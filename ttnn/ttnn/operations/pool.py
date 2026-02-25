@@ -6,6 +6,101 @@ import ttnn
 from typing import Tuple
 
 
+def validate_maxpool2d_indices(
+    input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype
+):
+    """
+    Validate indices by checking if differences are due to valid tie-breaking.
+    Note: input tensors should be in [N, H, W, C] format.
+    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling).
+    Returns (indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations)
+    """
+    import torch
+    import math
+
+    batch_size, input_h, input_w, channels = input_tensor.shape
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+    pad_tb, pad_lr = padding
+    dilation_h, dilation_w = dilation
+
+    # Check if indices are exactly equal first
+    indices_match = torch.equal(torch_indices, ttnn_indices)
+    if indices_match:
+        return True, 0, 0, 0, 0
+
+    # Find positions where indices don't match
+    diff = torch.abs(torch_indices - ttnn_indices)
+    mismatch_positions = torch.nonzero(diff, as_tuple=False)
+
+    tie_breaking_differences = 0
+    actual_errors = 0
+    value_differences = 0
+    window_violations = 0
+    for pos in mismatch_positions:
+        n, h, w, c = pos
+        torch_idx = torch_indices[n, h, w, c]
+        ttnn_idx = ttnn_indices[n, h, w, c]
+
+        # Convert linear indices to spatial coordinates
+        torch_h = torch_idx // input_w
+        torch_w = torch_idx % input_w
+        ttnn_h = ttnn_idx // input_w
+        ttnn_w = ttnn_idx % input_w
+
+        # Get input values at these positions
+        if ttnn_h >= 0 and ttnn_w >= 0 and ttnn_h < input_h and ttnn_w < input_w:
+            torch_input_val = input_tensor[n, torch_h, torch_w, c]
+            ttnn_input_val = input_tensor[n, ttnn_h, ttnn_w, c]
+        else:
+            actual_errors += 1
+            window_violations += 1
+            continue
+
+        # Check if this is a valid tie-breaking difference
+        # Two conditions must be satisfied:
+        # 1. The values must be the same
+        # 2. Both indices must be within the same kernel window
+
+        # Check if values are the same
+        atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+        if dtype == ttnn.bfloat8_b:
+            atol = 0.35
+            values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
+        else:
+            values_same = torch_input_val == ttnn_input_val
+
+        # Check if both indices are within the same kernel window
+        def is_in_dilated_kernel_window(
+            input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+        ):
+            for kh in range(kernel_h):
+                for kw in range(kernel_w):
+                    kernel_pos_h = kernel_top_left_h + kh * dilation_h
+                    kernel_pos_w = kernel_top_left_w + kw * dilation_w
+                    if kernel_pos_h == input_h and kernel_pos_w == input_w:
+                        return True
+            return False
+
+        kernel_top_left_h = h * stride_h - pad_tb
+        kernel_top_left_w = w * stride_w - pad_lr
+        ttnn_in_window = is_in_dilated_kernel_window(
+            ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+        )
+
+        if values_same and ttnn_in_window:
+            tie_breaking_differences += 1
+        elif not ttnn_in_window:
+            actual_errors += 1
+            window_violations += 1
+        else:
+            actual_errors += 1
+            value_differences += 1
+
+    # Indices are valid if there are no actual errors
+    return (actual_errors == 0), tie_breaking_differences, actual_errors, value_differences, window_violations
+
+
 def golden_maxpool2d(
     input_tensor: ttnn.Tensor,
     batch_size: int,
@@ -17,11 +112,12 @@ def golden_maxpool2d(
     padding,  # Can be Tuple[int, int] or List[int, int, int, int]
     dilation: Tuple[int, int],
     ceil_mode: bool = False,
+    return_indices: bool = False,
     **_,
 ):
     import torch
 
-    input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
@@ -30,8 +126,8 @@ def golden_maxpool2d(
         # ttnn format: [pad_t, pad_b, pad_l, pad_r]
         # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
         pad_t, pad_b, pad_l, pad_r = padding
-        input_tensor = torch.nn.functional.pad(
-            input_tensor, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
+        input_nchw = torch.nn.functional.pad(
+            input_nchw, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
         )
         torch_padding = 0  # No padding in max_pool2d since we already padded
     elif isinstance(padding, (list, tuple)) and len(padding) == 2:
@@ -41,17 +137,22 @@ def golden_maxpool2d(
         # Assume it's already in the correct format
         torch_padding = padding
 
-    output_tensor = torch.nn.functional.max_pool2d(
-        input_tensor,
+    output_tensor, indices = torch.nn.functional.max_pool2d(
+        input_nchw,
         kernel_size=kernel_size,
         stride=stride,
         padding=torch_padding,
         dilation=dilation,
         ceil_mode=ceil_mode,
+        return_indices=True,
     )
 
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+    indices = indices.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+
+    if return_indices:
+        return output_tensor, indices
 
     return output_tensor
 
