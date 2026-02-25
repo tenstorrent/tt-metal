@@ -211,31 +211,36 @@ def run_test_linear_impl(
         print(f"iteration {n}:")
         tt_output = tt_output_tensor_list[n]
 
+        if use_non_fused:
+            if cluster_axis == 0:
+                concat_dims = [sp_axis + 2, tp_axis + 2]
+            else:
+                concat_dims = [tp_axis + 2, sp_axis + 2]
+        else:
+            if cluster_axis == 0:
+                concat_dims = [sp_axis, tp_axis]
+            else:
+                concat_dims = [tp_axis, sp_axis]
+
         tt_output = ttnn.from_device(tt_output)
         tt_output = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                device,
-                mesh_shape=tuple(device.shape),
-                dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
-            ),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
         )
         check_result = []
 
-        for i in range(device.shape[0]):
-            for j in range(device.shape[1]):
+        for i in range(device.shape[sp_axis]):
+            for j in range(device.shape[tp_axis]):
+                m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
+                n_slice = slice(j * N, (j + 1) * N)
+
                 if use_non_fused:
-                    tt_device_output = tt_output[
-                        :,
-                        :,
-                        i * per_device_M : (i + 1) * per_device_M,
-                        j * N : (j + 1) * N,
-                    ]
+                    idx = (slice(None), slice(None), m_slice, n_slice)
                 else:
-                    tt_device_output = tt_output[
-                        i * per_device_M : (i + 1) * per_device_M,
-                        j * N : (j + 1) * N,
-                    ]
+                    idx = (m_slice, n_slice)
+
+                tt_device_output = tt_output[idx]
+
                 check_result.append(
                     assert_quality(
                         torch_output[:, :, i * per_device_M : (i + 1) * per_device_M, :]
@@ -276,6 +281,7 @@ def run_test_linear(
     tp_axis=1,
     num_iters=1,
     enable_trace=False,
+    cluster_axis=1,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -294,16 +300,22 @@ def run_test_linear(
             bias_input = torch.randn((1, N), dtype=torch_dtype)
 
     # Prepare TT tensors
+    if sp_axis == 1:
+        if use_non_fused:
+            shard_dims = [sp_axis + 2, tp_axis + 2]
+        else:
+            shard_dims = [sp_axis, tp_axis]
+    else:
+        if use_non_fused:
+            shard_dims = [tp_axis + 2, sp_axis + 2]
+        else:
+            shard_dims = [tp_axis, sp_axis]
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            device,
-            mesh_shape=tuple(device.shape),
-            dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
 
     tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
@@ -332,7 +344,7 @@ def run_test_linear(
         num_devices=device.get_num_devices(),
         num_links=num_links,
         topology=topology,
-        cluster_axis=1,
+        cluster_axis=cluster_axis,
         num_workers_per_link=num_workers_per_link,
         use_non_fused=use_non_fused,
         force_transpose=force_transpose,
@@ -345,7 +357,7 @@ def run_test_linear(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y",
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
         [
             (2, 4),
@@ -357,6 +369,7 @@ def run_test_linear(
             1,
             4,
             4,
+            1,
         ],
         [
             (8, 4),
@@ -372,6 +385,7 @@ def run_test_linear(
             1,
             8,
             8,
+            1,
         ],
         [
             (8, 4),
@@ -387,6 +401,7 @@ def run_test_linear(
             1,
             8,
             8,
+            1,
         ],
         [
             (8, 4),
@@ -402,9 +417,10 @@ def run_test_linear(
             1,
             8,
             8,
+            1,
         ],
         [
-            (8, 4),
+            (4, 8),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(4096),
@@ -413,10 +429,11 @@ def run_test_linear(
             ttnn.Topology.Ring,
             2,
             6,
-            0,
             1,
+            0,
             12,
             9,
+            0,
         ],
     ],
     ids=[
@@ -484,6 +501,7 @@ def test_linear(
     activation,
     enable_trace,
     num_iters,
+    cluster_axis,
 ):
     print(f"M,K,N,h,w: {M_block_size}, {K_block_size}, {N_block_size}, {subblock_h},  {subblock_w}\n")
 
@@ -509,6 +527,7 @@ def test_linear(
         activation=activation,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        cluster_axis=cluster_axis,
     )
 
     for n in range(num_iters):
