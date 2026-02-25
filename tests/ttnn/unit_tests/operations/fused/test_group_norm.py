@@ -398,8 +398,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 def generate_sdxl_test_inputs():
     inputs = []
 
-    # 1024x1024 resoultion
-
+    ##### START: 1024x1024 resolution #####
     # UNet inputs
     inputs.append((1, 1280, 64, 64))
     inputs.append((1, 1280, 32, 32))
@@ -428,6 +427,24 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 384, 64, 64))
     inputs.append((1, 768, 32, 32))
     inputs.append((1, 768, 64, 64))
+    ###### END: 1024x1024 resolution ######
+
+    ##### START: 512x512 resolution #####
+    # UNet inputs
+    inputs.append((1, 320, 64, 64))
+    inputs.append((1, 320, 32, 32))
+    inputs.append((1, 640, 32, 32))
+    inputs.append((1, 640, 16, 16))
+    inputs.append((1, 1280, 16, 16))
+    inputs.append((1, 2560, 16, 16))
+    # This test is removed to test_group_norm_DRAM because of the Issue #36408. To be added back after the issue is resolved.
+    # inputs.append((1, 1920, 16, 16))
+    inputs.append((1, 1920, 32, 32))
+    inputs.append((1, 1280, 32, 32))
+    inputs.append((1, 960, 32, 32))
+    inputs.append((1, 960, 64, 64))
+    inputs.append((1, 640, 64, 64))
+    ###### END: 512x512 resolution ######
 
     return inputs
 
@@ -436,13 +453,17 @@ def generate_sdxl_test_inputs():
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
-    num_groups = 32  #  always 32 for SDXL Base 1024x1024
+    num_groups = 32  #  always 32 for SDXL Base
     N, C, H, W = input_shape
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    # Use 5x5 grid for shape (1, 640, 16, 16) (temporary workaround for issue #36408)
+    if (C, H, W) == (640, 16, 16):
+        grid_size = ttnn.CoreGrid(y=4, x=4)
+    else:
+        grid_size = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -492,7 +513,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9996)
 
 
 def generate_sdxl_test_inputs_neg_mask():

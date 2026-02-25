@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 
 
-class RefinerModelOptimisations(ModelOptimisations):
+class RefinerModelOptimisations1024x1024(RefinerModelOptimisationsBase, ModelOptimisations1024x1024):
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,

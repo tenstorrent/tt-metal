@@ -6,18 +6,17 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 
 
 class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
-
         self.device = device
 
         self.module_path = module_path
 
-        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisationsBase)
 
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]
