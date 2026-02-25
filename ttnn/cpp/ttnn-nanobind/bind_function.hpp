@@ -8,7 +8,6 @@
 #include <array>
 #include <cstddef>
 #include <string>
-#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -16,8 +15,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
-
-#include <tt_stl/assert.hpp>
 
 namespace ttnn {
 

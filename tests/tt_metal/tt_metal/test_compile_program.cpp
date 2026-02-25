@@ -10,7 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

@@ -270,76 +270,6 @@ uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorM
     return (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
 }
 
-// Helper functions for TensorSpec
-const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
-
-inline auto is_uneven(const TensorSpec& t) {
-    if (not t.memory_config().is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = get_shard_spec(t)->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
-    // Only support TTT variant
-    if (!true_spec.has_value() || !false_spec.has_value()) {
-        return false;
-    }
-
-    // Output must be sharded
-    if (!output_spec.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // All shapes must be identical and predicate/true/false must have matching layouts
-    if (predicate_spec.logical_shape() == true_spec->logical_shape() &&
-        predicate_spec.logical_shape() == false_spec->logical_shape() &&
-        predicate_spec.memory_config() == true_spec->memory_config() &&
-        predicate_spec.memory_config() == false_spec->memory_config()) {
-        if (is_uneven(predicate_spec) || is_uneven(*true_spec) || is_uneven(*false_spec) || is_uneven(output_spec)) {
-            return false;
-        }
-        if (predicate_spec.memory_config().buffer_type() == BufferType::DRAM ||
-            true_spec->memory_config().buffer_type() == BufferType::DRAM ||
-            false_spec->memory_config().buffer_type() == BufferType::DRAM ||
-            output_spec.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((predicate_spec.memory_config().is_sharded() &&
-             predicate_spec.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((true_spec->memory_config().is_sharded() && true_spec->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((output_spec.memory_config().is_sharded() && output_spec.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::optional<AllShardSpecs> get_shard_specs(
     const TensorSpec& predicate_spec,
     const std::optional<TensorSpec>& true_spec,
@@ -359,7 +289,10 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec)) {
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec.memory_config()) ||
+        is_uneven(output_spec)) {
         // treat as interleaved
         return std::nullopt;
     }
@@ -922,7 +855,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    // Get shard volumes (using TensorSpec like binary_ng)
+    // Get shard volumes (using TensorSpec)
     const auto shard_volumes = get_shard_volumes(
         predicate_tensor.tensor_spec(),
         value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},

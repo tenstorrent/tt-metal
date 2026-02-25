@@ -11,6 +11,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
