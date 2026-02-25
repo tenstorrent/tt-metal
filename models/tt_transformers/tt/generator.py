@@ -5,7 +5,6 @@
 import os
 from collections import defaultdict
 
-
 import torch
 from loguru import logger
 
@@ -37,7 +36,6 @@ from models.tt_transformers.tt.common import (
 
 # Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
-
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -210,15 +208,16 @@ class Generator(WarmupForwardMixin):
         batch_size=1,
         user_id=0,
     ):
-        prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
-        if global_user_id is not None:
-            prefill_kwargs["global_user_id"] = global_user_id
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
-        tt_rot_mats_prefill_global = host_inputs[1]
-        tt_rot_mats_prefill_local = host_inputs[2]
-        # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+        if batch_size > 1:
+            prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+            if global_user_id is not None:
+                prefill_kwargs["global_user_id"] = global_user_id
+            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+            # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
+            tt_rot_mats_prefill_global = host_inputs[1]
+            tt_rot_mats_prefill_local = host_inputs[2]
+            # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -387,8 +386,11 @@ class Generator(WarmupForwardMixin):
         if global_user_id is not None:
             prefill_kwargs["global_user_id"] = global_user_id
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+        if batch_size > 1:
+            # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+        else:
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
