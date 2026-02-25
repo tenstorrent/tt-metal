@@ -2415,6 +2415,7 @@ class ModelArgs:
             # Try to load tokenizer from the original model path
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")

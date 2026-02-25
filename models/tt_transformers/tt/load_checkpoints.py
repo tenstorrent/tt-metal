@@ -335,17 +335,11 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     for key, tensor in loaded_weights.items():
         if "q_proj.weight" in key or "k_proj.weight" in key:
             n_heads = tensor.shape[0] // head_dim
-            if is_phi1:
-                converted_weights[key] = reverse_permute_partial_qk_weight(tensor, head_dim=head_dim, rotary_dim=rotary_dim)
-            else:
-                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
 
         elif "q_proj.bias" in key or "k_proj.bias" in key:
             n_heads = tensor.shape[0] // head_dim
-            if is_phi1:
-                converted_weights[key] = reverse_permute_partial_qk_bias(tensor, head_dim=head_dim, rotary_dim=rotary_dim)
-            else:
-                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
 
         elif "q_norm.weight" in key or "k_norm.weight" in key:
             # keep as-is unless you're *sure* Phi-1 needs this;
@@ -709,7 +703,6 @@ def map_hf_to_meta_keys(loaded_weights):
 
             # norms
             ("input_layernorm", "attention_norm"),
-            ("post_attention_layernorm", "ffn_norm"),
 
             # attention
             ("self_attn.q_proj", "attention.wq"),
@@ -837,8 +830,8 @@ def reverse_permute(tensor, n_heads, dim1, dim2):
     For non-Phi models: keep existing LLaMA/Meta-style conversion (half-split <-> interleaved pairs).
     For Phi-1 (NeoX-style assumption): no-op (already in expected pairwise layout).
     """
-    if _is_phi1():
-        return tensor
+    #if _is_phi1():
+    #    return tensor
     return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 
@@ -847,8 +840,8 @@ def permute(tensor, n_heads, dim1, dim2):
     Inverse of reverse_permute().
     If Phi-1 path is identity, its inverse is also identity.
     """
-    if _is_phi1():
-        return tensor
+    #if _is_phi1():
+    #   return tensor
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 

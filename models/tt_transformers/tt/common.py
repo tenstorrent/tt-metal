@@ -764,54 +764,8 @@ def create_tt_model(
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
-        #with open("debug_phi1.txt", "a") as f:    
-        #    f.write(f"state dict: {state_dict['tok_embeddings.weight'].shape[0]}\n")
-        # ===== DEBUG: final norm stats (converted dict) =====
-        def _stat(name):
-            import torch
-            t = state_dict[name].float()
-            print(name, "shape", tuple(t.shape), "min", float(t.min()), "max", float(t.max()), "mean", float(t.mean()))
+        state_dict = tt_model_args.load_state_dict()        
         
-        print("\n=== NORM KEY STATS (converted dict) ===")
-        for k in ["norm.weight", "norm.bias", "layers.0.attention_norm.weight", "layers.0.attention_norm.bias"]:
-            if k in state_dict:
-                _stat(k)
-            else:
-                print(k, "MISSING")
-        print("=== END NORM KEY STATS ===\n")
-        
-        try:
-            import torch
-            w = state_dict["norm.weight"]
-            b = state_dict["norm.bias"]
-            print("\n=== FINAL NORM PARAM STATS (converted dict) ===")
-            print("norm.weight shape:", tuple(w.shape),
-                  "min:", float(w.min()), "max:", float(w.max()), "mean:", float(w.mean()))
-            print("norm.bias   shape:", tuple(b.shape),
-                  "min:", float(b.min()), "max:", float(b.max()), "mean:", float(b.mean()))
-            print("=== END FINAL NORM PARAM STATS ===\n")
-        except Exception as e:
-            print("FINAL NORM PARAM STATS failed:", repr(e))
-        # ===== END DEBUG =====
-        
-        
-        
-    te_key = "tok_embeddings.weight"
-    out_key = "output.weight"
-
-    assert te_key in state_dict, f"Missing {te_key} in state_dict keys (sample: {list(state_dict)[:20]})"
-    assert out_key in state_dict, f"Missing {out_key} in state_dict keys (sample: {list(state_dict)[:20]})"
-
-    te = state_dict[te_key].detach().cpu()
-    out = state_dict[out_key].detach().cpu()
-
-    print("TT tok_embeddings:", tuple(te.shape), "norm", float(torch.norm(te)))
-    print("TT output:", tuple(out.shape), "norm", float(torch.norm(out)))
-    print("TT tied allclose:", bool(torch.allclose(te, out, atol=0, rtol=0)))
-    print("TT max abs diff:", float((te - out).abs().max()))
-
-
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,

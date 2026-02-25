@@ -27,7 +27,8 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
-
+_prev_tok = None
+_repeat_run = 0
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -263,6 +264,21 @@ def prepare_generator_args(
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
 
+    # ===== TOKENIZER DEBUG (TT) =====
+    prompt_debug = "What is your favorite condiment?"
+    
+    ids = tokenizer.encode(prompt_debug, add_special_tokens=False)
+    
+    print("\n=== TT TOKENIZER DEBUG ===")
+    print("TT ids:", ids[:50], "len:", len(ids), "max:", max(ids))
+    print("TT tokens:", tokenizer.convert_ids_to_tokens(ids[:50]))
+    print("tokenizer name:", getattr(tokenizer, "name_or_path", None))
+    print("vocab size:", len(tokenizer))
+    print("eos:", tokenizer.eos_token, tokenizer.eos_token_id)
+    print("pad:", tokenizer.pad_token, tokenizer.pad_token_id)
+    print("===========================\n")
+    # ===== END DEBUG =====
+    
     # mimic ModelArgs.create_tokenizer behavior
     if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
         tokenizer.stop_tokens = [tokenizer.eos_token_id]
@@ -830,6 +846,46 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+
+    def dump_decode_topk(tokenizer, logits, current_pos, k=10):
+        global _prev_tok, _repeat_run
+        import torch
+    
+        # flatten logits to [vocab]
+        if logits.ndim == 3:
+            v = logits[0, 0]
+        elif logits.ndim == 2:
+            v = logits[0]
+        else:
+            v = logits
+    
+        vals, ids = torch.topk(v.float(), k)
+        ids = ids.tolist()
+        vals = vals.tolist()
+    
+        # greedy token
+        tok = ids[0]
+    
+        # repetition tracking
+        if tok == _prev_tok:
+            _repeat_run += 1
+        else:
+            _repeat_run = 0
+        _prev_tok = tok
+    
+        # only print when repetition starts (tune threshold)
+        if _repeat_run >= 5:
+            toks = []
+            for i in ids:
+                try:
+                    toks.append(tokenizer.decode([i]).replace("\n","\\n"))
+                except:
+                    toks.append(str(i))
+    
+            margin = vals[0] - vals[1] if len(vals) > 1 else 0
+            print(f"[DECODE TOPK pos={int(current_pos[0])} repeat={_repeat_run} margin={margin:.4f}] " +
+                  ", ".join(f"{i}:{t!r}:{v:.4f}" for i,t,v in zip(ids,toks,vals)))
+
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -1066,6 +1122,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                enable_trace=False,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1160,6 +1217,7 @@ def test_demo_text(
                 out_tok = logits.unsqueeze(1)
 
             else:
+                dump_decode_topk(tokenizer, logits, current_pos, k=10)
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,

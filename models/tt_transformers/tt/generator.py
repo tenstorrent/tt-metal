@@ -206,17 +206,6 @@ class Generator:
         kv_cache=None,
         model_id=-1,
     ):
-        # ===== DEBUG: tokens passed into prepare_prefill_inputs_trace =====
-        try:
-            flat = prefill_ids.reshape(-1).tolist()
-            print("\n=== TOKENS BEFORE prepare_prefill_inputs_trace ===")
-            print("shape:", tuple(prefill_ids.shape), "dtype:", prefill_ids.dtype)
-            print("first 32:", flat[:32])
-            print("pos token_id 11 (first512):", next((i for i,t in enumerate(flat[:512]) if t==11), None))
-            print("=== END TOKENS BEFORE prepare_prefill_inputs_trace ===\n")
-        except Exception as e:
-            print("DEBUG tokens before prepare_prefill_inputs_trace failed:", repr(e))
-        # ===== END DEBUG =====
     
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
@@ -225,20 +214,7 @@ class Generator:
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        # ===== DEBUG: verify token tensor identity + metadata (no device reads) =====
-        try:
-            tt_tokens = device_inputs[0]
-            # these are safe: do not read device memory
-            print("\n=== TRACE WIRING DEBUG ===")
-            print("device_inputs lens:", len(device_inputs))
-            print("device_inputs[0] is tokens:", type(tt_tokens))
-            print("tokens shape:", tt_tokens.shape, "dtype:", tt_tokens.dtype, "layout:", tt_tokens.layout)
-            # If ttnn.Tensor supports ._tensor_id or similar internal handle, print it
-            print("tokens repr:", tt_tokens)  # often includes shape/dtype/layout
-            print("=== END TRACE WIRING DEBUG ===\n")
-        except Exception as e:
-            print("TRACE WIRING DEBUG failed:", repr(e))
-        # ===== END DEBUG =====
+        
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
@@ -277,20 +253,6 @@ class Generator:
         **kwargs,
     ):
 
-        # ===== DEBUG: prefill_ids entering _easy_trace_prefill =====
-        try:
-            import torch
-            flat = prefill_ids.reshape(-1)
-            nnz = int(torch.count_nonzero(flat).item())
-            if nnz != 0:
-                print("\n=== _easy_trace_prefill INPUT ===")
-                print("shape:", tuple(prefill_ids.shape), "nonzero:", nnz)
-                print("first 32:", flat[:32].tolist())
-                print("id @16:", int(flat[16].item()) if flat.numel() > 16 else "OOR")
-                print("=== END _easy_trace_prefill INPUT ===\n")
-        except Exception as e:
-            print("_easy_trace_prefill debug failed:", repr(e))
-        # ===== END DEBUG =====
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -330,27 +292,6 @@ class Generator:
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
         )
-
-        # ===== DEBUG: device token buffer after H2D (real prompt only) =====
-        try:
-            import ttnn, torch
-            tt_tokens = device_inputs[0]  # tokens should be first
-            t0 = ttnn.get_device_tensors(tt_tokens)[0]
-            flat = ttnn.to_torch(t0).reshape(-1)
-            nnz = int(torch.count_nonzero(flat).item())
-            if nnz != 0:
-                print("\n=== DEVICE TOKENS AFTER H2D ===")
-                print("nonzero:", nnz)
-                print("first 32:", flat[:32].tolist())
-                print("id @16:", int(flat[16].item()))
-                pos11 = (flat[:512] == 11).nonzero(as_tuple=False)[:10].reshape(-1).tolist()
-                print("pos token_id 11 (first512):", pos11 if pos11 else None)
-                print("=== END DEVICE TOKENS AFTER H2D ===\n")
-            else:
-                print("\n=== DEVICE TOKENS AFTER H2D === all zero ===\n")
-        except Exception as e:
-            print("DEVICE TOKENS AFTER H2D debug failed:", repr(e))
-        # ===== END DEBUG =====
         
 
         ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
@@ -370,6 +311,7 @@ class Generator:
         sampling_params: SamplingParams | None = None,
         **kwargs,
     ):
+
         self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -383,6 +325,7 @@ class Generator:
         self.warmup_model_prefill(kv_cache, enable_trace, [sampling_params])
 
         batch_size, batch_seq_len = tokens.shape
+        
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Each model expected to run the same model, safe to use 1st vocab size
@@ -391,7 +334,7 @@ class Generator:
         output_log_probs = torch.ones(batch_size, 1, dtype=torch.float32)
         sampling_executed = False
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
-
+        
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
@@ -419,32 +362,6 @@ class Generator:
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
-
-            # === DEBUG REAL PREFILL IDS (filter warmup) ===
-            try:
-                # prefill_ids shape: [1, prefill_seq_len]
-                flat = prefill_ids.reshape(-1)
-                nnz = int(torch.count_nonzero(flat).item())
-                is_warmup = (model_id_warmup is not None)
-                # Only print for the real prompt (non-zero tokens), or force-print if you want
-                if nnz != 0:
-                    idx_dbg = 16
-                    print("\n=== PREFILL_IDS DEBUG ===")
-                    print("is_warmup:", is_warmup)
-                    print("seq_len:", seq_len, "prefill_seq_len:", prefill_seq_len, "last_token_idx:", last_token_idx)
-                    print("prefill_ids shape:", tuple(prefill_ids.shape), "nonzero:", nnz)
-                    first32 = flat[:32].tolist()
-                    print("first 32 ids:", first32)
-                    if idx_dbg < flat.numel():
-                        print(f"id @{idx_dbg}:", int(flat[idx_dbg].item()))
-                    # show where token_id 11 appears (comma in your RAW tokens)
-                    tok = 11
-                    pos = (flat[:512] == tok).nonzero(as_tuple=False)
-                    print("pos token_id 11 (first512):", pos[:10].reshape(-1).tolist() if pos.numel() else None)
-                    print("=== END PREFILL_IDS DEBUG ===\n")
-            except Exception as e:
-                print("PREFILL_IDS DEBUG FAILED:", repr(e))
-            # === END DEBUG ===
             
             enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
 
@@ -553,9 +470,8 @@ class Generator:
                 if res["sampling"]:
                     tt_tokens = res["logits"][0]
                     tt_log_probs = res["logits"][1]
-                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[
-                        (last_token_idx % 32)
-                    ]
+                    idx_in_block = (last_token_idx % 32)
+                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[idx_in_block]
                     log_probs_host = (
                         ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[(last_token_idx % 32)]
                         if tt_log_probs is not None
@@ -564,16 +480,15 @@ class Generator:
                     output_tokens[idx] = tokens_host
                     if log_probs_host is not None:
                         output_log_probs[idx] = log_probs_host
-                else:
+                else: 
                     L = int(prompt_lens[idx])
                     true_last = L - 1
-                    print(
-                        f"[BLOCK CONTRACT non-trace] L={L} true_last={true_last} "
-                        f"get_last_token={(true_last // 32) * 32} idx_in_block={true_last % 32}"
-                    )
+                    idx_in_block = true_last % 32  # index within the 32-token tile
                     
                     output_logits[idx] = self.model[model_id].process_output_prefill(
-                        res["logits"], last_token_idx=(int(prompt_lens[idx]) % 32)
+                        res["logits"],
+                        last_token_idx=idx_in_block,
+                        tokenizer=self.tokenizer,
                     )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -653,27 +568,6 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            # ===== DEBUG: host tokens entering prepare_inputs_prefill =====
-            try:
-                import torch
-                print("\n=== HOST TOKENS DEBUG (prefill_forward_single_user_text) ===")
-                print("tokens.shape:", tuple(tokens.shape), "dtype:", tokens.dtype)
-                # tokens is torch.Tensor [1, seq_len]
-                seq_len = tokens.shape[1]
-                idx = 16
-                if idx < seq_len:
-                    print("host token @ idx=16:", int(tokens[0, idx].item()))
-                else:
-                    print("idx=16 out of range, seq_len =", seq_len)
-                print("host first 32 ids:", tokens[0, : min(32, seq_len)].tolist())
-                # Find where token_id 11 occurs (should include position 16 for your prompt)
-                flat = tokens[0].tolist()
-                pos11 = next((i for i, t in enumerate(flat[:512]) if t == 11), None)
-                print("first occurrence of token_id 11 (within first512):", pos11)
-                print("=== END HOST TOKENS DEBUG ===\n")
-            except Exception as e:
-                print("HOST TOKENS DEBUG failed:", repr(e))
-            # ===== END DEBUG =====
             
             (
                 prefill_input,
@@ -809,6 +703,7 @@ class Generator:
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
+
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
