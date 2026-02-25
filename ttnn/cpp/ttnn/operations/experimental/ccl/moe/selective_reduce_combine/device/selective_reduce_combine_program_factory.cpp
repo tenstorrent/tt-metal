@@ -239,27 +239,26 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // dense_token_maps_tensor page buffer
+    // tensor pages are padded for alignment
+    const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
     constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
-    // stash offset and count value for each local expert in uint32_t
-    // offset into token maps, number of tokens, offset into expert activations
-    constexpr auto token_offset_count_values_per_expert = 3;
-    const uint32_t dense_token_maps_tensor_extra_size_bytes =
-        token_offset_count_values_per_expert * sizeof(uint32_t) * experts_per_device;
-    const uint32_t aligned_dense_token_maps_buffer_size =
-        tt::align(aligned_dense_token_maps_page_size_bytes + dense_token_maps_tensor_extra_size_bytes, l1_alignment);
+    const uint32_t aligned_dense_token_maps_buffer_size_bytes =
+        tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
     const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
     CircularBufferConfig cb_dense_token_maps_config =
         CircularBufferConfig(
-            aligned_dense_token_maps_buffer_size, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
-            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_buffer_size);
+            aligned_dense_token_maps_buffer_size_bytes, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
+            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_page_size_bytes);
 
     // active token counts page buffer
+    // offset into token maps, number of tokens, offset into active token counts
+    constexpr auto token_offset_count_values_per_expert = 3;
     const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
     const auto token_counts_element_size = dense_token_counts_tensor.element_size();
     const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
-    const uint32_t aligned_token_counts_buffer_size =
-        tt::align(token_counts_element_size * experts_per_device, dram_alignment);
+    const uint32_t aligned_token_counts_buffer_size = tt::align(
+        (token_counts_element_size + token_offset_count_values_per_expert) * experts_per_device, dram_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
@@ -312,6 +311,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
         {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
@@ -348,6 +348,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
         {"token_activations_cb_id", token_activations_cb_id},
+        {"token_counts_cb_id", token_counts_cb_id},
         {"aligned_token_activation_page_size", aligned_token_activations_page_size_bytes / sizeof(uint32_t)},
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
@@ -363,6 +364,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"alignment", l1_alignment},
         {"num_devices", num_devices_total},
         {"src_chip_id", src_chip_id},
