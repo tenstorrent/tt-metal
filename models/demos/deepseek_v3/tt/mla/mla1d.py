@@ -1056,6 +1056,7 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
+            use_broadcast=True,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -1135,6 +1136,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_broadcast=True,
         )
 
         return {

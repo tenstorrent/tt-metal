@@ -206,7 +206,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
         input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
-        printf("Using composite_all_gather\n");
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
