@@ -27,7 +27,6 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <cctype>
 #include <map>
 
 #include <google/protobuf/text_format.h>
@@ -41,8 +40,8 @@ namespace {
 AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
-    const std::string& grouping_name = "",
-    uint32_t connections_per_edge = 1) {
+    const std::string& grouping_name,
+    uint32_t connections_per_edge) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {

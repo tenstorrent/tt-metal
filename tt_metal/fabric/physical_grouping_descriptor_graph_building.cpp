@@ -27,7 +27,6 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <cctype>
 #include <map>
 
 #include <google/protobuf/text_format.h>
@@ -36,8 +35,6 @@ namespace tt::tt_fabric {
 
 // Ensure tt::assert resolves correctly (not tt::tt_fabric::tt::assert)
 using namespace ::tt::assert;
-
-namespace {
 
 // Helper function to iterate through Cartesian product of multiple vectors.
 // Calls callback(indices) for each combination, where indices[i] is the index into the i-th vector.
@@ -68,6 +65,11 @@ void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callba
         }
     }
 }
+
+namespace {
+
+using tt::tt_fabric::AdjacencyGraph;
+using tt::tt_fabric::iterate_cartesian_product;
 
 AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& instance_ids) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
@@ -246,7 +248,7 @@ AdjacencyGraph<uint32_t> build_custom_connections_graph(
 // Implemented as a private static class method
 void PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(
     GroupingInfo& info, const std::vector<int32_t>& dims) {
-    using CO = GroupingItemInfo::CornerOrientation;
+    using CO = tt::tt_fabric::GroupingItemInfo::CornerOrientation;
 
     if (dims.empty() || info.items.empty()) {
         return;
@@ -362,13 +364,13 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         // Build GroupingItemInfo for backward compatibility with existing code
         GroupingItemInfo item_info;
         if (instance.has_asic_location()) {
-            item_info.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
+            item_info.type = tt::tt_fabric::GroupingItemInfo::ItemType::ASIC_LOCATION;
             item_info.asic_location = ::tt::tt_metal::ASICLocation{static_cast<uint32_t>(instance.asic_location())};
             info.items.push_back(item_info);
             asic_locations.push_back(*item_info.asic_location);
             has_asic_locations = true;
         } else if (instance.has_grouping_ref()) {
-            item_info.type = GroupingItemInfo::ItemType::GROUPING_REF;
+            item_info.type = tt::tt_fabric::GroupingItemInfo::ItemType::GROUPING_REF;
             const auto& ref = instance.grouping_ref();
             if (ref.has_preset_type()) {
                 // Convert preset_type enum to string and populate tray_id for TRAY_* types
@@ -432,7 +434,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
     } else {
         // No connection specified - empty adjacency graph (instances are not connected)
-        info.adjacency_graph = AdjacencyGraph<uint32_t>();
+        info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<uint32_t>();
     }
 
     return info;
@@ -444,8 +446,8 @@ namespace {
 
 // Infer row_major_mesh dims [rows, cols] from items' corner orientations.
 // Returns empty if corners don't indicate a row_major layout (fallback to [1, n]).
-std::vector<int32_t> infer_dims_from_corners(const GroupingInfo& g) {
-    using CO = GroupingItemInfo::CornerOrientation;
+std::vector<int32_t> infer_dims_from_corners(const tt::tt_fabric::GroupingInfo& g) {
+    using CO = tt::tt_fabric::GroupingItemInfo::CornerOrientation;
     const size_t n = g.items.size();
     if (n == 0) {
         return {};
@@ -511,7 +513,7 @@ struct NodeMetadata {
 };
 
 struct FlattenedMesh {
-    AdjacencyGraph<uint32_t> graph;
+    tt::tt_fabric::AdjacencyGraph<uint32_t> graph;
     std::vector<int32_t> dims;  // Always [rows, cols]
     std::vector<uint32_t> nodes_row_major;
     std::unordered_map<uint32_t, NodeMetadata> node_metadata;  // Maps node ID to metadata
@@ -697,13 +699,14 @@ std::vector<int32_t> normalize_dims(const std::vector<int32_t>& dims, size_t tot
 //   1. Copy all internal edges from each mesh
 //   2. Connect adjacent meshes along their shared boundaries (horizontal and vertical)
 //   3. Convert from set-based to vector-based adjacency representation
-AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& dims) {
+tt::tt_fabric::AdjacencyGraph<uint32_t> join_mesh_level(
+    const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& dims) {
     constexpr size_t SINGLE_MESH = 1;
     constexpr int32_t ROW_INDEX = 0;
     constexpr int32_t COL_INDEX = 1;
 
     if (meshes.empty()) {
-        return AdjacencyGraph<uint32_t>();
+        return tt::tt_fabric::AdjacencyGraph<uint32_t>();
     }
     if (meshes.size() == SINGLE_MESH) {
         // Validate single mesh has valid dimensions
@@ -780,7 +783,7 @@ AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshe
     for (const auto& [node, neighbors] : adj_set) {
         adj_map[node] = std::vector<uint32_t>(neighbors.begin(), neighbors.end());
     }
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return tt::tt_fabric::AdjacencyGraph<uint32_t>(adj_map);
 }
 
 // Helper to extract tray ID from grouping name (e.g., "tray_1" -> TrayID{1}, "TRAY_2" -> TrayID{2})
@@ -816,14 +819,14 @@ AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshe
 }
 
 // Rebuild GroupingInfo.items from FlattenedMesh. Graph nodes are 0..n-1; items[i] is the item for node i.
-void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& mesh) {
+void rebuild_items_from_flattened_mesh(tt::tt_fabric::GroupingInfo& info, const FlattenedMesh& mesh) {
     info.items.clear();
     const auto& node_ids = mesh.graph.get_nodes();
     info.items.reserve(node_ids.size());
 
     for (uint32_t node_id : node_ids) {
-        GroupingItemInfo item;
-        item.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
+        tt::tt_fabric::GroupingItemInfo item;
+        item.type = tt::tt_fabric::GroupingItemInfo::ItemType::ASIC_LOCATION;
         item.asic_location = ::tt::tt_metal::ASICLocation{0};
         item.tray_id = ::tt::tt_metal::TrayID{0};
 
@@ -847,16 +850,17 @@ void rebuild_items_from_flattened_mesh(GroupingInfo& info, const FlattenedMesh& 
 //     then for each combination in the Cartesian product, join and add one entry
 // Note: PSD validation is done at the top level in build_flattened_adjacency_mesh, not here.
 std::vector<FlattenedMesh> build_flattened_meshes_for_item(
-    const GroupingItemInfo& item,
+    const tt::tt_fabric::GroupingItemInfo& item,
     uint32_t& next_global_id,
-    const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>& cache,
-    const PhysicalGroupingDescriptor* desc,
+    const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<tt::tt_fabric::GroupingInfo>>>&
+        cache,
+    const tt::tt_fabric::PhysicalGroupingDescriptor* desc,
     const std::vector<std::string>& grouping_path = {}) {
     constexpr int32_t SINGLE_NODE_ROWS = 1;
     constexpr int32_t SINGLE_NODE_COLS = 1;
     constexpr size_t SINGLE_ITEM = 1;
 
-    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+    if (item.type == tt::tt_fabric::GroupingItemInfo::ItemType::ASIC_LOCATION) {
         // Leaf case: single ASIC node - one possibility
         FlattenedMesh mesh;
         mesh.dims = {SINGLE_NODE_ROWS, SINGLE_NODE_COLS};
@@ -878,7 +882,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         mesh.nodes_row_major = {node_id};
         mesh.node_metadata[node_id] = metadata;
-        mesh.graph = AdjacencyGraph<uint32_t>({{node_id, {}}});
+        mesh.graph = tt::tt_fabric::AdjacencyGraph<uint32_t>({{node_id, {}}});
 
         // PSD validation is done at the top level only, not for individual leaf nodes
         return {std::move(mesh)};
@@ -886,7 +890,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
     // Compound case: resolve grouping reference - iterate over ALL possible groupings
     // Look up by name first; preset types (TRAY_1, HOSTS, MESH) may be keyed by type, so fall back to type lookup
-    std::vector<GroupingInfo> possible_groupings;
+    std::vector<tt::tt_fabric::GroupingInfo> possible_groupings;
     auto name_it = cache.find(item.grouping_name);
     if (name_it != cache.end()) {
         for (const auto& [type, groupings] : name_it->second) {
@@ -906,7 +910,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     TT_FATAL(!possible_groupings.empty(), "Unknown grouping: {}", item.grouping_name);
 
     std::vector<FlattenedMesh> all_results;
-    for (const GroupingInfo& sub_grouping : possible_groupings) {
+    for (const tt::tt_fabric::GroupingInfo& sub_grouping : possible_groupings) {
         // Build new grouping path using grouping name (not type)
         std::vector<std::string> new_path = grouping_path;
         new_path.push_back(sub_grouping.name);
@@ -962,7 +966,7 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
         }
 
         size_t combination_index = 0;
-        iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
+        tt::tt_fabric::iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
             std::vector<FlattenedMesh> chosen;
             chosen.reserve(sub_grouping.items.size());
             for (size_t i = 0; i < sub_grouping.items.size(); ++i) {
@@ -1015,7 +1019,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
     if (grouping.items.empty()) {
         GroupingInfo result = grouping;
-        result.adjacency_graph = AdjacencyGraph<uint32_t>();
+        result.adjacency_graph = tt::tt_fabric::AdjacencyGraph<uint32_t>();
         return {result};
     }
 
@@ -1091,14 +1095,14 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     }
 
     size_t combination_index = 0;
-    iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
+    tt::tt_fabric::iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
         std::vector<FlattenedMesh> chosen;
         chosen.reserve(grouping.items.size());
         for (size_t i = 0; i < grouping.items.size(); ++i) {
             chosen.push_back(meshes_per_item[i][indices[i]]);
         }
 
-        AdjacencyGraph<uint32_t> joined_graph = join_mesh_level(chosen, layout);
+        tt::tt_fabric::AdjacencyGraph<uint32_t> joined_graph = join_mesh_level(chosen, layout);
 
         // Collect node metadata from all chosen meshes
         FlattenedMesh joined_mesh;

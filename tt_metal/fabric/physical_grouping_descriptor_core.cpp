@@ -665,7 +665,7 @@ void PhysicalGroupingDescriptor::validate_instance_counts(std::vector<std::strin
                     for (const auto& item : grouping.items) {
                         if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
                             has_any_refs = true;
-                            if (preset_names.find(item.grouping_name) == preset_names.end()) {
+                            if (!preset_names.contains(item.grouping_name)) {
                                 only_preset_refs = false;
                                 break;
                             }
