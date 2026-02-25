@@ -36,6 +36,7 @@
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
 #include "../../../unified_kernels/argmax.hpp"
+#include "../../../unified_kernels/rmsnorm.hpp"
 
 // Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
 // Each flag is specialized per core group at compile time, enabling if constexpr
@@ -50,6 +51,7 @@ struct Core {
     static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
     static constexpr bool is_argmax_mesh_sender_core =
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
+    static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
 };
 
 void kernel_main() {
@@ -101,7 +103,7 @@ void kernel_main() {
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -167,12 +169,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
+        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         get_write_ptr(mcast_dst_cb),
     };
 
@@ -198,6 +200,18 @@ void kernel_main() {
 
     // Matmul compute: [1, K] x [K, N_per_core] -> [1, N_per_core]
     // out_w (output tiles per core) is a compile-time template param for loop unrolling
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
+    };
+
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;
 
     // CB indices and tile count from op.py compile-time args
@@ -212,8 +226,7 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================
@@ -233,12 +246,22 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
-    // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
+    // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
     // or intermediate_tensor (CCL mode, where broadcast placed the data)
     if constexpr (Core::is_input_core) {
-        constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-        constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+    }
+#endif
+
+#if defined(COMPILE_FOR_TRISC)
+    deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
+    {
+        DeviceZoneScopedN("RMSNORM");
+        rmsnorm(rmsnorm_args);
     }
 #endif
 

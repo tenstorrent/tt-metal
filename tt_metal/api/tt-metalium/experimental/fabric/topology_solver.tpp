@@ -430,6 +430,11 @@ const std::set<GlobalNode>& MappingConstraints<TargetNode, GlobalNode>::get_pref
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::is_valid_mapping(TargetNode target, GlobalNode global) const {
+    // Check forbidden pairs first - these apply even when target has no valid_mappings_ entry
+    if (forbidden_pairs_.find({target, global}) != forbidden_pairs_.end()) {
+        return false;
+    }
+
     // Check if this global node is reserved by a many-to-many constraint
     auto reserved_it = reserved_global_nodes_.find(global);
     if (reserved_it != reserved_global_nodes_.end()) {
@@ -468,11 +473,18 @@ MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const 
 }
 
 template <typename TargetNode, typename GlobalNode>
+const std::set<std::pair<TargetNode, GlobalNode>>& MappingConstraints<TargetNode, GlobalNode>::get_forbidden_pairs()
+    const {
+    return forbidden_pairs_;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, GlobalNode global_node) {
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
-        return true;  // No constraints exist for this target, nothing to forbid
+        forbidden_pairs_.insert({target_node, global_node});
+        return true;
     }
 
     std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
@@ -485,7 +497,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
-        return true;  // No constraints exist for this target, nothing to forbid
+        for (const auto& global_node : global_nodes) {
+            forbidden_pairs_.insert({target_node, global_node});
+        }
+        return true;
     }
 
     std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
@@ -501,7 +516,9 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     std::map<TargetNode, std::set<GlobalNode>> saved_state;
     for (const auto& target_node : target_nodes) {
         auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
+        if (it == valid_mappings_.end()) {
+            forbidden_pairs_.insert({target_node, global_node});
+        } else {
             saved_state[target_node] = it->second;
             it->second.erase(global_node);
         }
@@ -510,7 +527,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     if (!saved_state.empty()) {
         return validate(&saved_state);
     }
-    return true;  // No constraints exist for any target, nothing to forbid
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
