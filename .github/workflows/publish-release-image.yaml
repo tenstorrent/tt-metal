@@ -148,6 +148,7 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
+            source /opt/venv/bin/activate
             uv pip install --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
             uv pip install 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
