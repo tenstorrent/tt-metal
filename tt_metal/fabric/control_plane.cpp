@@ -464,7 +464,7 @@ void ControlPlane::initialize_distributed_contexts() {
     if (*global_context->size() == 1) {
         {
             std::unique_lock lock(global_bindings_mutex_);
-            global_bindings_initialized_ = true;
+            global_bindings_initialized_.test_and_set(std::memory_order_release);
         }
         host_local_context_ = global_context;
         std::transform(
@@ -491,7 +491,7 @@ void ControlPlane::initialize_distributed_contexts() {
                     mesh_id, mesh_host_rank};
             }
         }
-        global_bindings_initialized_ = true;
+        global_bindings_initialized_.test_and_set(std::memory_order_release);
     }
 
     // Create a sub-context for each mesh-host-rank pair.
@@ -1416,6 +1416,10 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
                         MeshId neighbor_mesh_id;
                         MeshHostRankId neighbor_mesh_host_rank;
+                        // Fast path: skip if not initialized
+                        if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
+                            continue;
+                        }
                         {
                             std::shared_lock lock(global_bindings_mutex_);
                             auto it = global_logical_bindings_.find(
@@ -2633,19 +2637,21 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
 
 std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
 ControlPlane::get_global_logical_bindings() const {
-    std::shared_lock lock(global_bindings_mutex_);
-    if (!global_bindings_initialized_) {
+    // Fast path: check atomic flag without acquiring mutex
+    if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
         return {};
     }
+    std::shared_lock lock(global_bindings_mutex_);
     return global_logical_bindings_;
 }
 
 std::optional<std::pair<MeshId, MeshHostRankId>> ControlPlane::get_global_logical_binding(
     tt::tt_metal::distributed::multihost::Rank rank) const {
-    std::shared_lock lock(global_bindings_mutex_);
-    if (!global_bindings_initialized_) {
+    // Fast path: check atomic flag without acquiring mutex
+    if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
         return std::nullopt;
     }
+    std::shared_lock lock(global_bindings_mutex_);
     auto it = global_logical_bindings_.find(rank);
     if (it != global_logical_bindings_.end()) {
         return it->second;
@@ -2955,6 +2961,12 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
     MeshId neighbor_mesh_id;
+    // Fast path: return early if not initialized
+    if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
+        log_warning(
+            tt::LogFabric, "Global logical bindings not initialized for neighbor host rank {}", neighbor_host_rank);
+        return {};
+    }
     {
         std::shared_lock lock(global_bindings_mutex_);
         auto it = global_logical_bindings_.find(
@@ -3046,6 +3058,10 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
         // Skip if neighbor host is not in our global logical bindings
         MeshId neighbor_mesh_id;
+        // Fast path: skip if not initialized
+        if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
+            continue;
+        }
         {
             std::shared_lock bindings_lock(global_bindings_mutex_);
             auto bindings_it = global_logical_bindings_.find(

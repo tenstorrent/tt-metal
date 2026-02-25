@@ -363,7 +363,8 @@ private:
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
         global_logical_bindings_;
     mutable std::shared_mutex global_bindings_mutex_;
-    bool global_bindings_initialized_{false};
+    // atomic_flag for lock-free initialization checks - guaranteed lock-free on all platforms
+    mutable std::atomic_flag global_bindings_initialized_ = ATOMIC_FLAG_INIT;
 
     // custom logic to order eth channels
     void order_ethernet_channels();
