@@ -174,10 +174,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    if (operation_attributes.norm_type == LayerNormType::RMSNORM) {
+    if (operation_attributes.norm_type == LayerNormType::RMSNORM &&
+        operation_attributes.distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED) {
         TT_FATAL(
             !operation_attributes.compute_kernel_config.fp32_dest_acc_en,
-            "fp32_dest_acc_en is not supported for RMSNorm");
+            "fp32_dest_acc_en is not supported for distributed RMSNorm");
     }
     std::visit(
         [&](const auto& program_config) {

@@ -102,7 +102,6 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
             - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
-            - FP32 destination accumulation is not supported (`compute_kernel_config.fp32_dest_acc_en` must be false).
         )doc";
 
     ttnn::bind_function<"rms_norm">(
