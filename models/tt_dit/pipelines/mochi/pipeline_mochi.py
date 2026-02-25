@@ -142,6 +142,7 @@ class MochiPipeline(DiffusionPipeline):
         use_reference_vae: bool = False,
         model_name: str = "genmo/mochi-1-preview",
         force_zeros_for_empty_prompt: bool = False,
+        reload_dit_model: bool = None,
     ):
         super().__init__()
 
@@ -162,7 +163,7 @@ class MochiPipeline(DiffusionPipeline):
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
-        self.reload_dit_model = self.mesh_device.get_num_devices() <= 8  # Only required if VAE is memory-constrained.
+        self.reload_dit_model = reload_dit_model  # Only required if VAE is memory-constrained.
 
         if self.reload_dit_model and not cache.cache_dir_is_set():
             msg = (
@@ -295,25 +296,60 @@ class MochiPipeline(DiffusionPipeline):
         num_links=None,
         use_reference_vae=False,
         force_zeros_for_empty_prompt=False,
+        reload_dit_model=None,
     ):
-        default_config = {
-            (2, 4): {
-                "sp_axis": 0,
-                "tp_axis": 1,
-                "vae_mesh_shape": (1, 8),
-                "vae_sp_axis": 0,
-                "vae_tp_axis": 1,
-                "num_links": 1,
-            },
-            (4, 8): {
-                "sp_axis": 1,
-                "tp_axis": 0,
-                "vae_mesh_shape": (4, 8),
-                "vae_sp_axis": 0,
-                "vae_tp_axis": 1,
-                "num_links": 4,
-            },
-        }
+        if ttnn.device.is_blackhole():
+            assert tuple(mesh_device.shape) in [(2, 4), (4, 8)], "Mochi has only been successfully tested on 2x2"
+            default_config = {
+                (2, 2): {
+                    "sp_axis": 0,
+                    "tp_axis": 1,
+                    "num_links": 2,
+                    "vae_mesh_shape": (2, 2),
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,
+                    "reload_dit_model": True,
+                },
+                (2, 4): {  # Hangs on BH
+                    "sp_axis": 0,
+                    "tp_axis": 1,
+                    "num_links": 2,
+                    "vae_mesh_shape": (2, 4),
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,
+                    "reload_dit_model": False,
+                },
+                (4, 8): {  # Untested.
+                    "sp_axis": 1,
+                    "tp_axis": 0,
+                    "num_links": 2,
+                    "vae_mesh_shape": (4, 8),
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,
+                    "reload_dit_model": False,
+                },
+            }
+        else:
+            default_config = {
+                (2, 4): {
+                    "sp_axis": 0,
+                    "tp_axis": 1,
+                    "vae_mesh_shape": (1, 8),
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,
+                    "num_links": 1,
+                    "reload_dit_model": True,
+                },
+                (4, 8): {
+                    "sp_axis": 1,
+                    "tp_axis": 0,
+                    "vae_mesh_shape": (4, 8),
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,
+                    "num_links": 4,
+                    "reload_dit_model": False,
+                },
+            }
 
         mesh_shape = tuple(mesh_device.shape)
 
@@ -323,6 +359,7 @@ class MochiPipeline(DiffusionPipeline):
         vae_tp_axis = vae_tp_axis or default_config[mesh_shape]["vae_tp_axis"]
         vae_mesh_shape = vae_mesh_shape or default_config[mesh_shape]["vae_mesh_shape"]
         num_links = num_links or default_config[mesh_shape]["num_links"]
+        reload_dit_model = reload_dit_model or default_config[mesh_shape]["reload_dit_model"]
 
         sp_factor = mesh_device.shape[sp_axis]
         tp_factor = mesh_device.shape[tp_axis]
@@ -359,6 +396,7 @@ class MochiPipeline(DiffusionPipeline):
             use_reference_vae=use_reference_vae,
             model_name=checkpoint_name,
             force_zeros_for_empty_prompt=force_zeros_for_empty_prompt,
+            reload_dit_model=reload_dit_model,
         )
 
         return pipeline

@@ -8,12 +8,11 @@ from pathlib import Path
 
 import torch
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
-from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
 from loguru import logger
 
 import ttnn
 
-from ....layers.embeddings import WanPatchEmbed
+from ....layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList, Parameter
@@ -23,44 +22,8 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor, from_torch
+from ....utils.tensor import bf16_tensor, float32_tensor, from_torch
 from .attention_wan import WanAttention
-
-
-# Monkeypatch WanTimeTextImageEmbedding class
-def _forward_timestep(self, timestep: torch.Tensor, timestep_seq_len: int | None = None):
-    """
-    Compute temb and timestep_proj only.
-
-    ref_tensor: if provided, temb is cast to ref_tensor.dtype
-                (to mimic original .type_as(encoder_hidden_states)).
-    """
-    # --- copied from original forward ---
-    timestep = self.timesteps_proj(timestep)
-    if timestep_seq_len is not None:
-        timestep = timestep.unflatten(0, (-1, timestep_seq_len))
-
-    time_embedder_dtype = next(iter(self.time_embedder.parameters())).dtype
-    if timestep.dtype != time_embedder_dtype and time_embedder_dtype != torch.int8:
-        timestep = timestep.to(time_embedder_dtype)
-
-    temb = self.time_embedder(timestep)
-
-    timestep_proj = self.time_proj(self.act_fn(temb))
-    return temb, timestep_proj
-
-
-def _forward_text(self, encoder_hidden_states: torch.Tensor):
-    """
-    Compute text embeddings only.
-    """
-    encoder_hidden_states = self.text_embedder(encoder_hidden_states)
-
-    return encoder_hidden_states
-
-
-TorchWanTimeTextImageEmbedding.forward_timestep = _forward_timestep
-TorchWanTimeTextImageEmbedding.forward_text = _forward_text
 
 
 class WanTransformerBlock(Module):
@@ -291,6 +254,7 @@ class WanTransformer3DModel(Module):
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
+        self.cached_rope_features = {}
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -318,14 +282,14 @@ class WanTransformer3DModel(Module):
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
 
-        # NOTE: Torch fallback until we support WanCombinedTimestepCaptionEmbedding
-        self.condition_embedder = TorchWanTimeTextImageEmbedding(
+        self.condition_embedder = WanTimeTextImageEmbedding(
             dim=dim,
             time_freq_dim=freq_dim,
             time_proj_dim=dim * 6,
             text_embed_dim=text_dim,
-            image_embed_dim=None,
-            pos_embed_seq_len=None,
+            mesh_device=self.mesh_device,
+            tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.blocks = ModuleList(
@@ -385,7 +349,6 @@ class WanTransformer3DModel(Module):
 
         # Torch fallbacks
         torch.save(self.rope.state_dict(), directory / f"{prefix}rope.pt")
-        torch.save(self.condition_embedder.state_dict(), directory / f"{prefix}condition_embedder.pt")
 
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         super().load(directory, prefix=prefix)
@@ -394,18 +357,23 @@ class WanTransformer3DModel(Module):
 
         # Torch fallbacks
         self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
-        self.condition_embedder.load_state_dict(torch.load(directory / f"{prefix}condition_embedder.pt"))
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Torch fallbacks
         self.rope.load_state_dict(pop_substate(state, "rope"))
-        self.condition_embedder.load_state_dict(pop_substate(state, "condition_embedder"))
+
+    def get_rope_features(self, hidden_states):
+        if tuple(hidden_states.shape) not in self.cached_rope_features:
+            rope_features = self.prepare_rope_features(hidden_states)
+            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
+        return self.cached_rope_features[tuple(hidden_states.shape)]
 
     def prepare_rope_features(self, hidden_states):
         """
         Given video input, compute RoPE features.
         Return tensors on device.
         """
+        logger.info(f"Preparing rope features for shape {hidden_states.shape}")
         rope_cos, rope_sin = self.rope(hidden_states)
 
         # Convert to TT tensors with proper sharding
@@ -443,30 +411,17 @@ class WanTransformer3DModel(Module):
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
 
     def prepare_text_conditioning(self, encoder_hidden_states):
-        encoder_hidden_states = self.condition_embedder.forward_text(encoder_hidden_states)
-        tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
+        tt_prompt_1BLP = self.condition_embedder.forward_text(encoder_hidden_states)
 
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_prompt_1BLP
 
     def prepare_timestep_conditioning(self, timestep):
-        assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
-        temb, timestep_proj = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
-
-        timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        tt_temb_11BD = from_torch(
-            temb.unsqueeze(0).unsqueeze(0),
-            device=self.mesh_device,
-            mesh_axes=[..., tp_axis],
-            dtype=ttnn.float32,
-        )
-        tt_timestep_proj_1BTD = from_torch(
-            timestep_proj.unsqueeze(0),
-            device=self.mesh_device,
-            mesh_axes=[..., tp_axis],
-            dtype=ttnn.float32,
-        )
+        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
+        # TODO: Cleanup and move out of prepare_timestep_conditioning.
+        timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
+        tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
+        tt_timestep_proj_1BTD = ttnn.reshape(tt_timestep_proj_1BTD, list(tt_timestep_proj_1BTD.shape)[:-2] + [6, -1])
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
@@ -478,29 +433,8 @@ class WanTransformer3DModel(Module):
         Return tensors on device.
         """
         assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
-        temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image = self.condition_embedder(
-            timestep, encoder_hidden_states, encoder_hidden_states_image=None, timestep_seq_len=None
-        )
-        assert encoder_hidden_states_image is None, "Wan2.2-T2V does not support image conditioning"
-
-        timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        logger.info(f"temb shape: {temb.shape}")
-        logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
-
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        tt_temb_11BD = from_torch(
-            temb.unsqueeze(0).unsqueeze(0),
-            device=self.mesh_device,
-            mesh_axes=[..., tp_axis],
-            dtype=ttnn.float32,
-        )
-        tt_timestep_proj_1BTD = from_torch(
-            timestep_proj.unsqueeze(0),
-            device=self.mesh_device,
-            mesh_axes=[..., tp_axis],
-            dtype=ttnn.float32,
-        )
-        tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
+        tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
@@ -578,7 +512,7 @@ class WanTransformer3DModel(Module):
     def forward(
         self,
         spatial: torch.Tensor,
-        prompt: torch.Tensor,
+        prompt: ttnn.Tensor,
         timestep: torch.Tensor,
         y: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -597,7 +531,8 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
-        rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(spatial)
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(spatial)
+
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
 
         # Concatenate spatial and y along the channel dimension
@@ -674,7 +609,6 @@ class WanTransformer3DModel(Module):
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
             )
-
         scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
 

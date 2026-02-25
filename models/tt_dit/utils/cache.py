@@ -55,7 +55,7 @@ def load_model(
 
     Attempts to load from cache first. If the cache does not exist, loads from PyTorch state dict
     (if provided) and optionally creates the cache. Raises `MissingCacheError` if neither is
-    available.
+    available. Finally, any module that needs to be offloaded is taken care of.
 
     Args:
         `tt_model`: TT model instance to load weights into.
@@ -74,6 +74,13 @@ def load_model(
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    if tt_model.is_loaded():
+        return
+
+    # unload any modules that need to be unloaded before loading this module
+    for module in tt_model.unload_set or []:
+        module.deallocate_weights()
+
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
