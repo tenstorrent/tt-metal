@@ -75,6 +75,7 @@ void get_token_activation_offsets(
                 break;
             }
             expert_token_activations_ptr += AlignedActivationsPageSize;
+            ASSERT(t != GlobalNumTokens - 1);
         }
     }
 }
@@ -131,7 +132,10 @@ void kernel_main() {
     // experts
     for (uint32_t t = 0, l1_offset = 0, activations_page = 0; t < global_num_tokens; ++t) {
         const uint64_t token_activations_noc_addr = get_noc_addr(activations_page++, token_activations_addrgen);
-        noc_async_read(token_activations_noc_addr, token_activations_l1_addr + l1_offset, token_counts_page_size_bytes);
+        noc_async_read(
+            token_activations_noc_addr,
+            token_activations_l1_addr + l1_offset,
+            aligned_token_activations_page_size_bytes);
         l1_offset += aligned_token_activations_page_size_bytes;
     }
 

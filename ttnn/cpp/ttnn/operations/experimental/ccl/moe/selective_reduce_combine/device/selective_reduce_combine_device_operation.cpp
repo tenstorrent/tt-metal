@@ -30,15 +30,10 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const uint32_t seq_size = operation_attributes.seq_size;
     const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
-    // const uint32_t experts = operation_attributes.experts;
-
     const auto& axis = operation_attributes.axis;
     const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    // const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
-    // const uint32_t experts_per_cluster = experts / num_clusters;
-
     auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
