@@ -20,16 +20,11 @@
 namespace tt::tt_metal {
 
 BuildEnvManager& BuildEnvManager::get_instance() {
-    static BuildEnvManager instance;
+    static BuildEnvManager instance(MetalContext::instance().hal());
     return instance;
 }
 
-BuildEnvManager::BuildEnvManager() = default;
-
-void BuildEnvManager::init_build_state_indices(const Hal& hal) {
-    if (!kernel_build_state_indices_.empty()) {
-        return;
-    }
+BuildEnvManager::BuildEnvManager(const Hal& hal) {
     uint32_t kernel_index = 0;
     uint32_t firmware_index = 0;
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
@@ -109,8 +104,6 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     auto& dev_build_env = device_id_to_build_env_[device_id];
     auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
     const auto& rtoptions = MetalContext::instance().rtoptions();
-
-    init_build_state_indices(*dev_config.hal);
 
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);

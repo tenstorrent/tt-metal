@@ -72,7 +72,7 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    BuildEnvManager();
+    explicit BuildEnvManager(const Hal& hal);
     ~BuildEnvManager() = default;
 
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
@@ -82,8 +82,6 @@ private:
     ProgCoreMapping kernel_build_state_indices_;
     ProgCoreMapping firmware_build_state_indices_;
     std::mutex lock;
-
-    void init_build_state_indices(const Hal& hal);
 
     BuildIndexAndTypeCount get_kernel_build_index_and_state_count(
         uint32_t programmable_core, uint32_t processor_class) const;
