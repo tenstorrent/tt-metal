@@ -17,7 +17,7 @@ namespace ttml::ttnn_fixed::distributed {
 
 namespace {
 
-const char* kTTMetalHomeEnvVar = "TT_METAL_HOME";
+const char* kTTMetalRuntimeRootEnvVar = "TT_METAL_RUNTIME_ROOT";
 const char* kTTMeshGraphDescriptorEnvVar = "TT_MESH_GRAPH_DESC_PATH";
 
 // Convert FabricType (inferred from MGD dim_types) to the appropriate 2D FabricConfig
@@ -70,17 +70,17 @@ std::optional<std::string> get_mgd_path(uint32_t num_devices) {
     }
 
     // Build default path based on num_devices
-    const char* metal_home = std::getenv(kTTMetalHomeEnvVar);
-    if (!metal_home) {
-        throw std::runtime_error("TT_METAL_HOME is not set");
+    const char* runtime_root = std::getenv(kTTMetalRuntimeRootEnvVar);
+    if (!runtime_root) {
+        throw std::runtime_error("TT_METAL_RUNTIME_ROOT is not set");
     }
 
-    std::string mgd_path = std::string(metal_home) + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/";
+    std::string mgd_path = std::string(runtime_root) + "/tt_metal/fabric/mesh_graph_descriptors/";
 
     if (num_devices == 8U) {
-        mgd_path += "t3k_1x8_mesh_graph_descriptor.textproto";
+        mgd_path += "t3k_mesh_graph_descriptor.textproto";
     } else if (num_devices == 32U) {
-        mgd_path += "galaxy_1x32_mesh_graph_descriptor.textproto";
+        mgd_path += "single_galaxy_mesh_graph_descriptor.textproto";
     } else {
         // No default MGD for this device count
         return std::nullopt;
