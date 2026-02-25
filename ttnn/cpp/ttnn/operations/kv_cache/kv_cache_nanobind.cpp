@@ -38,7 +38,7 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"fill_cache_for_user_">(
+    ttnn::bind_function<"fill_cache_for_user_", "ttnn.kv_cache.">(
         mod, doc, &ttnn::fill_cache_for_user_, nb::arg("cache"), nb::arg("input"), nb::arg("batch_index"));
 }
 
@@ -60,7 +60,7 @@ void bind_update_cache_for_token_(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"update_cache_for_token_">(
+    ttnn::bind_function<"update_cache_for_token_", "ttnn.kv_cache.">(
         mod,
         doc,
         &ttnn::update_cache_for_token_,
@@ -91,7 +91,7 @@ void bind_update_cache(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_function<"update_cache">(
+    ttnn::bind_function<"update_cache", "ttnn.kv_cache.">(
         mod,
         doc,
         &ttnn::update_cache,
@@ -119,7 +119,7 @@ void bind_fill_cache(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_function<"fill_cache">(
+    ttnn::bind_function<"fill_cache", "ttnn.kv_cache.">(
         mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
 }
 
