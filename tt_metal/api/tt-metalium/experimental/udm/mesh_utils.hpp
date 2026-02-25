@@ -6,7 +6,7 @@
 
 #include <vector>
 #include <set>
-#include "tt_metal/experimental/udm/types.hpp"
+#include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::experimental::udm {

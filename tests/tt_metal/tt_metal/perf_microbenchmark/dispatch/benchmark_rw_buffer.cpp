@@ -7,7 +7,6 @@
 #include <fmt/format.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <string>
 #include <vector>
