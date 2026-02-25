@@ -147,11 +147,19 @@ static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeo
 static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
     switch (format) {
         case CommonDataFormat::Float32:
+#ifdef ARCH_QUASAR
+        case CommonDataFormat::Tf32:
+#else
         case CommonDataFormat::UInt32:
+#endif
         case CommonDataFormat::Int32: return 4;
+
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::UInt16:
+#endif
         case CommonDataFormat::Float16:
-        case CommonDataFormat::Float16_b:
-        case CommonDataFormat::UInt16: return 2;
+        case CommonDataFormat::Float16_b: return 2;
+
 #ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
@@ -161,7 +169,9 @@ static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
         case CommonDataFormat::Bfp8_b:
 #endif
         case CommonDataFormat::Int8:
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Lf8:
+#endif
         case CommonDataFormat::UInt8: return 1;  // Round up to 1 byte
         case CommonDataFormat::Invalid:
         default: return 0;  // Invalid/Unknown
@@ -182,10 +192,14 @@ static constexpr bool is_bfp(const CommonDataFormat& format) {
         case CommonDataFormat::Float16_b:
         case CommonDataFormat::Float32:
         case CommonDataFormat::Int8:
+#ifndef ARCH_QUASAR
         case CommonDataFormat::Lf8:
+#endif
         case CommonDataFormat::UInt8:
+#ifndef ARCH_QUASAR
         case CommonDataFormat::UInt16:
         case CommonDataFormat::UInt32:
+#endif
         case CommonDataFormat::Int32:
         case CommonDataFormat::Invalid:
         default: return false;
@@ -202,17 +216,19 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
         case CommonDataFormat::Float32:
         case CommonDataFormat::Int8:
         case CommonDataFormat::UInt8:
+#ifndef ARCH_QUASAR
         case CommonDataFormat::UInt16:
         case CommonDataFormat::UInt32:
+#endif
         case CommonDataFormat::Int32: return true;
 #ifndef ARCH_QUASAR
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
         case CommonDataFormat::Bfp4:
         case CommonDataFormat::Bfp8:
+        case CommonDataFormat::Lf8:
 #endif
         case CommonDataFormat::Float16:
-        case CommonDataFormat::Lf8:
         case CommonDataFormat::Invalid:
         default: return false;
     }
