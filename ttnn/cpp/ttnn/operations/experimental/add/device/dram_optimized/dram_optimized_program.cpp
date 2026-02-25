@@ -64,7 +64,7 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
 
     constexpr uint32_t num_tiles_per_batch = 4;
     constexpr uint32_t num_batches = 2;
-    constexpr uint32_t num_tiles_per_cb = num_tiles_per_batch * (num_batches + 1);  // 12 tiles per CB
+    constexpr uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * (num_batches);
 
     CBHandle a_tensor_cb_handle = createCircularBuffer(a_tensor_cb, single_tile_size, num_tiles_per_cb);
     CBHandle b_tensor_cb_handle = createCircularBuffer(b_tensor_cb, single_tile_size, num_tiles_per_cb);

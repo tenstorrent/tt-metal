@@ -41,24 +41,24 @@ void kernel_main() {
             // DeviceZoneScopedN("WRITER_KERNEL_DATA_MOVEMENT");
             {
                 DeviceZoneScopedN("WAIT_CB_DATA");
-                // cb_wait_front(ct_args.cb_dst, n_tiles_proc);
+                cb_wait_front(ct_args.cb_dst, n_tiles_proc);
             }
 
-            // uint32_t l1_read_addr = get_read_ptr(ct_args.cb_dst);
-            // // print_full_tile(ct_args.cb_dst, tile_id, true);
+            uint32_t l1_read_addr = get_read_ptr(ct_args.cb_dst);
+            // print_full_tile(ct_args.cb_dst, tile_id, true);
 
-            // for (uint32_t k = 0; k < n_tiles_proc; k++) {
-            //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
-            //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
-            //     dst_noc_ofs += tile_size;
-            // }
-            // {
-            //     DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
-            //     noc_async_write_barrier();
-            // }
-            // cb_pop_front(ct_args.cb_dst, n_tiles_proc);
+            for (uint32_t k = 0; k < n_tiles_proc; k++) {
+                noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
+                // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
+                dst_noc_ofs += tile_size;
+            }
+            {
+                DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
+                noc_async_write_barrier();
+            }
+            cb_pop_front(ct_args.cb_dst, n_tiles_proc);
         }
-        DPRINT << "range " << range.n_tiles << " of " << args.num_tiles << " completed" << ENDL();
+        DPRINT << "range " << range.n_tiles << " of " << range.n_tiles_proc << " completed" << ENDL();
     }
 
     DPRINT << "Writer kernel completed" << ENDL();
