@@ -179,7 +179,7 @@ class DecoderBlock2D(DecoderBlock2DBase):
 
         # For decode, we need to check the actual hidden size
         # The w1 weight shape tells us the input dimension
-        hidden_size = cfg["w1"]["weight"].shape[-1] * tp_size  # Input features to w1
+        hidden_size = cfg["w1"]["weight"].shape[-2] * tp_size  # Input features to w1
 
         return cls._forward_mlp_common(
             x,
@@ -187,6 +187,6 @@ class DecoderBlock2D(DecoderBlock2DBase):
             NonExpert.forward_decode,
             hidden_size,
             tp_size,
-            "reduce_scatter",
+            "reduce_scatter_async",
             "decode",
         )
