@@ -59,7 +59,8 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
                        Zeros for unused CBs.
         Words 256:     cb_mask_low  (bits 0-31)
         Words 257:     cb_mask_high (bits 32-63)
-        Words 258-263: padding (zeros)
+        Words 258-259: cross-RISC sync semaphores (initialized to 0, used at runtime)
+        Words 260-263: reserved (zeros)
 
     Args:
         cb_metadata: dict mapping cb_id → (addr, total_size, num_pages, page_size, core_ranges)
