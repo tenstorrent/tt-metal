@@ -116,7 +116,6 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         "");
 
     _llk_pack_init_<untilize, zero_output, tilize>(
-        pack_src_format[output_id],
         pack_dst_format[output_id],
         face_r_dim,
         tile_c_dim,

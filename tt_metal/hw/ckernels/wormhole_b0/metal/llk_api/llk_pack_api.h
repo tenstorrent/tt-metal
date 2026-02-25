@@ -110,7 +110,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
         "");
 
     _llk_pack_init_<untilize, zero_output>(
-        pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
 template <bool out_of_order_output, bool untilize>
