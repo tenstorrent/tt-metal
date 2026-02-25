@@ -55,44 +55,48 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from script location, PYTHONPATH, or current working directory"""
+        """Get the tt-metal base directory.
 
-        # Helper function to find base with model_tracer
-        def find_base_with_model_tracer(start_dir):
-            """Walk up from start_dir to find a directory containing model_tracer/traced_operations"""
+        Resolution order:
+        1. Walk up from this script's location to find model_tracer/traced_operations
+        2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+        3. PYTHONPATH entries
+        4. Current working directory
+        """
+        _marker = os.path.join("model_tracer", "traced_operations")
+
+        def _walk_up(start_dir):
             current = os.path.abspath(start_dir)
             while current != "/":
-                traced_ops_dir = os.path.join(current, "model_tracer", "traced_operations")
-                if os.path.exists(traced_ops_dir):
+                if os.path.isdir(os.path.join(current, _marker)):
                     return current
                 parent = os.path.dirname(current)
-                if parent == current:  # Reached root
+                if parent == current:
                     break
                 current = parent
             return None
 
-        # First try to get base dir from this script's location
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        base = find_base_with_model_tracer(script_dir)
+        base = _walk_up(script_dir)
         if base:
             return base
 
-        # Try current working directory
-        current_dir = os.getcwd()
-        base = find_base_with_model_tracer(current_dir)
-        if base:
-            return base
+        tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+        if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+            return tt_metal_home
 
-        # Try PYTHONPATH
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
-            paths = pythonpath.split(":")
-            for path in paths:
-                base = find_base_with_model_tracer(path)
+            for path in pythonpath.split(":"):
+                base = _walk_up(path)
                 if base:
                     return base
 
-        # Fallback to current directory
+        current_dir = os.getcwd()
+        base = _walk_up(current_dir)
+        if base:
+            return base
+
         return current_dir
 
 

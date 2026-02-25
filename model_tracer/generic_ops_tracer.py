@@ -36,21 +36,39 @@ from pathlib import Path
 
 
 def get_base_dir():
-    """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+    """Get the tt-metal base directory.
+
+    Resolution order:
+    1. Walk up from this script's location to find model_tracer/traced_operations
+    2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+    3. PYTHONPATH entries containing 'tt-metal'
+    4. Current working directory
+    """
+    _marker = os.path.join("model_tracer", "traced_operations")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    current = script_dir
+    while current != "/":
+        if os.path.isdir(os.path.join(current, _marker)):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+    tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+    if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+        return tt_metal_home
+
     pythonpath = os.environ.get("PYTHONPATH", "")
     if pythonpath:
-        paths = pythonpath.split(":")
-        for path in paths:
-            if "tt-metal" in path:
-                if path.endswith("tt-metal"):
-                    return path
-                parts = path.split("tt-metal")
-                if parts:
-                    return parts[0] + "tt-metal"
+        for path in pythonpath.split(":"):
+            if os.path.isdir(os.path.join(path, _marker)):
+                return path
+
     current_dir = os.getcwd()
-    if "tt-metal" in current_dir:
-        parts = current_dir.split("tt-metal")
-        return parts[0] + "tt-metal"
+    if os.path.isdir(os.path.join(current_dir, _marker)):
+        return current_dir
     return current_dir
 
 
