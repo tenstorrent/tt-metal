@@ -25,6 +25,7 @@
 #include <optional>
 #include <unordered_set>
 #include <utility>
+#include <type_traits>
 #include <variant>
 
 #include "buffer_types.hpp"
@@ -412,6 +413,8 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
+void ReleaseOwnership() { MetalContext::destroy_instance(); }
+
 void print_page(
     uint32_t dev_page_id,
     CoreCoord core,
@@ -743,6 +746,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 
         detail::CompileProgram(device, program);
+        program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
         }
@@ -796,17 +800,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    std::unordered_set<CoreCoord> not_done_cores;
-    const auto& hal = MetalContext::instance().hal();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal.get_core_type(index);
-        for (const auto& logical_core : logical_cores) {
-            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            not_done_cores.insert(physical_core);
-        }
-    }
-    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -1233,57 +1227,83 @@ KernelHandle CreateEthernetKernel(
     return program.impl().add_kernel(kernel, eth_core_type);
 }
 
+void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
+    for (const auto& [key, value] : defines) {
+        if (value.find('\0') != std::string::npos) {
+            throw std::invalid_argument("Define value for key '" + key + "' contains null character");
+        }
+    }
+}
+
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
-
-    // Validate the defines in the config
-    std::visit(
-        [](const auto& cfg) {
-            for (const auto& [key, value] : cfg.defines) {
-                if (value.find('\0') != std::string::npos) {
-                    throw std::invalid_argument(
-                        "Define value for key '" + key + "' contains null character");
-                }
-            }
-        },
-        config);
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
 
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
 
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, config);
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> cfg_variant = std::visit(
+        [&](const auto& cfg) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> { return cfg; },
+        config);
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, cfg_variant);
+
     return kernel;
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernelFromString(
     Program& program,
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 CBHandle CreateCircularBuffer(
@@ -1325,6 +1345,11 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
+}
+
+uint32_t CreateSemaphore(
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
+    return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
 }
 
 uint32_t CreateSemaphore(

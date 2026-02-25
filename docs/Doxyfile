@@ -942,7 +942,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i1.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/reverseops.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/logical_not_noti.h \
+                         tt_metal/hw/inc/api/compute/eltwise_unary/logical_not.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rounding.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/activations.h \
@@ -1011,7 +1011,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/include/tt_metal/buffer.hpp \
                          tt_metal/include/tt_metal/command_queue.hpp \
                          tt_metal/include/tt_metal/device.hpp \
-                         tt_metal/include/tt_metal/event.hpp \
                          tt_metal/api/tt-metalium/global_circular_buffer.hpp \
                          tt_metal/include/tt_metal/kernel.hpp \
                          tt_metal/include/tt_metal/program.hpp \

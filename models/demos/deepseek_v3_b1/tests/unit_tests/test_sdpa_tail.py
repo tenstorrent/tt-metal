@@ -25,15 +25,19 @@ from models.demos.deepseek_v3_b1.micro_ops.sdpa_tail.op import SdpaTailSingleCor
 
 
 @pytest.mark.parametrize(
-    "width, block_size, num_blocks",
+    "width, block_size, num_blocks, dense",
     [
-        (16, 8, 2),  # Multiple columns
+        (16, 16, 1, True),
+        (16, 8, 2, False),
     ],
 )
 @pytest.mark.parametrize("final_reduction", [True, False])
+@pytest.mark.parametrize("untilize_out", [True, False])
 @pytest.mark.parametrize("scale", [192**-0.5])
-def test_sdpa_tail(device, width, block_size, num_blocks, final_reduction, scale):
+def test_sdpa_tail(device, width, block_size, num_blocks, dense, final_reduction, untilize_out, scale):
     """Test TTNN sdpa_tail operation on a single core"""
+    if block_size > 8 and not dense:
+        pytest.skip("Dense packing is required for block size > 8")
 
     # Tile dimensions
     tile_height = 8
@@ -134,7 +138,7 @@ def test_sdpa_tail(device, width, block_size, num_blocks, final_reduction, scale
     ttnn_l_out = ttnn.from_torch(
         torch_l_out,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.TILE_LAYOUT if not untilize_out else ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=l_mem_config,
         tile=tile,
@@ -164,6 +168,7 @@ def test_sdpa_tail(device, width, block_size, num_blocks, final_reduction, scale
         block_size=block_size,
         num_blocks=num_blocks,
         final_reduction=final_reduction,
+        dense=dense,
     )
 
     # Convert back to torch for verification

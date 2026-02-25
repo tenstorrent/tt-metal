@@ -26,6 +26,46 @@
 
 namespace tt::tt_metal {
 
+enum Eth : uint8_t {
+    SENDER = 0,
+    RECEIVER = 1,
+    IDLE = 2,
+};
+
+struct EthernetConfig {
+    Eth eth_mode = Eth::SENDER;
+    NOC noc = NOC::NOC_0;
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
+    //     named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+};
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config);
+
 struct KernelSource {
     enum SourceType { FILE_PATH, SOURCE_CODE };
 
@@ -107,14 +147,13 @@ public:
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-    uint32_t dispatch_class() const { return this->dispatch_class_; }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
 
     virtual Config config() const = 0;
 
-    std::string compute_hash() const;
+    uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
@@ -178,7 +217,6 @@ protected:
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -217,9 +255,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~DataMovementKernel() override = default;
 
@@ -257,9 +293,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~EthernetKernel() override = default;
 
@@ -297,11 +331,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        // Note: it's wrong to use HalProcessorClassType here, because DM == 0 and COMPUTE == 1,
-        // but DISPATCH_CLASS_TENSIX_COMPUTE == 2.
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
-    }
+        config_(config) {}
 
     ~ComputeKernel() override = default;
 
