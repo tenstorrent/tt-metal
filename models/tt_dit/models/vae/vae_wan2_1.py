@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
-from tracy import Profiler
 
 import ttnn
 
@@ -81,7 +80,7 @@ class WanAttentionBlock(Module):
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -96,14 +95,14 @@ class WanAttentionBlock(Module):
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -240,7 +239,7 @@ class WanCausalConv3d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -289,7 +288,7 @@ class WanCausalConv3d(Module):
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
             if ttnn.float32
-            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -443,7 +442,7 @@ class WanResidualBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -502,7 +501,7 @@ class WanResidualBlock(Module):
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
             if dtype == ttnn.float32
-            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
+            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -596,7 +595,7 @@ class WanMidBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -671,7 +670,7 @@ class WanConv2d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -839,7 +838,7 @@ class WanResample(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -971,7 +970,7 @@ class WanUpBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -1047,7 +1046,7 @@ class WanDecoder3d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -1246,7 +1245,7 @@ class WanDecoder(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -1311,19 +1310,9 @@ class WanDecoder(Module):
         for i in range(T):
             # Process one frame at a time
             self._conv_idx = [0]
-
-            if i == 5:
-                profiler = Profiler()
-                profiler.enable()
-
             out_BTHWC, new_logical_h = self.decoder(
                 x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
-
-            if i == 5:
-                ttnn.synchronize_device(self.mesh_device)
-                profiler.disable()
-
             # Channels first
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
             # Trim padding on output channels
