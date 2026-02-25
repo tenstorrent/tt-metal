@@ -92,3 +92,11 @@
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
+
+- name: BH Galaxy DeepSeek V3 B1 unit tests
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+  skus:
+    bh_galaxy:
+      timeout: 40
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: fabric
