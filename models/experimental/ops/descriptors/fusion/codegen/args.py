@@ -103,7 +103,13 @@ def _compute_and_concatenate_runtime_args(
 
         cumulative += max_args
 
-    per_core = [(core_coords[i], col_args[i]) for i in range(num_cols) if col_args[i]]
+    # When building a fused kernel (target_core_range provided), always include all
+    # cores — even if no phase contributed per-core RT args (e.g. matmul compute has 0),
+    # the barrier suffix still needs to be appended to every core.
+    if target_core_range is not None:
+        per_core = [(core_coords[i], col_args[i]) for i in range(num_cols)]
+    else:
+        per_core = [(core_coords[i], col_args[i]) for i in range(num_cols) if col_args[i]]
     return offsets, per_core
 
 
