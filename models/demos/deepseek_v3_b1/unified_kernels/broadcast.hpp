@@ -141,8 +141,12 @@ struct Broadcast {
                         DPRINT << "BRISC: Reserving destination CB" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         DPRINT << "BRISC: Moving data" << ENDL();
-                        tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size, 0);
+                        noc_async_read(
+                            get_noc_addr(recv.read_ptr),
+                            get_write_ptr(CTArgs::cb0_id),
+                            args.socket_page_size,
+                            1 - noc_index);
+                        noc_async_read_barrier();
                         DPRINT << "BRISC: Pushing data" << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         DPRINT << "BRISC: Popping pages" << ENDL();
@@ -167,6 +171,7 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 

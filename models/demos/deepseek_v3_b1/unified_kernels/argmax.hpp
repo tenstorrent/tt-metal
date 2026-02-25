@@ -431,6 +431,7 @@ struct Sampling {
 
             // Phase 2: final-core intra-device reduction across all active cores.
             if constexpr (IsFinalCore) {
+                PacketHeaderPool::reset();
                 DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
                        << get_named_compile_time_arg_val("mesh_col") << "): Waiting for intra-device reduction (expect "
                        << CTArgs::expected_remote_incs << " incs)" << ENDL();

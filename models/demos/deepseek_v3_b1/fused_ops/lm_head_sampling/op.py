@@ -1027,6 +1027,7 @@ class LMHeadSampling:
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     brisc_common_runtime_args=brisc_bcast_common_args,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
