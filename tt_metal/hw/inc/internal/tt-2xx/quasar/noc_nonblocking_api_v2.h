@@ -605,7 +605,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | CMD_BUF_MISC_MULTICAST |
                     (posted ? CMD_BUF_MISC_POSTED : 0) | (linked ? CMD_BUF_MISC_LINKED : 0);
