@@ -187,7 +187,7 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
     }
 }
 
-void RiscFirmwareInitializer::teardown() {
+void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
 
     teardown_simulator_ethernet_cores();
