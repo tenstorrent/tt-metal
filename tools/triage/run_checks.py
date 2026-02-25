@@ -31,10 +31,8 @@ import threading
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from triage import log_warning
-
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check, create_progress
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_warning, create_progress
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -146,7 +144,7 @@ def _convert_to_on_chip_coordinates(
     for location in block_locations:
         coord_str = f"e{location.x},{location.y}" if "eth" in block_type.lower() else f"{location.x},{location.y}"
         # We skip e0,15 on wormhole devices since it is reserved for syseng use
-        if coord_str == "e0,15" and device.is_wormhole() and device.is_local:
+        if coord_str == "e0,15" and device.is_wormhole() and device.is_local and block_type != "eth":
             continue
         on_chip_coordinates.append(OnChipCoordinate.create(coord_str, device))
     return on_chip_coordinates
@@ -418,6 +416,7 @@ def run(args, context: Context):
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
+    print(block_locations)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
 
 
