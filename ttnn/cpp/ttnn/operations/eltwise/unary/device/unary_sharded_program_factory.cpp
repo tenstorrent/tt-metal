@@ -88,8 +88,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
-        ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);

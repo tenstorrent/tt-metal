@@ -21,6 +21,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
+#include "jit_build/precompiled.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -180,15 +181,24 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
+    auto& dev_build_env = device_id_to_build_env_[device_id];
+
     uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
-    const uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    device_id_to_build_env_[device_id].build_env.init(
-        build_key, tt::tt_metal::MetalContext::instance().get_cluster().arch(), max_cbs, device_kernel_defines);
-    device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, true);
-    device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, false);
+    const uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    dev_build_env.build_env.init(
+        build_key, MetalContext::instance().get_cluster().arch(), max_cbs, device_kernel_defines);
+
+    auto precompiled_dir = precompiled::find_precompiled_dir(
+        MetalContext::instance().rtoptions().get_root_dir(), dev_build_env.build_env.get_build_key());
+    if (precompiled_dir.has_value()) {
+        dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
+        dev_build_env.firmware_precompiled = true;
+        log_info(tt::LogBuildKernels, "Using pre-compiled firmware from: {}", *precompiled_dir);
+    }
+
+    dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, true);
+    dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
@@ -256,7 +266,17 @@ BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
 void BuildEnvManager::build_firmware(ChipId device_id) {
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
+    if (build_env.firmware_precompiled) {
+        return;
+    }
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+}
+
+std::string BuildEnvManager::get_firmware_binary_path(
+    ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
+    const auto& env = get_device_build_env(device_id).build_env;
+    const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
+    return env.get_firmware_binary_root() + state.get_target_full_path();
 }
 
 // Get build environment info for all devices

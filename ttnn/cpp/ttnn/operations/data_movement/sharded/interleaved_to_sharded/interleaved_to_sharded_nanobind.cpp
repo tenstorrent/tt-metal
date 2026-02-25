@@ -14,8 +14,6 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "interleaved_to_sharded.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
-
 namespace ttnn::operations::data_movement {
 
 // TODO: Add more descriptions to the arguments

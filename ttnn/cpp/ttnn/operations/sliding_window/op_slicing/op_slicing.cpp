@@ -106,8 +106,6 @@ static uint32_t compute_L1_usage_for_slice_config(
             std::tie(std::ignore, input_slice_width_start) = input_slice_start;
             std::tie(std::ignore, input_slice_width_end) = input_slice_end;
 
-            input_slice_height_start = 0;
-            input_slice_height_end = input_height;
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 

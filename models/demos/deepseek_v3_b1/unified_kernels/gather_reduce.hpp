@@ -65,8 +65,8 @@ struct GatherReduce {
     struct ReceiverArgs {
         uint32_t noc0_num_senders;
         uint32_t noc1_num_senders;
-        uint32_t noc0_receiver_semaphore_id;
-        uint32_t noc1_receiver_semaphore_id;
+        uint32_t noc0_receiver_semaphore_addr;
+        uint32_t noc1_receiver_semaphore_addr;
         uint32_t half0_dst_cb;
         uint32_t half1_dst_cb;
         uint32_t dst_num_tiles;
@@ -76,7 +76,7 @@ struct GatherReduce {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
         uint32_t data_size_bytes;
-        uint32_t receiver_semaphore_id;
+        uint32_t receiver_semaphore_addr;
         uint32_t src_cb;
         uint32_t src_num_pages;
         uint32_t gather_reduce_grid_start_x;
@@ -160,10 +160,9 @@ struct GatherReduce {
                 uint32_t dst_base_addr = get_write_ptr(dst_cb_id);
                 uint32_t dst_offset = half_info.half_local_idx * args.data_size_bytes;
 
-                uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);
-                uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)receiver_semaphore_addr;
+                uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
@@ -187,9 +186,8 @@ struct GatherReduce {
             // BRISC (Receiver) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsReceiverCore) {
-                uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
+                    (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
                 // Reserve space in destination CBs
                 cb_reserve_back(args.half0_dst_cb, args.dst_num_tiles);
@@ -199,9 +197,8 @@ struct GatherReduce {
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
 
                 if (args.noc1_num_senders > 0) {
-                    uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
                     volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
-                        (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                        (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
                     noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                     noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
                 }
