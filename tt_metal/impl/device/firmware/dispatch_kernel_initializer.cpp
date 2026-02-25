@@ -67,9 +67,9 @@ void DispatchKernelInitializer::init(
     devices_ = devices;
 
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor_->num_cqs());
+        std::make_unique<tt::tt_metal::DispatchMemMap>(descriptor_->hal(), CoreType::WORKER, descriptor_->num_cqs());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor_->num_cqs());
+        std::make_unique<tt::tt_metal::DispatchMemMap>(descriptor_->hal(), CoreType::ETH, descriptor_->num_cqs());
 
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {

@@ -117,9 +117,9 @@ public:
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
         dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor.num_cqs());
+            std::make_unique<tt::tt_metal::DispatchMemMap>(descriptor.hal(), CoreType::WORKER, descriptor.num_cqs());
         dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor.num_cqs());
+            std::make_unique<tt::tt_metal::DispatchMemMap>(descriptor.hal(), CoreType::ETH, descriptor.num_cqs());
     }
     virtual ~FDKernel() = default;
 

@@ -14,6 +14,7 @@
 
 namespace tt::tt_metal {
 enum class CommandQueueDeviceAddrType : uint8_t;
+class Hal;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -24,13 +25,16 @@ namespace tt::tt_metal {
 // order. The size of each address type and L1 base is
 // set by DispatchSettings.
 //
+// IMPORTANT: DispatchMemMap stores a reference to a Hal object. Callers must
+// ensure the Hal outlives the DispatchMemMap instance.
+//
 class DispatchMemMap {
 public:
     DispatchMemMap& operator=(const DispatchMemMap&) = delete;
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs);
+    DispatchMemMap(const Hal& hal, const CoreType& core_type, uint32_t num_hw_cqs);
 
     uint32_t prefetch_q_entries() const;
 
@@ -92,6 +96,7 @@ private:
 
     DispatchSettings settings;
 
+    const Hal& hal_;
     uint32_t hw_cqs{0};  // 0 means uninitialized
     CoreType last_core_type{CoreType::WORKER};
 };

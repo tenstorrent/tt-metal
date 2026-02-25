@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <enchantum/enchantum.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
@@ -11,14 +10,13 @@
 #include "command_queue_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch_settings.hpp"
-#include "fabric/fabric_context.hpp"
+#include "llrt/hal.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
 
-DispatchMemMap::DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs) {
+DispatchMemMap::DispatchMemMap(const Hal& hal, const CoreType& core_type, const uint32_t num_hw_cqs) : hal_(hal) {
     this->reset(core_type, num_hw_cqs);
 }
 
@@ -62,25 +60,20 @@ uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceA
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
     return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) *
-           tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+           hal_.get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
 uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
-    uint32_t offset = index * MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t offset = index * hal_.get_alignment(HalMemType::L1);
     return offset;
 }
 
 uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
     // Address of the first dispatch message entry. Remaining entries are each offset by
     // get_noc_stream_reg_space_size() bytes.
-    return tt::tt_metal::MetalContext::instance().hal().get_noc_overlay_start_addr() +
-           (tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() *
-            get_dispatch_stream_index(0)) +
-           (tt::tt_metal::MetalContext::instance()
-                .hal()
-                .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
-            sizeof(uint32_t));
+    return hal_.get_noc_overlay_start_addr() + (hal_.get_noc_stream_reg_space_size() * get_dispatch_stream_index(0)) +
+           (hal_.get_noc_stream_remote_dest_buf_space_available_update_reg_index() * sizeof(uint32_t));
 }
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
@@ -109,9 +102,8 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
 
     const auto dispatch_buffer_block_size = settings.dispatch_size_;
     const auto [l1_base, l1_size] = get_device_l1_info(settings.core_type_);
-    const auto pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    const auto l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    const auto pcie_alignment = hal_.get_alignment(tt::tt_metal::HalMemType::HOST);
+    const auto l1_alignment = hal_.get_alignment(tt::tt_metal::HalMemType::L1);
 
     TT_ASSERT(settings.prefetch_cmddat_q_size_ >= 2 * settings.prefetch_max_cmd_size_);
     TT_ASSERT(settings.prefetch_scratch_db_size_ % 2 == 0);
@@ -184,15 +176,15 @@ std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType&
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {
-        l1_base = MetalContext::instance().hal().get_dev_addr(
+        l1_base = hal_.get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = MetalContext::instance().hal().get_dev_size(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
+        l1_size =
+            hal_.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
     } else if (core_type == CoreType::ETH) {
-        l1_base = MetalContext::instance().hal().get_dev_addr(
+        l1_base = hal_.get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-        l1_size = MetalContext::instance().hal().get_dev_size(
-            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
+        l1_size =
+            hal_.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
     } else {
         TT_THROW("get_base_device_command_queue_addr not implemented for core type");
     }

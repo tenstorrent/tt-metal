@@ -207,9 +207,9 @@ void MetalContext::initialize(
     // Need DispatchMemMap for both dispatch core types
     tt_metal::DispatchSettings::initialize(*cluster_);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
+        std::make_unique<DispatchMemMap>(*hal_, CoreType::WORKER, num_hw_cqs);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
+        std::make_unique<DispatchMemMap>(*hal_, CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
     rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
