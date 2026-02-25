@@ -5,7 +5,7 @@ training_config:
   validation_batch_size: 4
   num_epochs: 1
   max_steps: 160
-  optimizer_config: "configs/optimizer_configs/moreh_adamw.yaml"
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   gradient_accumulation_steps: 1

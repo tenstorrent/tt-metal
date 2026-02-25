@@ -7,7 +7,7 @@ training_config:
   max_steps: 5000
   tokenizer_type: bpe
   model_config: "configs/model_configs/nanogpt.yaml"
-  optimizer_config: "configs/optimizer_configs/adamw_composite.yaml"
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
 
 device_config:
   enable_ddp: false

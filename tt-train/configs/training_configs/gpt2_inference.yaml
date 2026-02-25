@@ -5,7 +5,7 @@ training_config:
   batch_size: 4
   num_epochs: 1
   max_steps: 5000
-  optimizer_config: "configs/optimizer_configs/moreh_adamw.yaml"
+  optimizer_config: "configs/optimizer_configs/adamw.yaml"
   gradient_accumulation_steps: 1
   tokenizer_type: bpe
   tokenizer_path: "data/gpt2-tokenizer.json"
