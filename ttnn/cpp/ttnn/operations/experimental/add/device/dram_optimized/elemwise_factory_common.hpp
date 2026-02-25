@@ -70,13 +70,9 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
 
     uint32_t num_tiles = static_cast<uint32_t>(a_tensor.physical_volume() / TILE_HW);
 
-    // constexpr uint32_t num_blocks = 4;  // autotune parameter; shows how many tiles per block accross height
-    constexpr uint32_t num_banks = 12;  // constant; show how many tiles per block accross width
-
     bool row_major = true;  // TODO: make this configurable
     uint32_t num_cores_total = all_device_cores.num_cores();
 
-    TT_FATAL(num_cores_total == num_banks, "num_cores_total must be eq to num_banks");
     TT_FATAL(
         a_tensor.logical_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
         "num_tiles mismatch, {} % {} != 0",
@@ -209,25 +205,6 @@ inline void set_eltwise_binary_runtime_args_across_all_cores(
             ? grid_to_cores(
                   num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major)
             : corerange_to_cores(all_device_cores, {}, row_major);
-
-    // cores = order_cores_by_optimal_dram(std::move(cores), a_tensor.device());
-
-    // std::cout << "compute_with_storage_grid_size: " << compute_with_storage_grid_size.x << ", "
-    //           << compute_with_storage_grid_size.y << std::endl;
-
-    // std::cout << "cores: " << cores.size() << std::endl;
-
-    // std::cout << "num_cores: " << num_cores << std::endl;
-    // std::cout << "all_device_cores: " << all_device_cores.num_cores() << std::endl;
-    // std::cout << "zero_start_grid: " << zero_start_grid << std::endl;
-    // std::cout << "row_major: " << row_major << std::endl;
-    // std::cout << "num_tiles: " << num_tiles << std::endl;
-    // std::cout << "num_tiles_per_core_group_1: " << num_tiles_per_core_group_1 << std::endl;
-    // std::cout << "num_tiles_per_core_group_2: " << num_tiles_per_core_group_2 << std::endl;
-    // std::cout << "core_group_1: " << core_group_1.num_cores() << std::endl;
-    // std::cout << "core_group_2: " << core_group_2.num_cores() << std::endl;
-
-    // std::cout << "num_cores_total: " << num_cores_total << std::endl;
 
     std::vector<std::vector<uint32_t>> reader_args_array{
         cores.size(), std::vector<uint32_t>{amount_of_fields<EltwiseReaderArgs>(), 0}};
