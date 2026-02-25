@@ -38,6 +38,37 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
+# Supported (transpose_tile, tile_w, tile_h, has_bias) combinations for tiny-tile matmul.
+# Excluded cases:
+#   - transpose_tile=True,  tile_w=16, any tile_h, any has_bias:
+#       in1=32x16 with transpose has no addr_mod handling in llk_math_matmul
+#   - transpose_tile=False, tile_w=16, tile_h=32, has_bias=True:
+#       Broadcast Row with 32x16 narrow tile not supported
+_TINY_TILE_SUPPORTED_COMBOS = frozenset(
+    # (transpose_tile, tile_w, tile_h, has_bias)
+    {
+        (False, 16, 16, False),
+        (False, 16, 16, True),
+        (False, 16, 32, False),
+        # (False, 16, 32, True) excluded
+        (False, 32, 16, False),
+        (False, 32, 16, True),
+        (False, 32, 32, False),
+        (False, 32, 32, True),
+        # (True, 16, *, *) all excluded
+        (True, 32, 16, False),
+        (True, 32, 16, True),
+        (True, 32, 32, False),
+        (True, 32, 32, True),
+    }
+)
+
+
+def is_tiny_tile_combo_supported(transpose_tile: bool, tile_w: int, tile_h: int, has_bias: bool = False) -> bool:
+    """Return True if the (transpose_tile, tile_w, tile_h, has_bias) combo is valid in tiny-tile matmul."""
+    return (transpose_tile, tile_w, tile_h, has_bias) in _TINY_TILE_SUPPORTED_COMBOS
+
+
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
@@ -262,8 +293,8 @@ def test_matmul_reuse_config_sharded_fd_column(
 def test_matmul_reuse_config_sharded_tiny_tile(
     device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul.")
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     torch.manual_seed(0)
 
@@ -370,10 +401,8 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
-    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("Combination of tile_w=16 and transpose_tile=True is not supported in llk_math_matmul.")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
-        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     # PCC issue when height not equal to tile height
     m = tile_h
@@ -825,10 +854,8 @@ def test_matmul_2d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
-    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
-        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     for _ in range(2):
         run_matmul_2d_tiny_tile(
@@ -987,10 +1014,8 @@ def test_matmul_1d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
-    if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
-        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     for _ in range(2):
         run_matmul_1d_tiny_tile(
