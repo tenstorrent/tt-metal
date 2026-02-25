@@ -95,9 +95,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     bool input_is_nd_sharded = tensor_args.input_tensor.is_nd_sharded();
     const auto& input_tensor = tensor_args.input_tensor;
-    std::cout << "Computing output specs for tilize\n";
     if (input_tensor.memory_config().is_sharded() && !input_is_nd_sharded) {
-        std::cout << "Input tensor is sharded and not ND sharded\n";
         auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
             input_tensor.memory_config()
                 .shard_spec());  // If the input is legacy sharded, the output has the same shard spec as the input.

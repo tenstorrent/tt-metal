@@ -20,7 +20,6 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     const ttnn::prim::TilizeParams& operation_attributes,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
-    std::cout << "Creating default program for multi-core tilize\n";
     auto a = tensor_args.input_tensor;
     const auto& output = output_tensor;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -31,20 +30,16 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
-    // int32_t ntiles = a.physical_volume() / TILE_HW;
-    // uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
+    Buffer* src0_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
-    uint32_t logical_height = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
-    uint32_t batch = 1;
-    for (int i = 0; i < static_cast<int>(logical_shape.rank()) - 2; ++i) {
-        batch *= logical_shape[i];
-    }
     uint32_t ntiles_per_block = tt::div_up(logical_width, TILE_WIDTH);
-    int32_t ntiles = static_cast<int32_t>(batch * tt::div_up(logical_height, TILE_HEIGHT) * ntiles_per_block);
+    int32_t ntiles = dst_buffer->num_pages();
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    // uint32_t block_size_nbytes = a.padded_shape()[-1] * a.element_size(); //
-    IDevice* device = a.device();
+    auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -58,14 +53,6 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     auto [output_cb_index, _] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    std::cout << "output buffer: num_pages=" << dst_buffer->num_pages()
-              << ", num_dev_pages=" << dst_buffer->num_dev_pages() << ", page_size=" << dst_buffer->page_size()
-              << ", size=" << dst_buffer->size() << "\n";
-
     /** reader
      */
     uint32_t stick_size = a.padded_shape()[-1] * a.element_size();
@@ -75,20 +62,13 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         stick_size = shard_width * a.element_size();  // For ND sharding, a stick is a row of the shard.
-        num_sticks_in_row = tt::div_up(
-            logical_width,  // a.padded_shape()[-1],
-            shard_width);   // Compute number of sticks in one tensor row.
+        num_sticks_in_row = tt::div_up(logical_width,
+                                       shard_width);  // Compute number of sticks in one tensor row.
         uint32_t padding_size =
-            (num_sticks_in_row * stick_size) -         // block_size_nbytes;
+            (num_sticks_in_row * stick_size) -
             a.logical_shape()[-1] * a.element_size();  // Compute padding size for the last stick in the row.
         stick_size_of_last_stick_in_row = stick_size - padding_size;
     }
-    std::cout << "stick_size: " << stick_size << "\n";
-    std::cout << "num_sticks_in_row: " << num_sticks_in_row << "\n";
-    std::cout << "stick_size_of_last_stick_in_row: " << stick_size_of_last_stick_in_row << "\n";
-    // std::cout << "block_size_nbytes: " << block_size_nbytes << "\n";
-    std::cout << "ntiles_per_block: " << ntiles_per_block << "\n";
-    std::cout << "ntiles: " << ntiles << "\n";
     std::vector<uint32_t> reader_ct_args = {stick_size, num_sticks_in_row, stick_size_of_last_stick_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
@@ -112,9 +92,6 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
      */
     std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
-    std::cout << "nblocks_per_core: " << nblocks_per_core << "\n";
-    std::cout << "nblocks_per_core_cliff: " << nblocks_per_core_cliff << "\n";
-    std::cout << "ntiles_per_block: " << ntiles_per_block << "\n";
 
     if (!core_range.ranges().empty()) {
         CreateKernel(
