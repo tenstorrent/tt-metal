@@ -339,17 +339,19 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
         TT_FATAL(
             a_dim == b_dim || a_dim == 1 || b_dim == 1,
-            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            "Broadcasting rule violation at dimension index {} (output rank {}), dim a: {}, dim b: {}",
             i,
+            larger_rank,
             a_dim,
             b_dim);
 
         if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
-                "dim b: {}",
+                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
                 i,
+                larger_rank,
                 a_dim,
                 b_dim);
         }

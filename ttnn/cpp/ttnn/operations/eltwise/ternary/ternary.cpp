@@ -132,14 +132,7 @@ Tensor invoke_impl(
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
-        TernaryOpType::WHERE,
-        condition,
-        t_true,
-        t_false,
-        output_dtype,
-        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output,
-        sub_core_grids);
+        TernaryOpType::WHERE, condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
 }
 
 // TTS: tensor, tensor, scalar
@@ -289,7 +282,7 @@ Tensor AddcmulOperation::invoke(
         input_c,
         value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        memory_config,
         output,
         std::nullopt);
 }
@@ -329,7 +322,7 @@ Tensor AddcdivOperation::invoke(
         input_c,
         value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        memory_config,
         output,
         std::nullopt);
 }
