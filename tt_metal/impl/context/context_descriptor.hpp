@@ -10,7 +10,9 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <experimental/fabric/fabric_types.hpp>
-#include "context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
+#include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace tt {
 class Cluster;
