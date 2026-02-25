@@ -27,12 +27,10 @@ void kernel_main() {
     constexpr auto cb_in1 = ct_args.b_tensor_cb;
     constexpr auto cb_out0 = ct_args.output_cb;
 
-    // Metalium API Calls                              Involved Cores
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);  // Unpack, Math, Pack
-    add_tiles_init(cb_in0, cb_in1);                  // Unpack, Math
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    // add_tiles_init(cb_in0, cb_in1);
 
-    // DPRINT << "COMPUTE KERNEL: num_tiles: " << args.num_tiles << ", num_tiles_per_batch " << num_tiles_per_batch
-    //        << ENDL();
+    mul_tiles_init(cb_in0, cb_in1);
 
     auto inter_range = get_inter_range(args.num_tiles, ct_args.num_tiles_per_batch, ct_args.num_batches);
 
@@ -40,45 +38,30 @@ void kernel_main() {
         DPRINT << "range.n_tiles: " << range.n_tiles << ", range.n_tiles_proc: " << range.n_tiles_proc << ENDL();
         for (uint32_t tile_id = 0; tile_id < range.n_tiles; tile_id += range.n_tiles_proc) {
             const auto& n_tiles_proc = range.n_tiles_proc;
-            {
-                DeviceZoneScopedN("WAIT_CB_DATA");
-                cb_wait_front(cb_in0, n_tiles_proc);  // Unpack
-                cb_wait_front(cb_in1, n_tiles_proc);  // Unpack
-            }
+
+            cb_wait_front(cb_in0, n_tiles_proc);
+            cb_wait_front(cb_in1, n_tiles_proc);
+
             cb_reserve_back(cb_out0, n_tiles_proc);
 
-            {
-                DeviceZoneScopedN("ADD_TILES");
-                // acquire 8 tile registers to perform the addition
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < n_tiles_proc; i++) {
-                    // DPRINT << "Compute kernel is processing tile " << i << ENDL();
-                    add_tiles(cb_in0, cb_in1, i, i, i);
-                }
-                tile_regs_commit();
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < n_tiles_proc; i++) {
+                // add_tiles(cb_in0, cb_in1, i, i, i);
+                mul_tiles(cb_in0, cb_in1, i, i, i);
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+
+            for (uint32_t i = 0; i < n_tiles_proc; i++) {
+                pack_tile(i, cb_out0);
             }
 
-            {
-                // DeviceZoneScopedN("PACK_TILES");  // TRISC 2
-                tile_regs_wait();  // packer waits here
+            cb_push_back(cb_out0, n_tiles_proc);
+            tile_regs_release();
 
-                for (uint32_t i = 0; i < n_tiles_proc; i++) {
-                    pack_tile(i, cb_out0);  // Pack
-                }
-
-                // DPRINT << "Compute kernel is releasing tile " << i << ENDL();
-                cb_push_back(cb_out0, n_tiles_proc);  // Pack
-                tile_regs_release();                  // Pack
-            }
-
-            // DPRINT << "CB free processed input tiles " << ENDL();
-            cb_pop_front(cb_in0, n_tiles_proc);  // Unpack
-            cb_pop_front(cb_in1, n_tiles_proc);  // Unpack
-
-            // DPRINT << "Send out tile " << ENDL();
+            cb_pop_front(cb_in0, n_tiles_proc);
+            cb_pop_front(cb_in1, n_tiles_proc);
         }
-        DPRINT << "range " << range.n_tiles << " of " << range.n_tiles_proc << " completed" << ENDL();
     }
-
-    DPRINT << "Compute kernel completed" << ENDL();
 }
