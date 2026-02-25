@@ -70,6 +70,7 @@ void kernel_main() {
 // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
 // Runtime args: []
 // ============================================================================
+uint32_t per_core_rta_arg_idx = 0;
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
@@ -107,7 +108,7 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(10),  // ring_index
             get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
             get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
-            get_common_arg_val<uint32_t>(13),  // per core fabric args start index
+            per_core_rta_arg_idx,
         };
     }
 
@@ -262,12 +263,11 @@ void kernel_main() {
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 
-    uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         flash_mla_args = {
-            .k_addr = get_common_arg_val<uint32_t>(14),
-            .pos_addr = get_common_arg_val<uint32_t>(15),
+            .k_addr = get_common_arg_val<uint32_t>(13),
+            .pos_addr = get_common_arg_val<uint32_t>(14),
             .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -464,7 +464,6 @@ void kernel_main() {
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
     };
 
-    uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
@@ -695,7 +694,6 @@ void kernel_main() {
         .kv_cache_output_cb = get_common_arg_val<uint32_t>(5),
         .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(6),
     };
-    uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ComputeArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
