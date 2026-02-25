@@ -26,10 +26,9 @@ tt::tt_metal::Tensor RotaryEmbeddingHf::invoke(
     const bool is_decode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
-    if (input_tensor.storage_type() == StorageType::DEVICE) {
-        default_memory_config = input_tensor.memory_config();
-    }
+    auto output_mem_config = memory_config.value_or(
+        input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.memory_config()
+                                                           : tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
     auto arch = input_tensor.device()->arch();
     auto kernel_config =
