@@ -1013,7 +1013,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                     *src_fabric_node_id.mesh_id,
                     src_fabric_node_id.chip_id);
                 this->log_available_fabric_node_ids();
-                TT_FATAL(
+                TT_THROW(
                     "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
                     src_fabric_node_id.mesh_id,
                     src_fabric_node_id.chip_id);
