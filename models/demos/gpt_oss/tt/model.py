@@ -725,17 +725,23 @@ class Model:
             return concat_out.reshape(-1)[:B]
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
-        config = self.mesh_config.get_config("decode")
+        config = self.mesh_config.get_config(Mode.DECODE)
         if config.tp > 1:
             device_tensors = ttnn.get_device_tensors(tt_out)
             tp = config.tp
-            num_rows = len(device_tensors) // tp
-            rows = []
-            for r in range(num_rows):
-                row_tensors = device_tensors[r * tp : (r + 1) * tp]
-                row_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
-                rows.append(row_out)
-            torch_out = torch.cat(rows, dim=-2) if num_rows > 1 else rows[0]
+            if self.users_row_sharded:
+                # TP gather per row, then DP gather across rows (rows carry different users)
+                num_rows = len(device_tensors) // tp
+                rows = []
+                for r in range(num_rows):
+                    row_tensors = device_tensors[r * tp : (r + 1) * tp]
+                    row_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
+                    rows.append(row_out)
+                torch_out = torch.cat(rows, dim=-2) if num_rows > 1 else rows[0]
+            else:
+                # Rows are EP replicas with identical data; TP-gather first row only
+                row_tensors = device_tensors[:tp]
+                torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
         else:
             torch_out = self.concat_device_output(tt_out)
         torch_out = torch_out[:, 0, :, :]  # [1, 1, B, vocab_size]
@@ -757,7 +763,7 @@ class Model:
         Host-side TP gather: the generator moves logits to CPU before calling
         this method, so on-device allgather is not possible here.
         """
-        config = self.mesh_config.get_config("prefill")
+        config = self.mesh_config.get_config(Mode.PREFILL)
         if config.tp > 1:
             device_tensors = ttnn.get_device_tensors(tt_out)
             tp = config.tp
