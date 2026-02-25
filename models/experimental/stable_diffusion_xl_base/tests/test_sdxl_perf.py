@@ -10,6 +10,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -221,11 +222,102 @@ def test_refiner_unet(
         "test_sdxl_clip_encoder_2",
     ],
 )
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole performance test")
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_perf_device(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
     os.environ["TT_MM_THROTTLE_PERF"] = "0" if "clip_encoder" in command else "5"
+    run_model_device_perf_test(
+        command=command,
+        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
+        subdir=subdir,
+        model_name=model_name,
+        num_iterations=num_iterations,
+        batch_size=batch_size,
+        margin=margin,
+        comments=comments,
+    )
+
+
+@pytest.mark.parametrize(
+    "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
+    [
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet",
+            119_138_750,
+            "sdxl_unet",
+            "sdxl_unet_blackhole",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.015,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
+            131_795_269,
+            "sdxl_refiner_unet",
+            "sdxl_refiner_unet_blackhole",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.06,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'",
+            369_666_097,
+            "sdxl_vae",
+            "sdxl_vae_decode_blackhole",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'",
+            170_093_216,
+            "sdxl_vae",
+            "sdxl_vae_encode_blackhole",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'",
+            6_795_180,
+            "sdxl_clip_encoder_1",
+            "sdxl_clip_encoder_1_blackhole",
+            CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_2'",
+            31_220_061,
+            "sdxl_clip_encoder_2",
+            "sdxl_clip_encoder_2_blackhole",
+            CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.020,
+            "",
+        ),
+    ],
+    ids=[
+        "test_sdxl_unet_blackhole",
+        "test_sdxl_refiner_unet_blackhole",
+        "test_sdxl_vae_decode_blackhole",
+        "test_sdxl_vae_encode_blackhole",
+        "test_sdxl_clip_encoder_1_blackhole",
+        "test_sdxl_clip_encoder_2_blackhole",
+    ],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole performance test")
+@pytest.mark.models_device_performance_bare_metal
+def test_sdxl_perf_device_blackhole(
+    command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
+):
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
