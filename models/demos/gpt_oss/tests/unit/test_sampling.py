@@ -148,6 +148,35 @@ def extract_all_tokens(tt_out_tok, batch_size, device_idx=0):
     return torch_tensor[0, 0, :, :].reshape(-1)[:batch_size].tolist()
 
 
+def make_hot_logits(args, mesh_device, batch_size, num_hot=8):
+    """Create logits with controlled hot tokens spread across TP shards.
+
+    Returns (tt_input, hot_tokens) where tt_input is a sharded device tensor
+    and hot_tokens is the list of token IDs that have elevated logit values.
+    Hot tokens are placed in different shards so the all-gather path is
+    exercised, with varied logit values (10.0, 9.75, 9.5, ...) to produce
+    a non-uniform softmax distribution.
+    """
+    num_tp = mesh_device.shape[1]
+    per_device_vocab = args.padded_vocab_size // num_tp
+
+    hot_tokens = []
+    for i in range(num_hot):
+        shard_idx = i % num_tp
+        candidate = shard_idx * per_device_vocab + 100 + i
+        if candidate >= VOCAB_SIZE:
+            candidate = 200 + i
+        hot_tokens.append(candidate)
+
+    torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
+    for idx, tok in enumerate(hot_tokens):
+        torch_input[:, :, :, tok] = 10.0 - idx * 0.25
+    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
+
+    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+    return tt_input, hot_tokens
+
+
 # --- Test: greedy (argmax) sampling ---
 
 
@@ -240,7 +269,6 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     and produces varied output (not stuck on one token).
     """
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
-    num_tp = mesh_device.shape[1]
     num_samples = 100
 
     top_k = sampling_params["top_k"]
@@ -248,41 +276,18 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     temperature = sampling_params["temperature"]
     seed = sampling_params["seed"]
 
-    # Choose hot tokens spread across different device shards so the all-gather
-    # path is exercised. With 8 shards of 32768 each, pick tokens in different shards.
-    # Ensure all hot tokens are within VOCAB_SIZE (not in padding region).
-    per_device_vocab = args.padded_vocab_size // num_tp
-    num_hot = min(top_k, 8)  # Use up to 8 hot tokens
-    hot_tokens = []
-    for i in range(num_hot):
-        shard_idx = i % num_tp
-        candidate = shard_idx * per_device_vocab + 100 + i
-        if candidate >= VOCAB_SIZE:
-            # Fall back to a token in shard 0 if this shard is in the padding region
-            candidate = 200 + i
-        hot_tokens.append(candidate)
+    num_hot = min(top_k, 8)
+    tt_input, hot_tokens = make_hot_logits(args, mesh_device, batch_size, num_hot=num_hot)
 
-    # Create logits: hot tokens at varied high values (8.0-10.0), everything else
-    # near 0, padding at -inf. Varied values ensure softmax produces a non-uniform
-    # distribution so the PRNG actually samples different tokens.
-    torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
-    for idx, tok in enumerate(hot_tokens):
-        torch_input[:, :, :, tok] = 10.0 - idx * 0.25  # 10.0, 9.75, 9.5, ...
-    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
-
-    # Shard to device
-    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
-
-    # Use SamplingGenerator which manages seeds between iterations (TTSampling
-    # re-seeds from seeds_tt_tensor each forward call, so seeds must be updated
-    # via SeedManager.get_new_values() to get different random samples).
+    # SamplingGenerator manages seeds between iterations (TTSampling re-seeds
+    # from seeds_tt_tensor each forward call, so seeds must be updated via
+    # SeedManager.get_new_values() to get different random samples).
     sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
     params = format_sampling_params(
         SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, seed=seed),
         batch_size,
     )
     sg.reset_sampling_params(params)
-    sg.seed_manager.get_new_values()
 
     # Run device sampling
     sampled_tokens = []
@@ -384,7 +389,6 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
     sg.reset_prompt_tokens(target_tokens)
     sg.reset_output_state(tokens=target_tokens)
 
-    ttnn.manual_seed(42, device=mesh_device, sub_core_grids=args.sub_core_grids)
     tokens, _log_probs = sg.sample(tt_input, enable_trace=False)
     token = extract_token(tokens)
 
@@ -430,7 +434,6 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
     )
     sg.reset_sampling_params(params)
     sg.seed_manager.get_new_values()
-    ttnn.manual_seed(42, device=mesh_device, sub_core_grids=args.sub_core_grids)
 
     tokens, log_probs = sg.sample(tt_input, enable_trace=False)
 
@@ -458,56 +461,40 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
 
 
 def _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds):
-    """Create a SamplingGenerator with specific per-user seeds for stochastic sampling."""
+    """Create a SamplingGenerator with specific per-user seeds for stochastic sampling.
+
+    Seeds the per-user Python RNGs but does NOT call get_new_values() — the
+    caller is responsible for calling it before each sample() to advance the
+    RNG state and copy fresh seeds to the device.
+    """
     sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
     params = format_sampling_params(
         SamplingParams(temperature=1.0, top_k=32, top_p=0.95, seed=0),
         batch_size,
     )
     sg.reset_sampling_params(params)
-    # Set specific seeds for each user
     sg.seed_manager.reset_seed(per_user_seeds, list(range(len(per_user_seeds))))
-    sg.seed_manager.get_new_values()
     return sg
 
 
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
-def test_gpt_oss_seed_determinism_within_batch(mesh_device, device_params, reset_seeds):
-    """Test that running the same batch twice produces identical tokens for all users.
+def test_gpt_oss_seed_determinism_batch_replay(mesh_device, device_params, reset_seeds):
+    """Test that replaying the same seeds reproduces identical tokens for all users.
 
-    Seeds all users with distinct per-slot seeds, runs a multi-iteration decode,
-    then repeats with the same seeds.  Every user slot should produce the same
-    token sequence across both runs, proving that batch-level determinism holds
-    when seeds are replayed.
+    Seeds all 32 users with distinct per-slot seeds, runs a multi-iteration
+    decode, then repeats with a fresh generator and the same seeds.  Every
+    user slot should produce the same token sequence across both runs.
 
     Note: ttnn.manual_seed mixes user_id into the RNG state, so two *different*
-    user slots (e.g. 0 vs 5) with the same seed value will produce different
-    tokens.  This is by design — it prevents identical outputs for different
-    users that happen to share a seed.
+    user slots with the same seed value will produce different tokens.  This is
+    by design — it prevents identical outputs for different users that happen
+    to share a seed.
     """
     batch_size = BATCH_SIZE
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
-    num_tp = mesh_device.shape[1]
-    per_device_vocab = args.padded_vocab_size // num_tp
-
-    # Create logits with controlled hot tokens (same for all batch positions)
-    num_hot = 8
-    hot_tokens = []
-    for i in range(num_hot):
-        shard_idx = i % num_tp
-        candidate = shard_idx * per_device_vocab + 100 + i
-        if candidate >= VOCAB_SIZE:
-            candidate = 200 + i
-        hot_tokens.append(candidate)
-
-    torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
-    for idx, tok in enumerate(hot_tokens):
-        torch_input[:, :, :, tok] = 10.0 - idx * 0.25
-    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
-
-    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+    tt_input, _ = make_hot_logits(args, mesh_device, batch_size)
 
     per_user_seeds = [100 + i for i in range(batch_size)]
     num_iterations = 5
@@ -541,7 +528,7 @@ def test_gpt_oss_seed_determinism_within_batch(mesh_device, device_params, reset
     assert len(unique) > 1, f"All {len(flat)} tokens identical — stochastic sampling may be broken"
 
     logger.info(
-        f"Within-batch seed determinism passed: {num_iterations} iterations x {batch_size} users, "
+        f"Batch replay seed determinism passed: {num_iterations} iterations x {batch_size} users, "
         f"{len(unique)} unique tokens, both runs matched exactly"
     )
 
@@ -558,49 +545,34 @@ def test_gpt_oss_seed_determinism_across_requests(mesh_device, device_params, re
     """
     batch_size = BATCH_SIZE
     args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
-    num_tp = mesh_device.shape[1]
-    per_device_vocab = args.padded_vocab_size // num_tp
-
-    # Create logits with controlled hot tokens
-    num_hot = 8
-    hot_tokens = []
-    for i in range(num_hot):
-        shard_idx = i % num_tp
-        candidate = shard_idx * per_device_vocab + 100 + i
-        if candidate >= VOCAB_SIZE:
-            candidate = 200 + i
-        hot_tokens.append(candidate)
-
-    torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
-    for idx, tok in enumerate(hot_tokens):
-        torch_input[:, :, :, tok] = 10.0 - idx * 0.25
-    torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
-
-    tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
+    tt_input, _ = make_hot_logits(args, mesh_device, batch_size)
 
     per_user_seeds = [42] * batch_size
     num_iterations = 10
 
     # --- Run 1 ---
     sg1 = _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds)
-    run1_tokens = []
+    run1_all = []
     for _ in range(num_iterations):
         sg1.seed_manager.get_new_values()
         tokens, _ = sg1.sample(tt_input, enable_trace=False)
-        run1_tokens.append(extract_token(tokens))
+        run1_all.append(extract_all_tokens(tokens, batch_size))
 
     # --- Run 2 (fresh generator, same seeds) ---
     sg2 = _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds)
-    run2_tokens = []
+    run2_all = []
     for _ in range(num_iterations):
         sg2.seed_manager.get_new_values()
         tokens, _ = sg2.sample(tt_input, enable_trace=False)
-        run2_tokens.append(extract_token(tokens))
+        run2_all.append(extract_all_tokens(tokens, batch_size))
 
-    logger.info(f"Run 1 tokens: {run1_tokens}")
-    logger.info(f"Run 2 tokens: {run2_tokens}")
+    # Every user at every iteration should match
+    for it in range(num_iterations):
+        for u in range(batch_size):
+            assert run1_all[it][u] == run2_all[it][u], (
+                f"Mismatch at iteration {it}, user {u}: " f"run1={run1_all[it][u]}, run2={run2_all[it][u]}"
+            )
 
-    assert (
-        run1_tokens == run2_tokens
-    ), f"Cross-request determinism failed:\n  Run 1: {run1_tokens}\n  Run 2: {run2_tokens}"
-    logger.info(f"Cross-request seed determinism passed: {num_iterations} iterations matched exactly")
+    logger.info(
+        f"Cross-request seed determinism passed: {num_iterations} iterations x {batch_size} users matched exactly"
+    )
