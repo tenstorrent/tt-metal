@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "elemwise_args_kernel.hpp"
 #include "ttnn/kernel/kernel_utils.hpp"
+#include "common_kernel_utils.hpp"
 
 #include <tools/profiler/kernel_profiler.hpp>
 
@@ -23,66 +24,42 @@ void kernel_main() {
     using namespace ttnn::kernel_utils;
     using namespace eltwise_dram_optimized;
     auto args = make_runtime_struct_from_args<EltwiseWriterArgs>();
-    constexpr auto c_args = make_compile_time_struct_from_args<EltwiseWriterCTArgs>();
+    constexpr auto ct_args = make_compile_time_struct_from_args<EltwiseWriterCTArgs>();
 
-    const uint32_t tile_size = get_tile_size(c_args.cb_dst);
+    const uint32_t tile_size = get_tile_size(ct_args.cb_dst);
     constexpr auto dst_args = TensorAccessorArgs<amount_of_fields<EltwiseWriterCTArgs>()>();
     const auto dst_tensor = TensorAccessor(dst_args, args.dst_base_addr, tile_size);
 
-    constexpr uint32_t max_num_tiles_per_batch = 4;
-    uint32_t num_tiles_per_batch = args.num_tiles > max_num_tiles_per_batch ? max_num_tiles_per_batch : args.num_tiles;
-    uint32_t end_id = args.tile_ofs + args.num_tiles;
-
-    auto page_id = args.tile_ofs;
-    // DPRINT << "WRITER KERNEL: page_id " << page_id << ", num_tiles: " << args.num_tiles << ENDL();
-
-    //
     uint64_t dst_noc_addr = dst_tensor.get_noc_addr(args.tile_ofs);
     auto dst_noc_ofs = 0u;
-    // dst_noc_ofs += a_tile_size;
 
-    auto num_tail_tiles = args.num_tiles % num_tiles_per_batch;
-    auto num_tiles = args.num_tiles - num_tail_tiles;
+    auto inter_range = get_inter_range(args.num_tiles, ct_args.num_tiles_per_batch, ct_args.num_batches);
+    for (auto& range : inter_range) {
+        DPRINT << "range.n_tiles: " << range.n_tiles << ", range.n_tiles_proc: " << range.n_tiles_proc << ENDL();
+        for (uint32_t tile_id = 0; tile_id < range.n_tiles; tile_id += range.n_tiles_proc) {
+            const auto& n_tiles_proc = range.n_tiles_proc;
+            // DeviceZoneScopedN("WRITER_KERNEL_DATA_MOVEMENT");
+            {
+                DeviceZoneScopedN("WAIT_CB_DATA");
+                // cb_wait_front(ct_args.cb_dst, n_tiles_proc);
+            }
 
-    for (auto tile_id = 0u; tile_id < num_tiles; tile_id += num_tiles_per_batch) {
-        // DeviceZoneScopedN("WRITER_KERNEL_DATA_MOVEMENT");
-        {
-            DeviceZoneScopedN("WAIT_CB_DATA");
-            // cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
+            // uint32_t l1_read_addr = get_read_ptr(ct_args.cb_dst);
+            // // print_full_tile(ct_args.cb_dst, tile_id, true);
+
+            // for (uint32_t k = 0; k < n_tiles_proc; k++) {
+            //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
+            //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
+            //     dst_noc_ofs += tile_size;
+            // }
+            // {
+            //     DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
+            //     noc_async_write_barrier();
+            // }
+            // cb_pop_front(ct_args.cb_dst, n_tiles_proc);
         }
-
-        // uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
-        // // print_full_tile(c_args.cb_dst, tile_id, true);
-
-        // for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
-        //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
-        //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
-        //     dst_noc_ofs += tile_size;
-        // }
-        // {
-        //     DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
-        //     noc_async_write_barrier();
-        // }
-        // cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
+        DPRINT << "range " << range.n_tiles << " of " << args.num_tiles << " completed" << ENDL();
     }
 
-    if (num_tail_tiles != 0) {
-        num_tiles_per_batch = num_tail_tiles;
-        // cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
-
-        // uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
-        // // print_full_tile(c_args.cb_dst, tile_id, true);
-
-        // for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
-        //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
-        //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
-        //     dst_noc_ofs += tile_size;
-        // }
-        // {
-        //     DeviceZoneScopedN("TILE WRITER_KERNEL_BARRIER");
-        //     noc_async_write_barrier();
-        // }
-        // cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
-    }
-    // DPRINT << "Writing kernel finish" << ENDL();
+    DPRINT << "Writer kernel completed" << ENDL();
 }
