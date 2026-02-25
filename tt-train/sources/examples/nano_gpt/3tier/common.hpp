@@ -25,7 +25,6 @@ struct TrainingConfig {
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
     std::string optimizer_config;
-    OptimizerConfig optimizer;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;

@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
     auto config_dir = std::filesystem::path(config_name).parent_path();
     auto tt_train_root = config_dir.parent_path().parent_path();
     auto optimizer_config_path = (tt_train_root / config.optimizer_config).string();
-    config.optimizer = parse_optimizer_config(YAML::LoadFile(optimizer_config_path));
+    OptimizerConfig optimizer_config = parse_optimizer_config(YAML::LoadFile(optimizer_config_path));
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
-    auto optimizer = create_optimizer(config.optimizer, model_parameters);
+    auto optimizer = create_optimizer(optimizer_config, model_parameters);
 
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
