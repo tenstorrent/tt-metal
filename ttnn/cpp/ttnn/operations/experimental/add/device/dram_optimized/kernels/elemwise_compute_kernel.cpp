@@ -42,40 +42,40 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_tiles; tile_id += num_tiles_per_batch) {
         {
             DeviceZoneScopedN("WAIT_CB_DATA");
-            cb_wait_front(cb_in0, num_tiles_per_batch);  // Unpack
-            cb_wait_front(cb_in1, num_tiles_per_batch);  // Unpack
+            // cb_wait_front(cb_in0, num_tiles_per_batch);  // Unpack
+            // cb_wait_front(cb_in1, num_tiles_per_batch);  // Unpack
         }
-        cb_reserve_back(cb_out0, num_tiles_per_batch);
+        // cb_reserve_back(cb_out0, num_tiles_per_batch);
 
-        {
-            DeviceZoneScopedN("ADD_TILES");
-            // acquire 8 tile registers to perform the addition
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
-                // DPRINT << "Compute kernel is processing tile " << i << ENDL();
-                add_tiles(cb_in0, cb_in1, i, i, i);
-            }
-            tile_regs_commit();
-        }
+        // {
+        //     DeviceZoneScopedN("ADD_TILES");
+        //     // acquire 8 tile registers to perform the addition
+        //     tile_regs_acquire();
+        //     for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
+        //         // DPRINT << "Compute kernel is processing tile " << i << ENDL();
+        //         add_tiles(cb_in0, cb_in1, i, i, i);
+        //     }
+        //     tile_regs_commit();
+        // }
 
         {
             // DeviceZoneScopedN("PACK_TILES");  // TRISC 2
             //   packer waits here
-            tile_regs_wait();  // Pack
+            // tile_regs_wait();  // Pack
 
-            for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
-                // DPRINT << "Compute kernel is packing tile " << i << ENDL();
-                pack_tile(i, cb_out0);  // Pack
-            }
+            // for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
+            //     // DPRINT << "Compute kernel is packing tile " << i << ENDL();
+            //     pack_tile(i, cb_out0);  // Pack
+            // }
 
             // DPRINT << "Compute kernel is releasing tile " << i << ENDL();
-            cb_push_back(cb_out0, num_tiles_per_batch);  // Pack
-            tile_regs_release();                         // Pack
+            // cb_push_back(cb_out0, num_tiles_per_batch);  // Pack
+            // tile_regs_release();                         // Pack
         }
 
         // DPRINT << "CB free processed input tiles " << ENDL();
-        cb_pop_front(cb_in0, num_tiles_per_batch);  // Unpack
-        cb_pop_front(cb_in1, num_tiles_per_batch);  // Unpack
+        // cb_pop_front(cb_in0, num_tiles_per_batch);  // Unpack
+        // cb_pop_front(cb_in1, num_tiles_per_batch);  // Unpack
 
         // DPRINT << "Send out tile " << ENDL();
     }
@@ -84,34 +84,34 @@ void kernel_main() {
         num_tiles_per_batch = num_tail_tiles;
         {
             // DeviceZoneScopedN("COMPUTE_KERNEL_WAIT_CB_DATA");
-            cb_wait_front(cb_in0, num_tiles_per_batch);  // Unpack
-            cb_wait_front(cb_in1, num_tiles_per_batch);  // Unpack
+            // cb_wait_front(cb_in0, num_tiles_per_batch);  // Unpack
+            // cb_wait_front(cb_in1, num_tiles_per_batch);  // Unpack
         }
-        cb_reserve_back(cb_out0, num_tiles_per_batch);
+        // cb_reserve_back(cb_out0, num_tiles_per_batch);
 
-        // acquire 8 tile registers to perform the addition
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
-            // DPRINT << "Compute kernel is processing tile " << i << ENDL();
-            add_tiles(cb_in0, cb_in1, i, i, i);
-        }
-        tile_regs_commit();
+        // // acquire 8 tile registers to perform the addition
+        // tile_regs_acquire();
+        // for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
+        //     // DPRINT << "Compute kernel is processing tile " << i << ENDL();
+        //     add_tiles(cb_in0, cb_in1, i, i, i);
+        // }
+        // tile_regs_commit();
 
-        // packer waits here
-        tile_regs_wait();  // Pack
+        // // packer waits here
+        // tile_regs_wait();  // Pack
 
-        for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
-            // DPRINT << "Compute kernel is packing tile " << i << ENDL();
-            pack_tile(i, cb_out0);  // Pack
-        }
+        // for (uint32_t i = 0; i < num_tiles_per_batch; i++) {
+        //     // DPRINT << "Compute kernel is packing tile " << i << ENDL();
+        //     pack_tile(i, cb_out0);  // Pack
+        // }
 
         // DPRINT << "Compute kernel is releasing tile " << i << ENDL();
-        cb_push_back(cb_out0, num_tiles_per_batch);  // Pack
-        tile_regs_release();                         // Pack
+        // cb_push_back(cb_out0, num_tiles_per_batch);  // Pack
+        // tile_regs_release();                         // Pack
 
         // DPRINT << "CB free processed input tiles " << ENDL();
-        cb_pop_front(cb_in0, num_tiles_per_batch);  // Unpack
-        cb_pop_front(cb_in1, num_tiles_per_batch);  // Unpack
+        // cb_pop_front(cb_in0, num_tiles_per_batch);  // Unpack
+        // cb_pop_front(cb_in1, num_tiles_per_batch);  // Unpack
     }
     // DPRINT << "Compute kernel is done" << ENDL();
 }
