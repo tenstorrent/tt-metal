@@ -12,7 +12,6 @@ This is the **tt-metal** repository, containing TT-Metalium (low-level programmi
 ### Programming Model
 - **Three kernel types per Tensix core**: Reader (data input via NoC0), Compute (FPU/SFPU operations), Writer (data output via NoC1)
 - **Circular buffers**: Inter-kernel communication mechanism in SRAM
-- **SPMD execution**: Single Program Multiple Data across cores (most common pattern)
 
 Refer to `METALIUM_GUIDE.md` for detailed architecture explanations.
 
@@ -20,7 +19,7 @@ Refer to `METALIUM_GUIDE.md` for detailed architecture explanations.
 
 ### Standard Build
 ```bash
-./build_metal.sh --debug
+./build_metal.sh
 ```
 
 ### Device-side kernels
@@ -31,18 +30,16 @@ Kernels build at runtime. DO NOT build when changing kernel code.
 
 ### Testing rules
 
-Always use pytest, avoid raw python calls with main functions
-Use the defined device fixture, do not open the device yourself
-Put all parameters of the test into pytest parametrizations (even if only one of them), avoid hard coding parameters inside of functions
+Never use standard pytest, prefer using `tt-test.sh` (add --dev flag for debug mode). This gives standard pytest output while also managing device ownership and state.
 
 Python environment is sourced with
 `source python_env/bin/activate`
 
 Run the tests with
 
-`pytest <test_file_path.py>`
+`./tt-test.sh [--dev] <test_file_path.py>`
 
-You should be attentive of device hangs when running tests, especially for new / just implemented operations and kernels
+You should be attentive of device hangs when running tests, especially for new / just implemented operations and kernels.
 Watch the bash output at all times, if pytest console output stops, suspect a hang.
 If a hang occurs, kill the process with
 
@@ -51,6 +48,7 @@ If a hang occurs, kill the process with
 After that, reset the device with
 
 `tt-smi -r`
+
 
 ## Code Organization
 
@@ -122,3 +120,26 @@ Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
 
 ### Additional Resources
 - `.claude/QUICK_START.md` - End-to-end workflow example
+
+## Worktree Development
+
+Worktrees provide fully isolated development environments with their own C++ build and Python venv.
+
+### How it works
+- `EnterWorktree` or `isolation: "worktree"` triggers automatic setup
+- `tt-test.sh` auto-resolves paths from its own location (works in any worktree)
+
+### Running tests in a worktree
+```
+./tt-test.sh [--dev] <test_path>
+```
+
+### Manual setup (if hook didn't run)
+```
+.claude/scripts/worktree-setup.sh <path> --foreground
+```
+
+### Checking build status
+- `.worktree_building` exists → build in progress
+- `.worktree_ready` exists → ready to use
+- `.worktree_setup.log` → build output

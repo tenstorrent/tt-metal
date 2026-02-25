@@ -9,7 +9,7 @@
 #
 # Usage: bash tests/ttnn/unit_tests/test_stress_infra/run_stress.sh
 
-SCRIPT=".claude/scripts/tt-test.sh"
+SCRIPT="./tt-test.sh"
 TEST_DIR="tests/ttnn/unit_tests/test_stress_infra"
 LOG_DIR="/tmp/tt-stress"
 rm -rf "$LOG_DIR"

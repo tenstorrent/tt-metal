@@ -197,7 +197,7 @@ def test_functional_correctness(device):
 
 **Always run tests with `tt-test.sh --dev`:**
 ```bash
-.claude/scripts/tt-test.sh --dev {test_file_path}
+./tt-test.sh --dev {test_file_path}
 ```
 
 The script enables watcher, LLK asserts, lightweight kernel asserts, and automatic hang detection (5s dispatch timeout). It serializes device access via flock and resets the device after hangs.
