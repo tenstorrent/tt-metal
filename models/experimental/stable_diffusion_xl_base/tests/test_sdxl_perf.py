@@ -174,7 +174,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'",
-            14_609_421,
+            13_112_562,
             "sdxl_clip_encoder_1",
             "sdxl_clip_encoder_1",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -184,7 +184,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_2'",
-            70_551_148,  # Note: this is an average value of 30 test runs due to high variability
+            63_591_763,  # Note: this is an average value of 30 test runs due to high variability
             "sdxl_clip_encoder_2",
             "sdxl_clip_encoder_2",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
