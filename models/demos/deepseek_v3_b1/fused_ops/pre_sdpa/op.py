@@ -2158,7 +2158,7 @@ class PreSDPA:
                 # ================================================================
                 if skip_ccl:
                     # Single-device mode: empty broadcast args
-                    ncrisc_bcast_common_args = [0] * 14
+                    ncrisc_bcast_common_args = [0] * 13
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -2201,7 +2201,6 @@ class PreSDPA:
                         ring_index,
                         int(secondary_sync_sem_addr),
                         num_connections,
-                        len(mla_brisc_per_core_args),
                     ]
 
                 # RoPE DRAM address args (per-device)
