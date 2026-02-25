@@ -34,11 +34,11 @@ def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
 
     with torch.no_grad():
         variance = input_tensor.pow(2).mean(dim=-1, keepdim=True)
-        torch_normed = input_tensor * torch.rsqrt(variance + epsilon)
+        output = input_tensor * torch.rsqrt(variance + epsilon)
         if weight is not None:
-            torch_normed = torch_normed * weight
+            output = output * weight
         if bias is not None:
-            torch_normed = torch_normed + bias
+            output = output + bias
         if activation == "silu" or activation == ttnn.UnaryOpType.SILU:
             output = torch.nn.functional.silu(output)
         elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
@@ -112,6 +112,7 @@ def run_dit_rms_norm_unary_fused_test(
             use_welford=False,
             inplace=False,
         )
+    torch_expected = rms_norm_golden(torch_input, epsilon, torch_weight, torch_bias, activation)
 
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
