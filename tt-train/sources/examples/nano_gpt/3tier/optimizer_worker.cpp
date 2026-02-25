@@ -6,6 +6,7 @@
 
 #include <CLI/CLI.hpp>
 
+#include "../utils.hpp"
 #include "autograd/auto_context.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"

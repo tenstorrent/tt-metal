@@ -4,7 +4,6 @@
 
 #include <ttnn/distributed/create_socket.hpp>
 
-#include "../utils.hpp"
 #include "core/distributed/distributed.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
