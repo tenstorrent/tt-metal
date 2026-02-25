@@ -53,7 +53,7 @@ void kernel_main() {
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t h_neighbor_sem = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
@@ -133,7 +133,7 @@ void kernel_main() {
                 // Using cumulative waits (od+1) instead of resetting to 0 each iteration
                 // avoids a race where the writer sends multiple sem incs before the reader
                 // processes them — resetting to 0 would discard pending incs and cause a hang.
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), od + 1);
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
 
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                     for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
@@ -147,11 +147,11 @@ void kernel_main() {
                 }
             }
             // Reset after all waits are complete (safe: no more fabric increments expected)
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         } else {
             // 1D case: fabric wrote directly to DRAM; just wait for all outer_dims
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), outer_dim_size);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim_size);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         }
     }
     DPRINT << "HR:ok" << ENDL();

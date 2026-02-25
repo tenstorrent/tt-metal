@@ -52,19 +52,14 @@ void kernel_main() {
     const uint32_t padding_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    size_t neighbor_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    // CreateSemaphore returns an ID; convert to L1 address via get_semaphore().
-    // GlobalSemaphore.address() is already an absolute L1 address — no conversion needed.
-    if constexpr (is_w_fabric_writer) {
-        out_ready_sem = get_semaphore(out_ready_sem);
-        barrier_sem = get_semaphore(barrier_sem);
-    }
+
     // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[2];
@@ -73,7 +68,7 @@ void kernel_main() {
     for (uint32_t st = 0; st < 2; st++) {
         signal_noc_x[st] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[st] = get_arg_val<uint32_t>(arg_idx++);
-        signal_sem_addr[st] = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        signal_sem_addr[st] = get_arg_val<uint32_t>(arg_idx++);
     }
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
@@ -226,7 +221,7 @@ void kernel_main() {
                     if constexpr (use_l1_intermediate) {
                         // Target the receiver core's L1 buffer instead of DRAM
                         dst_noc_addr = safe_get_noc_addr(
-                            out_ready_sem_noc0_x, out_ready_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
+                            neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                         l1_buf_offset += stick_size;
                     } else {
                         dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
@@ -257,10 +252,10 @@ void kernel_main() {
             }
 
             // unicast output ready semaphore
-            uint64_t out_ready_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+            uint64_t neighbor_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
             pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
+                neighbor_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
             // Write the unicast packet
             if (direction) {
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();

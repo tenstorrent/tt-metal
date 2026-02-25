@@ -14,7 +14,7 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     std::vector<uint32_t> padding_right,
     const std::string& padding_mode,
     std::vector<uint32_t> cluster_axis,
-    std::vector<GlobalSemaphore> final_semaphore,
+    std::vector<GlobalSemaphore> neighbor_semaphore,
     std::vector<GlobalSemaphore> barrier_semaphore,
     std::optional<std::vector<size_t>> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
@@ -24,6 +24,12 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     TT_FATAL(dim.size() >= 1 && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
 
     std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(dim.size(), 1));
+
+    // neighbor_semaphore[0] is always the H (primary) neighbor semaphore.
+    // neighbor_semaphore[1] is the W (secondary) neighbor semaphore for 2D padding.
+    // For 1D padding, reuse [0] as the W semaphore (it won't be used).
+    const auto& h_neighbor_sem = neighbor_semaphore[0];
+    const auto& w_neighbor_sem = neighbor_semaphore.size() >= 2 ? neighbor_semaphore[1] : neighbor_semaphore[0];
 
     // Unpack secondary dimension if present
     std::optional<uint32_t> pad_dim2;
@@ -47,7 +53,8 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         padding_right[0],
         padding_mode,
         cluster_axis[0],
-        final_semaphore[0],
+        h_neighbor_sem,
+        w_neighbor_sem,
         barrier_semaphore[0],
         links[0],
         memory_config,

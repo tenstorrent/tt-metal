@@ -20,8 +20,9 @@ struct NeighborPadAsyncParams {
     uint32_t padding_right = 0;
     std::string padding_mode;
     uint32_t cluster_axis = 0;
-    GlobalSemaphore final_semaphore;    // Not default constructible
-    GlobalSemaphore barrier_semaphore;  // Not default constructible
+    GlobalSemaphore h_neighbor_semaphore;  // Not default constructible
+    GlobalSemaphore w_neighbor_semaphore;  // Not default constructible
+    GlobalSemaphore barrier_semaphore;     // Not default constructible
     uint32_t num_links = 0;
     MemoryConfig output_mem_config;
     ttnn::ccl::Topology topology;
@@ -43,7 +44,8 @@ struct NeighborPadAsyncParams {
         uint32_t padding_right,
         const std::string& padding_mode,
         uint32_t cluster_axis,
-        const GlobalSemaphore& final_semaphore,
+        const GlobalSemaphore& h_neighbor_semaphore,
+        const GlobalSemaphore& w_neighbor_semaphore,
         const GlobalSemaphore& barrier_semaphore,
         uint32_t num_links,
         MemoryConfig output_mem_config,
@@ -61,7 +63,8 @@ struct NeighborPadAsyncParams {
         padding_right(padding_right),
         padding_mode(padding_mode),
         cluster_axis(cluster_axis),
-        final_semaphore(final_semaphore),
+        h_neighbor_semaphore(h_neighbor_semaphore),
+        w_neighbor_semaphore(w_neighbor_semaphore),
         barrier_semaphore(barrier_semaphore),
         num_links(num_links),
         output_mem_config(std::move(output_mem_config)),
@@ -83,7 +86,8 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("padding_right", padding_right);
         attrs.emplace_back("padding_mode", padding_mode);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("final_semaphore", final_semaphore);
+        attrs.emplace_back("h_neighbor_semaphore", h_neighbor_semaphore);
+        attrs.emplace_back("w_neighbor_semaphore", w_neighbor_semaphore);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("output_mem_config", output_mem_config);

@@ -225,9 +225,10 @@ def run_2d_neighbor_pad_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # Create semaphores for H axis (W axis semaphores are program-local via CreateSemaphore)
-    h_final_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    h_barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    # Create semaphores
+    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     # Shard input to mesh
     dims = [None, None]
@@ -248,13 +249,13 @@ def run_2d_neighbor_pad_test(
     logger.info("Running fused 2D neighbor_pad_async...")
     output_tensor = ttnn.experimental.neighbor_pad_async(
         input_tensor_mesh,
-        dim=[h_dim, w_dim],
-        padding_left=[pH, pW],
-        padding_right=[pH, pW],
-        padding_mode=padding_mode,
-        cluster_axis=[h_axis, w_axis],
-        final_semaphore=[h_final_sem],
-        barrier_semaphore=[h_barrier_sem],
+        [h_dim, w_dim],
+        [pH, pW],
+        [pH, pW],
+        padding_mode,
+        [h_axis, w_axis],
+        [h_neighbor_sem, w_neighbor_sem],
+        [barrier_sem],
         num_links=[1, 1],
         memory_config=mem_config,
         topology=topology,
@@ -424,8 +425,8 @@ def test_1d_neighbor_pad_sanity(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    final_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    barrier_sem_1d = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     dims = [None, None]
     dims[pad_axis] = pad_dim
@@ -444,13 +445,13 @@ def test_1d_neighbor_pad_sanity(
     # 1D call with list API
     output_tensor = ttnn.experimental.neighbor_pad_async(
         input_tensor_mesh,
-        dim=[pad_dim],
-        padding_left=[pH],
-        padding_right=[pH],
-        padding_mode="zeros",
-        cluster_axis=[pad_axis],
-        final_semaphore=[final_sem],
-        barrier_semaphore=[barrier_sem],
+        [pad_dim],
+        [pH],
+        [pH],
+        "zeros",
+        [pad_axis],
+        [neighbor_sem],
+        [barrier_sem_1d],
         num_links=[1],
         memory_config=mem_config,
         topology=ttnn.Topology.Linear,

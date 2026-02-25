@@ -75,13 +75,13 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_runtime_args[0] = input.buffer()->address();
                 worker_reader_runtime_args[1] = output.buffer()->address();
-                worker_reader_runtime_args[9] = operation_attributes.final_semaphore.address();
+                worker_reader_runtime_args[9] = operation_attributes.h_neighbor_semaphore.address();
 
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[13] = operation_attributes.final_semaphore.address();
+                worker_writer_runtime_args[13] = operation_attributes.h_neighbor_semaphore.address();
                 worker_writer_runtime_args[17] = operation_attributes.barrier_semaphore.address();
 
                 core_idx++;
@@ -106,17 +106,19 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         for (size_t i = 0; i < shared_vars.w_reader_kernel_ids.size(); ++i) {
             CoreCoord core = shared_vars.w_fabric_core_coords[i];
 
-            // W reader: update output tensor address (runtime arg index 5)
+            // W reader
             auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.w_reader_kernel_ids[i]);
             auto& w_reader_args = reader_runtime_args[core.x][core.y];
+            w_reader_args[2] = operation_attributes.barrier_semaphore.address();
+            w_reader_args[4] = operation_attributes.w_neighbor_semaphore.address();
             w_reader_args[5] = output.buffer()->address();
 
-            // W reader/writer semaphores are program-local (CreateSemaphore) — no update needed.
-            // W writer: update tensor addresses only
+            // W writer
             auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.w_writer_kernel_ids[i]);
             auto& w_writer_args = writer_runtime_args[core.x][core.y];
             w_writer_args[0] = output.buffer()->address();
             w_writer_args[1] = output.buffer()->address();
+            w_writer_args[13] = operation_attributes.w_neighbor_semaphore.address();
         }
     }
 }
@@ -314,8 +316,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<CoreCoord> w_fabric_logical_cores;
     std::vector<CoreCoord> w_fabric_virtual_cores;
     CoreRangeSet w_fabric_core_range;
-    uint32_t w_barrier_sem_addr = 0;
-    uint32_t w_final_sem_addr = 0;
     bool is_first_w_device = true;
     bool is_last_w_device = true;
     uint32_t w_forward_device_offset = 0;
@@ -389,10 +389,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 CircularBufferConfig(w_recv_buf_size, {{recv_cb_index, df}}).set_page_size(recv_cb_index, page_size);
             CreateCircularBuffer(program, w_fabric_core_range, w_recv_cb_config);
         }
-
-        // Phase 2 semaphores: program-local (coordinated with CB allocator, no L1 overlap)
-        w_barrier_sem_addr = CreateSemaphore(program, w_fabric_core_range, 0);
-        w_final_sem_addr = CreateSemaphore(program, w_fabric_core_range, 0);
     }
 
     // Compute H fabric unicast route configuration (for compile-time args)
@@ -451,9 +447,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 (operation_attributes.dim > 0) ? link_dims_to_read : outer_dim_size,  // outer_dim_size
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
-                num_sticks_per_halo_dim,                        // num_sticks_per_halo_dim
-                operation_attributes.final_semaphore.address()  // out_ready_sem_bank_addr (absolute address)
-            };
+                num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
+                operation_attributes.h_neighbor_semaphore.address()};
             SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
 
             // Writer
@@ -502,14 +497,14 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 (operation_attributes.dim > 0) ? link_dims_to_read : outer_dim_size,  // outer_dim_size
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 operation_attributes.padding_left,                                                   // padding left
-                h_writer_num_sticks_to_read,                     // num_sticks_to_read
-                h_writer_num_sticks_per_halo_dim,                // num_sticks_per_halo_dim
-                virtual_core.x,                                  // out_ready_sem_noc0_x
-                virtual_core.y,                                  // out_ready_sem_noc0_y
-                operation_attributes.final_semaphore.address(),  // out_ready_sem_bank_addr (absolute address)
-                true,                                            // use_barrier_semaphore
-                virtual_opposite_core.x,                         // barrier_sem_noc0_x
-                virtual_opposite_core.y,                         // barrier_sem_noc0_y
+                h_writer_num_sticks_to_read,                          // num_sticks_to_read
+                h_writer_num_sticks_per_halo_dim,                     // num_sticks_per_halo_dim
+                virtual_core.x,                                       // neighbor_sem_noc0_x
+                virtual_core.y,                                       // neighbor_sem_noc0_y
+                operation_attributes.h_neighbor_semaphore.address(),  // neighbor_sem_bank_addr
+                true,                                                 // use_barrier_semaphore
+                virtual_opposite_core.x,                              // barrier_sem_noc0_x
+                virtual_opposite_core.y,                              // barrier_sem_noc0_y
                 operation_attributes.barrier_semaphore.address()};
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
             writer_rt_args.push_back(is_2d ? num_w_fabric_cores : 0);
@@ -517,7 +512,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 if (is_2d && s < num_w_fabric_cores) {
                     writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
                     writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
-                    writer_rt_args.push_back(w_barrier_sem_addr);
+                    writer_rt_args.push_back(operation_attributes.barrier_semaphore.address());
                 } else {
                     writer_rt_args.push_back(0);
                     writer_rt_args.push_back(0);
@@ -649,7 +644,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     if (is_2d && s < num_w_fabric_cores) {
                         local_writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
                         local_writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
-                        local_writer_rt_args.push_back(w_barrier_sem_addr);
+                        local_writer_rt_args.push_back(operation_attributes.barrier_semaphore.address());
                     } else {
                         local_writer_rt_args.push_back(0);
                         local_writer_rt_args.push_back(0);
@@ -716,9 +711,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 std::vector<uint32_t> w_reader_rt_args = {
                     w_outer_dim_size,                                                                // outer_dim_size
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
-                    w_barrier_sem_addr,                                                              // barrier_sem_id
+                    operation_attributes.barrier_semaphore.address(),                                // barrier_sem_addr
                     barrier_count,
-                    w_final_sem_addr,                         // final_sem_id
+                    operation_attributes.w_neighbor_semaphore.address(),
                     tensor_return_value.buffer()->address(),  // output_tensor_address
                     output_num_sticks_per_halo_dim,           // output_row_width (W + 2*pW)
                     operation_attributes.pad2_left,           // pad2_left
@@ -764,13 +759,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     operation_attributes.pad2_left,                                                  // padding_left
                     1,                 // num_sticks_to_read
                     1,                 // num_sticks_per_halo_dim
-                    w_virtual_core.x,  // out_ready_sem_noc0_x
-                    w_virtual_core.y,  // out_ready_sem_noc0_y
-                    w_final_sem_addr,  // out_ready_sem (program-local)
-                    false,             // use_barrier_semaphore (W writers: no startup barrier)
-                    0,                 // barrier_sem_noc0_x (unused)
-                    0,                 // barrier_sem_noc0_y (unused)
-                    0};                // barrier_sem (unused)
+                    w_virtual_core.x,  // neighbor_sem_noc0_x
+                    w_virtual_core.y,  // neighbor_sem_noc0_y
+                    operation_attributes.w_neighbor_semaphore.address(),
+                    false,  // use_barrier_semaphore (W writers: no startup barrier)
+                    0,      // barrier_sem_noc0_x (unused)
+                    0,      // barrier_sem_noc0_y (unused)
+                    0};     // barrier_sem (unused)
                 // No Phase 3 signal targets
                 w_writer_rt_args.push_back(0);
                 for (uint32_t s = 0; s < 6; s++) {

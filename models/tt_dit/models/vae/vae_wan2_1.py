@@ -375,17 +375,15 @@ class WanCausalConv3d(Module):
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
-            axes, final_sems, barrier_sems, links = [], [], [], []
+            axes, neighbor_sems, links = [], [], []
+            barrier_sem = self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
             if h_pad_needed:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                final_sems.append(
+                neighbor_sems.append(
                     self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)[0]
-                )
-                barrier_sems.append(
-                    self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
             if w_pad_needed:
@@ -393,11 +391,8 @@ class WanCausalConv3d(Module):
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                final_sems.append(
+                neighbor_sems.append(
                     self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)[0]
-                )
-                barrier_sems.append(
-                    self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
@@ -409,8 +404,8 @@ class WanCausalConv3d(Module):
                 pad_right,
                 "zeros",
                 axes,
-                final_sems,
-                barrier_sems,
+                neighbor_sems,
+                [barrier_sem],
                 num_links=links,
                 topology=self.ccl_manager.topology,
             )
@@ -776,17 +771,15 @@ class WanConv2d(Module):
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
-            axes, final_sems, barrier_sems, links = [], [], [], []
+            axes, neighbor_sems, links = [], [], []
+            barrier_sem = self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
             if h_pad_needed:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
-                final_sems.append(
+                neighbor_sems.append(
                     self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)[0]
-                )
-                barrier_sems.append(
-                    self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
             if w_pad_needed:
@@ -794,11 +787,8 @@ class WanConv2d(Module):
                 pad_left.append(self.external_padding[2])
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
-                final_sems.append(
+                neighbor_sems.append(
                     self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)[0]
-                )
-                barrier_sems.append(
-                    self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
             ttnn.synchronize_device(x_BTHWC.device())
@@ -809,8 +799,8 @@ class WanConv2d(Module):
                 pad_right,
                 "zeros",
                 axes,
-                final_sems,
-                barrier_sems,
+                neighbor_sems,
+                [barrier_sem],
                 num_links=links,
                 topology=self.ccl_manager.topology,
             )

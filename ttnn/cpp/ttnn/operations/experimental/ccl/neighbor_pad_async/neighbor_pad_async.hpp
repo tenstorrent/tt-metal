@@ -21,7 +21,7 @@ struct ExecuteNeighborPadAsync {
         std::vector<uint32_t> padding_right,
         const std::string& padding_mode,
         std::vector<uint32_t> cluster_axis,
-        std::vector<GlobalSemaphore> final_semaphore,
+        std::vector<GlobalSemaphore> neighbor_semaphore,
         std::vector<GlobalSemaphore> barrier_semaphore,
         std::optional<std::vector<size_t>> num_preferred_links = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

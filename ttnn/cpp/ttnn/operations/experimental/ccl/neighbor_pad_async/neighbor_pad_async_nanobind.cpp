@@ -33,7 +33,7 @@ void bind_neighbor_pad_async_op(nb::module_& mod, const ccl_operation_t& operati
             nb::arg("padding_right"),
             nb::arg("padding_mode"),
             nb::arg("cluster_axis"),
-            nb::arg("final_semaphore"),
+            nb::arg("neighbor_semaphore"),
             nb::arg("barrier_semaphore"),
             nb::kw_only(),
             nb::arg("num_links") = nb::none(),
@@ -60,8 +60,8 @@ void bind_neighbor_pad_async(nb::module_& mod) {
             padding_right (List[uint]): How much to pad to the right, one per dim.
             padding_mode (string): replicate, constant, reflect.
             cluster_axis (List[int]): Cluster axes for each padding dim.
-            final_semaphore (List[GlobalSemaphore]): Final semaphores for primary dim (length 1).
-            barrier_semaphore (List[GlobalSemaphore]): Barrier semaphores for primary dim (length 1).
+            neighbor_semaphore (List[GlobalSemaphore]): Neighbor semaphores, one per dim. Length 1 for 1D (H only), length 2 for fused 2D ([H, W]).
+            barrier_semaphore (List[GlobalSemaphore]): Barrier semaphores (length 1).
 
         Keyword Args:
             num_links (List[int], optional): Number of links per dim. Defaults to `[1, ...]`.

@@ -52,8 +52,9 @@ def run_neighbor_pad_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-
+    neighbor_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
     barrier_semaphore_handles = [
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
@@ -133,14 +134,14 @@ def run_neighbor_pad_impl(
     def run_op(i):
         tt_neighbor_pad_out_tensor = ttnn.experimental.neighbor_pad_async(
             input_tensor_mesh_list[i],
-            dim=halo_shard_dim,
-            padding_left=padding_left,
-            padding_right=padding_right,
-            padding_mode=padding_mode,
-            cluster_axis=cluster_axis,
-            final_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i],
-            num_links=num_links,
+            [halo_shard_dim],
+            [padding_left],
+            [padding_right],
+            padding_mode,
+            [cluster_axis],
+            [neighbor_semaphore_handles[i]],
+            [barrier_semaphore_handles[i]],
+            num_links=[num_links],
             memory_config=mem_config_output,
             topology=neighbor_pad_topology,
         )

@@ -47,9 +47,9 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t w_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
@@ -120,15 +120,17 @@ void kernel_main() {
     // for all at once. Uses cumulative waits (od+1) to avoid race where multiple
     // sem_incs arrive between iterations.
     if (!is_first_chip) {
-        volatile tt_l1_ptr uint32_t* final_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_sem_addr);
-        uint32_t cur_val = *final_sem_ptr;
+        volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
+        uint32_t cur_val = *w_neighbor_sem_ptr;
         DPRINT << "WR:in s=" << cur_val << ENDL();
 
         uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
         uint32_t buf_offset = 0;
         for (uint32_t od = 0; od < outer_dim_size; od++) {
             // Wait for this outer_dim's data using cumulative count
-            noc_semaphore_wait_min(final_sem_ptr, od + 1);
+            DPRINT << " od=" << od << "/" << outer_dim_size << ENDL();
+            noc_semaphore_wait_min(w_neighbor_sem_ptr, od + 1);
 
             for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                 cb_reserve_back(cb_output_id, 1);
@@ -140,7 +142,7 @@ void kernel_main() {
             }
         }
         // Reset after all waits complete (safe: no more fabric increments expected)
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_sem_addr), 0);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr), 0);
     }
     DPRINT << "WR:ok" << ENDL();
 }

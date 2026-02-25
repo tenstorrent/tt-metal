@@ -32,11 +32,11 @@ void kernel_main() {
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[2];
     uint8_t signal_noc_y[2];
-    uint32_t signal_sem_addr[2];
+    uint32_t barrier_sem_addr[2];
     for (uint32_t t = 0; t < 2; t++) {
         signal_noc_x[t] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[t] = get_arg_val<uint32_t>(arg_idx++);
-        signal_sem_addr[t] = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        barrier_sem_addr[t] = get_arg_val<uint32_t>(arg_idx++);
     }
     //
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
@@ -66,7 +66,7 @@ void kernel_main() {
 
     // Signal Phase 2 W fabric reader cores that Phase 1 writes are complete
     for (uint32_t t = 0; t < num_phase2_signal_targets; t++) {
-        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], signal_sem_addr[t]);
+        uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], barrier_sem_addr[t]);
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     // Ensure sem inc signals are delivered before kernel exits.
