@@ -149,3 +149,8 @@ Testing
 .auto_triage/output
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
+
+# Worktree setup markers
+.worktree_building
+.worktree_ready
+.worktree_setup.log
