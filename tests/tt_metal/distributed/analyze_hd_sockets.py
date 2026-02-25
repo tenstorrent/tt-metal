@@ -476,7 +476,6 @@ def run_d2h_throughput(path, prefix=""):
 
 
 def d2h_lat_print_report(df):
-    nf = df.socket_fifo_size.nunique()
     print(f"\n{'='*70}\n  D2H Round-Trip Latency  ({len(df)} rows)\n{'='*70}")
     print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
     print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
@@ -977,7 +976,7 @@ def h2d_ping_export_csv(csv_dir, out="h2d_ping_summary.csv"):
             df["h2d_mode"] = mode
             dfs.append(df)
         except FileNotFoundError:
-            pass
+            print(f"  Warning: {p} not found, skipping")
     if not dfs:
         print("  Warning: no H2D ping iteration files found")
         return
