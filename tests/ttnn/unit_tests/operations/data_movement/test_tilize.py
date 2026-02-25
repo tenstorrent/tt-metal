@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+import math
 from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -129,6 +130,176 @@ def test_tilize_nd_sharded(
         memory_config=input_memory_config,
     )
     ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=use_multicore)
+    output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_equal(input_torch_tensor, output_torch_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape",
+    [
+        # ([4, 128, 128], [2, 64, 64]),
+        # ([3, 160, 160], [2, 64, 64]),
+        # ([5, 4, 160, 160], [2, 3, 64, 96]),
+        # ([23, 96, 160], [4, 64, 96]),  # Test with uneven sharding and cliff core
+        ([7, 128, 128], [2, 64, 96]),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})],
+)
+@pytest.mark.parametrize("input_is_nd_sharded", [True])
+@pytest.mark.parametrize("output_is_nd_sharded", [True])
+@pytest.mark.parametrize("use_multicore", [True])
+@pytest.mark.parametrize("use_legacy_sharding", [True, False])
+def test_tilize_nd_sharded_sanity(
+    device,
+    dtype,
+    tensor_shape,
+    shard_shape,
+    shard_core_grid,
+    input_is_nd_sharded,
+    output_is_nd_sharded,
+    use_multicore,
+    use_legacy_sharding,
+):
+    torch.manual_seed(42)
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[448, 64],
+        grid=shard_core_grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,  # , shard_distribution_strategy=ttnn.ShardDistributionStrategy.GRID_2D
+    )
+    output_shard_spec = ttnn.ShardSpec(shard_core_grid, [448, 64], ttnn.ShardOrientation.ROW_MAJOR)
+    if input_is_nd_sharded:
+        print("SHARDING INPUT")
+        input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+        if not use_multicore:
+            pytest.skip("Singlecore is not supported for sharded input")
+    else:
+        input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    if output_is_nd_sharded:
+        print("SHARDING OUTPUT")
+        if use_legacy_sharding:
+            output_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, output_shard_spec
+            )
+        else:
+            output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
+
+    else:
+        output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+    ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=use_multicore)
+    mem_cfg = ttnn_output_tensor.memory_config()
+    if mem_cfg.is_sharded():
+        if mem_cfg.nd_shard_spec is not None:
+            nd = mem_cfg.nd_shard_spec
+            print(
+                "output nd_shard_spec: shard_shape=%s, grid=%s, orientation=%s, shard_distribution_strategy=%s, num_cores=%s"
+                % (nd.shard_shape, nd.grid, nd.orientation, nd.shard_distribution_strategy, nd.num_cores())
+            )
+        else:
+            print("output shard shape:", mem_cfg.shard_spec.shape)
+            print("output shard grid:", mem_cfg.shard_spec.grid)
+    print("output has nd_shard_spec:", mem_cfg.nd_shard_spec is not None)
+    print("output has shard_spec:", mem_cfg.shard_spec is not None)
+    output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_equal(input_torch_tensor, output_torch_tensor)
+
+
+# Legacy-sharded TILE output requires shard height and width to be multiples of 32 (tile size).
+# Only (tensor_shape, grid) where height_shard, width_shard, and block_shard dims are all % 32 == 0.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape",
+    [
+        (
+            [4, 128, 128],
+            [2, 64, 64],
+        ),  # 2D (512,128): height_shard (128,128), width_shard (512,32), block (256,64) all tile-aligned
+        ([8, 64, 128], [2, 32, 64]),  # 2D (512,128): same as above
+        (
+            [7, 128, 128],
+            [2, 64, 96],
+        ),  # Uneven ND sharding: dim 0 has 7 % 2 != 0 -> cliff core; 2D (896,128) still tile-aligned
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})],
+)
+@pytest.mark.parametrize(
+    "output_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+def test_tilize_nd_sharded_to_legacy_sharded(
+    device, dtype, tensor_shape, shard_shape, shard_core_grid, output_memory_layout
+):
+    """tilize: ND-sharded row-major input -> legacy-sharded (HEIGHT/WIDTH/BLOCK) tile output."""
+    torch.manual_seed(42)
+
+    num_shard_cores = shard_core_grid.num_cores()
+    num_dims = len(tensor_shape)
+    tensor_height = 1
+    for i in range(num_dims - 1):
+        tensor_height *= tensor_shape[i]
+    tensor_width = tensor_shape[-1]
+
+    height_shard_shape = (tensor_height // num_shard_cores, tensor_width)
+    width_shard_shape = (tensor_height, tensor_width // num_shard_cores)
+    block_shard_shape = (
+        tensor_height // int(math.sqrt(num_shard_cores)),
+        tensor_width // int(math.sqrt(num_shard_cores)),
+    )
+    shard_layout_map = {
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED: {"shard_grid": shard_core_grid, "shard_shape": height_shard_shape},
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED: {"shard_grid": shard_core_grid, "shard_shape": width_shard_shape},
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED: {"shard_grid": shard_core_grid, "shard_shape": block_shard_shape},
+    }
+    layout_info = shard_layout_map[output_memory_layout]
+    output_shard_spec = ttnn.ShardSpec(
+        layout_info["shard_grid"], layout_info["shard_shape"], ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    #    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+    ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
+    out_shard_spec = ttnn_output_tensor.memory_config().shard_spec
+    print("output shard shape:", out_shard_spec.shape)
+    print("output shard grid:", out_shard_spec.grid)
     output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     assert_equal(input_torch_tensor, output_torch_tensor)
