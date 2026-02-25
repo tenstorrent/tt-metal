@@ -6,17 +6,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <string>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-
-namespace tt::llrt {
-class RunTimeOptions;
-}
 
 namespace tt::tt_metal {
 
@@ -64,15 +58,6 @@ struct JitDeviceConfig {
 // configuration files alone. Because of this, the device must be accessible at
 // call time.
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs);
-
-// Translate a JitDeviceConfig into the set of preprocessor defines that are
-// passed to device-side kernel compilation.
-std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config);
-
-// Produce a deterministic hash that uniquely identifies the build configuration
-// implied by `config` and `rtoptions`. Two devices that yield the same key can
-// share compiled kernel artifacts.
-uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions);
 
 // TODO: Add a factory method to create JitDeviceConfig from a YAML profile
 

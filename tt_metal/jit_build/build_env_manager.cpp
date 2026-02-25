@@ -5,10 +5,13 @@
 #include "build_env_manager.hpp"
 
 #include <tracy/Tracy.hpp>
+#include <cmath>
 #include <cstddef>
+#include <map>
 #include <string>
 
 #include <tt_stl/assert.hpp>
+#include "common/stable_hash.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
@@ -50,6 +53,56 @@ BuildEnvManager::BuildEnvManager(const Hal& hal) {
 }
 
 namespace {
+
+std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config) {
+    std::map<std::string, std::string> device_kernel_defines;
+
+    bool is_dram_pow2 = ceil(log2(config.num_dram_banks)) == log2(config.num_dram_banks);
+    bool is_l1_pow2 = ceil(log2(config.num_l1_banks)) == log2(config.num_l1_banks);
+
+    device_kernel_defines.emplace("NUM_DRAM_BANKS", std::to_string(config.num_dram_banks));
+    device_kernel_defines.emplace("NUM_L1_BANKS", std::to_string(config.num_l1_banks));
+
+    if (is_dram_pow2) {
+        device_kernel_defines.emplace(
+            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(config.num_dram_banks))));
+    } else {
+        device_kernel_defines.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
+    }
+    if (is_l1_pow2) {
+        device_kernel_defines.emplace(
+            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(config.num_l1_banks))));
+    } else {
+        device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
+    }
+
+    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(config.pcie_core.x));
+    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(config.pcie_core.y));
+
+    return device_kernel_defines;
+}
+
+uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
+    // Collect all the parameters that affect the build configuration
+    FNV1a hasher;
+
+    hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
+    hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
+
+    // Hash the number of hardware command queues
+    hasher.update(static_cast<uint32_t>(config.num_hw_cqs));
+
+    // Hash the harvesting configuration based on whether coordinate virtualization is enabled
+    if (!config.coordinate_virtualization_enabled) {
+        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
+        // devices with different cores harvested.
+        hasher.update(config.harvesting_mask);
+    }
+
+    hasher.update(rtoptions.get_compile_hash_string());
+
+    return hasher.digest();
+}
 
 std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitDeviceConfig& dev_config, bool is_fw) {
     const auto& hal = *dev_config.hal;
