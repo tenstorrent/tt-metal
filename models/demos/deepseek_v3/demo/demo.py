@@ -409,6 +409,9 @@ def run_demo(
             results.append(result)
 
         return {"generations": results, "statistics": statistics}
+    except Exception:
+        logger.exception("run_demo failed with exception")
+        raise
     finally:
         # Clean up generator resources
         try:
