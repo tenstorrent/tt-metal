@@ -737,11 +737,15 @@ template <typename... Args>
 constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
     constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
-    std::array<uint32_t, sizeof...(Args)> arg_offset = {};
+    std::array<uint32_t, sizeof...(Args)> arg_memory_offsets = {};
     uint32_t current_offset = sizeof(device_print_detail::structures::DevicePrintHeader::value);
-    for (std::size_t i = 0; i < arg_offset.size(); ++i) {
-        arg_offset[i] = current_offset;
+    for (std::size_t i = 0; i < arg_memory_offsets.size(); ++i) {
+        arg_memory_offsets[i] = current_offset;
         current_offset += type_infos[arg_reorder[i]].size_in_bytes;
+    }
+    std::array<uint32_t, sizeof...(Args)> arg_offset = {};
+    for (std::size_t i = 0; i < arg_offset.size(); ++i) {
+        arg_offset[arg_reorder[i]] = arg_memory_offsets[i];
     }
     return arg_offset;
 }

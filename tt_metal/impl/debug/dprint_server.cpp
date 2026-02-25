@@ -536,7 +536,7 @@ std::vector<ArgumentValue> read_arguments_from_payload(
                 arguments.push_back(*reinterpret_cast<const float*>(payload_bytes.data() + payload_offset));
                 payload_offset += sizeof(float);
                 break;
-            case 'g':  // double
+            case 'd':  // double
                 arguments.push_back(*reinterpret_cast<const double*>(payload_bytes.data() + payload_offset));
                 payload_offset += sizeof(double);
                 break;
@@ -604,7 +604,7 @@ std::string DevicePrintImpl::format_message(std::string_view format_str, std::sp
                 case 'f':  // float
                     result << fmt::format(format, std::get<float>(argument_values[placeholder->arg_id]));
                     break;
-                case 'g':  // double
+                case 'd':  // double
                     result << fmt::format(format, std::get<double>(argument_values[placeholder->arg_id]));
                     break;
                 case '?':  // bool
@@ -622,22 +622,8 @@ std::string DevicePrintImpl::format_message(std::string_view format_str, std::sp
 
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
-    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
-    // TODO: Remove debug print
-    std::cout << "Read data:" << std::hex << std::endl;
-    for (size_t i = 0; i < data.size(); i++) {
-        std::cout << data[i] << " ";
-    }
-    std::cout << std::dec << std::endl;
-    const DevicePrintHeader* header1 = reinterpret_cast<const DevicePrintHeader*>(data.data());
-    std::cout << "First header: is_kernel: " << header1->is_kernel << " risc_id: " << header1->risc_id
-              << " message_payload: " << header1->message_payload << " info_id: " << header1->info_id << std::endl;
-    const DevicePrintHeader* header2 = header1 + 1;
-    std::cout << "Second header: is_kernel: " << header2->is_kernel << " risc_id: " << header2->risc_id
-              << " message_payload: " << header2->message_payload << " info_id: " << header2->info_id << std::endl;
-
     std::size_t word_index = 0;
+
     while (word_index < data.size()) {
         // New data always starts with a DevicePrintHeader, so lets parse it.
         const DevicePrintHeader* header = reinterpret_cast<const DevicePrintHeader*>(data.data() + word_index);
@@ -692,11 +678,6 @@ void DevicePrintImpl::print_buffer_data(
                 risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
 
-            // TODO: Remove debug print
-            std::cout << "Loading new kernel " << header->info_id << " on device " << device_id << " location "
-                      << virtual_core.str() << " on " << risc_name << std::endl;
-            std::cout << "Resolved ELF path: " << elf_path << std::endl;
-
             // Load elf file
             kernel_elf_cache_[std::make_tuple(kernel_id, header->risc_id)] = elf_path.string();
             auto& kernel_entry = elf_cache_[elf_path.string()];
@@ -706,20 +687,9 @@ void DevicePrintImpl::print_buffer_data(
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
             // This is a wrap around message, we should just ignore it and mark that we processed buffer.
-
-            // TODO: Remove debug print
-            std::cout << "Wrap around message detected, ignoring rest of the buffer until end." << std::endl;
             break;
         } else {
-            // TODO: This is a normal print message, we should parse it and print it out.
-
-            // TODO: Remove debug print
-            std::cout << "Print message detected, message info id: " << header->info_id
-                      << " payload size: " << header->message_payload << std::hex << std::endl;
-            for (size_t i = 0; i < header->message_payload / sizeof(uint32_t); i++) {
-                std::cout << data[word_index + i] << " ";
-            }
-            std::cout << std::dec << std::endl;
+            // This is a normal print message, we should parse it and print it out.
 
             // Find elf file
             ElfFileCacheEntry* elf_entry_ptr = nullptr;
@@ -767,10 +737,6 @@ void DevicePrintImpl::print_buffer_data(
                         std::span<const std::byte> payload_bytes(
                             reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
                         auto formatted_message = format_message(format_str, payload_bytes);
-
-                        // TODO: Remove debug print
-                        std::cout << "Formatted message: " << formatted_message << " at " << file_str << ":"
-                                  << info.line << std::endl;
 
                         // Find if we have something buffered from before
                         auto risc_key = RiscKey{device_id, logical_core, header->risc_id};
@@ -869,9 +835,6 @@ bool DevicePrintImpl::poll_one_core(
 
     if (wpos != rpos) {
         new_data = true;
-        // TODO: Remove debug print
-        std::cout << "New print data detected on device " << device_id << " core " << virtual_core.str()
-                  << " wpos: " << wpos << " rpos: " << rpos << std::endl;
         if (rpos > wpos) {
             // Read until end of buffer and then from beginning until wpos
             auto data = MetalContext::instance().get_cluster().read_core(

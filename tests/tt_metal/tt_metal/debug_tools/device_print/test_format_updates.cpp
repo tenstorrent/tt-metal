@@ -74,7 +74,7 @@ public:
 
 TEST_F(DevicePrintFormatUpdatesFixture, PrintSingleUintArg) {
     std::vector<std::string_view> messages = {
-        "Printing uint32_t from arg: {0,I}"sv,
+        "Printing uint32_t from arg: {0,I}\n"sv,
     };
 
     TestFormatUpdate(
@@ -83,19 +83,19 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintSingleUintArg) {
 
 TEST_F(DevicePrintFormatUpdatesFixture, PrintBasicTypes) {
     std::vector<std::string_view> messages = {
-        "int8_t: {0,b}"sv,
-        "uint8_t: {0,B}"sv,
-        "int16_t: {0,h}"sv,
-        "uint16_t: {0,H}"sv,
-        "int32_t: {0,i}"sv,
-        "uint32_t: {0,I}"sv,
-        "int64_t: {0,q}"sv,
-        "uint64_t: {0,Q}"sv,
-        "float: {0,f}"sv,
-        "double: {0,d}"sv,
-        "bool: {0,?}"sv,
-        "Reordered args: {3,?} {2,h} {1,i} {0,q}"sv,
-        "Reordered args: {3,?} {2,h} {1,i} {0,q}"sv,
+        "int8_t: {0,b}\n"sv,
+        "uint8_t: {0,B}\n"sv,
+        "int16_t: {0,h}\n"sv,
+        "uint16_t: {0,H}\n"sv,
+        "int32_t: {0,i}\n"sv,
+        "uint32_t: {0,I}\n"sv,
+        "int64_t: {0,q}\n"sv,
+        "uint64_t: {0,Q}\n"sv,
+        "float: {0,f}\n"sv,
+        "double: {0,d}\n"sv,
+        "bool: {0,?}\n"sv,
+        "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
+        "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
     };
 
     TestFormatUpdate(
@@ -104,17 +104,17 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintBasicTypes) {
 
 TEST_F(DevicePrintFormatUpdatesFixture, PrintWithFormatSpecified) {
     std::vector<std::string_view> messages = {
-        "int8_t: {0,b: >-10}"sv,
-        "uint8_t: {0,B:#B}"sv,
-        "int16_t: {0,h: <-10}"sv,
-        "uint16_t: {0,H:#X}"sv,
-        "int32_t: {0,i: ^-10}"sv,
-        "uint32_t: {0,I:#x}"sv,
-        "int64_t: {0,q: }"sv,
-        "uint64_t: {0,Q:#08X}"sv,
-        "float: {0,f:3.3g}"sv,
-        "double: {0,d:.5f}"sv,
-        "bool: {0,?}"sv,
+        "int8_t: {0,b: >-10}\n"sv,
+        "uint8_t: {0,B:#B}\n"sv,
+        "int16_t: {0,h: <-10}\n"sv,
+        "uint16_t: {0,H:#X}\n"sv,
+        "int32_t: {0,i: ^-10}\n"sv,
+        "uint32_t: {0,I:#x}\n"sv,
+        "int64_t: {0,q: }\n"sv,
+        "uint64_t: {0,Q:#08X}\n"sv,
+        "float: {0,f:3.3g}\n"sv,
+        "double: {0,d:.5f}\n"sv,
+        "bool: {0,?}\n"sv,
     };
 
     TestFormatUpdate(
