@@ -477,21 +477,18 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
-    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        if ((a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) ||
-            (a_dtype == DataType::BFLOAT8_B && b_dtype == DataType::BFLOAT8_B) ||
-            (a_dtype == DataType::BFLOAT4_B && b_dtype == DataType::BFLOAT4_B)) {
-            return true;
-        }
-    }
+    const DataType c_dtype) {
+    // All three formats must match: cb_llk_post uses the input format, but the
+    // compute kernel's pack configuration targets cb_out (output format).  A
+    // mismatch between input and output format causes pack_tile to write with
+    // the wrong format, corrupting data.
+    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt && c_dtype == dt; };
 
-    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if ((a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) ||
-            (a_dtype == DataType::BFLOAT8_B && b_dtype == DataType::BFLOAT8_B) ||
-            (a_dtype == DataType::BFLOAT4_B && b_dtype == DataType::BFLOAT4_B)) {
+        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B)) {
             return true;
         }
     }
