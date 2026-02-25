@@ -167,11 +167,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     Buffer* output_buffer = tensor_return_value.buffer();
 
     // Get OP Config, topology config
-    uint32_t page_size = tensor_args.input_tensor.buffer()->page_size();
-    // Round up to DRAM read alignment (32B) for NOC transfers with small sticks (e.g. C=4 bf16 = 8B).
-    // InterleavedAddrGen already spaces pages at aligned_page_size intervals, so reading/writing
-    // the padded size is safe and avoids sub-minimum NOC transfers.
-    page_size = (page_size + 31u) & ~31u;
+    // Use the buffer's aligned page size (architecture-specific: 32B on WH, 64B on BH).
+    // InterleavedAddrGen spaces pages at aligned_page_size intervals, so NOC transfers
+    // must use this size to avoid sub-minimum or misaligned reads.
+    uint32_t page_size = input_buffer->aligned_page_size();
     uint32_t num_sticks_per_halo_dim = 1;
     for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];
