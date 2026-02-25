@@ -33,6 +33,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     images,
     negative_prompts,
@@ -94,6 +95,7 @@ def run_demo_inference(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
         pipeline_config=TtSDXLImg2ImgPipelineConfig(
+            image_resolution=image_resolution,
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
@@ -110,18 +112,20 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
+    height, width = image_resolution
+
     images = images + [images[0]] * needed_padding
     images = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
-            image, height=1024, width=1024, crops_coords=None, resize_mode="default"
+            image, height=height, width=width, crops_coords=None, resize_mode="default"
         ).to(dtype=torch.float32)
         for image in images
     ]
 
-    images = torch.cat(images, dim=0)  # [batch_size, 3, 1024, 1024]
+    images = torch.cat(images, dim=0)  # [batch_size, 3, height, width]
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        torch_image=torch.randn(batch_size, 3, 1024, 1024),
+        torch_image=torch.randn(batch_size, 3, height, width),
         all_prompt_embeds_torch=torch.randn(
             batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
         ),
@@ -222,6 +226,14 @@ def run_demo_inference(
     return out_images
 
 
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -309,6 +321,7 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     images_or_path,
     negative_prompt,
@@ -328,6 +341,9 @@ def test_demo(
     timesteps,
     sigmas,
 ):
+    if image_resolution == (512, 512):
+        pytest.skip("512x512 image resolution is not yet supported for img2img pipeline.")
+
     if isinstance(images_or_path, str):
         images = [Image.open(images_or_path).convert("RGB")]
     else:
@@ -337,6 +353,7 @@ def test_demo(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         images,
         negative_prompt,

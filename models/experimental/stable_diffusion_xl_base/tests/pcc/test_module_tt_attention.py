@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -15,21 +15,28 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim",
+    "image_resolution, input_shape, encoder_shape, down_block_id, attn_id, query_dim, num_attn_heads, out_dim",
     [
-        ((1, 4096, 640), None, 1, 1, 640, 10, 640),
-        ((1, 4096, 640), (1, 77, 2048), 2, 1, 640, 10, 640),
-        ((1, 1024, 1280), None, 1, 2, 1280, 20, 1280),
-        ((1, 1024, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4096, 640), None, 1, 1, 640, 10, 640),
+        ((1024, 1024), (1, 4096, 640), (1, 77, 2048), 1, 2, 640, 10, 640),
+        ((1024, 1024), (1, 1024, 1280), None, 2, 1, 1280, 20, 1280),
+        ((1024, 1024), (1, 1024, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280),
+        # 512x512 image resolution
+        ((512, 512), (1, 1024, 640), None, 1, 1, 640, 10, 640),
+        ((512, 512), (1, 1024, 640), (1, 77, 2048), 1, 2, 640, 10, 640),
+        ((512, 512), (1, 256, 1280), None, 2, 1, 1280, 20, 1280),
+        ((512, 512), (1, 256, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_attention(
     device,
+    image_resolution,
     input_shape,
     encoder_shape,
-    attn_id,
     down_block_id,
+    attn_id,
     query_dim,
     num_attn_heads,
     out_dim,
@@ -50,7 +57,7 @@ def test_attention(
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn1
     else:
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn2
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_attention = TtAttention(
         device,
         state_dict,

@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -15,14 +15,19 @@ from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, transformer_block_id, pcc",
+    "image_resolution, input_shape, block_id, transformer_block_id, pcc",
     [
-        ((1024, 1280), 2, 0, 0.997),
-        ((4096, 640), 1, 0, 0.999),
-        ((4096, 640), 1, 1, 0.998),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1024, 1280), 2, 0, 0.997),
+        ((1024, 1024), (4096, 640), 1, 0, 0.999),
+        # 512x512 image resolution
+        ((512, 512), (256, 1280), 2, 0, 0.997),
+        ((512, 512), (1024, 640), 1, 0, 0.999),
     ],
 )
-def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds):
+def test_feedforward(
+    device, image_resolution, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds
+):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -35,7 +40,7 @@ def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, i
 
     torch_ff = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id].ff
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_ff = TtFeedForward(
         device,
         state_dict,

@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
     prepare_linear_params,
 )
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -28,7 +28,7 @@ class TtResnetBlock2D(LightweightModule):
         self.module_path = module_path
         self.debug_mode = debug_mode
 
-        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisationsBase)
 
         # fixed for ResnetBlock
         self.stride = (1, 1)

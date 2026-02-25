@@ -66,6 +66,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
             4,
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
+        # SDXL Base
+        (1, 1920, 16, 16, 32, 1, 4, 4),
         #  SDXL VAE
         (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
