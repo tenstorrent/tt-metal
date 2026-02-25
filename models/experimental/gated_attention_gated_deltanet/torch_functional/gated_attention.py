@@ -172,16 +172,15 @@ def gated_attention_forward(
     key_states = repeat_kv(key_states, num_kv_groups)
     value_states = repeat_kv(value_states, num_kv_groups)
 
-    # Scaled dot-product attention
-    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
-
-    attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-    if training and attention_dropout > 0:
-        attn_weights = F.dropout(attn_weights, p=attention_dropout, training=True)
-
-    attn_output = torch.matmul(attn_weights, value_states)  # [B, H, T, D]
+    # Scaled dot-product attention (fused kernel)
+    attn_output = F.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        is_causal=(attention_mask is None),
+        scale=scaling,
+    )
     attn_output = attn_output.transpose(1, 2).reshape(B, T, -1)  # [B, T, H*D]
 
     # Apply sigmoid gate
