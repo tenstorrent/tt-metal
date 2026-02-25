@@ -63,9 +63,7 @@ void validate_pool2d(
     }
 }
 
-// Validation is the same for both cache hit and miss
-static void validate_pool2d_operation(
-    const Pool2D::operation_attributes_t& op_attr, const Pool2D::tensor_args_t& tensor) {
+void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     validate_pool2d(
         tensor.input_tensor_,
         op_attr.pool_type_,
@@ -76,12 +74,15 @@ static void validate_pool2d_operation(
         op_attr.output_layout_);
 }
 
-void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    validate_pool2d_operation(op_attr, tensor);
-}
-
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    validate_pool2d_operation(op_attr, tensor);
+    validate_pool2d(
+        tensor.input_tensor_,
+        op_attr.pool_type_,
+        op_attr.sliding_window_config_,
+        op_attr.memory_config_,
+        op_attr.divisor_override_,
+        op_attr.return_indices_,
+        op_attr.output_layout_);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
