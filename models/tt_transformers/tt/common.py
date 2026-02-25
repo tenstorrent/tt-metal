@@ -7,14 +7,49 @@ import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import List, Optional, Union
 
 import torch
-from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
+from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
+
+
+class URL(BaseModel):
+    uri: str
+
+    def __str__(self) -> str:
+        return self.uri
+
+
+class ImageMedia(BaseModel):
+    image: Union[PIL_Image.Image, URL]
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
+
+
+class Mode(Enum):
+    DECODE = "decode"
+    PREFILL = "prefill"
 
 
 class HostEmbedding(torch.nn.Module):
@@ -773,9 +808,14 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    use_prefetcher=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.prefetcher import Prefetcher
+
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -783,9 +823,14 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        prefetcher=prefetcher,
     )
+
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+
+    if prefetcher is not None:
+        prefetcher.num_layers = tt_model_args.n_layers
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
@@ -798,6 +843,7 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None

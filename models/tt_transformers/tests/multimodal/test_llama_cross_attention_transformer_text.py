@@ -14,7 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_single_rot_mat
+from models.tt_transformers.tt.common import Mode, get_single_rot_mat
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
@@ -183,8 +183,8 @@ def test_cross_attention_transformer_text_inference(
 
     for i in range(n_iter):
         # Test prefill and decode
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode = Mode.PREFILL if i == 0 else Mode.DECODE
+        seq_len = text_seq_len if mode == Mode.PREFILL else 1
         cur_pos = seq_len + prev_pos
 
         # Prepare pytorch inputs
@@ -225,7 +225,7 @@ def test_cross_attention_transformer_text_inference(
 
         TEXT_ONLY = False
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             T = get_ref_model_logits(
                 i,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
@@ -260,7 +260,7 @@ def test_cross_attention_transformer_text_inference(
             )
         logits = T.logits
         # Prepare TT inputs
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
@@ -327,7 +327,7 @@ def test_cross_attention_transformer_text_inference(
         else:
             tt_h = model_args.prepare_residual_tensor_decode(
                 h,
-                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+                model_args.get_residual_mem_config(Mode.DECODE, None),
             )
             position_ids = position_ids.reshape(1).expand(batch)
             tt_position_id = ttnn.from_torch(
@@ -421,7 +421,7 @@ def test_cross_attention_transformer_text_inference(
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
         prev_pos = cur_pos
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

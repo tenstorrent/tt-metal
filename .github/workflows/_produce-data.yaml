@@ -37,6 +37,7 @@ on:
       - "All post-commit tests"
       - "PR - All post-commit tests"
       - "apc nightly debug run"
+      - "apc nightly debug run with watcher"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
@@ -71,8 +72,8 @@ on:
       - "Multi-Host Deployment (Physical)"
       - "(Galaxy) Multi-user Isolation Tests"
       - "(Galaxy) demo tests"
-      - "(Galaxy) frequent tests"
-      - "(Galaxy) model perf tests"
+      - "(Galaxy) integration tests"
+      - "(Galaxy) perf tests"
       - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
@@ -84,7 +85,6 @@ on:
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"
-      - "(APC) Select and Run Post-Commit Tests"
       - "Git bisect dispatch"
       - "Custom test dispatch"
     types:
@@ -104,6 +104,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
@@ -213,6 +218,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'

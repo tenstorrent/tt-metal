@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include "remapper_common.hpp"
+#include "overlay_addresses.h"
 
 /**
  * @brief Generic API for Counter Remapper Configuration
@@ -46,8 +47,8 @@
  */
 class RemapperAPI {
 private:
-    tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS];  // Uninitialized to avoid memset
-    tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS];  // Uninitialized to avoid memset
+    tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
+    tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
     uint32_t current_pair_idx;
 
 public:
@@ -55,13 +56,9 @@ public:
      * @brief Constructor - initializes pair index only
      * @param pair_idx Initial pair index to use (0-63, default 0)
      *
-     * WARNING: Config arrays are left uninitialized to avoid linker issues with memset.
      * User MUST configure registers using set_* methods before calling write_* methods.
      */
-    RemapperAPI(uint32_t pair_idx = 0) : current_pair_idx(pair_idx) {
-        // Arrays intentionally left uninitialized to avoid memset() calls
-        // which cause linker errors with soft-float ABI
-    }
+    constexpr RemapperAPI(uint32_t pair_idx = 0) : current_pair_idx(pair_idx) {}
 
     // ========================================================================
     // Pair Management Methods

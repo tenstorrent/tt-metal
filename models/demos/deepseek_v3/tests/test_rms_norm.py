@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -19,6 +21,9 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
 
 @pytest.mark.parametrize(
     "device_params",
@@ -29,18 +34,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "mode, seq_len",
     [
         ("decode", 32),
-    ]
-    + [
-        ("prefill", seq_len)
-        if seq_len == 128
-        else pytest.param(
-            "prefill",
-            seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-            ),
-        )
-        for seq_len in PREFILL_SEQ_LENS
+        ("prefill", _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
@@ -109,6 +103,9 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_rms_norm",
+        real_weights=reference_layernorm_path is not None,
+        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(

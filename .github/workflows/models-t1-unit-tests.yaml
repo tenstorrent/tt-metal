@@ -1,0 +1,91 @@
+name: "[Tier 1] Models Unit Tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - llama3.1-8b
+          - llama3.3-70b-galaxy
+      sku:
+        description: "Select SKU to test"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "wh_n150 (N150)"
+          - "wh_galaxy (Galaxy)"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+permissions:
+  packages: write
+  contents: write
+
+jobs:
+  resolve-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+    steps:
+      - name: Resolve SKU selection
+        id: resolve
+        run: |
+          ALL_SKUS="wh_n150,wh_galaxy"
+          SKU_INPUT="${{ inputs.sku || 'all' }}"
+          if [[ "$SKU_INPUT" == "all" ]]; then
+            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          else
+            # Extract SKU name before the parenthetical description
+            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          fi
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+  models-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      tier: "1"

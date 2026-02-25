@@ -4,9 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_binary.h"
-
-namespace NAMESPACE {
+#include "api/compute/eltwise_binary.h"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -51,7 +49,7 @@ constexpr uint32_t intermediate_slice_cb_ids[8] = {
     intermediate_slice_6_cb_id,
     intermediate_slice_7_cb_id};
 
-void MAIN {
+void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -109,5 +107,3 @@ void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

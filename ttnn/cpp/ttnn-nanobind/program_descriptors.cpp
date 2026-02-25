@@ -364,7 +364,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "format_descriptors",
             &tt::tt_metal::CBDescriptor::format_descriptors,
-            "Collection of format descriptors for different sections of the buffer");
+            "Collection of format descriptors for different sections of the buffer")
+        .def_rw(
+            "address_offset",
+            &tt::tt_metal::CBDescriptor::address_offset,
+            "Byte offset from buffer base address for CB placement (default 0)");
 
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
@@ -372,6 +376,8 @@ void py_module_types(nb::module_& mod) {
         &tt::tt_metal::cb_descriptor_from_sharded_tensor,
         nb::arg("cb_index"),
         nb::arg("tensor"),
+        nb::arg("address_offset") = 0,
+        nb::arg("total_size") = 0,
         R"pbdoc(
             Create a CBDescriptor from a sharded tensor.
 
@@ -381,20 +387,24 @@ void py_module_types(nb::module_& mod) {
             Args:
                 cb_index: The circular buffer index (CB ID)
                 tensor: A sharded tensor to derive CB configuration from
+                address_offset: Byte offset from buffer base address for CB placement (default 0)
+                total_size: Total CB size in bytes (default 0 = use tensor's full bank size)
 
             Returns:
                 CBDescriptor with all fields (total_size, core_ranges, format_descriptors, buffer)
                 automatically populated from the tensor
 
             Example:
-                >>> # Assuming device_input_tensor is a sharded tensor
-                >>> cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                ...     0,
-                ...     device_input_tensor
+                >>> # Basic usage (full tensor)
+                >>> cb_desc = ttnn.cb_descriptor_from_sharded_tensor(0, device_input_tensor)
+                >>>
+                >>> # Place CB at offset within a pre-allocated buffer
+                >>> cb_k = ttnn.cb_descriptor_from_sharded_tensor(
+                ...     0, kv_cache, address_offset=0, total_size=k_size
                 ... )
-                >>> # Use cb_desc in ProgramDescriptor
-                >>> program_desc = ttnn.ProgramDescriptor()
-                >>> program_desc.cbs = [cb_desc]
+                >>> cb_v = ttnn.cb_descriptor_from_sharded_tensor(
+                ...     1, kv_cache, address_offset=v_offset, total_size=v_size
+                ... )
 
             Note:
                 The tensor must be sharded (have a shard specification), otherwise this will raise an error.
@@ -684,6 +694,33 @@ void py_module_types(nb::module_& mod) {
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+
+    mod.def(
+        "merge_program_descriptors",
+        &tt::tt_metal::merge_program_descriptors,
+        nb::arg("descriptors"),
+        R"pbdoc(
+            Merge multiple ProgramDescriptors into a single one.
+
+            The core ranges of all descriptors must not overlap with each other.
+            This returns a new ProgramDescriptor containing all kernels, semaphores,
+            and circular buffers from all input descriptors.
+
+            Args:
+                descriptors: List of ProgramDescriptors to merge.
+
+            Returns:
+                A new ProgramDescriptor containing all merged content.
+
+            Raises:
+                RuntimeError: If any kernel core ranges overlap between any of the descriptors.
+
+            Example:
+                >>> desc1 = ttnn.ProgramDescriptor()  # operates on cores (0,0)-(1,1)
+                >>> desc2 = ttnn.ProgramDescriptor()  # operates on cores (2,2)-(3,3)
+                >>> desc3 = ttnn.ProgramDescriptor()  # operates on cores (4,4)-(5,5)
+                >>> merged = ttnn.merge_program_descriptors([desc1, desc2, desc3])
+        )pbdoc");
 
     nb::class_<tt::tt_metal::experimental::MeshProgramDescriptor>(mod, "MeshProgramDescriptor", R"pbdoc(
         Descriptor for a mesh program.

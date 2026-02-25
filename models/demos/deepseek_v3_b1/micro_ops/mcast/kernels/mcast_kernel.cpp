@@ -39,7 +39,7 @@ void kernel_main() {
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -58,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
 
     // Mcast receiver data address (passed from Python as runtime arg, this is the output tensor's buffer address)
-    uint32_t mcast_receiver_data_addr = get_arg_val<uint32_t>(0);
+    uint32_t mcast_receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
     // Mcast sender args (from compile-time args, passed to op as runtime args)
     Mcast::SenderArgs mcast_args{
@@ -66,8 +66,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),

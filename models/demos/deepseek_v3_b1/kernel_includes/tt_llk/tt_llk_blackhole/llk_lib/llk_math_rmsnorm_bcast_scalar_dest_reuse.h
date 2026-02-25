@@ -15,14 +15,14 @@
 
 using namespace ckernel;
 
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, int NUM_FIDELITY_PHASES = 0>
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
     const std::uint32_t num_faces = 4, const std::uint32_t acc_to_dest = 0) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    constexpr uint addr_mod = ADDR_MOD_0;
-    uint innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
-    uint outerloop = num_faces;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t addr_mod = ADDR_MOD_0;
+    std::uint32_t innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
+    std::uint32_t outerloop = num_faces;
     constexpr auto broadcast_type = p_elwise::SRCB_BCAST_ALL;
 
     // Scalar broadcast should not Clear B within a mop.  This is controlled outside of MOP.
@@ -33,6 +33,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
             TT_OP_ELWADD(0, acc_to_dest, broadcast_type, ADDR_MOD_0, 0),
             TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWSUB) {
         ckernel_template tmp(
@@ -41,12 +42,13 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
             TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, ADDR_MOD_0, 0),
             TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         if constexpr (high_fidelity) {
             ckernel_template tmp(
                 num_faces,
-                NUM_FIDELITY_PHASES,
+                to_underlying(math_fidelity),
                 TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0),
                 TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_2, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
@@ -59,6 +61,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
                 TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0),
                 TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
             tmp.program();
         }
     }
@@ -74,14 +77,14 @@ inline void rmsnorm_bcast_scalar_reuse_dest_as_src() {
 
 template <
     EltwiseBinaryType eltwise_binary_type,
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     DstSync Dst,
     bool is_fp32_dest_acc_en,
-    int NUM_FIDELITY_PHASES = 0,
+    MathFidelity math_fidelity,
     bool clear_dest = false>
-inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_index) {
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(std::uint32_t src_index, std::uint32_t dst_index) {
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(src_index);
     rmsnorm_bcast_scalar_reuse_dest_as_src();
@@ -100,7 +103,6 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
@@ -110,13 +112,12 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_
     }
     // Manually clear B once mop is done for scaler bcast
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-
-    math::clear_dst_reg_addr();
 }
 
-template <EltwiseBinaryType eltwise_binary_type, int NUM_FIDELITY_PHASES, std::uint32_t FIDELITY_INCREMENT>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
 inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_t num_faces) {
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
     // Use srcA for data movement
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
@@ -138,7 +139,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
                 .srca = {.incr = 0, .clr = 1},
                 .srcb = {.incr = 0, .clr = 1},
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                .fidelity = {.incr = FIDELITY_INCREMENT}}
+                .fidelity = {.incr = fidelity_increment}}
                 .set(ADDR_MOD_2);
 
             addr_mod_t{
@@ -170,21 +171,16 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, int MATH_FIDELITY_DESC = 0>
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(
     const std::uint32_t num_faces, const std::uint32_t acc_to_dest) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
 
-    rmsnorm_bcast_scalar_dest_reuse_configure_addrmod<
-        eltwise_binary_type,
-        MATH_FIDELITY_PHASES,
-        MATH_FIDELITY_INCREMENT>(num_faces);
+    rmsnorm_bcast_scalar_dest_reuse_configure_addrmod<eltwise_binary_type, math_fidelity>(num_faces);
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        rmsnorm_bcast_scalar_dest_reuse_configure_mop<eltwise_binary_type, num_tiles, MATH_FIDELITY_PHASES>(
+        rmsnorm_bcast_scalar_dest_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(
             num_faces, acc_to_dest);
     }
 

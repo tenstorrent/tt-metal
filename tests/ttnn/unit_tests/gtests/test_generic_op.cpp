@@ -16,6 +16,7 @@
 #include <tt-metalium/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
+#include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -618,6 +619,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
+        .named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
@@ -646,10 +648,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         num_output_tiles_per_core_group_2  // Nt
     };
     log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}, {"cb_out", output_cb_index}};
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -659,6 +664,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -1443,10 +1449,10 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
 
     // Append fabric connection args - this modifies sender_runtime_args and adds semaphores/defines to descriptor
     tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(0);
-    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+    tt::tt_fabric::append_routing_plane_connection_manager_rt_args<ProgramDescriptor>(
         sender_fabric_node_id,
-        {tt::tt_fabric::RoutingDirection::E},
-        {},
+        std::vector<tt::tt_fabric::eth_chan_directions>{tt::tt_fabric::eth_chan_directions::EAST},
+        std::vector<uint32_t>{},
         sender_program_descriptor,
         kernel_id,
         {sender_logical_core},

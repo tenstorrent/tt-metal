@@ -13,6 +13,15 @@
 struct Core {
     static constexpr bool is_sender_core = get_named_compile_time_arg_val("is_sender_core") == 1;
     static constexpr bool is_receiver_core = get_named_compile_time_arg_val("is_receiver_core") == 1;
+#if defined(COMPILE_FOR_NCRISC)
+    // Use per-core sender index (scattered mode) vs grid-based computation
+    // Only relevant for sender (NCRISC) - receiver/compute don't need this
+    static constexpr bool use_per_core_sender_idx =
+        get_named_compile_time_arg_val("gather_use_per_core_sender_idx") == 1;
+#else
+    // For BRISC/TRISC, default to false (not used anyway)
+    static constexpr bool use_per_core_sender_idx = false;
+#endif
 };
 
 void kernel_main() {
@@ -34,14 +43,14 @@ void kernel_main() {
     }
 
     // Get receiver data address from runtime arg (dst CB doesn't exist on sender cores)
-    uint32_t receiver_data_addr = get_arg_val<uint32_t>(0);
+    uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
     Gather::SenderArgs gather_args{
         get_named_compile_time_arg_val("gather_dest_noc_x"),
         get_named_compile_time_arg_val("gather_dest_noc_y"),
         get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather_src_cb"),
         get_named_compile_time_arg_val("gather_src_num_pages"),
         get_named_compile_time_arg_val("gather_sender_grid_start_x"),
@@ -50,6 +59,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather_row_major"),
         receiver_data_addr,  // receiver_data_addr from runtime arg (output tensor buffer address)
+        get_named_compile_time_arg_val("gather_sender_idx"),
     };
 
 // ============================================================================
@@ -62,8 +72,8 @@ void kernel_main() {
     Gather::ReceiverArgs gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
         get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather_dst_cb"),
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };
@@ -78,6 +88,7 @@ void kernel_main() {
 
     // Execute gather operation
     // pop_src = true (input is consumed after gather)
-    Gather::Op<Core::is_sender_core, Core::is_receiver_core, true> gather;
-    gather(gather_args);
+    // UsePerCoreSenderIdx = Core::use_per_core_sender_idx (compile-time scattered vs grid mode)
+    Gather::Op<Core::is_sender_core, Core::is_receiver_core, true, Core::use_per_core_sender_idx> gather_op;
+    gather_op(gather_args);
 }

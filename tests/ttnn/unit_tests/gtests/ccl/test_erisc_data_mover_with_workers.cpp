@@ -706,14 +706,9 @@ int TestEntrypoint(
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_info(tt::LogTest, "This test can only be run on n300 devices");
-        return 0;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 

@@ -127,7 +127,7 @@ protected:
                 *config_.arch);
         }
 
-        const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+        const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
         if (config_.mesh_shape.has_value() && config_.mesh_shape->mesh_size() > system_mesh_shape.mesh_size()) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a machine with SystemMesh {} that is smaller than the requested "
@@ -194,6 +194,11 @@ protected:
 class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
+};
+
+class MeshDevice1x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

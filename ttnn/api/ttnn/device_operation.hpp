@@ -11,6 +11,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
@@ -19,6 +20,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -223,7 +225,11 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
 
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
@@ -314,7 +320,19 @@ void create_and_cache_mesh_workload(
             emit_mesh_workload_annotation<mesh_device_operation_t>(
                 cached_workload.workload, operation_attributes, tensor_args);
 
-            if (program_cache.is_enabled()) {
+            // Don't cache programs during NO_DISPATCH graph capture mode because
+            // buffer addresses are invalid (address=0). Caching such programs would
+            // cause issues when later running in NORMAL mode.
+            // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
+            bool hook_blocks = false;
+            if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+                auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
+                if (processor_hooks) {
+                    hook_blocks = processor_hooks->get_block();
+                }
+            }
+            bool should_cache = program_cache.is_enabled() && !hook_blocks;
+            if (should_cache) {
                 program_cache.insert(
                     program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
                 auto& cached_program_factory = program_cache.get(program_hash);
@@ -533,9 +551,8 @@ typename device_operation_t::tensor_return_value_t launch(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {
-        const auto& storage = first_tensor.value().storage();
         TT_FATAL(
-            std::holds_alternative<tt::tt_metal::DeviceStorage>(storage),
+            tt::tt_metal::is_device_tensor(first_tensor.value()),
             "Device Operations expect tensor with Device storage in inputs");
     }
 
@@ -543,8 +560,16 @@ typename device_operation_t::tensor_return_value_t launch(
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
+    // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
+    // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
+    // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
+    if (mesh_device->get_view().get_devices().empty()) {
+        tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+        return tensor_return_value;
+    }
+
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-        mesh_device_operation_utils::filter_tensor_shards(
+        tensor_return_value = mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
     }
 

@@ -22,6 +22,7 @@
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
+class DispatchTopology;
 
 namespace experimental {
 class DispatchContext;
@@ -64,6 +65,7 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    int get_clock_rate_mhz() const override;
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
@@ -132,9 +134,10 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    void init_command_queue_device_with_topology(DispatchTopology* topology);
+
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     // Puts device into reset
     bool close() override;
 
@@ -194,7 +197,7 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 
-    void configure_command_queue_programs();
+    void configure_command_queue_programs(DispatchTopology* topology);
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();

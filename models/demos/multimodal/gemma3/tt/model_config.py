@@ -69,11 +69,17 @@ class ModelArgs(TTModelArgs):
 
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.padded_vocab_size = 262400
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
+
         # This dictionary is used to override the default ceil warmup prefill value
-        model_specific_ceil_warmup_lengths = {"gemma-3-4b": 65536}
+        # Longer seqlens take too much time to warmup, so CI times out
+        model_specific_ceil_warmup_lengths = {
+            "gemma-3-4b": 2048,
+            "gemma-3-27b": 2048,
+        }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
         if max_seq_len_to_warmup > self.capped_warmup_seq_len:

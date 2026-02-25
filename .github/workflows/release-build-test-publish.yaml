@@ -88,8 +88,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: "wh_llmbox_perf"
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
 
   galaxy-demos:
     needs: build-artifact
@@ -100,9 +100,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
+      enabled-skus: wh_galaxy
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
 
   blackhole-demo-tests:
     needs: build-artifact
@@ -112,23 +111,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ["P100", "P150", "p150b"]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: false
-
-  blackhole-multi-card-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
         test-group:
+          - name: P150 Demo tests
+            runner-label: P150
+            extra-tag: pipeline-perf
+            num_devices: 1
           - name: LLMBox Demo tests
             runner-label: BH-LLMBox
             extra-tag: pipeline-perf

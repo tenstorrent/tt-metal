@@ -16,6 +16,9 @@ UINT16_MAX = 65535
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
 
+    if dtype == ttnn.bfloat8_b:
+        pytest.xfail("BFLOAT8_B not supported by pad operation in topk")
+
     # Input tensor
     shape = [N, C, H, W]
     ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
@@ -56,11 +59,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert list(ttnn_topk_values.shape) == desired_shape
     assert list(ttnn_topk_indices.shape) == desired_shape
 
-    # Assert values correctness
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
-    else:
-        assert_equal(ttnn_torch_values, pyt_topk_values)
+    assert_equal(ttnn_torch_values, pyt_topk_values)
 
     # Assert indices correctness using gather
     # pcc is not a good measure for the raw indices
@@ -95,6 +94,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     (
         (1, 1, 32, 8192, 3, 50),
         (1, 1, 64, 64, 2, 32),
+        (1, 1, 32, 32 * 512, 3, 32),
         (1, 1, 64, 64, 2, 64),
         (1, 2048, 1, 64, 1, 32),
         (1, 1, 32, 64, 3, 2),
@@ -106,6 +106,11 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
+        (1, 1, 65 * 32, 32 * 3, 3, 32),
+        (1, 10, 32, 512, 2, 32),
+        (5, 9, 96, 1024, 2, 32),
+        (5, 9, 1024, 96, 3, 32),
+        (3, 2, 160, 960, 2, 32),
     ),
 )
 @pytest.mark.parametrize(
@@ -231,23 +236,23 @@ def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device
 
 
 @pytest.mark.parametrize(
-    "torch_input_tenosr_dtype, ttnn_input_tenosr_dtype",
+    "torch_input_tensor_dtype, ttnn_input_tensor_dtype",
     [
         (torch.float32, ttnn.float32),
         (torch.uint32, ttnn.uint32),
         (torch.int32, ttnn.int32),
     ],
 )
-def test_topk_input_dtypes_raise(torch_input_tenosr_dtype, ttnn_input_tenosr_dtype, device):
+def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device):
     torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
-    if torch_input_tenosr_dtype == torch.float32:
-        input_torch = torch.randn(shape, dtype=torch_input_tenosr_dtype)
+    if torch_input_tensor_dtype == torch.float32:
+        input_torch = torch.randn(shape, dtype=torch_input_tensor_dtype)
     else:
-        input_torch = torch.randint(0, 100, shape, dtype=torch_input_tenosr_dtype)
+        input_torch = torch.randint(0, 100, shape, dtype=torch_input_tensor_dtype)
 
-    ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tenosr_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
@@ -275,4 +280,4 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
     index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
 
     with pytest.raises(Exception):
-        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
+        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))

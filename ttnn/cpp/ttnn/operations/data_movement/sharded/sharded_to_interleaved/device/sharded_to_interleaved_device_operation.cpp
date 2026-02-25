@@ -12,11 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-ShardedToInterleavedDeviceOperation::program_factory_t ShardedToInterleavedDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ShardedToInterleavedProgramFactory{};
-}
-
 void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -51,11 +46,6 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor.dtype() != args.output_dtype) {
         TT_FATAL(input_tensor.layout() == Layout::TILE, "If diff output type, tensor must be TILED");
     }
-}
-
-void ShardedToInterleavedDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(

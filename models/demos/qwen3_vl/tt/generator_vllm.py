@@ -12,7 +12,11 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.model_executor.models.qwen3_vl import (
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLMultiModalProcessor,
+    Qwen3VLProcessingInfo,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
@@ -20,7 +24,6 @@ from models.demos.qwen3_vl.tt.common import merge_vision_tokens, multimodal_rope
 from models.demos.qwen3_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -61,16 +64,19 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=None,
 ):
+    # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
+    hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
+
     tt_model_args = ModelArgs(
         mesh_device,
-        instruct=("Instruct" in hf_config.name_or_path),
+        instruct=("Instruct" in hf_model_id),
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    assert tt_model_args.model_name.replace("-", "").endswith(
-        hf_config.name_or_path.split("/")[-1].replace("-", "")
-    ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
+    assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
+        "-", ""
+    ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
     state_dict = tt_model_args.load_state_dict()
 
     model = Transformer(
@@ -90,14 +96,13 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
-class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
-# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
-    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
@@ -114,10 +119,12 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
+        # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
+        hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
+        optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_model_id)
         if max_seq_len > max_seq_len_native:
             logger.warning(
-                f"max_seq_len {max_seq_len} is not supported for {hf_config.name_or_path}, using {max_seq_len_native} instead"
+                f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
         model_args, model = initialize_vllm_text_transformer(
@@ -166,41 +173,76 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens,
-        images,
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
+        enable_trace,
+        **kwargs,  # pixel_values and image_grid_thw
     ):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or all(
+            x == 0 for x in start_pos
+        ), f"Prefix caching is not supported for Qwen3VL, got start_pos: {start_pos}"
+        # Must add this so that vLLM can call without errors
+        enable_trace = False
+        logger.warning("Tracing in prefill mode is not supported for Qwen3VL")
+
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
         padded_seq_len = tokens.shape[-1]
         for i in range(tokens.shape[0]):  # for each user, fix their padding
             tokens[i][prompt_lens[i] :] = pad_token_id
 
-        # reconstruct the inputs that Qwen2.5-VL expects
+        # reconstruct the inputs that Qwen3VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
-        inputs.attention_mask = torch.concat(
-            [
-                torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
-                if im is not None
-                else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                for i, im in enumerate(images)
-            ],
-            dim=0,
+
+        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
+        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
+        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
+        inputs.attention_mask = torch.zeros(
+            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
         )
-        if images[0] is not None and "pixel_values" in images[0]:
-            # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
-            inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
-            inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
+        for i, plen in enumerate(prompt_lens):
+            inputs.attention_mask[i, :plen] = 1
+
+        if (
+            "pixel_values" in kwargs
+            and len(kwargs["pixel_values"]) > 0
+            and kwargs["pixel_values"][0] is not None
+            # kwargs["pixel_values"] is a list,
+            # each element is a list of images for one user
+            # We only check if the first user's pixel_values is not None
+            # as we currently do not support mixed inputs of text-only
+            # users and text-image users
+        ):
+            inputs.pixel_values = torch.concat(
+                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+            )
+            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
+            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
+            # vLLM Qwen3VL provides per-image `image_grid_thw` as a length-3
+            # 1D tensor (t, h, w). Stack into (num_images, 3).
+            assert _grid_items and all(
+                im is not None for im in _grid_items
+            ), "Expected non-empty image_grid_thw for image inputs."
+            for g in _grid_items:
+                assert (
+                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+            inputs.image_grid_thw = torch.stack(
+                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
+                dim=0,
+            )
             # Vision prefill
             image_embeds, deepstack_visual_embeds = self.visual_model(
                 inputs.pixel_values, grid_thw=inputs.image_grid_thw
             )
         else:
             # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16)
-            deepstack_visual_embeds = None
+            image_embeds, deepstack_visual_embeds = (
+                torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
+                None,
+            )
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
@@ -242,4 +284,4 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
 
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)

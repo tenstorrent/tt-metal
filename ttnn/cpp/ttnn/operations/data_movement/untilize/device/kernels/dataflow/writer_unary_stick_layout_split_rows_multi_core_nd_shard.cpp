@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,10 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(11);
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
+    constexpr uint32_t output_tensor_width = get_compile_time_arg_val(13);
+    constexpr uint32_t output_tensor_height = get_compile_time_arg_val(14);
 
-    constexpr auto dst_args = TensorAccessorArgs<13>();
+    constexpr auto dst_args = TensorAccessorArgs<15>();
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr, output_stick_size);
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
@@ -36,7 +38,8 @@ void kernel_main() {
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
-                                            uint32_t num_cols_already_processed_in_first_output_block) {
+                                            uint32_t num_cols_already_processed_in_first_output_block,
+                                            uint32_t num_rows_to_write) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
 
         // Base address of the row of elements we are going to be writing.
@@ -47,7 +50,7 @@ void kernel_main() {
         uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
 
         // Process each row of elements in the input block
-        for (uint32_t j = 0; j < tile_height; ++j) {
+        for (uint32_t j = 0; j < num_rows_to_write; ++j) {
             uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
 
             // Note: For width or block sharding (either input, output, or both), there may be more/less blocks width
@@ -107,81 +110,41 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
-    // Access pages within kernel
-    const auto& dspec = accessor_src.dspec();
-    // Iterate through all shards and within each shard iterate through all pages (padding and non-padding). Process
-    // only rows in the shards with non padding pages.
+
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
-        // Get total pages in shard (including padding)
-        uint32_t shard_volume = dspec.shard_volume();
+        auto shard_pages = accessor_src.shard_pages(shard_id);
+        for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();
+             page_iter += num_tiles_per_input_block) {
+            uint32_t page_id = page_iter->page_id();
+            uint32_t height_wise_input_block_index = page_id / num_tiles_per_row;
+            uint32_t tile_index_width = page_id % num_tiles_per_row;
+            uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
 
-        // Initialize coordinates for checking padding
-        auto local_page_coord = std::array<uint32_t, 4>{};  // Max rank 4
-        auto global_page_coord = std::array<uint32_t, 4>{};
-        auto shard_coord = std::array<uint32_t, 4>{};
-
-        // Calculate shard coordinates
-        uint32_t remaining_shard_id = shard_id;
-        for (int i = dspec.rank() - 1; i >= 0; --i) {
-            shard_coord[i] = remaining_shard_id % dspec.shard_grid()[i];
-            remaining_shard_id /= dspec.shard_grid()[i];
-        }
-
-        // Iterate through all pages in the shard
-        for (uint32_t page_offset = 0; page_offset < shard_volume; ++page_offset) {
-            // Calculate local page coordinates within shard
-            uint32_t temp_page_id = page_offset;
-            for (int i = dspec.rank() - 1; i >= 0; --i) {
-                local_page_coord[i] = temp_page_id % dspec.shard_shape()[i];
-                temp_page_id /= dspec.shard_shape()[i];
+            uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+            uint32_t last_column_tensor_index_in_block =
+                (tile_index_width + num_tiles_per_input_block) * tile_width - 1;
+            if (last_column_tensor_index_in_block >= output_tensor_width) {
+                // we have columns consisting of padding elements, so ignore those last padding columns
+                num_unpadded_cols_per_input_block = (output_tensor_width - tile_index_width * tile_width);
             }
-
-            // Calculate global coordinates and check if within bounds
-            bool is_padding = false;
-            for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                global_page_coord[i] = shard_coord[i] * dspec.shard_shape()[i] + local_page_coord[i];
-                if (global_page_coord[i] >= dspec.tensor_shape()[i]) {
-                    is_padding = true;
-                    break;
-                }
+            uint32_t last_row_tensor_index_in_block = (height_wise_input_block_index + 1) * tile_height - 1;
+            uint32_t num_rows_to_write = tile_height;
+            if (last_row_tensor_index_in_block >= output_tensor_height) {
+                // we have rows consisting of padding elements, so ignore those last padding rows. For untilize, the
+                // output_tensor_height is the padded shape height, so this should never happen. It may happen for
+                // untilize_with_unpadding.
+                num_rows_to_write = (output_tensor_height - height_wise_input_block_index * tile_height);
             }
-
-            // Check if page is at start of row in shard
-            bool is_start_of_row = (local_page_coord[dspec.rank() - 1] % num_tiles_per_input_block == 0);
-            if (is_start_of_row) {
-                if (!is_padding) {
-                    uint32_t page_id = 0;
-                    for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                        page_id += global_page_coord[i] * dspec.tensor_strides()[i];
-                    }
-                    uint32_t height_wise_input_block_index = page_id / num_tiles_per_row;
-                    uint32_t tile_index_width = page_id % num_tiles_per_row;
-                    uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
-
-                    uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-                    if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
-                        // we have an uneven shard with padding along the width dimension, so ignore those last
-                        // padding columns
-                        num_unpadded_cols_per_input_block = (num_tiles_per_row - tile_index_width) * tile_width;
-                    }
-
-                    uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
-                    uint32_t width_wise_output_block_start_index =
-                        input_block_global_col_index / num_cols_per_output_block;
-                    uint32_t num_cols_already_processed_in_first_output_block =
-                        input_block_global_col_index % num_cols_per_output_block;
-                    write_tiles_in_current_block(
-                        height_wise_input_block_index,
-                        width_wise_output_block_start_index,
-                        num_unpadded_cols_per_input_block,
-                        num_cols_already_processed_in_first_output_block);
-
-                } else {
-                    // Discard padding blocks, do not write to output
-                    cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                    cb_pop_front(cb_id_out0, num_tiles_per_input_block);
-                }
-            }
+            uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+            uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+            uint32_t num_cols_already_processed_in_first_output_block =
+                input_block_global_col_index % num_cols_per_output_block;
+            write_tiles_in_current_block(
+                height_wise_input_block_index,
+                width_wise_output_block_start_index,
+                num_unpadded_cols_per_input_block,
+                num_cols_already_processed_in_first_output_block,
+                num_rows_to_write);
         }
     }
 }

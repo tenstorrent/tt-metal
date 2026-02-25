@@ -22,7 +22,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -96,7 +95,6 @@ void create_test_stimuli(MatmulTileStimuli& stimuli, uint32_t M, uint32_t K, uin
 
 // This function creates bit masks to model math fidelity phases. This will mask the result only.
 void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -104,7 +102,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
         }
         case MathFidelity::HiFi2:
         case MathFidelity::LoFi: {
-            math_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            math_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -385,9 +383,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleTile) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 MatmulTileConfig matmul_config = {
                     .M = 1,
@@ -416,9 +411,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiTile) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 uint32_t M = fp32_dest_acc_en ? 2 : 4;
                 uint32_t N = fp32_dest_acc_en ? 2 : 4;
@@ -455,9 +447,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 uint32_t M = fp32_dest_acc_en ? 2 : 4;
                 uint32_t N = fp32_dest_acc_en ? 2 : 4;
@@ -492,9 +481,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 uint32_t M = fp32_dest_acc_en ? 2 : 4;
                 uint32_t N = fp32_dest_acc_en ? 2 : 4;
@@ -529,9 +515,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShortWithDt) {
             continue;
         }
         for (bool fp32_dest_acc_en : {true, false}) {
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 uint32_t M = fp32_dest_acc_en ? 2 : 4;
                 uint32_t N = fp32_dest_acc_en ? 2 : 4;

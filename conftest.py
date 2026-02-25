@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import pytest
 import torch
 import random
@@ -687,16 +688,12 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     del mesh_device
 
 
-@pytest.fixture(scope="function")
-def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
-    # Generic blackhole configuration
-    # This preserves the 2D mesh configuration in rackbox and galaxy
+@contextlib.contextmanager
+def bh_2d_mesh_device_context(device_params):
     import ttnn
 
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
-        pytest.skip()
-
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+        raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % ttnn.get_num_devices())
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -720,14 +717,26 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
             **updated_device_params,
         )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
+    try:
+        yield mesh_device
+    finally:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        reset_fabric(fabric_config)
+        del mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
 
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    with bh_2d_mesh_device_context(device_params) as mesh_device:
+        yield mesh_device
 
 
 @pytest.fixture()
@@ -851,6 +860,21 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--trace-params",
+        action="store_true",
+        default=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
+    )
+
+
+def pytest_configure(config):
+    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
+    if config.getoption("--trace-params", default=False):
+        # Set a module-level flag that can be checked by operation_tracer
+        import ttnn.operation_tracer
+
+        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture

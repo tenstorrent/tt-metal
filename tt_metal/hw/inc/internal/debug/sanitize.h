@@ -24,6 +24,7 @@
     defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
+#include "internal/hw_thread.h"
 
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 #include "hostdev/dev_msgs.h"
@@ -246,7 +247,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
-        v[noc_id].which_risc = PROCESSOR_INDEX;
+        v[noc_id].which_risc = internal_::get_hw_thread_idx();
         v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
         v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
@@ -563,6 +564,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, true)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, check_linked)                                                  \
+    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE, check_linked); \
+    LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, true)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir)        \
     debug_sanitize_noc_and_worker_addr(noc_id, noc_a, worker_a, l, multicast, dir, true); \
     LOG_LEN(l)
@@ -637,9 +642,15 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
     bool delay = false;
     switch (transaction_type) {
-        case TransactionRead: delay = (v[0].read_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionWrite: delay = (v[0].write_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
-        case TransactionAtomic: delay = (v[0].atomic_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionRead:
+            delay = (v[0].read_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionWrite:
+            delay = (v[0].write_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
+        case TransactionAtomic:
+            delay = (v[0].atomic_delay_processor_mask & (1u << internal_::get_hw_thread_idx())) != 0;
+            break;
         default: break;
     }
     if (delay) {
@@ -653,6 +664,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #else  // !WATCHER_ENABLED
 
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)

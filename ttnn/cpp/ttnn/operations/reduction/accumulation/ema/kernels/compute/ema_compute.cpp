@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/ema.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/ema.h"
 
 /*
  * -------------------------------------------------------------------------------------------------
