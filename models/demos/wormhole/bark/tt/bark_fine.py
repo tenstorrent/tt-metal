@@ -25,14 +25,10 @@ import ttnn
 from models.demos.wormhole.bark.tt.bark_gpt import (
     BarkConfig,
     TtBarkBlock,
+    preprocess_embedding_weight,
     preprocess_layernorm_weight,
     preprocess_linear_weight,
 )
-
-
-def preprocess_embedding_weight(w, device):
-    """Preprocess embedding weights for ttnn.embedding (2D ROW_MAJOR)."""
-    return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
 class TtBarkFineModel:
@@ -91,7 +87,7 @@ class TtBarkFineModel:
         self,
         codebook_idx: int,
         input_ids: Union[ttnn.Tensor, List[ttnn.Tensor]],
-        memory_config: Optional[ttnn.MemoryConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         """Forward pass for a specific codebook prediction on device.
 
