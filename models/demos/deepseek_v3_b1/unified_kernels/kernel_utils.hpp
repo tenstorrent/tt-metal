@@ -74,6 +74,23 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 #endif
 
 // ============================================================================
+// Cross-RISC synchronization
+// ============================================================================
+
+// Synchronization barrier using an atomic L1 semaphore.
+// NCRISC waits for BR + TR0 + TR2 (3 RISCs) to signal done, then resets.
+// Other RISCs (BR, TR0, TR2) atomically increment and proceed.
+FORCE_INLINE void sync_riscs(volatile uint32_t tt_l1_ptr* sem_addr) {
+#if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    __atomic_fetch_add(sem_addr, 1, __ATOMIC_RELAXED);
+#elif defined(COMPILE_FOR_NCRISC)
+    while (__atomic_load_n(sem_addr, __ATOMIC_RELAXED) < 3) {
+    }
+    *sem_addr = 0;
+#endif
+}
+
+// ============================================================================
 // CB reconfig utilities
 // ============================================================================
 
@@ -90,76 +107,67 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 //   NCRISC/BRISC:  read=true,  write=true
 //   TRISC0/unpack: read=true,  write=false
 //   TRISC2/pack:   read=false, write=true
+template <bool do_read, bool do_write, bool do_reset_stream_regs>
+FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t mask, uint32_t start_cb) {
+    uint32_t cb = start_cb;
+    while (mask) {
+        if (mask & 1) {
+            uint32_t base = cb * 4;
+            uint32_t fifo_addr = cb_config[base + 0] >> cb_addr_shift;
+            uint32_t fifo_size = cb_config[base + 1] >> cb_addr_shift;
+            uint32_t fifo_num_pages = cb_config[base + 2];
+            uint32_t fifo_page_size = cb_config[base + 3] >> cb_addr_shift;
+
+            LocalCBInterface& iface = get_local_cb_interface(cb);
+            if constexpr (do_read) {
+                iface.fifo_rd_ptr = fifo_addr;
+            }
+            if constexpr (do_write) {
+                iface.fifo_wr_ptr = fifo_addr;
+                iface.fifo_num_pages = fifo_num_pages;
+            }
+            iface.fifo_size = fifo_size;
+            iface.fifo_limit = fifo_addr + fifo_size;
+            iface.fifo_page_size = fifo_page_size;
+            iface.tiles_acked_received_init = 0;
+
+            if constexpr (do_reset_stream_regs) {
+                *get_cb_tiles_received_ptr(cb) = 0;
+                *get_cb_tiles_acked_ptr(cb) = 0;
+            }
+        }
+        mask >>= 1;
+        cb++;
+    }
+}
+
 FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
+    constexpr bool do_reset_stream_regs = true;
+#elif defined(COMPILE_FOR_BRISC)
+    constexpr bool do_read = true;
+    constexpr bool do_write = true;
+    constexpr bool do_reset_stream_regs = false;
 #elif defined(UCK_CHLKC_UNPACK)
     constexpr bool do_read = true;
     constexpr bool do_write = false;
+    constexpr bool do_reset_stream_regs = false;
 #elif defined(UCK_CHLKC_PACK)
     constexpr bool do_read = false;
     constexpr bool do_write = true;
+    constexpr bool do_reset_stream_regs = false;
 #else
     constexpr bool do_read = false;
     constexpr bool do_write = false;
+    constexpr bool do_reset_stream_regs = false;
 #endif
-    uint32_t cb_mask_low = cb_config[256];
-    uint32_t cb_mask_high = cb_config[257];
 
-    // Process lower 32 CBs (0-31)
-    uint32_t mask = cb_mask_low;
-    uint32_t cb = 0;
-    while (mask) {
-        if (mask & 1) {
-            uint32_t base = cb * 4;
-            uint32_t fifo_addr = cb_config[base + 0] >> cb_addr_shift;
-            uint32_t fifo_size = cb_config[base + 1] >> cb_addr_shift;
-            uint32_t fifo_num_pages = cb_config[base + 2];
-            uint32_t fifo_page_size = cb_config[base + 3] >> cb_addr_shift;
+    sync_riscs(reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]));
 
-            LocalCBInterface& iface = get_local_cb_interface(cb);
-            if constexpr (do_read) {
-                iface.fifo_rd_ptr = fifo_addr;
-            }
-            if constexpr (do_write) {
-                iface.fifo_wr_ptr = fifo_addr;
-                iface.fifo_num_pages = fifo_num_pages;
-            }
-            iface.fifo_size = fifo_size;
-            iface.fifo_limit = fifo_addr + fifo_size;
-            iface.fifo_page_size = fifo_page_size;
-        }
-        mask >>= 1;
-        cb++;
-    }
-
-    // Process upper 32 CBs (32-63)
-    mask = cb_mask_high;
-    cb = 32;
-    while (mask) {
-        if (mask & 1) {
-            uint32_t base = cb * 4;
-            uint32_t fifo_addr = cb_config[base + 0] >> cb_addr_shift;
-            uint32_t fifo_size = cb_config[base + 1] >> cb_addr_shift;
-            uint32_t fifo_num_pages = cb_config[base + 2];
-            uint32_t fifo_page_size = cb_config[base + 3] >> cb_addr_shift;
-
-            LocalCBInterface& iface = get_local_cb_interface(cb);
-            if constexpr (do_read) {
-                iface.fifo_rd_ptr = fifo_addr;
-            }
-            if constexpr (do_write) {
-                iface.fifo_wr_ptr = fifo_addr;
-                iface.fifo_num_pages = fifo_num_pages;
-            }
-            iface.fifo_size = fifo_size;
-            iface.fifo_limit = fifo_addr + fifo_size;
-            iface.fifo_page_size = fifo_page_size;
-        }
-        mask >>= 1;
-        cb++;
-    }
+    reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[256], 0);
+    reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[257], 32);
 }
 
 }  // namespace unified_kernels
