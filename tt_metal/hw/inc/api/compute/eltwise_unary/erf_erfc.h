@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void erf_tile_init() {
     MATH(SFPU_UNARY_KERNEL_INIT(erf, approx_mode));
 }
@@ -35,7 +35,7 @@ ALWI void erf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void erf_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erf, RC, approx_mode, idst));
 }
@@ -45,7 +45,7 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void erfc_tile_init() {
     MATH(SFPU_UNARY_KERNEL_INIT(erfc, approx_mode));
 }
@@ -64,7 +64,7 @@ ALWI void erfc_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void erfc_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfc, RC, approx_mode, idst));
 }

@@ -32,10 +32,10 @@ void kernel_main() {
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 0);
 
-            exp_tile_init<1u>();
-            exp_tile<1u>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
+            exp_tile_init<ckernel::ApproximationMode::FastApproximate>();
+            exp_tile<ckernel::ApproximationMode::FastApproximate>(0);
+            log1p_tile_init<ckernel::ApproximationMode::Approximate>();
+            log1p_tile<ckernel::ApproximationMode::Approximate>(0);
             tanh_tile_init();
             tanh_tile(0);
 

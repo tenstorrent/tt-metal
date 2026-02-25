@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void gelu_tile_init() {
     MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, approx_mode));
 }
@@ -35,7 +35,7 @@ ALWI void gelu_tile_init() {
  * | approx_mode      | Approximation mode selection                                               | ApproximationMode | Precise, Approximate, FastApproximate, FastApproximateClamped | False |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::FastApproximate>
 ALWI void gelu_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, approx_mode, idst));
 }

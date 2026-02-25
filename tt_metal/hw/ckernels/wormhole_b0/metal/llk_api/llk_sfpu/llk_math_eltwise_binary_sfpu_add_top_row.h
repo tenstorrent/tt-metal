@@ -11,7 +11,8 @@
 namespace ckernel {
 
 inline void llk_math_eltwise_binary_sfpu_add_top_row_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::add_top_row, true>(sfpu::init_add_top_row);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::add_top_row, ckernel::ApproximationMode::Approximate>(
+        sfpu::init_add_top_row);
 }
 
 template <DataFormat format>

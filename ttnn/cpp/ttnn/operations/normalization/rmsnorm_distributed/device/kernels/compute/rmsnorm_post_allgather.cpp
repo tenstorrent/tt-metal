@@ -118,8 +118,8 @@ void kernel_main() {
         add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
+        rsqrt_tile_init<APPROX, LEGACY_RSQRT>();
+        rsqrt_tile<APPROX, LEGACY_RSQRT>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

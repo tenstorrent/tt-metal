@@ -35,8 +35,8 @@ ALWI void batchnorm_bcast_tiles(
     tile_regs_acquire();
     add_tiles_init_with_dt(cb_batch_var, cb_eps);
     add_tiles(cb_batch_var, cb_eps, 0, 0, dst0);
-    rsqrt_tile_init();
-    rsqrt_tile(dst0);
+    rsqrt_tile_init<APPROX>();
+    rsqrt_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();

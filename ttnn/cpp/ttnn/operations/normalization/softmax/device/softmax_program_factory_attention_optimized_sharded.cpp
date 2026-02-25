@@ -190,7 +190,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     if (attributes.numeric_stable) {
         softmax_defines["NUMERIC_STABLE"] = "1";
     }
-    softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    softmax_defines["EXP_APPROX"] = math_approx_mode ? "true" : "false";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     CreateKernel(
         program,

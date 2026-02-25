@@ -180,8 +180,8 @@ void kernel_main() {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(dst0);
+        rsqrt_tile_init<APPROX, true>();
+        rsqrt_tile<APPROX, true>(dst0);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();

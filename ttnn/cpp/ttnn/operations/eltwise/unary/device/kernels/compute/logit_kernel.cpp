@@ -68,8 +68,8 @@ void kernel_main() {
             div_binary_tile_init();
             div_binary_tile(1, 0, 0);
 
-            log_tile_init();
-            log_tile(0);
+            log_tile_init<APPROX>();
+            log_tile<APPROX>(0);
 #ifdef WHERE  // Conditional negation: when eps > 0.5 and input < eps, negate the logit result (multiply by -1.0) to
               // ensure positive output. WHERE selects negated result (true) or original result (false).
             copy_dest_values(0, 2);

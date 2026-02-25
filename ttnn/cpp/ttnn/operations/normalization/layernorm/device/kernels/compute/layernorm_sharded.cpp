@@ -318,8 +318,8 @@ void kernel_main() {
                 add_tiles_init(cb_ex2, cb_eps);
                 add_tiles(cb_ex2, cb_eps, i, 0, dst0);
                 tile_regs_wait();
-                rsqrt_tile_init<LEGACY_RSQRT>();
-                rsqrt_tile<LEGACY_RSQRT>(dst0);
+                rsqrt_tile_init<APPROX, LEGACY_RSQRT>();
+                rsqrt_tile<APPROX, LEGACY_RSQRT>(dst0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2pe);

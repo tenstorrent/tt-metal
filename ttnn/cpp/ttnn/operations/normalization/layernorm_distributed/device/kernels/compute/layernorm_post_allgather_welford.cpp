@@ -141,8 +141,8 @@ void kernel_main() {
         tile_regs_acquire();
         tile_regs_wait();
         add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
+        rsqrt_tile_init<APPROX, true>();
+        rsqrt_tile<APPROX, true>(0);
         pack_tile(0, cb_recip_sqrt_var);
         tile_regs_commit();
         tile_regs_release();

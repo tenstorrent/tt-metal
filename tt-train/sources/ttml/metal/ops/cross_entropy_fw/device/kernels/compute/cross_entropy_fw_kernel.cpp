@@ -211,7 +211,8 @@ void calculate_sum_exp_x() {
         sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
 
         exp_tile_init();
-        exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+        exp_tile<ckernel::ApproximationMode::Precise>(
+            working_register);  // calculate exp for each tile in tile register
 
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
@@ -272,7 +273,8 @@ void calculate_sum_exp_x() {
                 working_register, max_value_register, working_register);  // subtract max value from each tile
 
             exp_tile_init();
-            exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+            exp_tile<ckernel::ApproximationMode::Precise>(
+                working_register);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -326,8 +328,8 @@ void reduce_log_sum_exp_x() {
     reduce_uninit();
 
     // log(sum(exp(x - max(x))))
-    log_tile_init();
-    log_tile(reduction_register);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(reduction_register);
     tile_regs_commit();
 
     tile_regs_wait();

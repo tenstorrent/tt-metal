@@ -31,8 +31,8 @@ void kernel_main() {
     tile_regs_acquire();
     copy_tile_init_with_dt(cb_divisor);
     copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(dst0);
     tile_regs_commit();
 
     cb_pop_front(cb_divisor, onetile);

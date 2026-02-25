@@ -243,7 +243,7 @@ void kernel_main() {
     // ROUND 1: reduce(local, r1_neighbor) → r1_result (unnormalized)
     // =========================================================================
     sdpa_tail_streaming_conditional<
-        EXP_APPROX_MODE,
+        use_approximate_enum<EXP_APPROX_MODE>(),
         false /* no normalize - R1 doesn't normalize */,
         block_size,
         scale_fp32,
@@ -266,7 +266,7 @@ void kernel_main() {
     bool r2_neighbor_r1_valid = r2_neighbor_valid;
 
     sdpa_tail_streaming_conditional<
-        EXP_APPROX_MODE,
+        use_approximate_enum<EXP_APPROX_MODE>(),
         final_reduction, /* don't normalize if data only on a single device */
         block_size,
         scale_fp32,

@@ -431,7 +431,7 @@ void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
         std::ostreambuf_iterator<char>(out),
         "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
         "constexpr bool APPROX_BOOL = {};\n"
-        "constexpr ckernel::ApproximationMode APPROX = ckernel::use_approximate_enum<APPROX>();\n",
+        "constexpr ckernel::ApproximationMode APPROX = ckernel::use_approximate_enum<APPROX_BOOL>();\n",
         static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()),
         desc.get_hlk_math_approx_mode());
 }

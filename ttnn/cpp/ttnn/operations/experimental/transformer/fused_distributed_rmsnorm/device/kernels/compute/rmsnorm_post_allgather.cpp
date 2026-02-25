@@ -106,8 +106,8 @@ void kernel_main() {
         add_tiles_init(reduce_result_cb, epsilon_cb);
         tile_regs_acquire();
         add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-        rsqrt_tile_init<use_legacy_rsqrt>();
-        rsqrt_tile<use_legacy_rsqrt>(0);
+        rsqrt_tile_init<APPROX, use_legacy_rsqrt>();
+        rsqrt_tile<APPROX, use_legacy_rsqrt>(0);
         tile_regs_commit();
         cb_pop_front(reduce_result_cb, 1);
         cb_reserve_back(reduce_result_cb, 1);

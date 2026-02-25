@@ -141,8 +141,8 @@ inline void combine_welford_partials(
         add_unary_tile(m2_acc_dst, rsqrt_policy.eps);
 
         // Compute 1/sqrt(Var[x] + eps)
-        rsqrt_tile_init();
-        rsqrt_tile(m2_acc_dst);
+        rsqrt_tile_init<APPROX>();
+        rsqrt_tile<APPROX>(m2_acc_dst);
     }
 
     // Pack the results into the combined CB

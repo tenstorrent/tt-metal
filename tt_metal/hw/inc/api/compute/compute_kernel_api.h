@@ -153,7 +153,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
  * If using an approximate implementation of tanh_tile(), then tanh_tile_init() should be called with a non-Precise
  * approx_mode beforehand.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
 ALWI void tanh_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_tanh_init<approx_mode, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
@@ -176,7 +176,7 @@ ALWI void tanh_tile_init() {
  * | approx_mode     | Approximation mode selection                                               | ApproximationMode | Precise, Approximate, FastApproximate, FastApproximateClamped | Precise |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
+template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
 ALWI void tanh_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_tanh<approx_mode, DST_ACCUM_MODE>(idst)));
 }
@@ -387,12 +387,14 @@ ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst))); }
+ALWI void exp2_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_exp2<ckernel::ApproximationMode::Approximate, DST_ACCUM_MODE>(idst)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>())); }
+ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<ckernel::ApproximationMode::Approximate>())); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -591,7 +593,7 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>())); }
+ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<ckernel::ApproximationMode::Approximate>())); }
 
 // clang-format off
 /**
@@ -619,7 +621,7 @@ template <
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<
-          true, /* APPROX_MODE */
+          ckernel::ApproximationMode::Precise,
           DST_ACCUM_MODE,
           num_rows,
           ITERATIONS,
@@ -776,18 +778,14 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_max_int32_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max_int32_init<approx_mode>()));
-}
+ALWI void unary_max_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_int32_init<APPROX>())); }
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -805,18 +803,14 @@ ALWI void unary_max_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_max_uint32_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32_init<approx_mode>()));
-}
+ALWI void unary_max_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32_init<APPROX>())); }
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -834,18 +828,14 @@ ALWI void unary_max_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_max<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_max_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max_init<approx_mode>()));
-}
+ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_init<APPROX>())); }
 
 // clang-format off
 /**
@@ -862,18 +852,14 @@ ALWI void unary_max_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void alt_complex_rotate90_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<approx_mode>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<APPROX>(idst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void alt_complex_rotate90_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init<approx_mode>()));
-}
+ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init<APPROX>())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -891,18 +877,14 @@ ALWI void alt_complex_rotate90_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min_int32<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_min_int32<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_min_int32_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min_int32_init<approx_mode>()));
-}
+ALWI void unary_min_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_int32_init<APPROX>())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -920,18 +902,14 @@ ALWI void unary_min_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_min_uint32_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32_init<approx_mode>()));
-}
+ALWI void unary_min_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32_init<APPROX>())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -949,18 +927,14 @@ ALWI void unary_min_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min<approx_mode>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_unary_min<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = APPROX_MODE>
-ALWI void unary_min_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min_init<approx_mode>()));
-}
+ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_init<APPROX>())); }
 
 ALWI uint32_t get_compute_special_value_flags() {
     uint32_t ret_val = 0;

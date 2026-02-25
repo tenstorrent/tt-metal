@@ -107,8 +107,8 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_qk_result, uint32_t cb_cur_m
     tile_regs_acquire();
     sub_tiles_bcast_cols(cb_qk_result, cb_cur_max, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
 
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(exp_dst_idx);
+    exp_tile_init<ckernel::ApproximationMode::Precise>();
+    exp_tile<ckernel::ApproximationMode::Precise>(exp_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -178,8 +178,8 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(exp_max_diff_dst_idx);
+    exp_tile_init<ckernel::ApproximationMode::Precise>();
+    exp_tile<ckernel::ApproximationMode::Precise>(exp_max_diff_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -266,8 +266,8 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
 
-    recip_tile_init();
-    recip_tile(reduce_dst_idx);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(reduce_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();

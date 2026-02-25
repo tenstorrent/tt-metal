@@ -141,8 +141,8 @@ void kernel_main() {
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1));
         sub_tiles_init(cb_one, cb_tmp1);
         sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -196,8 +196,8 @@ void kernel_main() {
         WITH_FP32_DEST_ACC(reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
-        sqrt_tile_init();
-        sqrt_tile(dst0);
+        sqrt_tile_init<APPROX>();
+        sqrt_tile<APPROX>(dst0);
         pack_tile_with_dt(dst0, cb_tmp1);
         tile_regs_commit();
 
@@ -217,8 +217,8 @@ void kernel_main() {
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_tmp1, cb_scalar_args));
         add_tiles_init(cb_tmp1, cb_scalar_args);
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -248,8 +248,8 @@ void kernel_main() {
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp2));
         sub_tiles_init(cb_one, cb_tmp2);
         sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         cb_pop_front(cb_tmp2, onetile);
         tile_regs_commit();
 

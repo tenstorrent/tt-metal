@@ -315,7 +315,7 @@ void kernel_main() {
             add_binary_tile(reduction_register, eps_register, reduction_register);
 
             sqrt_tile_init();
-            sqrt_tile(reduction_register);
+            sqrt_tile<APPROX>(reduction_register);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -355,8 +355,8 @@ void kernel_main() {
 
             copy_tile_init(cb_rms_after_reduction_intermediate);
             copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
-            recip_tile_init();
-            recip_tile(temporary_register);
+            recip_tile_init<APPROX>();
+            recip_tile<APPROX>(temporary_register);
 
             tile_regs_wait();
             tile_regs_commit();

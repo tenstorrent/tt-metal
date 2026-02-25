@@ -328,8 +328,8 @@ void kernel_main() {
         add_tiles_init_with_dt(cb_var, cb_eps);
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
 
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        rsqrt_tile_init<APPROX>();
+        rsqrt_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();

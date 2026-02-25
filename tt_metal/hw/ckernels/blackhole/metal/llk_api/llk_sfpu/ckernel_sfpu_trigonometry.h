@@ -497,7 +497,7 @@ void tangent_init() {
 
 template <ckernel::ApproximationMode APPROX_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROX_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    _init_exponential_<APPROX_MODE, p_sfpu::kCONST_1_FP16B>();
 }
 
 template <ckernel::ApproximationMode APPROX_MODE>

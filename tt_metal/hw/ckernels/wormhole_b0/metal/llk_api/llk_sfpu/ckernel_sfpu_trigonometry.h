@@ -160,14 +160,14 @@ template <ckernel::ApproximationMode APPROX_MODE>
 static sfpi::vFloat sfpu_sinpi(sfpi::vFloat x);
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<true>(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat sfpu_sinpi<ckernel::ApproximationMode::Approximate>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
 
     return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
 }
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat sfpu_sinpi<ckernel::ApproximationMode::Precise>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
 
     return x *
@@ -520,7 +520,7 @@ void tangent_init() {
 
 template <ckernel::ApproximationMode APPROX_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROX_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    _init_exponential_<APPROX_MODE, p_sfpu::kCONST_1_FP16B>();
 }
 
 template <ckernel::ApproximationMode APPROX_MODE>

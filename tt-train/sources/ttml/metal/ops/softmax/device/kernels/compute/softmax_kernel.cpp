@@ -212,8 +212,8 @@ void calculate_sum_exp_x() {
                 /* tile_idx */ 0,
                 /* register idx */ block_idx);
 
-            exp_tile_init<false>();
-            exp_tile</* approx */ false>(block_idx);  // calculate exp for each tile in tile register
+            exp_tile_init<ckernel::ApproximationMode::Precise>();
+            exp_tile<ckernel::ApproximationMode::Precise>(block_idx);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -293,8 +293,9 @@ void calculate_sum_exp_x() {
             sub_binary_tile(
                 working_register, max_value_register, working_register);  // subtract max value from each tile
 
-            exp_tile_init<false>();
-            exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+            exp_tile_init<ckernel::ApproximationMode::Precise>();
+            exp_tile<ckernel::ApproximationMode::Precise>(
+                working_register);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -357,8 +358,8 @@ void reduce_sum_exp_x() {
     matmul_tiles(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
 
-    recip_tile_init();
-    recip_tile(reduction_register);  // DST[0] = 1/sum(exp(x))
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(reduction_register);  // DST[0] = 1/sum(exp(x))
 
     tile_regs_commit();
 
@@ -423,8 +424,9 @@ void kernel_main() {
                     /* tile_idx */ 0,
                     /* register idx */ block_idx);
 
-                exp_tile_init<false>();
-                exp_tile</* approx */ false>(block_idx);  // calculate exp for each tile in tile register
+                exp_tile_init<ckernel::ApproximationMode::Precise>();
+                exp_tile<ckernel::ApproximationMode::Precise>(
+                    block_idx);  // calculate exp for each tile in tile register
 #endif
 
                 mul_binary_tile_init();

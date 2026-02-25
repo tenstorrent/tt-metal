@@ -325,8 +325,8 @@ void kernel_main() {
         cb_wait_front(cb_ex2, onetile);
         tile_regs_acquire();
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        rsqrt_tile_init<APPROX>();
+        rsqrt_tile<APPROX>(dst0);
         tile_regs_commit();
         cb_pop_front(cb_ex2, onetile);
 

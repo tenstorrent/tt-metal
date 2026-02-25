@@ -48,9 +48,9 @@ ALWI void batchnorm_bcast_tiles(
 
         add_binary_tile(i * 2, i * 2 + 1, i * 2);
     }
-    rsqrt_tile_init();
+    rsqrt_tile_init<APPROX>();
     for (uint32_t i = 0; i < onetile; ++i) {
-        rsqrt_tile(i * 2);
+        rsqrt_tile<APPROX>(i * 2);
 
         pack_tile(i * 2, cb_den);
     }

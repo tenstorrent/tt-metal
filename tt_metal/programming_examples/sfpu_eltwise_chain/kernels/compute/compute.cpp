@@ -48,8 +48,8 @@ void kernel_main() {
     add_binary_tile_init();
     add_binary_tile(0, 1, 0);  // exp(input) + 1
 
-    log_tile_init();
-    log_tile(0);  // log(exp(input) + 1)
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(0);  // log(exp(input) + 1)
 
     // Wait for result to be done and data stored back to the circular buffer
     tile_regs_commit();

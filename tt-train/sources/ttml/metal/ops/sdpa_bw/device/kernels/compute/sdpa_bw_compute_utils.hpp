@@ -88,8 +88,8 @@ void apply_statistics_inplace(
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
     // exp(x - max(x))
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(working_reg);
+    exp_tile_init<ckernel::ApproximationMode::Precise>();
+    exp_tile<ckernel::ApproximationMode::Precise>(working_reg);
 
     reconfig_data_format(cb_intermediates, cb_intermediates);
     // bcast 1/sum(exp(x - max(x))) stored in intermediates[1]

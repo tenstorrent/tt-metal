@@ -193,7 +193,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
 
-    softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    softmax_defines["EXP_APPROX"] = math_approx_mode ? "true" : "false";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     std::string softmax_kernel_path =
         use_large_kernel ? std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_large_tensor.cpp"

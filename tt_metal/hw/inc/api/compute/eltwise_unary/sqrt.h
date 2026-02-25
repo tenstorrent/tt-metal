@@ -15,10 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <ckernel::ApproximationMode approx_mode = ckernel::ApproximationMode::Precise>
-ALWI void sqrt_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, approx_mode));
-}
+ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, APPROX)); }
 
 // clang-format off
 /**

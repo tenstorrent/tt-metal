@@ -302,8 +302,8 @@ void normalize_scores(
     add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate, cb_epsilon_scalar, 0, 0, 0);
 
     // 4. Recip
-    recip_tile_init();
-    recip_tile(0);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(0);
     tile_regs_commit();
 
     cb_pop_front(cb_reduce_intermediate, 1);

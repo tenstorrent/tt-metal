@@ -223,17 +223,14 @@ void calculate_recip_first_column() {
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_ < use_approximate_enum<APPROX>() !=
-                                       ckernel::ApproximationMode::Precise
-                                   ? 2
-                                   : 3 > (in);
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX_BOOL ? 2 : 3>(in);
             // Note: negate check removed since in always >= 0.0
             // v_if (in < 0.0)
             // {
             //     out = -out;
             // }
             // v_endif;
-            if constexpr (DST_ACCUM_MODE || APPROX) {
+            if constexpr (DST_ACCUM_MODE || APPROX_BOOL) {
                 sfpi::dst_reg[0] = out;
             } else {
                 sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
@@ -274,7 +271,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
-    recip_tile_init();
+    recip_tile_init<APPROX>();
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
 
@@ -1058,14 +1055,14 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     copy_tile_to_dst_init_short(in_cb);
-    log_tile_init();
+    log_tile_init<APPROX>();
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         copy_tile(in_cb, i, 0 /*dst*/);
-        log_tile(0);
+        log_tile<APPROX>(0);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -1084,14 +1081,14 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<false, false>();
+    exp_tile_init<ckernel::ApproximationMode::Precise>();
     // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
-        MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
+        MATH((exp_tile_first_column<ckernel::ApproximationMode::Precise, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
         MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
         // recip_tile<false>(0, (int)VectorMode::C);

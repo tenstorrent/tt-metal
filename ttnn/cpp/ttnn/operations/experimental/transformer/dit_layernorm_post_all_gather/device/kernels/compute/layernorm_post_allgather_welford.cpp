@@ -74,12 +74,12 @@ void kernel_main() {
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
         add_tiles_init(cb_stats_reduced, cb_eps);
-        rsqrt_tile_init<true>();
+        rsqrt_tile_init<APPROX, true>();
         tile_regs_acquire();
         tile_regs_wait();
         // stats_reduced tile 1 holds variance (after combine_welford_partials)
         add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile<true>(0);
+        rsqrt_tile<APPROX, true>(0);
         pack_tile(0, cb_recip_sqrt_var);
         tile_regs_commit();
         tile_regs_release();

@@ -293,8 +293,8 @@ ALWI void mul_tiles_log_to_cb(
     mul_tiles_init_with_dt(icb0, icb1);
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -372,8 +372,8 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
     mul_bcast_rows_init_short(icb0, icb1);
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -451,8 +451,8 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
     mul_bcast_cols_init_short(icb0, icb1);
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -895,8 +895,8 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     copy_tile_init_with_dt(icb);
     copy_tile(icb, itile, dst0);
 
-    recip_tile_init();
-    recip_tile(dst0);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -920,8 +920,8 @@ ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     copy_tile_init_with_dt(icb);
     copy_tile(icb, itile, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -960,8 +960,8 @@ ALWI void reduce_and_recip_tile_to_cb(
 
     reduce_uninit();
 
-    recip_tile_init();
-    recip_tile(dst0);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -997,8 +997,8 @@ ALWI void reduce_and_log_tile_to_cb(
 
     reduce_uninit();
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -1033,8 +1033,8 @@ ALWI void power_tile_to_cb(
     power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
     }
     tile_regs_commit();
 
@@ -1052,8 +1052,8 @@ ALWI void power_tile_to_cb(
     copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -1128,8 +1128,8 @@ ALWI void power_tile_with_abs_x_to_cb(
     power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
     }
     tile_regs_commit();
 
@@ -1150,8 +1150,8 @@ ALWI void power_tile_with_abs_x_to_cb(
     abs_tile_init();
     abs_tile(dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -1223,8 +1223,8 @@ ALWI void power_and_recip_tile_to_cb(
     power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
     }
     tile_regs_commit();
 
@@ -1242,8 +1242,8 @@ ALWI void power_and_recip_tile_to_cb(
     copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
-    log_tile_init();
-    log_tile(dst0);
+    log_tile_init<APPROX>();
+    log_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -1281,8 +1281,8 @@ ALWI void power_and_recip_tile_to_cb(
     mul_tiles_init_with_dt(cb_xpow, cb_exp_lxmd);
     mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
 
-    recip_tile_init();
-    recip_tile(dst0);
+    recip_tile_init<APPROX>();
+    recip_tile<APPROX>(dst0);
     tile_regs_commit();
 
     tile_regs_wait();

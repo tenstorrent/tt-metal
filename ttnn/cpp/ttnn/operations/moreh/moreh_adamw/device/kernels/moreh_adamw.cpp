@@ -140,8 +140,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp1, onetile);
         sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
         sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -182,7 +182,7 @@ void kernel_main() {
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
         sqrt_tile_init();
-        sqrt_tile(dst0);
+        sqrt_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -201,8 +201,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp1, onetile);
         add_tiles_init_with_dt(cb_tmp1, cb_scalar_args);
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -219,8 +219,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp2, onetile);
         sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
         sub_tiles(cb_one, cb_beta1_exponent, first_tile, first_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        recip_tile_init<APPROX>();
+        recip_tile<APPROX>(dst0);
         tile_regs_commit();
 
         tile_regs_wait();

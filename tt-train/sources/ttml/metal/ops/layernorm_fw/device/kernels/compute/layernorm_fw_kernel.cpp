@@ -312,8 +312,8 @@ inline void compute_rstd() {
     add_binary_tile(rstd_register, eps_register, rstd_register);
 
     // Compute rstd = 1 / sqrt(variance + eps) using rsqrt
-    rsqrt_tile_init();
-    rsqrt_tile(rstd_register);
+    rsqrt_tile_init<APPROX>();
+    rsqrt_tile<APPROX>(rstd_register);
 
     tile_regs_commit();
     cb_pop_front(cb_variance_sum_idx, onetile);
