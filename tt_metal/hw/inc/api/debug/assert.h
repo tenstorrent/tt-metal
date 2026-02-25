@@ -54,18 +54,11 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#if defined(ENABLE_LLK_ASSERT)
-
-#define ASSERT(condition, ...)
-
-#else
 #define ASSERT(condition, ...)      \
     do {                            \
         if (!(condition))           \
             asm volatile("ebreak"); \
     } while (0)
-
-#endif // ENABLE_LLK_ASSERT
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
@@ -75,7 +68,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #define ASSERT(condition, ...)
 
-#define ASSERT_ENABLED 0
+#define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0
 
