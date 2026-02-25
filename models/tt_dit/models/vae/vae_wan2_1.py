@@ -130,14 +130,14 @@ class WanAttentionBlock(Module):
         assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
         residual_BTHWC = x_tile_BTHWC
 
-        x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        # x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
+            x_tile_BTHWC = ttnn.experimental.all_gather_async(
+                x_tile_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
+                    x_tile_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
                 ),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -148,10 +148,10 @@ class WanAttentionBlock(Module):
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
         if self.parallel_config.width_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
+            x_tile_BTHWC = ttnn.experimental.all_gather_async(
+                x_tile_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                    x_tile_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -166,11 +166,11 @@ class WanAttentionBlock(Module):
             """
             H is padded, so slice it out before attention
             """
-            padded_h = x_BTHWC.shape[2]
-            x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
-        B, T, H, W, C = x_BTHWC.shape
-        x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
-        x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
+            padded_h = x_tile_BTHWC.shape[2]
+            x_tile_BTHWC = x_tile_BTHWC[:, :, :logical_h, :, :]
+        B, T, H, W, C = x_tile_BTHWC.shape
+        x_TNC = ttnn.reshape(x_tile_BTHWC, (B * T, H * W, C))
+        # x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
         x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
