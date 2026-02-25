@@ -483,6 +483,18 @@ class Model:
 
         return logits
 
+    def allgather_prefill_logits(self, logits):
+        """All-gather TP-sharded prefill logits outside of trace capture.
+
+        Called by the generator when the prefill trace was captured without
+        the TP all-gather (which is a device write, forbidden during trace)
+        and on-device sampling is not active for this call.
+        """
+        config = self.mesh_config.get_config("prefill")
+        if config.tp > 1:
+            logits = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1)
+        return logits
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
