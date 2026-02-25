@@ -14,6 +14,48 @@ elif [[ -v "$BUILD_ID" ]]; then
     VERSION="${BUILD_ID}"
 fi
 
+# Map a C++ compiler binary name to its CMake toolchain file.
+# Returns the path on stdout, or empty string if no matching toolchain exists.
+toolchain_for() {
+    case "$1" in
+        clang++-20) echo "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+        clang++)    echo "cmake/x86_64-linux-clang-libstdcpp-toolchain.cmake";;
+        g++-14)     echo "cmake/x86_64-linux-gcc-14-toolchain.cmake";;
+        g++-12)     echo "cmake/x86_64-linux-gcc-12-toolchain.cmake";;
+        g++)        echo "cmake/x86_64-linux-gcc-toolchain.cmake";;
+        *)          echo "";;
+    esac
+}
+
+# Find the first available binary from a list of candidates.
+# Returns the name on stdout; returns 1 if none found.
+find_compiler() {
+    for candidate in "$@"; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Set toolchain_path or cxx/c_compiler_path from a C++ binary name.
+# Uses toolchain file when one exists; falls back to direct compiler path.
+use_compiler() {
+    local cxx="$1"
+    local tc
+    tc=$(toolchain_for "$cxx")
+    if [ -n "$tc" ]; then
+        toolchain_path="$tc"
+    else
+        cxx_compiler_path="$(command -v "$cxx")"
+        # Derive C compiler: g++-13 → gcc-13, clang++-18 → clang-18
+        local cc="${cxx/++/}"
+        [[ "$cxx" == g++* ]] && cc="${cxx/g++/gcc}"
+        c_compiler_path="$(command -v "$cc")"
+    fi
+}
+
 # Function to display help
 show_help() {
     echo "Usage: $0 [options]..."
@@ -230,58 +272,23 @@ while true; do
     shift
 done
 
-# Map --compiler flag to toolchain file
+# Resolve --compiler flag to toolchain_path or cxx/c_compiler_path
 if [ "$compiler" != "" ]; then
     case "$compiler" in
         clang)
-            # Find the best available Clang (prefer newest versioned, fall back to unversioned)
-            found_compiler=""
-            for candidate in clang++-20 clang++-19 clang++-18 clang++-17 clang++; do
-                if command -v "$candidate" >/dev/null 2>&1; then
-                    found_compiler="$candidate"
-                    break
-                fi
-            done
-            if [ -z "$found_compiler" ]; then
-                echo "ERROR: No clang++ found in PATH."
-                exit 1
-            fi
-            echo "INFO: --compiler clang: found $found_compiler"
-            case "$found_compiler" in
-                clang++-20) toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
-                clang++)    toolchain_path="cmake/x86_64-linux-clang-libstdcpp-toolchain.cmake";;
-                *)          cxx_compiler_path="$(command -v "$found_compiler")"
-                            c_compiler_path="$(command -v "${found_compiler/++/}")";;
-            esac;;
+            found=$(find_compiler clang++-20 clang++-19 clang++-18 clang++-17 clang++) \
+                || { echo "ERROR: No clang++ found in PATH."; exit 1; }
+            echo "INFO: --compiler clang: found $found"
+            use_compiler "$found";;
         gcc)
-            # Find the best available GCC (prefer newest versioned, fall back to unversioned)
-            found_compiler=""
-            for candidate in g++-14 g++-13 g++-12 g++; do
-                if command -v "$candidate" >/dev/null 2>&1; then
-                    found_compiler="$candidate"
-                    break
-                fi
-            done
-            if [ -z "$found_compiler" ]; then
-                echo "ERROR: No g++ found in PATH."
-                exit 1
-            fi
-            echo "INFO: --compiler gcc: found $found_compiler"
-            case "$found_compiler" in
-                g++-14) toolchain_path="cmake/x86_64-linux-gcc-14-toolchain.cmake";;
-                g++-12) toolchain_path="cmake/x86_64-linux-gcc-12-toolchain.cmake";;
-                g++)    toolchain_path="cmake/x86_64-linux-gcc-toolchain.cmake";;
-                *)      cxx_compiler_path="$(command -v "$found_compiler")"
-                        c_compiler_path="$(command -v "${found_compiler/g++/gcc}")";;
-            esac;;
-        clang-20)
-            toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
-        clang-20-libcpp)
-            toolchain_path="cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake";;
-        gcc-12)
-            toolchain_path="cmake/x86_64-linux-gcc-12-toolchain.cmake";;
-        gcc-14)
-            toolchain_path="cmake/x86_64-linux-gcc-14-toolchain.cmake";;
+            found=$(find_compiler g++-14 g++-13 g++-12 g++) \
+                || { echo "ERROR: No g++ found in PATH."; exit 1; }
+            echo "INFO: --compiler gcc: found $found"
+            use_compiler "$found";;
+        clang-20)      toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+        clang-20-libcpp) toolchain_path="cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake";;
+        gcc-12)        toolchain_path="cmake/x86_64-linux-gcc-12-toolchain.cmake";;
+        gcc-14)        toolchain_path="cmake/x86_64-linux-gcc-14-toolchain.cmake";;
         *)
             echo "ERROR: Unknown compiler '$compiler'. Allowed: clang, gcc, clang-20, clang-20-libcpp, gcc-12, gcc-14."
             show_help
@@ -293,44 +300,10 @@ fi
 if [ "$compiler" = "" ] && [ "$cxx_compiler_path" = "" ] && [ "$toolchain_path_explicitly_set" = "false" ]; then
     if ! command -v clang++-20 >/dev/null 2>&1; then
         echo "WARNING: Default compiler 'clang++-20' not found in PATH."
-        # Search for best available Clang, then GCC
-        found_compiler=""
-        for candidate in clang++-19 clang++-18 clang++-17 clang++; do
-            if command -v "$candidate" >/dev/null 2>&1; then
-                found_compiler="$candidate"
-                break
-            fi
-        done
-        if [ -n "$found_compiler" ]; then
-            case "$found_compiler" in
-                clang++) toolchain_path="cmake/x86_64-linux-clang-libstdcpp-toolchain.cmake";;
-                *)       cxx_compiler_path="$(command -v "$found_compiler")"
-                         c_compiler_path="$(command -v "${found_compiler/++/}")";;
-            esac
-            echo "INFO: Auto-selected $found_compiler"
-        else
-            # No Clang found, try GCC
-            found_compiler=""
-            for candidate in g++-14 g++-13 g++-12 g++; do
-                if command -v "$candidate" >/dev/null 2>&1; then
-                    found_compiler="$candidate"
-                    break
-                fi
-            done
-            if [ -n "$found_compiler" ]; then
-                case "$found_compiler" in
-                    g++-14) toolchain_path="cmake/x86_64-linux-gcc-14-toolchain.cmake";;
-                    g++-12) toolchain_path="cmake/x86_64-linux-gcc-12-toolchain.cmake";;
-                    g++)    toolchain_path="cmake/x86_64-linux-gcc-toolchain.cmake";;
-                    *)      cxx_compiler_path="$(command -v "$found_compiler")"
-                            c_compiler_path="$(command -v "${found_compiler/g++/gcc}")";;
-                esac
-                echo "INFO: Auto-selected $found_compiler"
-            else
-                echo "ERROR: No C++ compiler found. Install clang or gcc, or use --compiler/--cxx-compiler-path."
-                exit 1
-            fi
-        fi
+        found=$(find_compiler clang++-19 clang++-18 clang++-17 clang++ g++-14 g++-13 g++-12 g++) \
+            || { echo "ERROR: No C++ compiler found. Install clang or gcc, or use --compiler/--cxx-compiler-path."; exit 1; }
+        echo "INFO: Auto-selected $found"
+        use_compiler "$found"
     fi
 fi
 
