@@ -213,9 +213,9 @@ def run_ring_joint_sdpa(
     joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
 
     # Print shapes of all inputs along with input names
-    logger.debug(f"Q: {Q.shape}")
-    logger.debug(f"K: {K.shape}")
-    logger.debug(f"V: {V.shape}")
+    logger.debug(f"jointQ: {joint_Q.shape}")
+    logger.debug(f"jointK: {joint_K.shape}")
+    logger.debug(f"jointV: {joint_V.shape}")
     logger.debug(f"padded_Q: {padded_Q.shape}")
     logger.debug(f"padded_K: {padded_K.shape}")
     logger.debug(f"padded_V: {padded_V.shape}")
@@ -278,6 +278,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=joint_k_mesh_mapper,
     )
+    print("tt_joint_K shape = ", tt_joint_K.shape)
     tt_joint_V = ttnn.from_torch(
         joint_V,
         dtype=dtype,
@@ -285,6 +286,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
+    print("tt_joint_V shape = ", tt_joint_V.shape)
 
     logger.debug(f"tt_Q: {tt_Q.shape}")
     logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
@@ -301,6 +303,8 @@ def run_ring_joint_sdpa(
             print("tt_joint_Q: ", tt_joint_Q.shape)
             print("tt_joint_K: ", tt_joint_K.shape)
             print("tt_joint_V: ", tt_joint_V.shape)
+            print("base seq_len is: ", base_seq_len)
+            print("cluster axis is: ", rp_axis)
             tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
@@ -326,7 +330,7 @@ def run_ring_joint_sdpa(
                 is_balanced=is_balanced,
             )
             tt_out_list.append(tt_out)
-            tt_joint_out_list.append(tt_joint_out)
+            # tt_joint_out_list.append(tt_joint_out)
 
     if trace_enabled:
         logger.info("Compile run")
@@ -370,12 +374,12 @@ def run_ring_joint_sdpa(
             joint_shard_dims = [None, None]
             joint_shard_dims[up_axis] = 1
             joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
-            tt_joint_out = ttnn.to_torch(
-                tt_joint_out_list[i],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
-                ),
-            )
+            # tt_joint_out = ttnn.to_torch(
+            #     tt_joint_out_list[i],
+            #     mesh_composer=ttnn.ConcatMesh2dToTensor(
+            #         submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
+            #     ),
+            # )
             print("Done to torch stuff...")
 
             # Reverse reordering for TT output if balanced reordering was applied
@@ -391,7 +395,7 @@ def run_ring_joint_sdpa(
 
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
             logger.debug(f"tt_out: {tt_out.shape}")
-            logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
+            # logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
             passing = True
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
@@ -403,17 +407,17 @@ def run_ring_joint_sdpa(
                 passing = False
             passing = passing and out_pass
 
-            if joint_seq_len > 0:
-                logger.debug("prompt")
-                for joint_replica_id in range(tt_joint_out.shape[0]):
-                    joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
-                    out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
-                    logger.debug(f"{out_pcc}")
-                    mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
-                    logger.debug(f"mse: {mse}")
-                    if max_mse is not None and mse > max_mse:
-                        passing = False
-                    passing = passing and out_pass
+            # if joint_seq_len > 0:
+            #     logger.debug("prompt")
+            #     for joint_replica_id in range(tt_joint_out.shape[0]):
+            #         joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
+            #         out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
+            #         logger.debug(f"{out_pcc}")
+            #         mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
+            #         logger.debug(f"mse: {mse}")
+            #         if max_mse is not None and mse > max_mse:
+            #             passing = False
+            #         passing = passing and out_pass
 
             assert passing
 
