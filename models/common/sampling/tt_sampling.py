@@ -103,6 +103,7 @@ class TTSampling(LightweightModule):
         self._line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
         self._line_all_gather_supports_buffer_key = False
         self._line_all_gather_supports_dtype = False
+        self.pad_to_power_of_2 = getattr(args, "pad_logits_to_power_of_2", False)
         if callable(self._line_all_gather):
             try:
                 line_all_gather_sig = inspect.signature(self._line_all_gather)
@@ -271,6 +272,17 @@ class TTSampling(LightweightModule):
         indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
         for i in range(padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
+
+        # pad to power of 2 if needed
+        if self.pad_to_power_of_2 and not is_power_of_2(indices_tensor_torch.shape[-1]):
+            padded_value = upper_power_of_2(indices_tensor_torch.shape[-1])
+            indices_tensor_torch = torch.nn.functional.pad(
+                indices_tensor_torch,
+                (0, padded_value - indices_tensor_torch.shape[-1]),  # pad only last dim
+                mode="constant",
+                value=-1,  # invalid index to ensure that the padding values are not used
+            )
+
         indices_dtype = self._select_topk_indices_dtype(padded_per_device, self.multi_step_reduction)
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
@@ -436,7 +448,7 @@ class TTSampling(LightweightModule):
             # if number is not power of 2, pad to upper power of 2
             # pad only last dimension with float::min value to upper_power_of_2
             # This is necessary to use full optimization in the topk operation.
-            if not is_power_of_2(x_bf16.shape[-1]):
+            if self.pad_to_power_of_2 and not is_power_of_2(x_bf16.shape[-1]):
                 padded_value = upper_power_of_2(x_bf16.shape[-1])
                 x_bf16 = ttnn.pad(
                     x_bf16,
