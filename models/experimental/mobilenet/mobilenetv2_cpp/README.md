@@ -46,12 +46,12 @@ Below are the sample outputs for the two implementations:
 
 **Optimized Version (`mobilenetv2_e2e`)**:
 ```
-mobilenetv2 batch_size=1, PCC= 0.9520 - Passed 
-ttnn_mobilenetv2_224x224_batch_size_1. One inference iteration time (sec): 0.002176, FPS: 459.66, 
+mobilenetv2 batch_size=1, PCC= 0.9520 - Passed
+ttnn_mobilenetv2_224x224_batch_size_1. One inference iteration time (sec): 0.002176, FPS: 459.66,
 ```
 
 **Baseline Version (`mobilenetv2_cpp`)**:
 ```
-mobilenetv2 batch_size=1, PCC= 0.9528 - Passed 
-ttnn_mobilenetv2_224x224_batch_size_1. One inference iteration time (sec): 0.014258, FPS: 70.14 
+mobilenetv2 batch_size=1, PCC= 0.9528 - Passed
+ttnn_mobilenetv2_224x224_batch_size_1. One inference iteration time (sec): 0.014258, FPS: 70.14
 ```
