@@ -59,9 +59,19 @@ void CommandQueueInitializer::init(
 
 void CommandQueueInitializer::configure() {}
 
-void CommandQueueInitializer::teardown() {
+void CommandQueueInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Dispatch),
+        "CommandQueueInitializer must be torn down after DispatchKernelInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Fabric),
+        "CommandQueueInitializer must be torn down after FabricFirmwareInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Profiler),
+        "CommandQueueInitializer must be torn down after ProfilerInitializer");
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 bool CommandQueueInitializer::is_initialized() const { return initialized_; }
