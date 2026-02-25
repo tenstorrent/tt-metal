@@ -100,6 +100,7 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
         weights_dtype=ttnn.bfloat16,
         shard_layout=None,
         deallocate_activation=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -130,7 +131,6 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
     out = ttnn.sharded_to_interleaved(out)
     out = ttnn.reshape(out, [B, T, D])
     out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
-    out = ttnn.silu(out)
     return out
 
 
