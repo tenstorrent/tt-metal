@@ -206,7 +206,7 @@ class MLA1D(AbstractModule):
         }
 
         # DRAM sharding configuration
-        num_dram_banks = device.dram_grid_size().x
+        num_dram_banks = mesh_device.dram_grid_size().x
 
         # Create DRAM WIDTH sharded memory config for wq_b
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
@@ -645,7 +645,7 @@ class MLA1D(AbstractModule):
         )
 
         # DRAM sharding constants
-        num_dram_banks = 12
+        num_dram_banks = mesh_device.dram_grid_size().x
         tile_size = 32
         dim = hf_config.hidden_size
 
