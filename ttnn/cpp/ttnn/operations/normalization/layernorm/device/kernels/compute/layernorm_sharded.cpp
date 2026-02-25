@@ -102,7 +102,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
+    constexpr uint32_t cb_im = do_gamma ? cb_x : (do_beta ? cb_fusion : cb_out);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
 // pre-add x + y

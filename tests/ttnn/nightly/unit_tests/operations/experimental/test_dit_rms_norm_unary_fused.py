@@ -2,14 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Kernel coverage note:
-#   layernorm_large_tensor.cpp is NEVER triggered by RMSNorm — the `large_tensor_needed`
-#   condition is gated behind `if (!rms_norm ...)`, so it only fires for LayerNorm.
-#   The two reachable kernels for this fused op are:
-#     - layernorm.cpp          -> interleaved (non-sharded) input  [tests below: basic/Wan2.2]
-#     - layernorm_sharded.cpp  -> sharded input + LayerNormShardedMultiCoreProgramConfig
-#                                 [tests below: test_dit_rms_norm_unary_fused_sharded_*]
-
 import pytest
 import torch
 import ttnn
@@ -29,34 +21,48 @@ def assert_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_thres
 
 def run_dit_rms_norm_unary_fused_test(
     device,
-    input_shape,
-    hidden_dim,
+    h,
+    w,
     epsilon=1e-5,
-    use_weight=True,
+    use_weight=False,
+    use_bias=False,
     activation=None,  # "silu", "gelu", ttnn.UnaryOpType, or None
     dtype=ttnn.bfloat16,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     fp32_dest_acc_en=False,
+    # --- sharded path: shard_params = (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) or None ---
+    sharded=False,
+    shard_params=None,
 ):
     """
-    Test dit_rms_norm_unary_fused against reference: activation(rms_norm(x)).
-    input_shape: tuple of leading dims, e.g. (1, 1, seq_len) — hidden_dim is appended.
-    Uses the interleaved (non-sharded) path -> layernorm.cpp kernel.
+    Unified test helper for dit_rms_norm_unary_fused.
+
+    When sharded=False (default): uses the interleaved path (layernorm.cpp kernel).
+    When sharded=True: wraps the input in a BLOCK_SHARDED memory config and passes a
+    LayerNormShardedMultiCoreProgramConfig (layernorm_sharded.cpp kernel).
+    shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True.
+
+    Weight/bias tensors use shape (1, w) regardless of path.
+
+    Activation compatibility:
+      - Non-sharded: all weight/bias/activation combinations are supported.
+      - Sharded + activation: only no-weight, no-bias (do_gamma=0, do_beta=0) is supported
+        due to the static_assert guard in layernorm_sharded.cpp block 1.
+      - Sharded + weight or bias: activation must be None.
     """
     torch.manual_seed(42)
 
-    full_shape = input_shape + (hidden_dim,)
+    torch_input = torch.randn(h, w, dtype=torch.bfloat16)
+    torch_weight = torch.ones(w, dtype=torch.bfloat16) if use_weight else None
+    torch_bias = torch.rand(w, dtype=torch.bfloat16) if use_bias else None
 
-    torch_input = torch.randn(*full_shape, dtype=torch.bfloat16)
-    torch_weight = torch.ones(hidden_dim, dtype=torch.bfloat16) if use_weight else None
-
-    # Reference: rms_norm then activation
     with torch.no_grad():
         variance = torch_input.pow(2).mean(dim=-1, keepdim=True)
         torch_normed = torch_input * torch.rsqrt(variance + epsilon)
         if torch_weight is not None:
             torch_normed = torch_normed * torch_weight
-        # Apply activation
+        if torch_bias is not None:
+            torch_normed = torch_normed + torch_bias
         if activation == "silu" or activation == ttnn.UnaryOpType.SILU:
             torch_expected = torch.nn.functional.silu(torch_normed)
         elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
@@ -65,16 +71,52 @@ def run_dit_rms_norm_unary_fused_test(
             torch_expected = torch_normed
         else:
             raise ValueError(
-                f"Unsupported activation for reference: {activation!r}. "
+                f"Unsupported activation: {activation!r}. "
                 "Supported: 'silu', 'gelu', ttnn.UnaryOpType.SILU, ttnn.UnaryOpType.GELU, or None."
             )
 
-    # Convert to ttnn
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_weight = None
-    if use_weight:
-        torch_weight_2d = torch_weight.unsqueeze(0)
-        tt_weight = ttnn.from_torch(torch_weight_2d, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+    program_config = None
+
+    if sharded:
+        assert (
+            shard_params is not None and len(shard_params) == 5
+        ), "shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True"
+        num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = shard_params
+        shard_height = h // num_cores_h
+        shard_width = w // num_cores_w
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}),
+            [shard_height, shard_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=shard_spec,
+        )
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=subblock_wt,
+            use_welford=False,
+            inplace=False,
+        )
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_weight = (
+        ttnn.from_torch(torch_weight.unsqueeze(0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        if use_weight
+        else None
+    )
+    tt_bias = (
+        ttnn.from_torch(torch_bias.unsqueeze(0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        if use_bias
+        else None
+    )
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -87,106 +129,15 @@ def run_dit_rms_norm_unary_fused_test(
         tt_input,
         epsilon=epsilon,
         weight=tt_weight,
-        compute_kernel_config=compute_config,
-        activation=activation,
-    )
-
-    tt_output_torch = ttnn.to_torch(tt_output)
-
-    return assert_quality(torch_expected, tt_output_torch)
-
-
-def run_dit_rms_norm_unary_fused_sharded_test(
-    device,
-    h,
-    w,
-    num_cores_h,
-    num_cores_w,
-    block_ht,
-    block_wt,
-    subblock_wt,
-    epsilon=1e-5,
-    activation=None,
-    dtype=ttnn.bfloat16,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-):
-    """
-    Test dit_rms_norm_unary_fused with a sharded (block-sharded) input tensor.
-    Uses LayerNormShardedMultiCoreProgramConfig -> layernorm_sharded.cpp kernel.
-
-    Shard layout: BLOCK_SHARDED, single-stage reduction.
-      shard_height = h // num_cores_h
-      shard_width  = w // num_cores_w
-
-    NOTE: No weight is passed (do_gamma=0, do_beta=0).  The SFPU activation in
-    layernorm_sharded.cpp lives in block 1, which is the no-gamma/no-beta path.
-    The static_assert(!(do_gamma | do_beta)) in that block would fire at JIT
-    compile time if a weight were passed (do_gamma=1), so weight-free input is
-    the correct setup for testing the fused activation via the sharded kernel.
-    """
-    torch.manual_seed(42)
-
-    torch_input = torch.randn(h, w, dtype=torch.bfloat16)
-
-    with torch.no_grad():
-        variance = torch_input.pow(2).mean(dim=-1, keepdim=True)
-        torch_normed = torch_input * torch.rsqrt(variance + epsilon)
-        if activation == "silu":
-            torch_expected = torch.nn.functional.silu(torch_normed)
-        elif activation is None:
-            torch_expected = torch_normed
-        else:
-            raise ValueError(f"Unsupported activation for sharded test: {activation!r}")
-
-    shard_height = h // num_cores_h
-    shard_width = w // num_cores_w
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}),
-        [shard_height, shard_width],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
-
-    tt_input = ttnn.from_torch(
-        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
-    )
-
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-    )
-    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        block_h=block_ht,
-        block_w=block_wt,
-        subblock_w=subblock_wt,
-        use_welford=False,
-        inplace=False,
-    )
-
-    tt_output = ttnn.experimental.dit_rms_norm_unary_fused(
-        tt_input,
-        epsilon=epsilon,
-        memory_config=sharded_mem_config,
+        bias=tt_bias,
+        memory_config=memory_config,
         program_config=program_config,
         compute_kernel_config=compute_config,
         activation=activation,
     )
-
     tt_output_torch = ttnn.to_torch(tt_output)
 
     return assert_quality(torch_expected, tt_output_torch)
-
-
-# ---------------------------------------------------------------------------
-# Basic tests — layernorm.cpp (interleaved) path
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("use_weight", [True, False], ids=["with_weight", "no_weight"])
@@ -195,8 +146,8 @@ def test_dit_rms_norm_unary_fused_no_activation(device, use_weight, dtype):
     """Without activation: should match plain rms_norm."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=(1, 1),
-        hidden_dim=4096,
+        h=1,
+        w=4096,
         use_weight=use_weight,
         activation=None,
         dtype=dtype,
@@ -210,8 +161,8 @@ def test_dit_rms_norm_unary_fused_silu_string(device, dtype):
     """Test with SiLU activation passed as a string."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=(1, 1),
-        hidden_dim=4096,
+        h=1,
+        w=4096,
         activation="silu",
         dtype=dtype,
     )
@@ -224,8 +175,8 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype):
     """Test with SiLU activation passed as ttnn.UnaryOpType."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=(1, 1),
-        hidden_dim=4096,
+        h=1,
+        w=4096,
         activation=ttnn.UnaryOpType.SILU,
         dtype=dtype,
     )
@@ -234,45 +185,40 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype):
 
 
 @pytest.mark.parametrize(
-    "input_shape, hidden_dim, name",
+    "h, w, name",
     [
-        ((1, 1), 256, "small"),
-        ((1, 1), 512, "medium"),
-        ((1, 38), 4096, "dit_norm_shape"),
+        (1, 256, "small"),
+        (1, 512, "medium"),
+        (38, 4096, "dit_norm_shape"),
     ],
     ids=["small", "medium", "dit_norm_shape"],
 )
-def test_dit_rms_norm_unary_fused_basic_shapes(device, input_shape, hidden_dim, name):
+def test_dit_rms_norm_unary_fused_basic_shapes(device, h, w, name):
     """Basic shapes test with SiLU activation."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=input_shape,
-        hidden_dim=hidden_dim,
+        h=h,
+        w=w,
         activation="silu",
     )
     assert check_result["pcc"] > 0.9995, f"[{name}] PCC too low: {check_result['pcc']}"
     assert check_result["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
-# ---------------------------------------------------------------------------
-# Wan2.2 shapes — layernorm.cpp (interleaved) path
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
-    "seq_len, hidden_dim, config_name",
+    "h, w, config_name",
     [
         (9472, 5120, "wan2.2_14b-720p-full"),
         (2368, 5120, "wan2.2_14b-720p-single"),
     ],
     ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
 )
-def test_dit_rms_norm_unary_fused_wan2_shapes(device, seq_len, hidden_dim, config_name):
+def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
     """Test with actual Wan2.2 transformer shapes."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=(1, 1, seq_len),
-        hidden_dim=hidden_dim,
+        h=h,
+        w=w,
         activation="silu",
         dtype=ttnn.bfloat16,
     )
@@ -280,11 +226,6 @@ def test_dit_rms_norm_unary_fused_wan2_shapes(device, seq_len, hidden_dim, confi
     assert (
         check_result["relative_rmse"] < 0.04
     ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
-
-
-# ---------------------------------------------------------------------------
-# Activation variants — layernorm.cpp (interleaved) path
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -296,10 +237,10 @@ def test_dit_rms_norm_unary_fused_activations(device, activation):
     """Test different activation functions."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        input_shape=(1, 1),
-        hidden_dim=1024,
-        activation=activation,
+        h=1,
+        w=1024,
         use_weight=True,
+        activation=activation,
     )
     assert check_result["pcc"] > 0.9995, f"[{activation}] PCC too low: {check_result['pcc']}"
     assert (
@@ -307,42 +248,83 @@ def test_dit_rms_norm_unary_fused_activations(device, activation):
     ), f"[{activation}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
-# ---------------------------------------------------------------------------
-# Sharded tests — layernorm_sharded.cpp path
-#
-# Uses BLOCK_SHARDED + LayerNormShardedMultiCoreProgramConfig (use_welford=False)
-# which is the only sharded variant reachable by RMSNorm.
-#
-# Shape conventions:
-#   shard_height = h // num_cores_h   (must be divisible)
-#   shard_width  = w // num_cores_w   (must be divisible)
-#   block_ht     = shard_height // 32  (tiles per shard in H)
-#   block_wt     = shard_width  // 32  (tiles per shard in W)
-# ---------------------------------------------------------------------------
-
-
+@pytest.mark.parametrize(
+    "use_weight, use_bias",
+    [(False, True), (True, True)],
+    ids=["bias_only", "weight_and_bias"],
+)
 @pytest.mark.parametrize(
     "activation",
     ["silu", None],
     ids=["silu", "no_activation"],
 )
-def test_dit_rms_norm_unary_fused_sharded(device, activation):
-    """
-    Sharded path sanity check with a small block-sharded tensor.
-    h=256, w=320, 2x5 core grid  ->  shard 128x64, block_ht=4, block_wt=2
-    """
-    check_result = run_dit_rms_norm_unary_fused_sharded_test(
+def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, activation):
+    """Weight/bias combinations for the interleaved (non-sharded) path."""
+    check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=256,
-        w=320,
-        num_cores_h=2,
-        num_cores_w=5,
-        block_ht=4,
-        block_wt=2,
-        subblock_wt=1,
+        h=1,
+        w=1024,
+        use_weight=use_weight,
+        use_bias=use_bias,
         activation=activation,
     )
-    assert check_result["pcc"] > 0.9995, f"[sharded_small/{activation}] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["pcc"] > 0.9995
+    ), f"[w={use_weight},b={use_bias},{activation}] PCC too low: {check_result['pcc']}"
     assert (
         check_result["relative_rmse"] < 0.03
-    ), f"[sharded_small/{activation}] Relative RMSE too high: {check_result['relative_rmse']}"
+    ), f"[w={use_weight},b={use_bias},{activation}] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+@pytest.mark.parametrize(
+    "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
+    [(256, 320, 2, 5, 4, 2, 1)],
+)
+def test_dit_rms_norm_unary_fused_sharded(device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt):
+    """Sharded path with SiLU activation, no weight, no bias (do_gamma=0, do_beta=0)."""
+    check_result = run_dit_rms_norm_unary_fused_test(
+        device=device,
+        h=h,
+        w=w,
+        sharded=True,
+        shard_params=(num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt),
+        activation="silu",
+    )
+    assert check_result["pcc"] > 0.9995, f"[sharded/silu] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["relative_rmse"] < 0.03
+    ), f"[sharded/silu] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+@pytest.mark.parametrize(
+    "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
+    [(256, 320, 2, 5, 4, 2, 1)],
+)
+@pytest.mark.parametrize(
+    "use_weight, use_bias",
+    [(False, True), (True, True)],
+    ids=["bias_only", "weight_and_bias"],
+)
+def test_dit_rms_norm_unary_fused_sharded_weight_bias(
+    device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_weight, use_bias
+):
+    """
+    Sharded path weight/bias combinations without activation.
+    Activation must be None here: sharded + activation requires do_gamma=0, do_beta=0.
+    """
+    check_result = run_dit_rms_norm_unary_fused_test(
+        device=device,
+        h=h,
+        w=w,
+        sharded=True,
+        shard_params=(num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt),
+        use_weight=use_weight,
+        use_bias=use_bias,
+        activation=None,
+    )
+
+    assert check_result["pcc"] > 0.9995, f"[sharded/w={use_weight},b={use_bias}] PCC too low: {check_result['pcc']}"
+
+    assert (
+        check_result["relative_rmse"] < 0.03
+    ), f"[sharded/w={use_weight},b={use_bias}] Relative RMSE too high: {check_result['relative_rmse']}"
