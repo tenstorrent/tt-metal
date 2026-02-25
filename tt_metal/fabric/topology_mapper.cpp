@@ -982,24 +982,15 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
 
     // Fill in physical_chip_id for ASICs that belong to this host
     // (The controller may have set it to 0 for ASICs on other hosts)
-    // Also update mesh_host_rank for local ASICs if local_mesh_binding.host_rank is set
     const auto& my_host = physical_system_descriptor_.my_host_name();
     for (auto& info : chip_topology_mapping_) {
-        if (!info.hostname.empty() && info.hostname == my_host) {
-            if (info.physical_chip_id == 0) {
-                // This ASIC belongs to this host, look up its physical chip ID
-                for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
-                    if (unique_id == *info.asic_id) {
-                        info.physical_chip_id = physical_chip_id;
-                        break;
-                    }
+        if (info.physical_chip_id == 0 && !info.hostname.empty() && info.hostname == my_host) {
+            // This ASIC belongs to this host, look up its physical chip ID
+            for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
+                if (unique_id == *info.asic_id) {
+                    info.physical_chip_id = physical_chip_id;
+                    break;
                 }
-            }
-            // If local_mesh_binding.host_rank is set, use it for all local ASICs
-            // This ensures get_local_host_rank() returns a consistent value
-            // The coordinate ranges will be rebuilt using the mesh graph's original assignments
-            if (local_mesh_binding_.host_rank != MESH_HOST_RANK_UNSET && info.is_mapped) {
-                info.mesh_host_rank = local_mesh_binding_.host_rank;
             }
         }
     }
