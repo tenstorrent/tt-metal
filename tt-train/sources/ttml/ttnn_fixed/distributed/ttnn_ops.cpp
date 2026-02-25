@@ -45,7 +45,7 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 }
 
 // Get the appropriate CCL topology based on cluster axis ring status
-ttnn::ccl::Topology get_topology_for_cluster_axis(const std::optional<uint32_t>& cluster_axis) {
+ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     if (!cluster_axis.has_value()) {
         auto* mesh_device = &ttml::autograd::ctx().get_device();
         const auto& mesh_shape = mesh_device->shape();
@@ -83,7 +83,7 @@ tt::tt_metal::Tensor all_gather(
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology_for_cluster_axis(cluster_axis);
+    auto topology = get_topology(cluster_axis);
 
     // Use cluster_axis overload for 2D mesh
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
@@ -121,7 +121,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology_for_cluster_axis(cluster_axis);
+    auto topology = get_topology(cluster_axis);
 
     if (cluster_axis.has_value()) {
         // Use cluster_axis overload for 2D mesh
@@ -160,7 +160,7 @@ tt::tt_metal::Tensor reduce_scatter(
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology_for_cluster_axis(cluster_axis);
+    auto topology = get_topology(cluster_axis);
 
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
     return ttnn::experimental::reduce_scatter_minimal_async(

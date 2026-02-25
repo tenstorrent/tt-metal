@@ -14,7 +14,7 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t> cluster_axes) {
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>& cluster_axes) {
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {
         return tensor;

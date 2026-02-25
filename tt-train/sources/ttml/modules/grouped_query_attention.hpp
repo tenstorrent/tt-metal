@@ -47,7 +47,7 @@ public:
     // Forward with KV cache for inference
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& x,
-        const ttml::autograd::TensorPtr& mask,
+        const autograd::TensorPtr& mask,
         std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
         const uint32_t layer_idx,
         const uint32_t new_tokens);

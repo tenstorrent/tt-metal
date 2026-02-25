@@ -53,13 +53,13 @@ autograd::TensorPtr all_gather(
     const autograd::TensorPtr& tensor,
     const int dim,
     const std::optional<uint32_t> cluster_axis,
-    const GRAD_OUTPUT_TYPE grad_output_type) {
+    const GradOutputType grad_output_type) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_gather(tensor->get_value(), dim, cluster_axis));
 
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis, grad_output_type]() {
         if (out->is_grad_initialized()) {
             auto reduced_grad = ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis);
-            if (grad_output_type == GRAD_OUTPUT_TYPE::SHARDED) {
+            if (grad_output_type == GradOutputType::SHARDED) {
                 tensor->add_grad(reduced_grad);
             } else {
                 auto* device = &autograd::ctx().get_device();

@@ -180,15 +180,15 @@ ParallelismContext::ParallelismContext(
 
         // Axis assignment order: DP -> CP -> TP
         uint32_t axis = 0;
-        if (config.enable_ddp) {
+        if (config.enable_ddp && mesh_shape[axis] > 1U) {
             m_ddp_axis = axis++;
             m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
         }
-        if (config.enable_cp) {
+        if (config.enable_cp && mesh_shape[axis] > 1U) {
             m_cp_axis = axis++;
             m_num_cp_devices = mesh_shape[m_cp_axis.value()];
         }
-        if (config.enable_tp) {
+        if (config.enable_tp && mesh_shape[axis] > 1U) {
             m_tp_axis = axis++;
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }

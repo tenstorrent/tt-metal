@@ -7,9 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <regex>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -39,62 +37,61 @@
 
 namespace {
 
-// Parse device_topology dims from MGD textproto file using regex
-// Returns {dim0, dim1} or empty vector if parsing fails
-std::vector<uint32_t> parse_mgd_device_topology_dims(const std::string &mgd_path) {
-    if (!std::filesystem::exists(mgd_path)) {
-        return {};
+// Validate that the configured mesh_shape matches the physical mesh shape from the control plane
+void validate_mesh_shape_against_physical(const tt::tt_metal::distributed::MeshShape &mesh_shape) {
+    auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
+    if (physical_mesh_shapes.empty()) {
+        return;  // No physical mesh available, skip validation
     }
 
-    std::ifstream file(mgd_path);
-    if (!file.is_open()) {
-        return {};
-    }
-
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-    // Match: device_topology { dims: [ X, Y ] ... }
-    std::regex dims_regex(R"(device_topology\s*\{\s*dims\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\])");
-    std::smatch match;
-
-    if (std::regex_search(content, match, dims_regex) && match.size() >= 3) {
-        return {static_cast<uint32_t>(std::stoul(match[1].str())), static_cast<uint32_t>(std::stoul(match[2].str()))};
-    }
-    return {};
-}
-
-void validate_mesh_shape_against_mgd(const tt::tt_metal::distributed::MeshShape &mesh_shape, uint32_t num_devices) {
-    auto mgd_path_opt = ttml::ttnn_fixed::distributed::get_mgd_path(num_devices);
-    if (!mgd_path_opt.has_value()) {
-        return;  // No MGD available, skip validation
-    }
-
-    const std::string &mgd_path = mgd_path_opt.value();
-    auto mgd_dims = parse_mgd_device_topology_dims(mgd_path);
-    if (mgd_dims.empty()) {
-        fmt::println("WARNING: Could not parse device_topology dims from MGD file: {}", mgd_path);
+    if (physical_mesh_shapes.size() != 1) {
+        fmt::println(
+            "WARNING: Expected single physical mesh, got {}. Skipping mesh shape validation.",
+            physical_mesh_shapes.size());
         return;
     }
 
-    if (mesh_shape.dims() != 2) {
-        throw std::runtime_error(
-            fmt::format("Mesh shape dimensions mismatch: config has {} dims, MGD has 2 dims", mesh_shape.dims()));
+    const auto &physical_mesh_shape = physical_mesh_shapes.begin()->second;
+
+    if (mesh_shape.dims() != physical_mesh_shape.dims()) {
+        throw std::runtime_error(fmt::format(
+            "Mesh shape dimensions mismatch: config has {} dims, physical mesh has {} dims",
+            mesh_shape.dims(),
+            physical_mesh_shape.dims()));
     }
 
-    if (mesh_shape[0] != mgd_dims[0] || mesh_shape[1] != mgd_dims[1]) {
+    bool mismatch = false;
+    for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+        if (mesh_shape[i] != physical_mesh_shape[i]) {
+            mismatch = true;
+            break;
+        }
+    }
+
+    if (mismatch) {
+        std::string config_shape_str = "[";
+        std::string physical_shape_str = "[";
+        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (i > 0) {
+                config_shape_str += ", ";
+                physical_shape_str += ", ";
+            }
+            config_shape_str += std::to_string(mesh_shape[i]);
+            physical_shape_str += std::to_string(physical_mesh_shape[i]);
+        }
+        config_shape_str += "]";
+        physical_shape_str += "]";
+
         throw std::runtime_error(fmt::format(
             "Mesh shape mismatch!\n"
-            "Config mesh_shape: [{}, {}]\n"
-            "MGD device_topology: [{}, {}]\n"
-            "Please ensure your training config mesh_shape matches the MGD file: {}",
-            mesh_shape[0],
-            mesh_shape[1],
-            mgd_dims[0],
-            mgd_dims[1],
-            mgd_path));
+            "Config mesh_shape: {}\n"
+            "Physical mesh shape: {}\n"
+            "Please ensure your training config mesh_shape matches the MGD file.",
+            config_shape_str,
+            physical_shape_str));
     }
 
-    fmt::println("Mesh shape validated against MGD: [{}, {}] matches device_topology", mesh_shape[0], mesh_shape[1]);
+    fmt::println("Mesh shape validated against physical mesh: {} devices", mesh_shape[0] * mesh_shape[1]);
 }
 
 }  // namespace
@@ -346,7 +343,7 @@ inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, c
     }
 }
 
-bool pctx_initialized() {
+bool is_pctx_initialized() {
     return ttml::autograd::ctx().is_parallelism_context_initialized();
 }
 
@@ -404,8 +401,8 @@ int main(int argc, char **argv) {
         fmt::print("Enabling fabric\n");
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
 
-        // Validate that config mesh_shape matches MGD device_topology to catch configuration errors early
-        validate_mesh_shape_against_mgd(device_config.mesh_shape, num_devices);
+        // Validate that config mesh_shape matches physical mesh shape (must be after device init)
+        validate_mesh_shape_against_physical(device_config.mesh_shape);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
@@ -566,7 +563,7 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (pctx_initialized()) {
+                if (is_pctx_initialized()) {
                     const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
                     const auto &mesh_device = ttml::autograd::ctx().get_device();
                     const uint32_t BATCH_DIM = 0;
@@ -641,8 +638,11 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
-                const auto coef = ((pctx_initialized() && pctx.is_tp_enabled()) ? pctx.get_tp_size() : 1U) * 32U;
+                uint32_t coef = 32U;
+                if (is_pctx_initialized()) {
+                    const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+                    coef = ((pctx.is_tp_enabled()) ? pctx.get_tp_size() : 1U) * 32U;
+                }
                 arg.vocab_size = (arg.vocab_size + coef - 1) / coef * coef;
             } else {
                 throw std::runtime_error(
