@@ -740,12 +740,6 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
-    // Record the build state used for compilation so that future runs can detect
-    // when compile-affecting flags (cflags, defines, includes from HAL, etc.) change.
-    if (compiled.any()) {
-        write_build_state_hash(out_dir);
-    }
-
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
     extract_zone_src_locations(out_dir);
