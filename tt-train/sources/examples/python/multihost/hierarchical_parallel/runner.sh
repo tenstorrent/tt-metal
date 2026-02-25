@@ -8,6 +8,7 @@
 
 export TT_METAL_HOME="/data/${USER}/tt-metal"
 source ${TT_METAL_HOME}/python_env/bin/activate
+export PYTHONHOME="${TT_METAL_HOME}/python_env"
 export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
 export HIERARCHICAL_ROOT="/data/${USER}/tt-metal/tt-train/sources/examples/python/multihost/hierarchical_parallel"
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
