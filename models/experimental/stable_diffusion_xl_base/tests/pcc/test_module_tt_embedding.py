@@ -7,15 +7,16 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
+@pytest.mark.parametrize("image_resolution", [(1024, 1024), (512, 512)])
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
 @pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
-def test_embedding(device, input_shape, module_path, is_ci_env, reset_seeds, linear_weights_dtype):
+def test_embedding(device, image_resolution, input_shape, module_path, is_ci_env, reset_seeds, linear_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -29,7 +30,7 @@ def test_embedding(device, input_shape, module_path, is_ci_env, reset_seeds, lin
     torch_embedding = eval("unet." + module_path)
     assert torch_embedding is not None, f"{module_path} is not a valid UNet module"
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_embedding = TtTimestepEmbedding(
         device, state_dict, module_path, model_config, linear_weights_dtype=linear_weights_dtype
     )

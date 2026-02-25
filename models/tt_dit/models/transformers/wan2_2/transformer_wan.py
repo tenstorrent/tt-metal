@@ -109,6 +109,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            is_self=True,
         )
 
         self.attn2 = WanAttention(
@@ -119,6 +120,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            is_self=False,
         )
 
         self.norm2 = (
@@ -210,7 +212,7 @@ class WanTransformerBlock(Module):
             shifted_temb_1BTD, 6, dim=2
         )
 
-        # NOTE: workaround - addcmul is less accurate with fp32 gate input
+        # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
         gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
         c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
 
@@ -218,19 +220,17 @@ class WanTransformerBlock(Module):
             spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
         )
 
-        # Self attention on spatial
-        spatial_attn_1BND = self.attn1(
+        # Self attention on spatial with fused residual addcmul
+        # Fuses: spatial_1BND = spatial_1BND + to_out(attn_output) * gate_msa_1B1D
+        spatial_1BND = self.attn1(
             spatial_1BND=spatial_normed_1BND,
             N=N,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=trans_mat,
+            addcmul_residual=spatial_1BND,
+            addcmul_gate=gate_msa_1B1D,
         )
-
-        # Residual
-        # spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
-        # NOTE: higher precision compute config in addcmul may be needed for correctness
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_attn_1BND, gate_msa_1B1D)
 
         # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND)

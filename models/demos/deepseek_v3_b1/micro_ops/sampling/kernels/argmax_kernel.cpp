@@ -40,7 +40,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage2_expected_remote_incs"),
         get_named_compile_time_arg_val("sampling_stage2_local_slot_offset"),
         get_named_compile_time_arg_val("sampling_mesh_local_send_slot_offset"),
-        get_named_compile_time_arg_val("sampling_sender_idx")>;
+        get_named_compile_time_arg_val("sampling_sender_idx"),
+        0,
+        0,
+        0>;
 
     constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
     deepseek_b1_ops::Sampling::ReaderArgs args{
@@ -62,12 +65,16 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     using SamplingWriterCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id")>;
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        0,
+        0,
+        0>;
 
     deepseek_b1_ops::Sampling::WriterArgs args{
         get_common_arg_val<uint32_t>(0),
         get_common_arg_val<uint32_t>(1),
         get_common_arg_val<uint32_t>(2),
+        0,
     };
 
     deepseek_b1_ops::Sampling::
