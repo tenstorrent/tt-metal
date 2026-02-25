@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::prim {
@@ -82,27 +83,65 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             .set_page_size(output_cb_index, output_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    const uint32_t num_l1_banks = (src_buffer->is_l1() && dst_buffer->is_l1())
+                                      ? device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1)
+                                      : 0;
+    const bool use_strided_l1 = num_l1_banks > 0 && !is_row_major && num_pages >= num_l1_banks;
+
+    // For strided L1 mode, build core groups based on per-bank tile count.
+    // Each core processes tiles from its local L1 bank (stride = num_l1_banks).
+    // Cores with bank_id < remainder get one extra tile.
+    uint32_t strided_tiles_max = 0;
+    uint32_t strided_tiles_min = 0;
+    std::set<CoreRange> strided_group_max_ranges;
+    std::set<CoreRange> strided_group_min_ranges;
+    // Map core_linear_id -> bank_id for strided runtime args
+    std::vector<uint32_t> core_bank_ids(num_cores, 0);
+
+    if (use_strided_l1) {
+        strided_tiles_max = (num_pages + num_l1_banks - 1) / num_l1_banks;
+        strided_tiles_min = num_pages / num_l1_banks;
+        const auto remainder = num_pages % num_l1_banks;
+
+        for (uint32_t i = 0; i < num_cores; i++) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            const auto& bank_ids =
+                device->allocator()->get_bank_ids_from_logical_core(tt::tt_metal::BufferType::L1, core);
+            const auto bank_id = bank_ids.empty() ? i : bank_ids[0];
+            core_bank_ids[i] = bank_id;
+
+            // Group 1 (primary) gets strided_tiles_max tiles.
+            // Group 2 (secondary) gets strided_tiles_min tiles.
+            // When remainder == 0, all cores get equal tiles → all go to group 1.
+            if (remainder == 0 || bank_id < remainder) {
+                strided_group_max_ranges.insert(CoreRange(core));
+            } else {
+                strided_group_min_ranges.insert(CoreRange(core));
+            }
+        }
+    }
+
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    std::map<std::string, std::string> dataflow_defines;
+    if (use_strided_l1) {
+        dataflow_defines["STRIDED_L1_ACCESS"] = "1";
+    }
+
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, dataflow_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_pages_per_core_group_1,  // per_core_block_cnt
-        1,                           // per_core_block_size
-    };
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, dataflow_defines));
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
@@ -153,10 +192,22 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
+    // For strided L1 mode, core groups are based on bank_id tile assignment.
+    // Otherwise, use the standard split_work_to_cores groups.
+    const auto compute_core_group_1 = use_strided_l1 ? CoreRangeSet(strided_group_max_ranges) : core_group_1;
+    const auto compute_core_group_2 = use_strided_l1 ? CoreRangeSet(strided_group_min_ranges) : core_group_2;
+    const uint32_t compute_tiles_group_1 = use_strided_l1 ? strided_tiles_max : num_pages_per_core_group_1;
+    const uint32_t compute_tiles_group_2 = use_strided_l1 ? strided_tiles_min : num_pages_per_core_group_2;
+
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
+        compute_tiles_group_1,  // per_core_block_cnt
+        1,                      // per_core_block_size
+    };
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
-        core_group_1,
+        compute_core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
@@ -167,16 +218,16 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             .defines = unary_defines});
 
     auto eltwise_unary_kernel_group_2_id = 0;
-    if (!core_group_2.ranges().empty()) {
+    if (!compute_core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_pages_per_core_group_2,  // per_core_block_cnt
-            1,                           // per_core_block_size
+            compute_tiles_group_2,  // per_core_block_cnt
+            1,                      // per_core_block_size
         };
 
         eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
             program,
             path,
-            core_group_2,
+            compute_core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
@@ -189,25 +240,40 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     for (uint32_t i = 0, num_pages_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_pages_per_core = 0;
-        auto kernel_id = eltwise_unary_kernel_group_1_id;
-        if (core_group_1.contains(core)) {
-            num_pages_per_core = num_pages_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_pages_per_core = num_pages_per_core_group_2;
-            kernel_id = eltwise_unary_kernel_group_2_id;
+
+        if (use_strided_l1) {
+            const auto bank_id = core_bank_ids[i];
+
+            tt::tt_metal::SetRuntimeArgs(
+                program, unary_reader_kernel_id, core, {src_buffer->address(), num_pages, bank_id, num_l1_banks});
+
+            tt::tt_metal::SetRuntimeArgs(
+                program, unary_writer_kernel_id, core, {dst_buffer->address(), num_pages, bank_id, num_l1_banks});
+
+            auto compute_kernel_id =
+                compute_core_group_1.contains(core) ? eltwise_unary_kernel_group_1_id : eltwise_unary_kernel_group_2_id;
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {packed_scalar1, packed_scalar2});
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            uint32_t num_pages_per_core = 0;
+            auto kernel_id = eltwise_unary_kernel_group_1_id;
+            if (core_group_1.contains(core)) {
+                num_pages_per_core = num_pages_per_core_group_1;
+            } else if (core_group_2.contains(core)) {
+                num_pages_per_core = num_pages_per_core_group_2;
+                kernel_id = eltwise_unary_kernel_group_2_id;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
+
+            tt::tt_metal::SetRuntimeArgs(
+                program, unary_reader_kernel_id, core, {src_buffer->address(), num_pages_per_core, num_pages_written});
+
+            tt::tt_metal::SetRuntimeArgs(
+                program, unary_writer_kernel_id, core, {dst_buffer->address(), num_pages_per_core, num_pages_written});
+
+            tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {packed_scalar1, packed_scalar2});
+            num_pages_written += num_pages_per_core;
         }
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_pages_per_core, num_pages_written});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_pages_per_core, num_pages_written});
-
-        tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {packed_scalar1, packed_scalar2});
-        num_pages_written += num_pages_per_core;
     }
 
     return cached_program_t{
