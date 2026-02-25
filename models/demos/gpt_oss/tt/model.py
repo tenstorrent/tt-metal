@@ -18,6 +18,19 @@ from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
 
+def compute_per_device_vocab(vocab_size, num_tp):
+    """Compute per-device vocab width: tile-aligned then rounded to next power of 2.
+
+    The power-of-2 rounding enables ttnn.topk's multi-core path (bitonic sort
+    requires power-of-2 width). Without it, topk falls back to single-core.
+
+    This must be used consistently for both lm_head weight padding and sampling
+    args so device shard boundaries match TTSampling device offset strides.
+    """
+    per_device = (((vocab_size + num_tp - 1) // num_tp + 31) // 32) * 32
+    return 1 << (per_device - 1).bit_length()  # next power of 2
+
+
 def create_rope_setup(
     mesh_device,
     hf_config,
@@ -178,8 +191,11 @@ class Model:
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
         # If we shard at unpadded boundaries and pad after, the offsets are wrong for devices 1+.
         # Pre-sharding padding ensures device shard boundaries match the offset stride.
+        # Round per-device width to next power of 2 so ttnn.topk can use its multi-core path
+        # (bitonic sort requires power-of-2 width). Without this, topk falls back to single-core
+        # and takes ~14ms instead of being parallelized across many cores.
         sampling_splits = mesh_device.shape[1]
-        per_device_padded = (((self.vocab_size + sampling_splits - 1) // sampling_splits + 31) // 32) * 32
+        per_device_padded = compute_per_device_vocab(self.vocab_size, sampling_splits)
         padded_vocab_size = per_device_padded * sampling_splits
         lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
         if lm_head_weight.shape[1] < padded_vocab_size:
@@ -191,13 +207,13 @@ class Model:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded.weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
-        # Initialize on-device sampling (supported when per-device vocab fits in 64K)
-        self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
+        # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
+        self._supports_on_device_sampling = per_device_padded <= 64 * 1024
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
@@ -231,11 +247,7 @@ class Model:
         args = _SamplingArgs()
         args.vocab_size = hf_config.vocab_size
         num_tp = mesh_device.shape[1]
-        # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
-        # for TTPenalties scatter operations.
-        # The lm_head weight is padded to this size BEFORE column-parallel sharding,
-        # so device shard boundaries align with TTSampling device offset strides.
-        per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
+        per_device_vocab = compute_per_device_vocab(args.vocab_size, num_tp)
         args.padded_vocab_size = per_device_vocab * num_tp
         args.cluster_shape = tuple(mesh_device.shape)
         args.sampling_all_gather_axis = 1
