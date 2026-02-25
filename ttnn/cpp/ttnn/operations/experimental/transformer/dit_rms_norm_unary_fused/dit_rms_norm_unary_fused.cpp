@@ -23,8 +23,8 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    bool approx_mode = true;
-    bool fp32_acc = false;
+    const bool approx_mode = true;
+    const bool fp32_acc = false;
     auto kernel_config_val = compute_kernel_config.value_or(
         init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
 

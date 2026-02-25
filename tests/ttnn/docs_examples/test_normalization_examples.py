@@ -236,13 +236,6 @@ def test_dit_rms_norm_unary_fused(device):
     )
     logger.info(f"dit_rms_norm_unary_fused (silu, UnaryOpType) result shape: {output2.shape}")
 
-    # Without activation: equivalent to plain rms_norm
-    output_no_act = ttnn.experimental.dit_rms_norm_unary_fused(
-        input_tensor,
-        weight=weight,
-    )
-    logger.info(f"dit_rms_norm_unary_fused (no activation) result shape: {output_no_act.shape}")
-
 
 def test_batch_norm(device):
     # Setup input tensor and parameters

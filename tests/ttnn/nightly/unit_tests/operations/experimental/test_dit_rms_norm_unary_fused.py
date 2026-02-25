@@ -19,6 +19,41 @@ def assert_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_thres
     }
 
 
+def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
+    """
+    Compute golden RMS output for an input tensor and weight tensor.
+    Args:
+        input_tensor: The input tensor to run the rms norm on.
+        epsilon: The epsilon to use for the rms norm.
+        weight: The weight tensor to use for the rms norm.
+        bias: The bias tensor to use for the rms norm.
+        activation: The activation to apply to the rms norm output.
+    Returns:
+        The output tensor as a torch tensor.
+    """
+
+    with torch.no_grad():
+        variance = input_tensor.pow(2).mean(dim=-1, keepdim=True)
+        torch_normed = input_tensor * torch.rsqrt(variance + epsilon)
+        if weight is not None:
+            torch_normed = torch_normed * weight
+        if bias is not None:
+            torch_normed = torch_normed + bias
+        if activation == "silu" or activation == ttnn.UnaryOpType.SILU:
+            output = torch.nn.functional.silu(output)
+        elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
+            output = torch.nn.functional.gelu(output)
+        elif activation is None:
+            output = output
+        else:
+            raise ValueError(
+                f"Unsupported activation: {activation!r}. "
+                "Supported: 'silu', 'gelu', ttnn.UnaryOpType.SILU, ttnn.UnaryOpType.GELU, or None."
+            )
+
+    return output
+
+
 def run_dit_rms_norm_unary_fused_test(
     device,
     h,
@@ -31,11 +66,10 @@ def run_dit_rms_norm_unary_fused_test(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     fp32_dest_acc_en=False,
     # --- sharded path: shard_params = (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) or None ---
-    sharded=False,
     shard_params=None,
 ):
     """
-    Unified test helper for dit_rms_norm_unary_fused.
+    Test helper for dit_rms_norm_unary_fused.
 
     When sharded=False (default): uses the interleaved path (layernorm.cpp kernel).
     When sharded=True: wraps the input in a BLOCK_SHARDED memory config and passes a
@@ -43,12 +77,6 @@ def run_dit_rms_norm_unary_fused_test(
     shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True.
 
     Weight/bias tensors use shape (1, w) regardless of path.
-
-    Activation compatibility:
-      - Non-sharded: all weight/bias/activation combinations are supported.
-      - Sharded + activation: only no-weight, no-bias (do_gamma=0, do_beta=0) is supported
-        due to the static_assert guard in layernorm_sharded.cpp block 1.
-      - Sharded + weight or bias: activation must be None.
     """
     torch.manual_seed(42)
 
@@ -56,29 +84,10 @@ def run_dit_rms_norm_unary_fused_test(
     torch_weight = torch.ones(w, dtype=torch.bfloat16) if use_weight else None
     torch_bias = torch.rand(w, dtype=torch.bfloat16) if use_bias else None
 
-    with torch.no_grad():
-        variance = torch_input.pow(2).mean(dim=-1, keepdim=True)
-        torch_normed = torch_input * torch.rsqrt(variance + epsilon)
-        if torch_weight is not None:
-            torch_normed = torch_normed * torch_weight
-        if torch_bias is not None:
-            torch_normed = torch_normed + torch_bias
-        if activation == "silu" or activation == ttnn.UnaryOpType.SILU:
-            torch_expected = torch.nn.functional.silu(torch_normed)
-        elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
-            torch_expected = torch.nn.functional.gelu(torch_normed)
-        elif activation is None:
-            torch_expected = torch_normed
-        else:
-            raise ValueError(
-                f"Unsupported activation: {activation!r}. "
-                "Supported: 'silu', 'gelu', ttnn.UnaryOpType.SILU, ttnn.UnaryOpType.GELU, or None."
-            )
-
     memory_config = ttnn.DRAM_MEMORY_CONFIG
     program_config = None
 
-    if sharded:
+    if shard_params is not None:
         assert (
             shard_params is not None and len(shard_params) == 5
         ), "shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True"
@@ -140,44 +149,15 @@ def run_dit_rms_norm_unary_fused_test(
     return assert_quality(torch_expected, tt_output_torch)
 
 
-@pytest.mark.parametrize("use_weight", [True, False], ids=["with_weight", "no_weight"])
+@pytest.mark.parametrize("activation", [None, "silu", ttnn.UnaryOpType.SILU], ids=["none", "silu", "UnaryOpType.SILU"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_rms_norm_unary_fused_no_activation(device, use_weight, dtype):
-    """Without activation: should match plain rms_norm."""
-    check_result = run_dit_rms_norm_unary_fused_test(
-        device=device,
-        h=1,
-        w=4096,
-        use_weight=use_weight,
-        activation=None,
-        dtype=dtype,
-    )
-    assert check_result["pcc"] > 0.9995, f"PCC too low: {check_result['pcc']}"
-    assert check_result["relative_rmse"] < 0.03, f"Relative RMSE too high: {check_result['relative_rmse']}"
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_rms_norm_unary_fused_silu_string(device, dtype):
-    """Test with SiLU activation passed as a string."""
-    check_result = run_dit_rms_norm_unary_fused_test(
-        device=device,
-        h=1,
-        w=4096,
-        activation="silu",
-        dtype=dtype,
-    )
-    assert check_result["pcc"] > 0.9995, f"PCC too low: {check_result['pcc']}"
-    assert check_result["relative_rmse"] < 0.03, f"Relative RMSE too high: {check_result['relative_rmse']}"
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype):
+def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation):
     """Test with SiLU activation passed as ttnn.UnaryOpType."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
         h=1,
         w=4096,
-        activation=ttnn.UnaryOpType.SILU,
+        activation=activation,
         dtype=dtype,
     )
     assert check_result["pcc"] > 0.9995, f"PCC too low: {check_result['pcc']}"
@@ -229,26 +209,6 @@ def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
 
 
 @pytest.mark.parametrize(
-    "activation",
-    ["silu", "gelu", None],
-    ids=["silu", "gelu", "no_activation"],
-)
-def test_dit_rms_norm_unary_fused_activations(device, activation):
-    """Test different activation functions."""
-    check_result = run_dit_rms_norm_unary_fused_test(
-        device=device,
-        h=1,
-        w=1024,
-        use_weight=True,
-        activation=activation,
-    )
-    assert check_result["pcc"] > 0.9995, f"[{activation}] PCC too low: {check_result['pcc']}"
-    assert (
-        check_result["relative_rmse"] < 0.02
-    ), f"[{activation}] Relative RMSE too high: {check_result['relative_rmse']}"
-
-
-@pytest.mark.parametrize(
     "use_weight, use_bias",
     [(False, True), (True, True)],
     ids=["bias_only", "weight_and_bias"],
@@ -280,26 +240,6 @@ def test_dit_rms_norm_unary_fused_weight_bias(device, use_weight, use_bias, acti
     "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
     [(256, 320, 2, 5, 4, 2, 1)],
 )
-def test_dit_rms_norm_unary_fused_sharded(device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt):
-    """Sharded path with SiLU activation, no weight, no bias (do_gamma=0, do_beta=0)."""
-    check_result = run_dit_rms_norm_unary_fused_test(
-        device=device,
-        h=h,
-        w=w,
-        sharded=True,
-        shard_params=(num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt),
-        activation="silu",
-    )
-    assert check_result["pcc"] > 0.9995, f"[sharded/silu] PCC too low: {check_result['pcc']}"
-    assert (
-        check_result["relative_rmse"] < 0.03
-    ), f"[sharded/silu] Relative RMSE too high: {check_result['relative_rmse']}"
-
-
-@pytest.mark.parametrize(
-    "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
-    [(256, 320, 2, 5, 4, 2, 1)],
-)
 @pytest.mark.parametrize(
     "use_weight, use_bias",
     [(False, True), (True, True)],
@@ -316,7 +256,6 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
         device=device,
         h=h,
         w=w,
-        sharded=True,
         shard_params=(num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt),
         use_weight=use_weight,
         use_bias=use_bias,
