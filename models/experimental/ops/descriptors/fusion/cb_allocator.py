@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
 
 import ttnn
-from ttnn._ttnn.program_descriptor import UnpackToDestMode
+from ttnn import UnpackToDestMode
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
