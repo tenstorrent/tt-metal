@@ -47,6 +47,15 @@ jobs:
           # Define all single-card test groups (whisper, llama3.1-8b, unet-shallow)
           all_tests='[
             {
+              name: "DeepSeek-V3 MoE Gate Prefill"
+              model: "deepseek_v3"
+              arch: "blackhole"
+              extra-tag: "pipeline-perf"
+              cmd: "pytest models/demos/deepseek_v3/tests/test_moe_gate_prefill.py --timeout 1200"
+              owner_id: "U08RL15T4N8"
+              owner_name: "Danilo Djekic"
+            }
+            {
               "name": "whisper performance",
               "model": "whisper",
               "arch": "blackhole",
