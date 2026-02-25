@@ -91,12 +91,9 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     // vector of cores
     auto cores = corerange_to_cores(all_device_cores, std::nullopt, row_major);
 
-    std::vector<std::vector<uint32_t>> reader_args_array{
-        cores.size(), std::vector<uint32_t>{amount_of_fields<EltwiseReaderArgs>(), 0}};
-    std::vector<std::vector<uint32_t>> compute_args_array{
-        cores.size(), std::vector<uint32_t>(amount_of_fields<EltwiseComputeArgs>(), 0)};
-    std::vector<std::vector<uint32_t>> writer_args_array{
-        cores.size(), std::vector<uint32_t>(amount_of_fields<EltwiseWriterArgs>(), 0)};
+    std::vector<std::vector<uint32_t>> reader_args_array{cores.size()};
+    std::vector<std::vector<uint32_t>> compute_args_array{cores.size()};
+    std::vector<std::vector<uint32_t>> writer_args_array{cores.size()};
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);

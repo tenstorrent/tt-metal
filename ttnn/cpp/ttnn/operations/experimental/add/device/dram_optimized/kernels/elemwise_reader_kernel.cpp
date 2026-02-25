@@ -49,13 +49,23 @@ void kernel_main() {
     uint32_t trid = 1u;  // MUST START WITH ONE
     uint32_t trid_to_wait = trid;
 
-    constexpr uint32_t num_batches = c_args.num_batches;  // noc transcation must be overlapped
-    constexpr uint32_t max_num_tiles_per_batch = c_args.num_tiles_per_batch;
-    const uint32_t num_tiles_per_batch =
-        args.num_tiles > max_num_tiles_per_batch ? max_num_tiles_per_batch : args.num_tiles;
+    constexpr uint32_t num_batches = c_args.num_batches;  // noc transcations must be overlapped
+    const uint32_t num_tiles_per_batch = c_args.num_tiles_per_batch;
 
-    uint32_t a_write_base_ptr = get_write_ptr(c_args.a_tensor_cb);  // must be after reserve_back
+    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
+    uint32_t remaining = args.num_tiles;
+    bool first_iter = true;
+    uint32_t prev_chunk = 0;
+
+    cb_reserve_back(c_args.a_tensor_cb, large_chunk);
+    cb_reserve_back(c_args.b_tensor_cb, large_chunk);
+
+    // get_write_ptr must be called after reserve_back
+    uint32_t a_write_base_ptr = get_write_ptr(c_args.a_tensor_cb);
     uint32_t b_write_base_ptr = get_write_ptr(c_args.b_tensor_cb);
+
+    uint32_t a_write_ptr = a_write_base_ptr;
+    uint32_t b_write_ptr = b_write_base_ptr;
 
     uint32_t a_write_end_ptr = a_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * a_tile_size;
     uint32_t b_write_end_ptr = b_write_base_ptr + CB_PAGE_COUNT(c_args.a_tensor_cb) * b_tile_size;
@@ -81,19 +91,6 @@ void kernel_main() {
         return addr;
     };
 
-    uint32_t a_write_ptr = a_write_base_ptr;
-    uint32_t b_write_ptr = b_write_base_ptr;
-
-    // DPRINT << "Reader kernel. num_tiles: " << args.num_tiles << " num_batches: " << num_batches
-    //        << ", num_tiles_per_batch: " << num_tiles_per_batch << ENDL();
-
-    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
-    uint32_t remaining = args.num_tiles;
-    bool first_iter = true;
-    uint32_t prev_chunk = 0;
-
-    cb_reserve_back(c_args.a_tensor_cb, num_tiles_per_batch);
-    cb_reserve_back(c_args.b_tensor_cb, num_tiles_per_batch);
     while (remaining > 0) {
         uint32_t chunk;
         if (remaining >= large_chunk) {
