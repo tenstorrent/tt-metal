@@ -266,18 +266,26 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     assert_with_ulp(output_tensor, golden_tensor)
 
 
-def test_addcmul_with_int32_inputs(device):
-    in_data1 = torch.randint(0, 100, (1, 1, 32, 32), dtype=torch.int32)
-    in_data2 = torch.randint(0, 100, (1, 1, 32, 32), dtype=torch.int32)
-    in_data3 = torch.randint(0, 100, (1, 1, 32, 32), dtype=torch.int32)
-    value = 1
+@pytest.mark.parametrize(
+    "in_data1_shape, in_data2_shape, in_data3_shape",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),
+        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),
+        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),
+        ((1, 1, 1, 1), (1, 1, 1024, 1024), (1, 1, 1, 1)),
+    ],
+)
+def test_addcmul_with_int32_inputs(device, in_data1_shape, in_data2_shape, in_data3_shape):
+    in_data1 = torch.randint(-100, 100, in_data1_shape, dtype=torch.int32)
+    in_data2 = torch.randint(-100, 100, in_data2_shape, dtype=torch.int32)
+    in_data3 = torch.randint(-100, 100, in_data3_shape, dtype=torch.int32)
+    value = 6
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor3 = ttnn.from_torch(in_data3, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.addcmul(input_tensor1, input_tensor2, input_tensor3, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
-
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
