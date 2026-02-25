@@ -6,7 +6,7 @@
 
 #include <array>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
 // #define DEBUG

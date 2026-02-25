@@ -8,9 +8,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::slice {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct SliceParams {
     ttnn::Shape slice_start;
     ttnn::Shape slice_end;
     ttnn::Shape step;
@@ -21,14 +21,11 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
-struct tensor_args_t {
+struct SliceInputs {
     Tensor input;
     std::optional<Tensor> start_tensor;
     std::optional<Tensor> end_tensor;
     std::optional<Tensor> preallocated_output;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::data_movement::slice
+}  // namespace ttnn::prim

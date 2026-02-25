@@ -12,24 +12,11 @@ from transformers.models.mllama.modeling_mllama import MllamaTextCrossAttention
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
-
-
-def load_partial_weights(weights_path, layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len(layer_prefix) :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
 
 
 @pytest.mark.parametrize(
@@ -82,7 +69,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
+        AutoModelForVision2Seq, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
     )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
@@ -134,8 +121,8 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     """
     n_iter = 10
     for i in range(n_iter):
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode = Mode.PREFILL if i == 0 else Mode.DECODE
+        seq_len = text_seq_len if mode == Mode.PREFILL else 1
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
 
@@ -173,7 +160,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
             pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
         )[0] * full_text_mask.squeeze(1)
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             outputs = []
             for b in range(batch):
                 tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
@@ -218,7 +205,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                model_args.get_attn_input_mem_config(Mode.DECODE, None),
                 force_replicated=True,
             )
 
@@ -268,7 +255,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

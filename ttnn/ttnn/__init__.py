@@ -78,14 +78,26 @@ logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
 @contextlib.contextmanager
-def manage_config(name, value):
+def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    setattr(CONFIG, name, original_value)
-    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    try:
+        setattr(CONFIG, name, original_value)
+        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    except Exception as e:
+        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+        # afuller
+        if original_value is None:
+            try:
+                setattr(CONFIG, name, "")
+                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+            except Exception as e2:
+                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
+        else:
+            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -108,6 +120,13 @@ from ttnn._ttnn.multi_device import (
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
+    Rank,
+    Size,
+    init_distributed_context,
+    is_initialized as distributed_context_is_initialized,
+    get_rank as distributed_context_get_rank,
+    get_size as distributed_context_get_size,
+    barrier as distributed_context_barrier,
 )
 
 from ttnn._ttnn.events import (
@@ -133,7 +152,21 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManagerMode,
+    FabricRouterConfig,
+    set_fabric_config,
+    get_tt_fabric_packet_header_size_bytes,
+    get_tt_fabric_max_payload_size_bytes,
+    MeshId,
+    FabricNodeId,
+    setup_fabric_connection,
+    setup_routing_plane_connection,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -151,6 +184,13 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
+)
+
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
 )
 
 from ttnn.types import (
@@ -198,7 +238,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
@@ -220,13 +259,18 @@ from ttnn.types import (
     DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
+    RuntimeArgs,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    MeshProgramDescriptor,
+    merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
@@ -238,6 +282,9 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_optimal_dram_bank_to_logical_worker_assignment,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -256,7 +303,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
@@ -317,6 +371,9 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+from ttnn.operations.unary import SigmoidMode
+
+divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
@@ -324,7 +381,7 @@ mul_ = ttnn.multiply_
 div_ = ttnn.divide_
 
 
-# TODO: pybind the overloaded operators below
+# TODO: nanobind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
@@ -345,6 +402,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.normalization import (
@@ -353,13 +411,23 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
-    LayerNormDistributedDefaultProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -374,7 +442,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -389,6 +457,11 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
+    Op2DSliceConfig,
+    Op2DDRAMSliceHeight,
+    Op2DDRAMSliceWidth,
+    Op2DL1Full,
+    Op2DL1FullSliceConfig,
 )
 
 from ttnn.operations.pool import (

@@ -7,12 +7,11 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/reflection.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -57,7 +56,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -185,6 +184,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<const Tensor>>, &GraphProcessor::begin_function_process>(),
+        make_process<std::vector<std::reference_wrapper<const Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<Tensor, &GraphProcessor::begin_function_process>(),
         make_process<const Tensor, &GraphProcessor::begin_function_process>(),
         make_process<std::optional<Tensor>, &GraphProcessor::begin_function_process>(),
@@ -292,23 +292,19 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
-    const auto& storage = t.storage();
-    tt::tt_metal::Buffer* buffer = std::visit(
-        [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-                    // It has an ID different from the "backing" buffer that was used to perform the allocation.
-                    // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-                    // buffer.
-                    return storage.mesh_buffer->get_backing_buffer();
-                } else {
-                    return t.buffer();
-                }
-            }
-            return nullptr;
-        },
-        storage);
+    tt::tt_metal::Buffer* buffer = nullptr;
+    if (is_device_tensor(t)) {
+        const auto& storage = t.device_storage();
+        if (storage.mesh_buffer) {
+            // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+            // It has an ID different from the "backing" buffer that was used to perform the allocation.
+            // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+            // buffer.
+            buffer = storage.mesh_buffer->get_backing_buffer();
+        } else {
+            buffer = t.buffer();
+        }
+    }
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
     std::uint64_t tensor_id = t.tensor_id;
@@ -321,7 +317,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             "for this tensor ahead of time.");
         tensor_id = tt::tt_metal::Tensor::next_tensor_id();
     }
-    node_id tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
+    node_id tensor_counter = tensor_id_to_counter.contains(tensor_id) ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
@@ -329,7 +325,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         {kTensorId, fmt::format("{}", tensor_id)},
     };
 
-    if (tensor_id_to_counter.count(tensor_id) == 0) {
+    if (!tensor_id_to_counter.contains(tensor_id)) {
         int stacking_level = static_cast<int>(current_op_id.size()) - 1;
         graph.push_back(Vertex{
             .counter = tensor_counter,
@@ -341,10 +337,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffer == nullptr) {
-        log_debug(
-            tt::LogAlways,
-            "Tensor doesn't have buffer, but storage is {}",
-            graph_demangle(get_type_in_var(t.storage()).name()));
+        log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
     } else {
         node_id buffer_node_id = add_buffer(buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
@@ -383,6 +376,10 @@ void GraphProcessor::begin_function_process(const Tensor& tensor) {
     node_id tensor_node_id = add_tensor(tensor);
     graph[tensor_node_id].connections.push_back(current_op_id.top());
     current_input_tensors.push_back(tensor_node_id);
+}
+
+void GraphProcessor::begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref) {
+    begin_function_process(tensor_ref.get());
 }
 
 template <typename T>
@@ -471,17 +468,19 @@ nlohmann::json GraphProcessor::end_graph_capture() {
     return res;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
+    return do_block;
+}
 
-bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
     return do_block;
 }
 

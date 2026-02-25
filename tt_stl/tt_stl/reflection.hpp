@@ -339,49 +339,8 @@ inline std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     return os;
 }
 
-template <typename T>
-typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
-    std::ostream& os, const T& object) {
-    if constexpr (detail::supports_to_string_v<T>) {
-        os << object.to_string();
-    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
-        constexpr auto num_attributes = detail::get_num_attributes<T>();
-        os << get_type_name<T>();
-        os << "(";
-
-        if constexpr (num_attributes > 0) {
-            const auto attribute_values = object.attribute_values();
-            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-                (
-                    [&os, &object, &attribute_values] {
-                        const auto& attribute = std::get<Ns>(attribute_values);
-                        os << std::get<Ns>(object.attribute_names);
-                        os << "=";
-                        os << attribute;
-                        os << ",";
-                    }(),
-                    ...);
-            }(std::make_index_sequence<num_attributes - 1>{});
-
-            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
-            os << std::get<num_attributes - 1>(object.attribute_names);
-            os << "=";
-            os << attribute;
-        }
-
-        os << ")";
-    } else {
-        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
-    }
-    return os;
-}
-
-template <typename T>
-typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << enchantum::scoped::to_string(value);
-    return os;
-}
-
+// Container operator<< definitions must come before the generic template below,
+// otherwise `os << attribute` will match `operator<<(ostream&, const Attribute&)` via implicit conversion.
 template <typename T1, typename T2>
 std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     os << "{" << pair.first << ", " << pair.second << "}";
@@ -493,7 +452,13 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
-    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
+    os << enchantum::scoped::to_string(value);
+    return os;
+}
+
+template <typename T>
+    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
     os << "(";
@@ -508,6 +473,45 @@ std::ostream& operator<<(std::ostream& os, const T& object) {
         object);
 
     os << ")";
+    return os;
+}
+
+// This template must be placed after the Reflectable operator<< to ensure proper
+// name lookup when printing objects that contain Reflectable fields.
+template <typename T>
+typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
+    std::ostream& os, const T& object) {
+    if constexpr (detail::supports_to_string_v<T>) {
+        os << object.to_string();
+    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
+        constexpr auto num_attributes = detail::get_num_attributes<T>();
+        os << get_type_name<T>();
+        os << "(";
+
+        if constexpr (num_attributes > 0) {
+            const auto attribute_values = object.attribute_values();
+            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&os, &object, &attribute_values] {
+                        const auto& attribute = std::get<Ns>(attribute_values);
+                        os << std::get<Ns>(object.attribute_names);
+                        os << "=";
+                        os << attribute;
+                        os << ",";
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes - 1>{});
+
+            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
+            os << std::get<num_attributes - 1>(object.attribute_names);
+            os << "=";
+            os << attribute;
+        }
+
+        os << ")";
+    } else {
+        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
+    }
     return os;
 }
 
@@ -532,7 +536,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, T&& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 
     template <typename object_t>
@@ -544,7 +548,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, const T& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 };
 
@@ -944,7 +948,7 @@ struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::suppor
 };
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
+struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& value, format_context& ctx) const -> format_context::iterator {
@@ -1077,8 +1081,8 @@ struct fmt::formatter<std::unordered_map<K, V>> {
 
 template <typename T>
     requires(
-        ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
-                                               ttsl::reflection::detail::supports_conversion_to_string_v<T>))
+        ttsl::concepts::Reflectable<T> and
+        not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
@@ -1241,9 +1245,9 @@ inline hash_t hash_object(const T& object) noexcept {
         }
         if (object.has_value()) {
             return hash_object(object.value());
-        } else {
-            return 0;
         }
+        return 0;
+
     } else if constexpr (ttsl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
@@ -1325,9 +1329,8 @@ struct to_json_t<T> {
     nlohmann::json operator()(const T& object) noexcept {
         if (object) {
             return to_json(*object);
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1337,9 +1340,8 @@ struct from_json_t<T> {
     T operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return nullptr;
-        } else {
-            throw std::runtime_error("Cannot load pointer from JSON");
         }
+        throw std::runtime_error("Cannot load pointer from JSON");
     }
 };
 
@@ -1417,9 +1419,8 @@ struct to_json_t<std::optional<T>> {
     nlohmann::json operator()(const std::optional<T>& optional) noexcept {
         if (optional.has_value()) {
             return to_json(optional.value());
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1428,9 +1429,8 @@ struct from_json_t<std::optional<T>> {
     std::optional<T> operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return std::nullopt;
-        } else {
-            return from_json<T>(json_object);
         }
+        return from_json<T>(json_object);
     }
 };
 

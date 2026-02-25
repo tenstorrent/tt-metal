@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);

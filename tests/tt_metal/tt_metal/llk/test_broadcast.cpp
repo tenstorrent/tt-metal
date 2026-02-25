@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <bit>
 #include <functional>
 #include <map>
@@ -17,7 +17,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -128,7 +127,6 @@ std::vector<bfloat16> gold_broadcast(
     uint16_t srcb_fid_mask = 0xFFFF;
 
     std::vector<bfloat16> golden(num_cols * num_rows);
-    auto arch = get_arch_from_string(get_umd_arch_name());
 
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
@@ -136,12 +134,12 @@ std::vector<bfloat16> gold_broadcast(
             break;
         }
         case MathFidelity::HiFi2: {
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         case MathFidelity::LoFi: {
             srca_fid_mask = 0xFFF8;
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         default: {

@@ -8,7 +8,6 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_e75, is_grayskull
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS
@@ -289,24 +288,14 @@ def get_model_config(batch, device_grid_size, model_config_str):
         activation_grid_dim = 8
         # For GS COL_MAJOR is expected to be more optimal, so we test that case first
         # Opposite for other arch like WH where ROW_MAJOR is more optimal
-        if is_grayskull():
-            if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-                grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
-                shard_orientation = ttnn.ShardOrientation.COL_MAJOR
-            elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-                grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
-                shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-            else:
-                assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+        if activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
+            grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
+            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+        elif batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
+            grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
+            shard_orientation = ttnn.ShardOrientation.COL_MAJOR
         else:
-            if activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-                grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
-                shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-            elif batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-                grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
-                shard_orientation = ttnn.ShardOrientation.COL_MAJOR
-            else:
-                assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+            assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
         transpose_mm_mcast = shard_orientation == ttnn.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
@@ -424,9 +413,6 @@ def get_tt_cache_path(model_version):
 
 
 def skip_unsupported_config(device, model_config_str, batch):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
     grid_size = device.compute_with_storage_grid_size()
     if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")

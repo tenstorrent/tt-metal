@@ -7,8 +7,8 @@
 #include <cstdint>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "dev_mem_map.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "noc_nonblocking_api.h"
 #include "core_config.h"
 
@@ -36,6 +36,12 @@ private:
 public:
     // {route_id: [header_ptr, num_headers]}
     static std::pair<volatile tt_l1_ptr PACKET_HEADER_TYPE*, uint8_t> header_table[HEADER_GROUP_SIZE_PER_RISC];
+
+    // Reset pool to initial state — allows re-allocation across loop iterations
+    FORCE_INLINE static void reset() {
+        current_offset_ = risc_pool_start;
+        route_id_ = 0;
+    }
 
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header(uint8_t num_headers = 1) {
         ASSERT(current_offset_ + HEADER_SIZE * num_headers <= risc_pool_end);

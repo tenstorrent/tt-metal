@@ -93,7 +93,7 @@ class DistributedRMSNorm(RMSNormBase):
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                USERS_PER_ROW,
+                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
                     even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,
@@ -135,7 +135,6 @@ class DistributedRMSNorm(RMSNormBase):
                 cluster_axis=1,
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 memory_config=rms_norm_stats_memory_config,
-                topology=ttnn.Topology.Linear,
             ),
             "rms_norm_post_all_gather": RMSNormPostAllGatherConfig(
                 epsilon=hf_config.rms_norm_eps,

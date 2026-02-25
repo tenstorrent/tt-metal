@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include "debug/assert.h"
-#include "dataflow_api.h"
+#include "api/debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc_parameters.h"
 #include "udm_registered_response_pool.hpp"
 

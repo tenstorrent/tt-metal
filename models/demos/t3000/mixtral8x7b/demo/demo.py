@@ -266,14 +266,15 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     ids=["general", "instruct"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, is_ci_env):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral8x7b_demo(mesh_device, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
         pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
 
     return run_mixtral_demo(
         user_input=input_prompts,
         batch_size=32,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
     )

@@ -6,9 +6,11 @@
 
 #include <variant>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 enum class LayerNormType { LAYERNORM, RMSNORM };
 
@@ -32,4 +34,4 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

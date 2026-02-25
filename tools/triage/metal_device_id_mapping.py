@@ -14,6 +14,9 @@ Description:
     restricts devices, Inspector RPC uses remapped metal device IDs (starting from 0), while
     tt-exalens uses the original device IDs from the full device set. This causes a
     mismatch between Metal device IDs and Exalens device IDs.
+
+Owner:
+    adjordjevic-TT
 """
 
 from inspector_data import run as get_inspector_data, InspectorData

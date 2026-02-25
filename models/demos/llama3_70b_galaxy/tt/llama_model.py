@@ -146,6 +146,7 @@ class TtTransformer(LightweightModule):
             mode="prefill",
             mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
@@ -168,6 +169,7 @@ class TtTransformer(LightweightModule):
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
@@ -737,7 +739,13 @@ class TtTransformer(LightweightModule):
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        lm_head_output = self.lm_head(
+            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
+        # if mode is decode and Qwen model
+        if mode == "decode" and self.args.is_qwen:
+            ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
+        return lm_head_output
 
     def __del__(self):
         self.tt_ccl.close()

@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -104,7 +104,6 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
     CoreCoord unharvested_logical_grid_size;
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10); break;
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
@@ -562,7 +561,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
 }
 
 void run_local_noc_stream_reg_inc(
-    MeshDispatchFixture* fixture,
+    MeshDispatchFixture* /*fixture*/,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {

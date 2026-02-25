@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -21,6 +21,8 @@ Options:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
+    --disable-colors                 Disable colored output. [default: False]
+    --disable-progress               Disable progress bars. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -30,17 +32,25 @@ Description:
         ./build_metal.sh --build-programming-examples
         build/programming_examples/matmul_multi_core
         triage
+
+Owner:
+    tt-vjovanovic
 """
 
 # Check if tt-exalens is installed
+from collections import defaultdict
+from enum import Enum
+import heapq
 import inspect
 import os
+import shutil
 import threading
 from time import time
 import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
+import re
 
 
 def find_install_debugger_script() -> str:
@@ -52,19 +62,24 @@ def find_install_debugger_script() -> str:
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     install_script = find_install_debugger_script()
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
-    print(f"  {utils.GREEN}{install_script}{utils.RST}")
+    print(f"  {GREEN}{install_script}{RST}")
     exit(1)
 
 # Check if requirements are installed
 try:
     import capnp
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {utils.GREEN}pip install -r {requirements_path}{utils.RST}")
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -72,13 +87,23 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
+from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
+
+
+class ScriptPriority(Enum):
+    LOW = 0
+    MEDIUM = 1
+    HIGH = 2
 
 
 @dataclass
@@ -86,6 +111,7 @@ class ScriptConfig:
     data_provider: bool = False
     disabled: bool = False
     depends: list[str] = field(default_factory=list)
+    priority: ScriptPriority = ScriptPriority.MEDIUM
 
 
 class ScriptArguments:
@@ -130,7 +156,7 @@ def default_serializer(value) -> str:
     if value is None:
         return "N/A"
     if isinstance(value, Device):
-        return str(value._id)
+        return str(value.id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
     elif isinstance(value, ElfVariable):
@@ -195,6 +221,7 @@ class TriageScript:
     config: ScriptConfig
     module: ModuleType
     run_method: Callable[..., Any]
+    documentation: str
     depends: list["TriageScript"] = field(default_factory=list)
     failed: bool = False
     failure_message: str | None = None
@@ -209,6 +236,8 @@ class TriageScript:
                 else:
                     raise TTTriageError("Data provider script did not return any data.")
             return result
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -235,6 +264,15 @@ class TriageScript:
                 # This script does not have a configuration, which means it is not tt-triage script, skipping...
                 raise ValueError(f"Script {script_path} does not have script_config.")
 
+            # Check if script has a docstring and an owner
+            if not script_module.__doc__:
+                raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
+
+            if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
+                raise ValueError(
+                    f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
+                )
+
             # Check if script has a run method with two arguments (args and context)
             run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
             if run_method is not None:
@@ -256,6 +294,7 @@ class TriageScript:
                 config=deepcopy(script_config),
                 module=script_module,
                 run_method=run_method,
+                documentation=script_module.__doc__,
             )
 
             if triage_script.config.depends is None:
@@ -298,35 +337,107 @@ class TriageScript:
 
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
-    used_scripts: set[str] = set()
-    script_queue: list[TriageScript] = []
-    while len(scripts) > len(script_queue):
-        deployed_scripts: int = 0
-        for script_path, script in scripts.items():
-            if script_path in used_scripts:
-                continue
+    # Build script dependents graph and script missing dependencies map
+    script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
+    script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
 
-            # Check if all dependencies are met
-            if all(dep in used_scripts for dep in script.config.depends):
-                # Add script to the queue
-                script_queue.append(script)
-                used_scripts.add(script_path)
-                deployed_scripts += 1
+    for path, script in scripts.items():
+        script_missing_dependencies[path] = len(script.config.depends)
+        for dep in script.config.depends:
+            script_dependents[dep].append(path)
 
-        # Check circular dependency
-        if deployed_scripts == 0:
-            # If no scripts were deployed, it means there is a circular dependency or disabled script dependency
-            remaining_scripts = set(scripts.keys()) - used_scripts
-            raise ValueError(
-                f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
-                f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
-                f"  Please check if all dependencies are met and scripts are enabled."
-            )
-    return script_queue
+    # Min-heap for runnable scripts: (-priority, script name, script object)
+    # Negative priority because heapq is a min-heap
+    heap = []
+
+    # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
+    for path, script in scripts.items():
+        if script_missing_dependencies[path] == 0:
+            heapq.heappush(heap, (-script.config.priority.value, path, script))
+
+    result = []
+
+    while heap:
+        # Pop the highest priority ready script
+        _, path, script = heapq.heappop(heap)
+        result.append(script)
+
+        # Decrease in-degree of dependent scripts
+        for dep_path in script_dependents[path]:
+            script_missing_dependencies[dep_path] -= 1
+            if script_missing_dependencies[dep_path] == 0:
+                dep_script = scripts[dep_path]
+                heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
+
+    # If some scripts remain with non-zero in-degree, we have a cycle
+    if len(result) != len(scripts):
+        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        raise ValueError(
+            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+            f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
+            f"  Please check if all dependencies are met and scripts are enabled."
+        )
+
+    return result
+
+
+# Purposely uninitialized global console object to ensure proper initialization only once later
+console: Console = None  # type: ignore[assignment]
+progress_disabled: bool = False
+
+
+def init_console_and_verbosity(args: ScriptArguments) -> None:
+    global console
+    global progress_disabled
+
+    if console is not None:
+        return
+
+    # When redirecting to file, use a larger width to avoid wrapping.
+    # When in a terminal, let Rich auto-detect the terminal width.
+    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
+    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"])
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"] or 0
+    set_verbose_level(verbose_level)
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+
+
+def create_progress() -> Progress:
+    global console
+    global progress_disabled
+
+    return Progress(
+        SpinnerColumn(),
+        TimeElapsedColumn(),
+        BarColumn(),
+        TimeRemainingColumn(),
+        TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
+        console=console,
+        transient=True,
+        disable=progress_disabled,
+    )
+
+
+def process_arguments(args: ScriptArguments) -> None:
+    init_console_and_verbosity(args)
 
 
 def parse_arguments(
-    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+    scripts: dict[str, TriageScript] = {},
+    script_path: str | None = None,
+    argv: list[str] | None = None,
+    only_triage_script_args=False,
 ) -> ScriptArguments:
     from docopt import (
         parse_defaults,
@@ -347,8 +458,7 @@ def parse_arguments(
     my_name = os.path.splitext(os.path.basename(__file__))[0]
     docs[my_name] = __doc__
     for script in scripts.values():
-        if hasattr(script.module, "__doc__") and script.module.__doc__:
-            docs[script.name] = script.module.__doc__
+        docs[script.name] = script.documentation
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
@@ -365,20 +475,29 @@ def parse_arguments(
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
+    # Deduplicate options if some scripts define the same option
+    seen_options: set[str | None] = set()
+    unique_options: list[Option] = []
+    for opt in combined_options:
+        key = opt.long or opt.short
+        if key not in seen_options:
+            seen_options.add(key)
+            unique_options.append(opt)
+
     if argv is None:
         argv = sys.argv[1:]
-    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(unique_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
-        ao.children = list(set(combined_options) - pattern_options)
+        ao.children = list(set(unique_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
-    if matched and left == []:
-        return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+    if only_triage_script_args or (matched and left == []):
+        arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+        process_arguments(arguments)
+        return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
-    doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
-    if doc is None:
-        doc = __doc__
+    doc = __doc__ if script_path is None else scripts[script_path].documentation
     if detailed_help:
         help_message = doc
         if script_path is None:
@@ -386,19 +505,19 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    help_message += f"\n{script.module.__doc__}\n"
+                    help_message += f"\n{script.documentation}\n"
         print(help_message)
         sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    usage = printable_usage(script.module.__doc__)
+                    usage = printable_usage(script.documentation)
                     help_message += " " + " ".join(usage.split()[2:])
 
     DocoptExit.usage = help_message
@@ -417,7 +536,7 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 
@@ -434,6 +553,16 @@ def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, me
     log_check_location(location, success, formatted_message)
 
 
+WARNING_CHECKS_LOCK = threading.Lock()
+WARNING_CHECKS: list[str] = []
+
+
+def log_warning(message: str) -> None:
+    global WARNING_CHECKS, WARNING_CHECKS_LOCK
+    with WARNING_CHECKS_LOCK:
+        WARNING_CHECKS.append(message)
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
@@ -441,10 +570,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         print()
         utils.INFO(f"{script.name}{execution_time}:")
 
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
+    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
         FAILURE_CHECKS = []
+    with WARNING_CHECKS_LOCK:
+        warnings = WARNING_CHECKS
+        WARNING_CHECKS = []
     if result is None:
         if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
@@ -452,12 +584,22 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"    {failure}")
             if script.failed:
                 utils.ERROR(f"    {script.failure_message}")
+
+                import textwrap
+
+                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
+                utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
+            for warning in warnings:
+                utils.WARN(f"    {warning}")
         return
 
     for failure in failures:
         utils.ERROR(f"  {failure}")
+
+    for warning in warnings:
+        utils.WARN(f"  {warning}")
 
     if isinstance(result, list) and len(result) == 0:
         utils.ERROR("  No results found.")
@@ -468,7 +610,7 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         if not isinstance(result, list):
             result = [result]
 
-        def generate_header(header: list[str], obj, flds):
+        def generate_header(table: Table, obj, flds):
             for field in flds:
                 metadata = field.metadata
                 # Skip field if it requires higher verbosity level
@@ -479,9 +621,10 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 elif "recurse" in metadata and metadata["recurse"]:
                     value = getattr(obj, field.name)
                     assert is_dataclass(value)
-                    generate_header(header, value, fields(value))
+                    generate_header(table, value, fields(value))
                 elif "serialized_name" in metadata:
-                    header.append(metadata["serialized_name"] if metadata["serialized_name"] else field.name)
+                    justify = metadata.get("justify", "left")
+                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
 
         def generate_row(row: list[str], obj, flds):
             for field in flds:
@@ -506,32 +649,15 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 elif "serializer" in metadata:
                     row.append(metadata["serializer"](getattr(obj, field.name)))
 
+        table = Table()
+
         # Create table header
-        header = []
-        generate_header(header, result[0], fields(result[0]))
-        table = [header]
+        generate_header(table, result[0], fields(result[0]))
         for item in result:
-            row = []
+            row: list[str] = []
             generate_row(row, item, fields(item))
-            multilined_row = [r.splitlines() for r in row]
-            multirow = max([len(r) for r in multilined_row])
-            if multirow == 1:
-                table.append(row)
-            else:
-                # If multirow, add empty rows for each line in the row
-                for i in range(multirow):
-                    multirow_row = []
-                    for lines in multilined_row:
-                        if i < len(lines):
-                            multirow_row.append(lines[i])
-                        else:
-                            multirow_row.append("")
-                    table.append(multirow_row)
-
-        from tabulate import tabulate
-        from utils import DEFAULT_TABLE_FORMAT
-
-        print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+            table.add_row(*row)
+        console.print(table)
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -549,7 +675,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    scripts_dir = os.path.dirname(find_install_debugger_script())
+    install_script = find_install_debugger_script()
+    scripts_dir = os.path.dirname(install_script)
     ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
 
     try:
@@ -572,23 +699,24 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
     except importlib_metadata.PackageNotFoundError:
         utils.WARN(
-            "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
+            f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
         )
-        raise TTTriageError("Debugger dependency is not installed")
+        console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
+        console.print(f"  [command]{install_script}[/]")
+        exit(1)
 
-    # Match by prefix to allow short-vs-long
+    # Check if installed version matches approved version
     if approved_version != installed_version:
-        message = (
-            "Debugger version mismatch.\n"
-            f"  Installed: {installed_version}\n"
-            f"  Approved:  {approved_version}\n"
-            "Use scripts/install_debugger.sh to install the approved version, or run with --skip-version-check"
-        )
+        message = f"Debugger version mismatch.\n  Installed: {installed_version}\n  Approved:  {approved_version}"
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
-            raise TTTriageError(message)
+            console.print(message)
+            console.print(f"Please install tt-exalens by running:")
+            console.print(f"  [command]{install_script}[/]")
+            console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
+            exit(1)
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:
@@ -605,6 +733,8 @@ def run_script(
     argv: list[str] | None = None,
     return_result: bool = False,
 ) -> Any:
+    force_exit = False
+
     # Resolve script path
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
@@ -612,6 +742,7 @@ def run_script(
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
+        force_exit = True
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
@@ -632,18 +763,6 @@ def run_script(
     if args is None:
         args = parse_arguments(scripts, script_path, argv)
 
-        # Set verbose level from -v count (controls which columns are displayed)
-        verbose_level = args["-v"]
-        set_verbose_level(verbose_level)
-
-        # Setting verbosity level
-        try:
-            verbosity = int(args["--verbosity"])
-            utils.Verbosity.set(verbosity)
-        except:
-            utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-        utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
     # Initialize context if not provided
     if context is None:
         _enforce_dependencies(args)
@@ -663,6 +782,10 @@ def run_script(
         return result
     serialize_result(script, result)
 
+    if force_exit:
+        # Remove nanobind leak check to avoid false positives on exit
+        os._exit(0)
+
 
 class TTTriageError(Exception):
     """Base class for TT Triage errors."""
@@ -672,6 +795,9 @@ class TTTriageError(Exception):
 
 def main():
     triage_start = time()
+
+    # Parse only tt-triage script arguments first to initialize logging and console
+    parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
@@ -714,67 +840,68 @@ def main():
     # Parse common command line arguments
     args = parse_arguments(scripts)
 
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
-    # Check if we should run specific scripts
-    if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
-        for script_name in args["--run"]:
-            run_script(script_name, args, context)
-    else:
-        # Execute all scripts
-        triage_init_end = time()
-        if args["--print-script-times"]:
-            utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
-        total_time = triage_init_end - triage_start
-        serialization_time = 0.0
-        for script in script_queue:
-            if not all(not dep.failed for dep in script.depends):
-                utils.INFO(f"{script.name}:")
-                utils.WARN(f"  Cannot run script due to failed dependencies.")
-                script.failed = True
-                script.failure_message = "Cannot run script due to failed dependencies."
-            else:
-                start_time = time()
-                result = script.run(args=args, context=context)
-                end_time = time()
-                total_time += end_time - start_time
-                execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
-                if script.config.data_provider:
-                    if result is None:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        if script.failure_message is not None:
-                            utils.ERROR(f"  Data provider script failed: {script.failure_message}")
-                        else:
-                            utils.ERROR(f"  Data provider script did not return any data.")
-                    elif execution_time:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        utils.INFO("  pass")
+    with create_progress() as progress:
+        scripts_task = progress.add_task("Script execution", total=len(script_queue))
+
+        # Check if we should run specific scripts
+        if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+            progress.update(scripts_task, total=len(args["--run"]))
+            for script_name in args["--run"]:
+                progress.update(scripts_task, description=f"Running {script_name}")
+                run_script(script_name, args, context)
+                progress.advance(scripts_task)
+        else:
+            # Execute all scripts
+            triage_init_end = time()
+            if args["--print-script-times"]:
+                utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
+            total_time = triage_init_end - triage_start
+            serialization_time = 0.0
+            progress.update(scripts_task, total=len(script_queue))
+            for script in script_queue:
+                progress.update(scripts_task, description=f"Running {script.name}")
+                if not all(not dep.failed for dep in script.depends):
+                    utils.INFO(f"{script.name}:")
+                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    script.failed = True
+                    script.failure_message = "Cannot run script due to failed dependencies."
                 else:
                     start_time = time()
-                    serialize_result(script, result, execution_time)
+                    result = script.run(args=args, context=context)
                     end_time = time()
                     total_time += end_time - start_time
-                    serialization_time += end_time - start_time
-        if args["--print-script-times"]:
-            print()
-            utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
-            utils.INFO(f"Total execution time: {total_time:.2f}s")
+                    execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
+                    if script.config.data_provider:
+                        if result is None:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            if script.failure_message is not None:
+                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                            else:
+                                utils.ERROR(f"  Data provider script did not return any data.")
+                        elif execution_time:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            utils.INFO("  pass")
+                    else:
+                        start_time = time()
+                        serialize_result(script, result, execution_time)
+                        end_time = time()
+                        total_time += end_time - start_time
+                        serialization_time += end_time - start_time
+                progress.advance(scripts_task)
+            if args["--print-script-times"]:
+                print()
+                utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
+                utils.INFO(f"Total execution time: {total_time:.2f}s")
+        progress.remove_task(scripts_task)
+
+    # Remove nanobind leak check to avoid false positives on exit
+    os._exit(0)
 
 
 if __name__ == "__main__":

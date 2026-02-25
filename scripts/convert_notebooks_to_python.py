@@ -25,6 +25,7 @@ NOTEBOOKS_DIR = Path("ttnn/tutorials")
 OUTPUT_DIR = Path("ttnn/tutorials/basic_python")
 TEMPLATE_DIR = Path("scripts/nbconvert_template")
 TEMPLATE_NAME = "ttnn_examples_convert"
+EXCLUDED_TUTORIALS = ["ttnn/tutorials/ttnn_intro.ipynb"]
 
 
 def get_staged_notebooks() -> list[Path]:
@@ -38,7 +39,11 @@ def get_staged_notebooks() -> list[Path]:
         check=True,
     )
     staged_files = result.stdout.splitlines()
-    return [Path(f) for f in staged_files if f.endswith(".ipynb") and Path(f).is_relative_to(NOTEBOOKS_DIR)]
+    return [
+        Path(f)
+        for f in staged_files
+        if f.endswith(".ipynb") and Path(f).is_relative_to(NOTEBOOKS_DIR) and f not in EXCLUDED_TUTORIALS
+    ]
 
 
 def convert_with_nbconvert(notebook: Path, output_tmp: Path) -> None:

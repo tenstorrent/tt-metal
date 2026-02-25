@@ -4,8 +4,6 @@
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
-#include <tt-logger/tt-logger.hpp>
-
 namespace tt::tt_fabric {
 
 std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
@@ -22,7 +20,7 @@ std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
 
 bool RouterConnectionMapping::has_targets(uint32_t vc, uint32_t receiver) const {
     ReceiverChannelKey key{vc, receiver};
-    return receiver_to_targets_.find(key) != receiver_to_targets_.end();
+    return receiver_to_targets_.contains(key);
 }
 
 std::vector<ReceiverChannelKey> RouterConnectionMapping::get_all_receiver_keys() const {
@@ -54,7 +52,7 @@ RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirectio
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
-    Topology topology, RoutingDirection direction, bool has_z) {
+    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1) {
     RouterConnectionMapping mapping;
 
     // VC0 receiver_channel channels for mesh routers
@@ -104,28 +102,52 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
             }
         }
 
-        // Map sender channels 1-3 to outbound directions
+        // Map sender channels 1-3 to outbound directions on VC0
+        // Map sender channels 0-2 to outbound directions on VC1
         //
         // IMPORTANT: INTRA_MESH connections are hardcoded to use VC0 only.
         // This is the intended behavior for the following reasons:
         //
-        // 1. VC0 is reserved for intra-mesh traffic (mesh-to-mesh communication within a single mesh)
-        // 2. VC1 is reserved for inter-mesh traffic (mesh-to-Z, Z-to-mesh, or mesh-to-mesh across different meshes)
+        // 1. VC0 is reserved for intra-mesh traffic (chip-to-chip communication within a single mesh)
+        //    All locally generated traffic in a mesh whether destined for another chip in the mesh or exiting the mesh
+        //    is transported over VC0. If traffic exits the mesh, the inter-mesh receiver router in the receiving mesh
+        //    crosses over the traffic to VC1. In other words ALL traffic generated locally on a mesh is considered
+        //    intra-mesh until it exits the mesh. If traffic exits the mesh, it is considered inter-mesh traffic (by the
+        //    receiving mesh/router) and is transported over VC1.
+        // 2. VC1 is reserved for inter-mesh traffic (Z-to-mesh, or mesh-to-mesh across different meshes)
         // 3. This separation ensures proper traffic isolation and prevents deadlocks in multi-mesh systems
         // 4. Even when VC1 is enabled on mesh routers (via IntermeshVCConfig), INTRA_MESH connections
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
         //
         TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
+
+        // Add VC0 targets for intra-mesh traffic
         for (size_t i = 0; i < outbound_directions.size(); ++i) {
             mapping.add_target(
-                0,  // VC0 - hardcoded for INTRA_MESH (see documentation above)
+                0,  // VC0 - for intra-mesh traffic
                 0,  // Receiver channel 0
                 ConnectionTarget(
                     ConnectionType::INTRA_MESH,
-                    0,      // Target VC0 - hardcoded for INTRA_MESH (see documentation above)
+                    0,      // Target VC0
                     i + 1,  // Target sender channel
                     outbound_directions[i]));
+        }
+
+        // Add VC1 targets for intra-mesh routers (to forward inter-mesh traffic)
+        // VC1 connections are only for intra-mesh routers in multi-mesh topologies
+        // They forward inter-mesh traffic that was received via VC1
+        if (enable_vc1) {
+            for (size_t i = 0; i < outbound_directions.size(); ++i) {
+                mapping.add_target(
+                    1,  // VC1 - for inter-mesh traffic forwarding
+                    0,  // Receiver channel 0 (VC1 only has one receiver channel)
+                    ConnectionTarget(
+                        ConnectionType::INTRA_MESH,
+                        1,  // Target VC1
+                        i,  // Target sender channel (0-2 for VC1)
+                        outbound_directions[i]));
+            }
         }
     }
 
@@ -155,31 +177,22 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
 RouterConnectionMapping RouterConnectionMapping::for_z_router() {
     RouterConnectionMapping mapping;
 
-    // VC0: Standard mesh forwarding (if Z router participates in mesh routing)
-    // For now, Z routers primarily use VC1, so VC0 may be unused or reserved
-    // This can be extended later if needed
-
-    // VC1: Multi-target Z_TO_MESH connections
-    // Sender channels 0-3 map to N/E/S/W mesh routers
-    // Each sender channel has intent to connect to a specific direction
-    // FabricBuilder will skip non-existent directions (2-4 mesh routers on edge devices)
-
-    std::vector<RoutingDirection> mesh_directions = {
-        RoutingDirection::N,   // Sender channel 0
-        RoutingDirection::E,    // Sender channel 1
-        RoutingDirection::S,   // Sender channel 2
-        RoutingDirection::W     // Sender channel 3
+    std::vector<RoutingDirection> vc1_outbound_directions = {
+        RoutingDirection::E,  // Forward to EAST mesh router
+        RoutingDirection::W,  // Forward to WEST mesh router
+        RoutingDirection::N,  // Forward to NORTH mesh router
+        RoutingDirection::S   // Forward to SOUTH mesh router
     };
 
-    for (size_t i = 0; i < mesh_directions.size(); ++i) {
+    for (size_t i = 0; i < vc1_outbound_directions.size(); ++i) {
         mapping.add_target(
             1,  // VC1
-            0,  // Receiver channels 0-3
+            0,  // Receiver channel 0
             ConnectionTarget(
                 ConnectionType::Z_TO_MESH,
                 1,  // Target mesh router VC1
-                i,  // Target receiver channel (resolved by mesh router)
-                mesh_directions[i]));
+                i,  // Target sender channel on mesh router (0-3, no worker)
+                vc1_outbound_directions[i]));
     }
 
     return mapping;

@@ -6,6 +6,7 @@
 
 #include "ternary_device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include <map>
 #include <optional>
@@ -32,14 +33,15 @@ enum class KernelName {
     ReaderRowBcastTTS,
     WriterNoBcastTernary,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
-    ComputeBcastTTT,         // TTT : column and scalar bcast cases
-    ComputeRowBcastTTT,      // TTT : row bcast cases : bfloat16 only
-    ComputeBcastTTS_TST,     // TTS, TST: column and scalar bcast cases
-    ComputeNoBcastTTS_TST,   // TTS, TST: no bcast, outer dim and row bcast cases
-    ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
-    ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
-    ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
+    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,        // TTT : column and scalar bcast cases
+    ComputeRowBcastTTT,     // TTT : row bcast cases : bfloat16 only
+    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
+    // Shared by ADDCMUL and ADDCDIV (same kernel files, op-specific defines)
+    ComputeNoBcastAddcOp,   // no bcast: ternary_addc_ops_sfpu.cpp
+    ComputeBcastAddcOp,     // column/scalar bcast: ternary_addc_ops_sfpu_bcast.cpp
+    ComputeRowBcastAddcOp,  // row bcast: ternary_addc_ops_fpu_rowbcast.cpp or ternary_addc_ops_sfpu.cpp
 };
 
 struct TernaryKernelConfig {
@@ -52,7 +54,9 @@ struct TernaryKernelConfig {
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
+std::string override_addcmul_compute_kernel(KernelName kernel_name);
+
+uint32_t pack_scalar_runtime_arg(ScalarVariant scalar, DataType dtype);
 
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, DataType b_dtype, std::optional<DataType> c_dtype = std::nullopt);  // for binary & ternary variant
@@ -66,6 +70,10 @@ TernaryBroadcastType get_broadcast_type(
 
 // 2-tensor broadcast compatibility (used by both TTS and TST)
 TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
+
+// Broadcast output shape for three tensors (used by where fallback and device op)
+ttnn::Shape compute_broadcasted_output_ternary(
+    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape);
 
 // AllShardSpecs structure for TensorSpecs
 struct AllShardSpecs {
@@ -85,6 +93,19 @@ struct AllShardVolumes {
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+tt::tt_metal::MemoryConfig compute_mem_config_actual(
+    const Tensor& input_tensor, const ttnn::Shape& output_logical_shape);
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+
+bool is_uneven(const TensorSpec& t);
+
+bool is_native_L1_sharding(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config);
 
 std::optional<AllShardVolumes> get_shard_volumes(
     const TensorSpec& predicate_spec,

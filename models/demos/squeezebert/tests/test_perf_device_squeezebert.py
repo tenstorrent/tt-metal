@@ -4,7 +4,6 @@
 
 import pytest
 
-from models.common.utility_functions import is_grayskull
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -20,7 +19,7 @@ def test_perf_device_bare_metal(batch_size, test):
     subdir = "ttnn_squeezebert"
     num_iterations = 1
     margin = 0.03
-    expected_perf = 102.7 if is_grayskull() else 299.7
+    expected_perf = 299.7
 
     command = f"pytest tests/ttnn/integration_tests/squeezebert/test_ttnn_squeezebert.py::test_squeezebert_for_question_answering"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

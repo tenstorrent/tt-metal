@@ -281,29 +281,27 @@ ttnn::Tensor SliceOperation::invoke(
             sub_core_grids,
             optional_output_tensor);
         return res;
-    } else {
-        // convert the Tensor to Vector
-        std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
-        std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
+    }  // convert the Tensor to Vector
+    std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
+    std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
 
-        // convert the Vector to Span
-        tt::stl::Span<const T> output_tensor_start_span(
-            output_tensor_start_vector.data(), output_tensor_start_vector.size());
-        tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
+    // convert the Vector to Span
+    tt::stl::Span<const T> output_tensor_start_span(
+        output_tensor_start_vector.data(), output_tensor_start_vector.size());
+    tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
 
-        // generate the step value if it is not provided
-        ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
+    // generate the step value if it is not provided
+    ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
 
-        return SliceOperation::invoke<T>(
-            input_tensor,
-            output_tensor_start_span,
-            output_tensor_end_span,
-            tt::stl::Span<const T>(step_value),
-            memory_config_arg,
-            optional_output_tensor,
-            pad_value,
-            sub_core_grids);
-    }
+    return SliceOperation::invoke<T>(
+        input_tensor,
+        output_tensor_start_span,
+        output_tensor_end_span,
+        tt::stl::Span<const T>(step_value),
+        memory_config_arg,
+        optional_output_tensor,
+        pad_value,
+        sub_core_grids);
 }
 
 // Template instantiations for SliceOperation::invoke

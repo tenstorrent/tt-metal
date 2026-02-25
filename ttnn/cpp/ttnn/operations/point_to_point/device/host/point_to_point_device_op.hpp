@@ -67,7 +67,7 @@ struct PointToPointOp {
             const tt::tt_metal::GlobalSemaphore& semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -77,21 +77,9 @@ struct PointToPointOp {
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return SendReceive{};
-    };
-
     // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        validate(operation_attributes, tensor_args);
-    };
-
-    // Probably the same as on cache miss
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        ;
         validate(operation_attributes, tensor_args);
     };
 
@@ -100,18 +88,6 @@ struct PointToPointOp {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const ::ttnn::ccl::Topology& topology,
-        const MeshCoordinate& receiver_coord,
-        const MeshCoordinate& sender_coord,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt) {
-        return std::make_tuple(
-            operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
-            tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
-    };
 
 private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
@@ -146,8 +122,8 @@ Fabric1DRoute fabric_1d_routing(
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& send_coord,
+    const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
 
@@ -158,7 +134,12 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
 }  // namespace operations::point_to_point
 
 namespace prim {
-constexpr auto point_to_point =
-    ttnn::register_operation<"ttnn::prim::point_to_point", ttnn::operations::point_to_point::PointToPointOp>();
+ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to_point(
+    const Tensor& input_tensor,
+    const ::ttnn::ccl::Topology& topology,
+    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& sender_coord,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

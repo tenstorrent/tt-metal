@@ -91,7 +91,7 @@ TEST(Sanity, ReportIntermeshLinks) {
 
     // Detailed information per chip
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
+        if (all_intermesh_links.contains(chip_id)) {
             auto links = all_intermesh_links.at(chip_id);
             log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
             for (const auto& [channel, remote_connection] : links) {

@@ -10,37 +10,6 @@
  * LLK UNPACK AB
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_AB_hw_configure(
-    const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpack_AB_params->unpB_operand);
-
-    // unpA -> srcA
-    // unpB -> srcB
-    const uint32_t num_faces = get_operand_num_faces(unpA_operand_id);    // num faces in unpA and unpB are the same
-    const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
-
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpack_src_format[unpB_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpack_dst_format[unpB_operand_id],
-        face_r_dim,
-        within_face_16x16_transpose,
-        num_faces);
-}
-
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
-    const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
-
-    llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
-}
-
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, const std::uint32_t operand_id = 0) {
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -57,6 +26,18 @@ inline void llk_unpack_AB_init(
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
+
+    LLK_ASSERT(
+        (are_unpacker_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[get_operand_id(operandB)],
+            unpack_dst_format[get_operand_id(operandB)],
+            face_r_dim,
+            get_operand_face_r_dim(get_operand_id(operandB)),
+            num_faces,
+            get_operand_num_faces(get_operand_id(operandB)))),
+        "");
 
     _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose);
 }
@@ -76,6 +57,18 @@ inline void llk_unpack_AB(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
+
+    LLK_ASSERT(
+        (are_unpacker_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            get_operand_face_r_dim(operandA_id),
+            get_operand_face_r_dim(operandB_id),
+            get_operand_num_faces(operandA_id),
+            get_operand_num_faces(operandB_id))),
+        "");
 
     // For row broadcast with non-zero row index, adjust address to point to the desired row
     if constexpr (BType == BroadcastType::ROW) {
@@ -113,34 +106,4 @@ inline void llk_unpack_AB(
     WAYPOINT("UABW");
     _llk_unpack_AB_<BType>(address_a, address_b);
     WAYPOINT("UABD");
-}
-
-template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
-inline void llk_unpack_AB_reduce_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t acc_to_dest = 0) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile =
-        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
-
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-
-    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
-    // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(
-        ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
-
-    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
-    config_unpacker_x_end<UNP_SEL>(face_r_dim);
-
-    _llk_unpack_AB_mop_config_<BType>(transpose > 0, num_faces, narrow_tile);  // transpose of faces 0,2,1,3
 }

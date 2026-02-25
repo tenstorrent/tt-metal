@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+pytestmark = pytest.mark.use_module_device
+
 import torch
 import ttnn
 
@@ -109,7 +112,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
         return
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 

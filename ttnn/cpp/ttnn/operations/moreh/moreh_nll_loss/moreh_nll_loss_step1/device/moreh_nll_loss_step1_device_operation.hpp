@@ -52,34 +52,26 @@ struct MorehNllLossStep1DeviceOperation {
     };
 
     using program_factory_t = std::variant<Factory>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& target_tensor,
-        const std::optional<Tensor>& weight_tensor,
-        int32_t ignore_index,
-        const std::string& reduction,
-        DataType dtype,
-        uint32_t channel_size,
-        const std::optional<MemoryConfig>& memory_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step1
 
 namespace ttnn::prim {
-constexpr auto moreh_nll_loss_step1 = ttnn::register_operation<
-    "ttnn::prim::moreh_nll_loss_step1",
-    ttnn::operations::moreh::moreh_nll_loss_step1::MorehNllLossStep1DeviceOperation>();
+ttnn::operations::moreh::moreh_nll_loss_step1::MorehNllLossStep1DeviceOperation::tensor_return_value_t
+moreh_nll_loss_step1(
+    const Tensor& target_tensor,
+    const std::optional<Tensor>& weight_tensor,
+    int32_t ignore_index,
+    const std::string& reduction,
+    DataType dtype,
+    uint32_t channel_size,
+    const std::optional<MemoryConfig>& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
 }  // namespace ttnn::prim

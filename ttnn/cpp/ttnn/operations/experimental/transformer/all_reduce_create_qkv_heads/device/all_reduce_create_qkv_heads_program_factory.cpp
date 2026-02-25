@@ -13,7 +13,6 @@
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -28,7 +27,7 @@
 #include <ranges>
 #include <optional>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads::program {
+namespace ttnn::experimental::prim {
 
 using namespace ttnn::ccl;
 
@@ -96,10 +95,10 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
 
 AllReduceCreateQkvHeadsMeshWorkloadFactory::cached_mesh_workload_t
 AllReduceCreateQkvHeadsMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllReduceCreateQkvHeadsParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllReduceCreateQkvHeadsInputs& tensor_args,
+    AllReduceCreateQkvHeadsResult& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -117,10 +116,10 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_mesh_workload(
 
 ttnn::device_operation::CachedProgram<AllReduceCreateQkvHeadsSharedVariables>
 AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllReduceCreateQkvHeadsParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllReduceCreateQkvHeadsInputs& tensor_args,
+    AllReduceCreateQkvHeadsResult& tensor_return_value) {
     log_debug(tt::LogOp, "AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at called");
 
     tt::tt_metal::Program program{};
@@ -269,18 +268,18 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     vcores_noc_x_coords.reserve(v_cores_vector.size());
     vcores_noc_y_coords.reserve(v_cores_vector.size());
 
-    for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(q_cores_vector[i]);
+    for (auto core : q_cores_vector) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(core);
         qcores_noc_x_coords.push_back(worker_core.x);
         qcores_noc_y_coords.push_back(worker_core.y);
     }
-    for (uint32_t i = 0; i < k_cores_vector.size(); i++) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(k_cores_vector[i]);
+    for (auto core : k_cores_vector) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(core);
         kcores_noc_x_coords.push_back(worker_core.x);
         kcores_noc_y_coords.push_back(worker_core.y);
     }
-    for (uint32_t i = 0; i < v_cores_vector.size(); i++) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(v_cores_vector[i]);
+    for (auto core : v_cores_vector) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(core);
         vcores_noc_x_coords.push_back(worker_core.x);
         vcores_noc_y_coords.push_back(worker_core.y);
     }
@@ -798,9 +797,9 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
 
 void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllReduceCreateQkvHeadsParams& operation_attributes,
+    const AllReduceCreateQkvHeadsInputs& tensor_args,
+    AllReduceCreateQkvHeadsResult& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
     const auto& batch_tensor = tensor_args.batch_offset_tensor;
@@ -834,8 +833,7 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
         auto& reduction_reader_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_reader_kernel_id);
         auto& reduction_writer_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_writer_kernel_id);
 
-        for (uint32_t i = 0; i < shared_vars.output_cores_vec.size(); i++) {
-            const auto& core = shared_vars.output_cores_vec[i];
+        for (const auto& core : shared_vars.output_cores_vec) {
             auto& reader_args = reduction_reader_args_by_core[core.x][core.y];
             reader_args[0] = q_base_addr;
             reader_args[1] = k_base_addr;
@@ -852,4 +850,4 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads::program
+}  // namespace ttnn::experimental::prim

@@ -7,14 +7,49 @@ import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import List, Optional, Union
 
 import torch
-from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
+from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
+
+
+class URL(BaseModel):
+    uri: str
+
+    def __str__(self) -> str:
+        return self.uri
+
+
+class ImageMedia(BaseModel):
+    image: Union[PIL_Image.Image, URL]
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
+
+
+class Mode(Enum):
+    DECODE = "decode"
+    PREFILL = "prefill"
 
 
 class HostEmbedding(torch.nn.Module):
@@ -79,10 +114,11 @@ class RopeScalingYarn(RopeScaling):
     """RoPE scaling configuration for Yarn."""
 
     # Yarn-specific parameters
-    beta_fast: Optional[int] = 32
-    beta_slow: Optional[int] = 1
+    beta_fast: Optional[float] = 32.0
+    beta_slow: Optional[float] = 1.0
     mscale: Optional[float] = 1.0
     mscale_all_dim: Optional[float] = 0.0
+    truncate: Optional[bool] = True  # Whether to truncate the correction range (floor/ceil)
 
 
 class RopeScalingPhi3(RopeScaling):
@@ -112,6 +148,27 @@ def rope_scaling_model_factory(
         return None
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
+
+
+# Minimal addition for Mistral vision support
+def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
+    position_ids_tt = []
+    for tt_patch in tt_patch_embeds_list:
+        shape = tt_patch.shape
+        height, width = shape[-2], shape[-1]
+        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        ids = h_grid * max_width + v_grid
+
+        tt_ids = ttnn.from_torch(
+            ids,
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        position_ids_tt.append(tt_ids[:, 0])
+    return ttnn.concat(position_ids_tt, dim=0)
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
@@ -334,6 +391,45 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
         freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
 
     return freqs
+
+
+# Minimal addition for Mistral vision RoPE support
+def apply_scaling_vision(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    return freqs / scale_factor
+
+
+# Minimal addition for Mistral vision RoPE support
+def precompute_mistral_vision_freqs(
+    dim: int, max_patches_per_side: int, theta: float, scale_factor=None, orig_context_len=None
+):
+    # Compute base frequencies
+    base_freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+    if scale_factor is not None:
+        base_freqs = apply_scaling_vision(base_freqs, scale_factor, orig_context_len)
+
+    # Get height and width indices
+    h_idx = torch.arange(max_patches_per_side)
+    w_idx = torch.arange(max_patches_per_side)
+
+    # Compute 2D frequency matrices
+    freqs_h = torch.outer(h_idx, base_freqs[::2])
+    freqs_w = torch.outer(w_idx, base_freqs[1::2])
+
+    # Broadcast + merge
+    inv_freq = torch.cat(
+        [
+            freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
+            freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
+        ],
+        dim=-1,
+    ).reshape(
+        -1, dim // 2
+    )  # Shape: [H*W, dim//2]
+
+    full_freqs = torch.cat([inv_freq, inv_freq], dim=-1)
+    cos = full_freqs.cos()
+    sin = full_freqs.sin()
+    return cos, sin  # Shape: [H*W, dim]
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
@@ -748,9 +844,14 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    use_prefetcher=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.prefetcher import Prefetcher
+
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -758,9 +859,14 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        prefetcher=prefetcher,
     )
+
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+
+    if prefetcher is not None:
+        prefetcher.num_layers = tt_model_args.n_layers
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
@@ -773,6 +879,7 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None

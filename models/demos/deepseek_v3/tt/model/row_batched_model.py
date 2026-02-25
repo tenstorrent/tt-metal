@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 import torch
 from tqdm.auto import tqdm
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -17,7 +18,7 @@ from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -170,11 +171,23 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         mla_caches: Sequence[torch.Tensor] | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> Any:
         assert mla_caches is None or (
             len(mla_caches) >= 1
             and len(mla_caches) == hf_config.num_hidden_layers
             and all(mla_cache.shape == mla_caches[0].shape for mla_cache in mla_caches)
+        )
+
+        mlp_caches = (
+            mla_caches[: hf_config.first_k_dense_replace]
+            if mla_caches is not None
+            else [None] * hf_config.first_k_dense_replace
+        )
+        moe_caches = (
+            mla_caches[hf_config.first_k_dense_replace :]
+            if mla_caches is not None
+            else [None] * (hf_config.num_hidden_layers - hf_config.first_k_dense_replace)
         )
 
         return {
@@ -186,20 +199,13 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                     ccl,
                     mla_cache,
+                    kv_cache_override,
                 )
-                for mla_cache in (
-                    mla_caches[: hf_config.first_k_dense_replace]
-                    if mla_caches is not None
-                    else [None] * hf_config.first_k_dense_replace
-                )
+                for mla_cache in tqdm(mlp_caches, desc="Creating MLP layer states")
             ],
             "moe_decoder_block": [
-                MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache)
-                for mla_cache in (
-                    mla_caches[hf_config.first_k_dense_replace :]
-                    if mla_caches is not None
-                    else [None] * (hf_config.num_hidden_layers - hf_config.first_k_dense_replace)
-                )
+                MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override)
+                for mla_cache in tqdm(moe_caches, desc="Creating MoE layer states")
             ],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "lm_head": LMHead1D.create_state(mesh_device, ccl),
@@ -213,19 +219,50 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
+        profile_decode: bool = False,
     ) -> ttnn.Tensor:
-        """Forward pass for decode mode."""
+        """Forward pass for decode mode.
+
+        Args:
+            x: Input tensor
+            position_idxs: Position indices
+            cfg: Run configuration
+            rope_tensors: RoPE tensors
+            page_tables: Page tables for each layer
+            profile_decode: If True, only run first dense layer + first MoE layer for profiling
+        """
+
         x = Embedding2D.forward_decode(x, cfg["embedding"])
 
-        for (block_cfg, BlockClass), page_table in zip(
-            itertools.chain(
-                zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
-                zip(cfg["moe_decoder_block"], itertools.repeat(MoEDecoderBlock2D)),
-            ),
-            page_tables,
-            strict=True,
-        ):
-            x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
+        if profile_decode:
+            # Profile mode: run only first dense layer + first MoE layer
+            # First dense layer (MLP)
+            if cfg["mlp_decoder_block"]:
+                signpost(header="first_dense_layer")
+                x = DecoderBlock2D.forward_decode(
+                    x, position_idxs, cfg["mlp_decoder_block"][0], rope_tensors, page_tables[0]
+                )
+                signpost(header="first_dense_layer")
+            # First MoE layer
+            if cfg["moe_decoder_block"]:
+                signpost(header="first_moe_layer")
+                moe_page_table_idx = len(cfg["mlp_decoder_block"])
+                x = MoEDecoderBlock2D.forward_decode(
+                    x, position_idxs, cfg["moe_decoder_block"][0], rope_tensors, page_tables[moe_page_table_idx]
+                )
+                signpost(header="first_moe_layer")
+
+        else:
+            # Normal mode: run all layers
+            for (block_cfg, BlockClass), page_table in zip(
+                itertools.chain(
+                    zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
+                    zip(cfg["moe_decoder_block"], itertools.repeat(MoEDecoderBlock2D)),
+                ),
+                page_tables,
+                strict=True,
+            ):
+                x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])

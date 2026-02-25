@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_allclose, maybe_trace
 DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.uint16]]
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
@@ -53,6 +54,10 @@ def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, en
 
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for ttnn_gather in ttnn.get_device_tensors(tt_out_tensors):
+    coords = list(tt_out_tensors.tensor_topology().mesh_coords())
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    for coord, ttnn_gather in zip(coords, ttnn.get_device_tensors(tt_out_tensors)):
+        if view is not None and not view.is_local(coord):
+            continue
         assert ttnn_gather.shape == torch_index.shape
         assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -16,7 +16,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned,
-    std::optional<Tensor> preallocated_output) {
+    const std::optional<Tensor>& preallocated_output) {
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,

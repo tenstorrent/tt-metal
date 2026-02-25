@@ -11,20 +11,19 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include "tt-metalium/constants.hpp"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/welford.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     /*
      * Definitions
      * block_h: This the length of the row we wish to processes in terms of tiles
@@ -559,4 +558,3 @@ void MAIN {
         cb_pop_front(cb_gamma, per_core_N);
     }
 }
-}  // namespace NAMESPACE

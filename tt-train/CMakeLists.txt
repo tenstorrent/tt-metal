@@ -1,19 +1,4 @@
-cmake_minimum_required(VERSION 3.18...3.30)
-include(cmake/compilers.cmake)
-
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
-
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specified C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specified C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    find_and_set_clang17()
-endif()
+cmake_minimum_required(VERSION 3.18...4.2)
 
 project(
     ml-framework-cpp
@@ -21,7 +6,6 @@ project(
         C
         CXX
 )
-CHECK_COMPILERS()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
@@ -58,6 +42,12 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(cmake/dependencies.cmake)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# ttnn header files are not clean against narrowing conversion checks
+# therefore tt-train likely is not clean against them
+# must disable checks to build with tt-metal as super project
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 
 # ttml projects
 

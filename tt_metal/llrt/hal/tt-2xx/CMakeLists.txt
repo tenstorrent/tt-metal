@@ -19,7 +19,7 @@ target_sources(
         quasar/qa_hal_idle_eth.cpp
 )
 target_include_directories(qa_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
-target_include_directories(qa_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/quasar)
+target_include_directories(qa_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar)
 target_link_libraries(
     qa_hal
     PRIVATE

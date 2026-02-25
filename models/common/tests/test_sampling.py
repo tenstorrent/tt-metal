@@ -6,13 +6,13 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.sampling import LogProbsCalculator
 from models.common.utility_functions import comp_pcc
-from models.common.utils import LogProbsCalculator
 
 
 @pytest.mark.parametrize(
     "shape",
-    [  # TODO: Add llama3.1-8b T3K shapes
+    [
         [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
     ],
 )
@@ -77,8 +77,6 @@ def test_log_probs_calculation(shape, mesh_device):
 @pytest.mark.parametrize(
     "shape",
     [
-        # [1, 1, 256, 256],  # llama on TG and T3K
-        # [1, 1, 32, 8 * 64],  # llama on N300
         [1, 1, 32, 8 * 16032],  # llama on TG with 8 chips sharded vocab
     ],
 )

@@ -8,24 +8,23 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::data_movement::pad {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct PadParams {
     ttnn::Shape output_logical_shape;
     ttnn::Shape output_padded_shape;
     ttnn::Shape input_tensor_start;
     float pad_value{};
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
+    std::optional<CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
+struct PadInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
-
-}  // namespace ttnn::operations::data_movement::pad
+}  // namespace ttnn::prim

@@ -11,7 +11,6 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_grayskull
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 from models.perf.perf_utils import prep_perf_report
@@ -42,7 +41,7 @@ def preprocess_inputs(
 
 
 def get_expected_times(squeezebert):
-    return {ttnn_functional_squeezebert: (13.5, 11.5) if is_grayskull() else (16.5, 8.5)}[squeezebert]
+    return {ttnn_functional_squeezebert: (16.5, 8.5)}[squeezebert]
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

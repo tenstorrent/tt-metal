@@ -15,15 +15,15 @@
 
 // namespace tt {
 // namespace tt_metal {
-// class CommandQueue;
+// class HWCommandQueue;
 // }  // namespace tt_metal
 // }  // namespace tt
 
 // namespace tt::tt_metal {
 
 // void LightMetalCompareToCapture(
-//     CommandQueue& cq, const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, void* dst)
-//     { LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+//     HWCommandQueue& cq, const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, void*
+//     dst) { LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
 //     // If dst ptr is not provided, just allocate temp space for rd return capture/usage.
 //     std::vector<uint32_t> rd_data_tmp;
@@ -40,7 +40,7 @@
 // }
 
 // void LightMetalCompareToGolden(
-//     CommandQueue& cq,
+//     HWCommandQueue& cq,
 //     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
 //     void* golden_data) {
 //     LIGHT_METAL_TRACE_FUNCTION_ENTRY();

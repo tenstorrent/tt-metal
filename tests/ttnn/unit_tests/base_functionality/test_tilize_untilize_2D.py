@@ -5,12 +5,13 @@
 from loguru import logger
 import pytest
 
+pytestmark = pytest.mark.use_module_device
+
 import torch
 
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
 def random_torch_tensor(dtype, shape):

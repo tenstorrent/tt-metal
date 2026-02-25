@@ -14,8 +14,8 @@ SCRIPT_PY="$(dirname ${BASH_SOURCE[0]})/codegen.py"
 YEAR=$(date +%Y)
 
 declare -a SRC_FILES=(
-    "tt_metal/hw/inc/dev_msgs.h"
-    "tt_metal/hw/inc/fabric_telemetry_msgs.h"
+    "tt_metal/hw/inc/hostdev/dev_msgs.h"
+    "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 )
 declare -a OUT_BASENAMES=(
     "dev_msgs"

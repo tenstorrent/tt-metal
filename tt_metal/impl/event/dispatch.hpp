@@ -25,7 +25,7 @@ struct ReadEventDescriptor {
     explicit ReadEventDescriptor(uint32_t event) : event_id(event) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
-    uint32_t get_global_event_id() { return global_offset + event_id; }
+    uint32_t get_global_event_id() const { return global_offset + event_id; }
 };
 
 namespace event_dispatch {

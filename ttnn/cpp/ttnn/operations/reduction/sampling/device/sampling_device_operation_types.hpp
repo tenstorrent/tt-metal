@@ -9,14 +9,14 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::sampling {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct SamplingParams {
     std::optional<uint32_t> seed;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
+struct SamplingInputs {
     Tensor input_values;
     Tensor input_indices;
     Tensor k;
@@ -25,8 +25,4 @@ struct tensor_args_t {
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::reduction::sampling
+}  // namespace ttnn::prim

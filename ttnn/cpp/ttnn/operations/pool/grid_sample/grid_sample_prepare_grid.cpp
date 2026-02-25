@@ -28,8 +28,7 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     const ttnn::Shape& output_shape,
     const std::string& mode,
     bool align_corners,
-    const std::vector<uint32_t>& tensor_input_shape,
-    DataType output_dtype) {
+    const std::vector<uint32_t>& tensor_input_shape) {
     auto input_buffer = tt::tt_metal::host_buffer::get_as<InputType>(input_tensor);
     std::vector<OutputType> output_buffer(output_shape.volume());
 
@@ -185,9 +184,9 @@ Tensor convert_grid_tensor(
     const ttnn::Shape& output_shape,
     const std::vector<uint32_t>& tensor_input_shape,
     DataType output_dtype) {
-    auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+    auto compute = [&](const tt::tt_metal::HostBuffer& /*input_host_buffer*/) {
         return create_host_buffer_for_grid_preprocessing<InputType, OutputType>(
-            input_tensor, output_shape, mode, align_corners, tensor_input_shape, output_dtype);
+            input_tensor, output_shape, mode, align_corners, tensor_input_shape);
     };
 
     const TensorSpec output_spec(

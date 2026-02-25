@@ -4,6 +4,9 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const { DEFAULT_LOOKBACK_DAYS, EMPTY_VALUE, SUCCESS_EMOJI, FAILURE_EMOJI, SHA_SHORT_LENGTH, DEFAULT_INFRA_OWNER, getTimeSinceLastSuccess } = require('./data-loading');
+
+/** Maximum number of error snippets to include in the step summary per workflow (avoids GitHub's 1024k limit for $GITHUB_STEP_SUMMARY) */
+const MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY = 5;
 const { getWorkflowStats, fetchPRInfo, findFirstFailInWindow, fetchCommitAuthor, renderCommitsTable } = require('./analysis');
 const { fetchErrorSnippetsForRun, inferJobAndTestFromSnippet, resolveOwnersForSnippet, findOwnerForLabel, renderErrorsTable } = require('./error-processing');
 const { getAnnotationsDirForRunId, listCommitsBetweenOffline } = require('./data-loading');
@@ -583,6 +586,7 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
           owners: []
         });
       } else if (change === 'stayed_failing' && info) {
+        const previousInfo = computeLatestRunInfo(previousRuns);
         stayedFailingDetails.push({
           name,
           run_id: info.id,
@@ -593,7 +597,9 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
           aggregate_run_url: aggregateRunUrl,
           commit_sha: info.head_sha,
           commit_short: commitShort,
-          commit_url: commitUrl
+          commit_url: commitUrl,
+          previous_run_id: previousInfo?.id,
+          previous_run_url: previousInfo?.url
         });
       }
     }
@@ -603,15 +609,18 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
 }
 
 /**
- * Enriches regression details with first failing run, commits, authors, and error snippets
- * @param {Array} regressedDetails - Array of regression detail objects (modified in place)
+ * Enriches failing workflow details with first failing run, commits, authors, and error snippets
+ * @param {Array} details - Array of failing detail objects (modified in place)
  * @param {Map} filteredGrouped - Map of workflow names to their runs
  * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
  * @param {Array} changes - Array of change objects (will be updated with enrichment data)
  * @param {object} context - GitHub Actions context
+ * @param {string} changeType - Type of change: 'success_to_fail' or 'stayed_failing'
  */
-async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context) {
-  for (const item of regressedDetails) {
+async function enrichFailingDetails(details, filteredGrouped, errorSnippetsCache, changes, context, changeType) {
+  const isRegression = changeType === 'success_to_fail';
+
+  for (const item of details) {
     try {
       const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
       const res = findFirstFailInWindow(windowRuns);
@@ -650,50 +659,80 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
             resolveOwnersForSnippet(sn, item.name);
           }
-          const ownerSet = new Map();
-          const genericExitOrigOwners = new Map();
-          const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
-          for (const sn of (item.error_snippets || [])) {
-            if (Array.isArray(sn.owner)) {
-              for (const o of sn.owner) {
-                if (!o) continue;
-                const k = `${o.id || ''}|${o.name || ''}`;
-                ownerSet.set(k, o);
+
+          // Owner extraction logic (only for regressions)
+          if (isRegression) {
+            const ownerSet = new Map();
+            const genericExitOrigOwners = new Map();
+            for (const sn of (item.error_snippets || [])) {
+              if (Array.isArray(sn.owner)) {
+                for (const o of sn.owner) {
+                  if (!o) continue;
+                  const k = `${o.id || ''}|${o.name || ''}`;
+                  ownerSet.set(k, o);
+                }
+              }
+              // Always include original pipeline owners if they exist (even when infra is assigned)
+              if (Array.isArray(sn.original_owners)) {
+                for (const oo of sn.original_owners) {
+                  const nm = (oo && (oo.name || oo.id)) || '';
+                  if (nm) genericExitOrigOwners.set(nm, true);
+                  if (oo) {
+                    const k2 = `${oo.id || ''}|${oo.name || ''}`;
+                    ownerSet.set(k2, { id: oo.id, name: oo.name });
+                  }
+                }
               }
             }
-            // Always include original pipeline owners if they exist (even when infra is assigned)
-            if (Array.isArray(sn.original_owners)) {
-              for (const oo of sn.original_owners) {
-                const nm = (oo && (oo.name || oo.id)) || '';
-                if (nm) genericExitOrigOwners.set(nm, true);
-                if (oo) {
-                  const k2 = `${oo.id || ''}|${oo.name || ''}`;
-                  ownerSet.set(k2, { id: oo.id, name: oo.name });
+            let owners = Array.from(ownerSet.values());
+            if (!owners.length) {
+              owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+            }
+            item.owners = owners;
+            item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
+          }
+
+          // Extract failing jobs with their URLs and owners (deduplicated by job name)
+          const failingJobsMap = new Map();
+          for (const sn of (item.error_snippets || [])) {
+            const jobName = (sn && sn.job) ? String(sn.job) : '';
+            const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
+            if (jobName) {
+              if (!failingJobsMap.has(jobName)) {
+                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [] });
+              }
+              // Merge owners from all snippets for this job (dedupe by id)
+              const job = failingJobsMap.get(jobName);
+              const snippetOwners = Array.isArray(sn.owner) ? sn.owner : [];
+              for (const owner of snippetOwners) {
+                if (owner && owner.id && !job.owners.some(o => o.id === owner.id)) {
+                  job.owners.push(owner);
                 }
               }
             }
           }
-          let owners = Array.from(ownerSet.values());
-          if (!owners.length) {
-            owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
-          }
-          item.owners = owners;
-          item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
-          const failingJobNames = (() => {
-            const jobs = new Set();
-            for (const sn of (item.error_snippets || [])) {
-              const jobName = (sn && sn.job) ? String(sn.job) : '';
-              if (jobName) jobs.add(jobName);
+          // For each job: if there are non-infra owners, remove infra; if no owners, add infra as default
+          const infraId = DEFAULT_INFRA_OWNER.id;
+          for (const job of failingJobsMap.values()) {
+            const nonInfraOwners = job.owners.filter(o => o.id !== infraId);
+            if (nonInfraOwners.length > 0) {
+              // Has specific owners - use only those (no infra)
+              job.owners = nonInfraOwners;
+            } else if (job.owners.length === 0) {
+              // No owners from snippets - try findOwnerForLabel as fallback
+              const labelOwners = findOwnerForLabel(job.name) || findOwnerForLabel(`${item.name} / ${job.name}`) || [];
+              const nonInfraLabelOwners = labelOwners.filter(o => o.id !== infraId);
+              job.owners = nonInfraLabelOwners.length > 0 ? nonInfraLabelOwners : [DEFAULT_INFRA_OWNER];
             }
-            return Array.from(jobs);
-          })();
-          item.failing_jobs = failingJobNames;
+            // else: job.owners only has infra, which is fine as the default
+          }
+          item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }
 
         item.repeated_errors = [];
-        const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
+        const changeRef = changes.find(c => c.name === item.name && c.change === changeType);
         if (changeRef) {
-          Object.assign(changeRef, {
+          const changeData = {
             first_failed_run_id: item.first_failed_run_id,
             first_failed_run_url: item.first_failed_run_url,
             first_failed_created_at: item.first_failed_created_at,
@@ -707,15 +746,31 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
             error_snippets: item.error_snippets || [],
             repeated_errors: item.repeated_errors || [],
             failing_jobs: item.failing_jobs || [],
-            owners: item.owners || [],
-            original_owner_names_for_generic_exit: item.original_owner_names_for_generic_exit || [],
-          });
+          };
+          // Only include owners fields for regressions
+          if (isRegression) {
+            changeData.owners = item.owners || [];
+            changeData.original_owner_names_for_generic_exit = item.original_owner_names_for_generic_exit || [];
+          }
+          Object.assign(changeRef, changeData);
         }
       }
     } catch (e) {
       core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
     }
   }
+}
+
+/**
+ * Enriches regression details with first failing run, commits, authors, and error snippets
+ * @param {Array} regressedDetails - Array of regression detail objects (modified in place)
+ * @param {Map} filteredGrouped - Map of workflow names to their runs
+ * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
+ * @param {Array} changes - Array of change objects (will be updated with enrichment data)
+ * @param {object} context - GitHub Actions context
+ */
+async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context) {
+  return enrichFailingDetails(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context, 'success_to_fail');
 }
 
 /**
@@ -727,51 +782,101 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
  * @param {object} context - GitHub Actions context
  */
 async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, context) {
+  return enrichFailingDetails(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, context, 'stayed_failing');
+}
+
+/**
+ * Detects job-level regressions in stayed_failing workflows and adds them to regressedDetails
+ * This handles the case where a pipeline is already failing, but a NEW job starts failing
+ * @param {Array} stayedFailingDetails - Array of stayed failing detail objects (already enriched)
+ * @param {Array} regressedDetails - Array of regression detail objects (will be modified to add job-level regressions)
+ * @param {Map} errorSnippetsCache - Cache for error snippets
+ * @param {object} context - GitHub Actions context
+ */
+async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, context) {
   for (const item of stayedFailingDetails) {
     try {
-      const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
-      const res = findFirstFailInWindow(windowRuns);
-      if (res && res.run) {
-        item.first_failed_run_id = res.run.id;
-        item.first_failed_run_url = res.run.html_url;
-        item.first_failed_created_at = res.run.created_at;
-        item.first_failed_head_sha = res.run.head_sha;
-        item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-        item.no_success_in_window = !!res.noSuccessInWindow;
-        if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
-          item.commits_between = listCommitsBetweenOffline(context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
-        }
-        if (item.first_failed_head_sha) {
-          const author = await fetchCommitAuthor(item.first_failed_head_sha);
-          item.first_failed_author_login = author.login;
-          item.first_failed_author_name = author.name;
-          item.first_failed_author_url = author.htmlUrl;
-        }
-        if (item.run_id) {
-          item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
-            item.run_id,
-            Number.POSITIVE_INFINITY,
-            undefined,
-            getAnnotationsDirForRunId(item.run_id)
-          );
-          if (!errorSnippetsCache.has(item.run_id)) {
-            errorSnippetsCache.set(item.run_id, item.error_snippets);
-          }
-        } else {
-          item.error_snippets = [];
-        }
-        try {
-          for (const sn of (item.error_snippets || [])) {
-            const inferred = inferJobAndTestFromSnippet(sn);
-            if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
-            resolveOwnersForSnippet(sn, item.name);
-          }
-        } catch (_) { /* ignore */ }
-        item.repeated_errors = [];
+      // Skip if we don't have both current and previous run IDs
+      if (!item.run_id || !item.previous_run_id) {
+        core.info(`Skipping job-level regression detection for ${item.name}: missing run IDs`);
+        continue;
       }
-      const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
-      if (changeRef) {
-        Object.assign(changeRef, {
+
+      // Get current failing jobs (already extracted in enrichStayedFailing)
+      // item.failing_jobs is now an array of {name, url} objects
+      const currentFailingJobsMap = new Map();
+      for (const job of (item.failing_jobs || [])) {
+        const jobName = (job && job.name) ? String(job.name).trim() : '';
+        if (jobName) currentFailingJobsMap.set(jobName, job);
+      }
+      const currentFailingJobNames = new Set(currentFailingJobsMap.keys());
+
+      // Fetch error snippets for the previous run
+      const previousAnnotationsDir = getAnnotationsDirForRunId(item.previous_run_id);
+      const previousErrorSnippets = errorSnippetsCache.get(item.previous_run_id) || await fetchErrorSnippetsForRun(
+        item.previous_run_id,
+        Number.POSITIVE_INFINITY,
+        undefined,
+        previousAnnotationsDir
+      );
+      if (!errorSnippetsCache.has(item.previous_run_id)) {
+        errorSnippetsCache.set(item.previous_run_id, previousErrorSnippets);
+      }
+
+      // Log debug info about previous error snippets
+      core.info(`[JOB-REGRESSION] ${item.name}: previous_run_id=${item.previous_run_id}, annotationsDir=${previousAnnotationsDir || 'NOT FOUND'}, snippets=${(previousErrorSnippets || []).length}`);
+
+      // Infer job names from previous error snippets
+      for (const sn of (previousErrorSnippets || [])) {
+        const inferred = inferJobAndTestFromSnippet(sn);
+        if (inferred) {
+          sn.job = inferred.job;
+          sn.test = inferred.test;
+        }
+      }
+
+      // Extract previous failing jobs (normalize for comparison)
+      const previousFailingJobNames = new Set();
+      for (const sn of (previousErrorSnippets || [])) {
+        const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
+        if (jobName) previousFailingJobNames.add(jobName);
+      }
+
+      // Log job comparison details
+      core.info(`[JOB-REGRESSION] ${item.name}: currentJobs=[${Array.from(currentFailingJobNames).join(', ')}], previousJobs=[${Array.from(previousFailingJobNames).join(', ')}]`);
+
+      // Find NEW failing jobs (in current but not in previous) - preserve the {name, url} objects
+      const newFailingJobs = Array.from(currentFailingJobNames)
+        .filter(jobName => !previousFailingJobNames.has(jobName))
+        .map(jobName => currentFailingJobsMap.get(jobName));
+
+      if (newFailingJobs.length > 0) {
+        const newJobNames = newFailingJobs.map(j => j.name);
+        core.info(`Found ${newFailingJobs.length} new failing job(s) in ${item.name}: ${newJobNames.join(', ')}`);
+
+        // Create a normalized set for fast lookup
+        const newFailingJobsSet = new Set(newJobNames.map(name => name.trim()));
+
+        // Create a regression entry for this pipeline with only the new failing jobs
+        // This will be treated as a regression and sent to auto-triage
+        const jobLevelRegression = {
+          name: item.name,
+          run_id: item.run_id,
+          run_url: item.run_url,
+          created_at: item.created_at,
+          workflow_url: item.workflow_url,
+          workflow_path: item.workflow_path,
+          aggregate_run_url: item.aggregate_run_url,
+          commit_sha: item.commit_sha,
+          commit_short: item.commit_short,
+          commit_url: item.commit_url,
+          owners: item.owners || [],
+          failing_jobs: newFailingJobs, // Only the NEW failing jobs (array of {name, url})
+          error_snippets: (item.error_snippets || []).filter(sn => {
+            // Filter error snippets to only include those from new failing jobs
+            const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
+            return jobName && newFailingJobsSet.has(jobName);
+          }),
           first_failed_run_id: item.first_failed_run_id,
           first_failed_run_url: item.first_failed_run_url,
           first_failed_created_at: item.first_failed_created_at,
@@ -782,12 +887,18 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
           first_failed_author_name: item.first_failed_author_name,
           first_failed_author_url: item.first_failed_author_url,
           commits_between: item.commits_between || [],
-          error_snippets: item.error_snippets || [],
-          repeated_errors: item.repeated_errors || [],
-        });
+          repeated_errors: [],
+          is_job_level_regression: true // Mark this as a job-level regression
+        };
+
+        // Add to regressedDetails so it goes through auto-triage
+        regressedDetails.push(jobLevelRegression);
+        core.info(`Added job-level regression for ${item.name} with jobs: ${newJobNames.join(', ')}`);
+      } else {
+        core.info(`No new failing jobs detected for ${item.name}`);
       }
     } catch (e) {
-      core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
+      core.warning(`Failed to detect job-level regressions for ${item.name}: ${e.message}`);
     }
   }
 }
@@ -824,6 +935,11 @@ function buildRegressionsSection(regressedDetails, context) {
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
     const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
 
+    // Add a note if this is a job-level regression (pipeline was already failing)
+    const jobLevelNote = it.is_job_level_regression
+      ? ' <strong>(New failing jobs in already-failing pipeline)</strong>'
+      : '';
+
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
       const shaLink = sha ? `[\`${sha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
@@ -833,8 +949,13 @@ function buildRegressionsSection(regressedDetails, context) {
         : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
 
       let errorsList = '';
-      const errorsHtml = renderErrorsTable(it.error_snippets || []);
-      errorsList = [errorsHtml, ''].join('\n');
+      const allErrors = it.error_snippets || [];
+      const errorsToShow = allErrors.slice(0, MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY);
+      const errorsHtml = renderErrorsTable(errorsToShow);
+      const overflowNote = allErrors.length > MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY
+        ? `<p><em>Showing first ${MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY} of ${allErrors.length} errors; full list in artifacts.</em></p>\n`
+        : '';
+      errorsList = [overflowNote, errorsHtml, ''].join('\n');
 
       if (it.no_success_in_window) {
         const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
@@ -846,7 +967,7 @@ function buildRegressionsSection(regressedDetails, context) {
           ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
           : '';
         const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-        return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, '</details>', ''].join('\n');
+        return ['<details>', `<summary>${workflowName}${timeBadge}${jobLevelNote}</summary>`, '', content, errorsList, '</details>', ''].join('\n');
       }
 
       let commitsList = '';
@@ -862,9 +983,9 @@ function buildRegressionsSection(regressedDetails, context) {
         ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
         : '';
       const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`;
-      return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', content, errorsList, commitsList, '</details>', ''].join('\n');
+      return ['<details>', `<summary>${workflowName}${timeBadge}${jobLevelNote}</summary>`, '', content, errorsList, commitsList, '</details>', ''].join('\n');
     }
-    return ['<details>', `<summary>${workflowName}${timeBadge}</summary>`, '', '  - No failure details available', '</details>', ''].join('\n');
+    return ['<details>', `<summary>${workflowName}${timeBadge}${jobLevelNote}</summary>`, '', '  - No failure details available', '</details>', ''].join('\n');
   });
 
   return ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
@@ -892,8 +1013,13 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
       const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
 
       let errorsList = '';
-      const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-      errorsList = [errorsHtml2, ''].join('\n');
+      const allErrors2 = it.error_snippets || [];
+      const errorsToShow2 = allErrors2.slice(0, MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY);
+      const errorsHtml2 = renderErrorsTable(errorsToShow2);
+      const overflowNote2 = allErrors2.length > MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY
+        ? `<p><em>Showing first ${MAX_ERRORS_PER_WORKFLOW_IN_SUMMARY} of ${allErrors2.length} errors; full list in artifacts.</em></p>\n`
+        : '';
+      errorsList = [overflowNote2, errorsHtml2, ''].join('\n');
 
       if (it.no_success_in_window) {
         const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
@@ -942,8 +1068,10 @@ module.exports = {
   computeLatestRunInfo,
   getMainWindowRuns,
   computeStatusChanges,
+  enrichFailingDetails,
   enrichRegressions,
   enrichStayedFailing,
+  detectJobLevelRegressions,
   buildRegressionsSection,
   buildStayedFailingSection,
 };

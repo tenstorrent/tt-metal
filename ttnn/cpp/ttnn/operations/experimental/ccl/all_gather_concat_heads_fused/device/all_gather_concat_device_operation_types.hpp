@@ -7,13 +7,12 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt_stl/reflection.hpp>
 #include <optional>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllGatherConcatParams {
     uint32_t dim = 0;
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
@@ -25,7 +24,7 @@ struct operation_attributes_t {
     bool use_noc1_only = false;
     uint32_t cluster_axis = 0;
 
-    operation_attributes_t(
+    AllGatherConcatParams(
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -64,12 +63,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllGatherConcatInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
+}  // namespace ttnn::experimental::prim

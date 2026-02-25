@@ -6,14 +6,14 @@
 // #include "device/grid_sample_op.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::grid_sample {
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-ttnn::Tensor ExecuteGridSample::invoke(
+ttnn::Tensor grid_sample(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& grid,
     const std::string& mode,

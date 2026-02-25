@@ -9,7 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
-#include <tt_stl/reflection.hpp>
 
 namespace ttnn {
 namespace operations::complex {
@@ -29,7 +28,7 @@ template <std::size_t I>
 const Tensor& get(const ComplexTensor&);
 
 struct CreateComplexTensor {
-    static ComplexTensor invoke(const Tensor& input_tensor_a_arg, const Tensor& input_tensor_b_arg);
+    static ComplexTensor invoke(const Tensor& real, const Tensor& imag);
 };
 
 }  // namespace operations::complex

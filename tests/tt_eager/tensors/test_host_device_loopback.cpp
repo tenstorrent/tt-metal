@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <cstring>
 #include <exception>
 
@@ -53,7 +52,7 @@ bool test_multi_tile_multi_dram_bank_loopback(distributed::MeshDevice* device) {
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

@@ -47,10 +47,27 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+        ),
+        # (
+        #    {
+        #        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        #        "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        #        "trace_region_size": 90112,
+        #    },
+        #    ttnn.Topology.Linear,
+        # ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=[
+        "fabric_ring",
+        # "fabric_manager_enabled_linear" # test removed due to issue 35320
+    ],
 )
 @pytest.mark.parametrize("chunks_per_sync", [1])
 @pytest.mark.parametrize("num_workers_per_link", [1])

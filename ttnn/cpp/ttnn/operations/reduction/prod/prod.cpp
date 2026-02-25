@@ -68,7 +68,7 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
         output_mem_config);
 }
 
-Tensor ProdOperation::invoke(
+Tensor prod_impl(
     const Tensor& input_a,
     const std::optional<int64_t> dim,
     const bool keepdim,
@@ -76,11 +76,22 @@ Tensor ProdOperation::invoke(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     const int size = static_cast<int>(input_a.logical_shape().rank());
 
+    TT_FATAL(size > 0, "Tensor has no dimensions");
+    TT_FATAL(
+        !dim.has_value() || (*dim >= -size && *dim <= size - 1),
+        "Dimension for prod is out of range (expected to be in range of [{}, {}])",
+        -size,
+        size - 1);
+
     const auto old_rank = input_a.logical_shape().rank();
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
-    // If no dim is provided, compute the prod across all dimensions
-    if (!dim.has_value()) {
+    // If no dim is provided, compute the prod across all dimensions.
+    // Similarly, if the tensor has only one dimension, compute the prod across all dimensions
+    // (which is just the one dimension).
+    // Note that validation of the dim parameter above guarantees that, when dim is provided,
+    // it is the single valid dimension (0 or -1 for rank 1).
+    if (!dim.has_value() || old_rank == 1) {
         Tensor result = compute_prod_all(input_a, output_mem_config);
         if (keepdim) {
             // Reshape to have all dimensions (as many as the input rank) set to 1.
@@ -89,13 +100,6 @@ Tensor ProdOperation::invoke(
         }
         return result;
     }
-
-    TT_FATAL(size > 0, "Tensor has no dimensions");
-    TT_FATAL(
-        *dim >= -size && *dim <= size - 1,
-        "Dimension for prod is out of range (expected to be in range of [{}, {}]",
-        -size,
-        size - 1);
 
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
@@ -143,54 +147,52 @@ Tensor ProdOperation::invoke(
         return result;
     }
     // 4D or lower dimension Tensors
-    else {
-        // For lower dimension Tensors, we need to unsqueeze to 4D
-        auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
+    // For lower dimension Tensors, we need to unsqueeze to 4D
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
-        // Update the dim because we unsqueezed input to 4d
-        // If dim is negative, counting from the back is not impacted by the unsqueeze
-        const int64_t dim_4d = (*dim >= 0) ? (4 - old_rank + *dim) : *dim;
+    // Update the dim because we unsqueezed input to 4d
+    // If dim is negative, counting from the back is not impacted by the unsqueeze
+    const int64_t dim_4d = (*dim >= 0) ? (4 - old_rank + *dim) : *dim;
 
-        Tensor temp = input_tensor_4d;
-        // Permute for dim 2,3
-        if (dim_4d == 2 || dim_4d == -2) {
-            ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
-            temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
-        } else if (dim_4d == 3 || dim_4d == -1) {
-            ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
-            temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
-        }
-        Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
-        // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
-        auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-        if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
-            result = ttnn::squeeze_from_4D(result, old_rank);
-        } else if (dim_4d == 2 || dim_4d == -2) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
-            Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-            const auto& input_shape = input_tensor_4d.logical_shape();
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
-            result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
-        } else {  // dim 3
-            // permute
-            ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
-            Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-            // unpad
-            const auto& input_shape = input_tensor_4d.logical_shape();
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
-            Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            // permute back
-            after_permute_dims = {0, 1, 3, 2};
-            Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
-            result = ttnn::squeeze_from_4D(res_host, old_rank);
-        }
-        return keepdim ? result : ttnn::squeeze(result, *dim);
+    Tensor temp = input_tensor_4d;
+    // Permute for dim 2,3
+    if (dim_4d == 2 || dim_4d == -2) {
+        ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
+    } else if (dim_4d == 3 || dim_4d == -1) {
+        ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
     }
+    Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
+    // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
+    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
+        result = ttnn::squeeze_from_4D(result, old_rank);
+    } else if (dim_4d == 2 || dim_4d == -2) {
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
+        const auto& input_shape = input_tensor_4d.logical_shape();
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
+        result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
+    } else {  // dim 3
+        // permute
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
+        // unpad
+        const auto& input_shape = input_tensor_4d.logical_shape();
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+        Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
+        // permute back
+        after_permute_dims = {0, 1, 3, 2};
+        Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+        result = ttnn::squeeze_from_4D(res_host, old_rank);
+    }
+    return keepdim ? result : ttnn::squeeze(result, *dim);
 }
 
-Tensor ProdOperation::invoke(
+Tensor prod_nc_impl(
     const Tensor& input,
     const Tensor& output,
     ttnn::SmallVector<int64_t>& dims,
@@ -204,3 +206,20 @@ Tensor ProdOperation::invoke(
 }
 
 }  // namespace ttnn::operations::reduction
+
+namespace ttnn {
+
+Tensor prod(
+    const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+}
+
+Tensor prod(
+    const Tensor& input,
+    const Tensor& output,
+    SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::prod_nc_impl(input, output, dims, memory_config);
+}
+
+}  // namespace ttnn

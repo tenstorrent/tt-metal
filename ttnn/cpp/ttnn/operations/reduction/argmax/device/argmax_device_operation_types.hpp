@@ -7,9 +7,9 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::argmax {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ArgmaxParams {
     tt::tt_metal::DataType output_dtype{};
     std::optional<int> dim;
     bool keepdim{};
@@ -18,12 +18,9 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct ArgmaxInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::reduction::argmax
+}  // namespace ttnn::prim

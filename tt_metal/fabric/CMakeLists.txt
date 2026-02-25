@@ -55,9 +55,14 @@ target_sources(
         builder/multi_pool_channel_allocator.cpp
         builder/connection_registry.cpp
         builder/router_connection_mapping.cpp
+        channel_trimming_export.cpp
+        channel_trimming_import.cpp
+        channel_trimming_io.cpp
+        channel_trimming_report.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_switch_manager.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_builder_context.cpp
@@ -75,6 +80,7 @@ target_sources(
         physical_system_descriptor.cpp
         topology_mapper.cpp
         topology_mapper_utils.cpp
+        topology_solver.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -93,6 +99,14 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
+
+# Expose a custom target for the generated protobuf files so that external consumers
+# can depend on them directly without going through the fabric OBJECT library.
+add_custom_target(fabric_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
+add_dependencies(fabric fabric_generated_protos)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_generated_protos)
+endif()
 
 # Exclude protobuf generated files from unity builds (they have conflicting static symbols)
 set_source_files_properties(

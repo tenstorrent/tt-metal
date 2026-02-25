@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
@@ -52,18 +54,7 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardInputGradOperation::program_factory_t
-MorehGroupNormBackwardInputGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return MorehGroupNormBackwardInputGradFactory();
-}
-
 void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
-void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
@@ -91,10 +82,11 @@ MorehGroupNormBackwardInputGradOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
-std::tuple<
-    MorehGroupNormBackwardInputGradOperation::operation_attributes_t,
-    MorehGroupNormBackwardInputGradOperation::tensor_args_t>
-MorehGroupNormBackwardInputGradOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardInputGradOperation::tensor_return_value_t
+moreh_group_norm_backward_input_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -104,11 +96,13 @@ MorehGroupNormBackwardInputGradOperation::invoke(
     const std::optional<const Tensor>& input_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    operation_attributes_t operation_attributes{
+    using OperationType =
+        ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardInputGradOperation;
+    OperationType::operation_attributes_t operation_attributes{
         num_groups,
         input_grad_memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
-    return {operation_attributes, tensor_args};
+    OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
+}  // namespace ttnn::prim

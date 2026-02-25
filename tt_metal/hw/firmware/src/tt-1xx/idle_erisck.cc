@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <cstdint>
 
-#include "risc_common.h"
+#include "internal/tt-1xx/risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
 #include "noc.h"
@@ -15,10 +15,10 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dataflow_api.h"
-#include "debug/stack_usage.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/debug/stack_usage.h"
 
 #include <kernel_includes.hpp>
 

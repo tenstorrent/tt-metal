@@ -18,8 +18,8 @@ import numpy as np
 # Dictionaries for converting dtypes
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,13 +29,16 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
 }
+
+TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
+NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
@@ -47,6 +50,32 @@ def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorc
     # messages.append(str(actual_pytorch_result))
     messages = [str(m) for m in messages]
     return "\n".join(messages)
+
+
+def _post_to_torch_conversion(tensor):
+    # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+    # This was changed to convert to unsigned types instead to address issue with the value truncation
+    # https://github.com/tenstorrent/tt-metal/issues/31150
+
+    # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+    # so ttnn tensor must have a post-conversion correction to avoid this error.
+    if tensor.dtype == torch.uint16:
+        return tensor.to(torch.int32)
+
+    elif tensor.dtype == torch.uint32:
+        return tensor.to(torch.int64)
+
+    else:
+        return tensor
+
+
+def _normalize_tensor(tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        tensor = ttnn.to_torch(tensor)
+
+    tensor = _post_to_torch_conversion(tensor)
+
+    return tensor
 
 
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
@@ -71,6 +100,10 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     Raises:
         AssertionError: If the tensor shapes don't match or if the PCC is below the specified threshold
     """
+
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -108,10 +141,9 @@ def assert_allclose(
          AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
                          the aforementioned formula.
     """
-    if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
-    if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
+
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -233,6 +265,9 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     Raises:
         AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
     """
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -398,3 +433,89 @@ def maybe_trace(op_func, enable_trace, device):
     else:
         output = op_func()
     return output
+
+
+def is_unsigned_tensor(py_tensor):
+    return py_tensor.dtype in TORCH_INTEGER_DTYPES
+
+
+def align_tensor_dtype(roundtrip_tensor, dtype):
+    if isinstance(roundtrip_tensor, torch.Tensor):
+        return roundtrip_tensor.to(dtype)
+
+    elif isinstance(roundtrip_tensor, np.ndarray):
+        return roundtrip_tensor.astype(dtype)
+
+    else:
+        raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
+
+
+def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
+    """
+    Generate all possible bfloat16 bit patterns as a test tensor.
+
+    This function creates an exhaustive test dataset by generating all 65,536 (2^16) possible
+    bfloat16 bit patterns. This is useful for comprehensive testing of operations across the
+    entire bfloat16 value space, including edge cases like infinities, NaNs, and subnormals.
+
+    Args:
+        dtype (torch.dtype, optional): The target dtype to cast the bit patterns to.
+                                       Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: A tensor of shape (256, 256) containing all possible bfloat16 values,
+                     cast to the specified dtype. The tensor is shaped as a square grid for
+                     convenient TILE_LAYOUT compatibility (32x32 tile divisibility).
+
+    Notes:
+        - The function generates values by iterating through all 16-bit integer patterns
+          and reinterpreting them as bfloat16 values.
+        - The resulting tensor includes all special values: +/-0, +/-infinity, NaNs,
+          subnormals, and all normal values in the bfloat16 range.
+        - When dtype is set to a higher precision format (e.g., torch.float32), the bfloat16
+          values are promoted without loss of information.
+
+    Example:
+        >>> all_bf16 = generate_all_bfloat16_bitpatterns(torch.float32)
+        >>> all_bf16.shape
+        torch.Size([256, 256])
+    """
+    # Generate all possible bfloat16 bit patterns (2^16 = 65536 values)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    bf16_bitpatterns = all_bitpatterns.view(torch.bfloat16)  # Reinterpret as bfloat16
+
+    # Cast to target dtype
+    bitpatterns = bf16_bitpatterns.to(dtype)
+
+    # Reshape tensor to 256 x 256 for tile layout compatibility
+    bitpatterns = bitpatterns.reshape(256, 256)
+
+    return bitpatterns
+
+
+def flush_subnormal_values_to_zero(tensor):
+    """
+    Flush subnormal (denormalized) floating-point values to zero.
+
+    Subnormal numbers are floating-point values smaller than the smallest normalized number.
+    Tenstorrent hardware flushes subnormals to zero for performance reasons.
+    This function replicates that behavior for testing purposes.
+
+    Args:
+        tensor (torch.Tensor): Input tensor with floating-point values.
+
+    Returns:
+        torch.Tensor: The input tensor with all subnormal values replaced by zero.
+                     The tensor is modified in-place.
+
+    Notes:
+        - This function only works for float32 and bfloat16 as they share the same exponent range.
+        - For float32 and bfloat16, subnormal values are those where the exponent bits are all zero,
+          which corresponds to absolute values less than 2^(-126).
+    """
+    # Float32 and bfloat16 numbers are subnormal if exponent == 0
+    # This corresponds to absolute values < 2^(-126)
+    SUBNORMAL_THRESHOLD = 2.0 ** (-126)
+    mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
+    tensor[mask] = 0.0
+    return tensor

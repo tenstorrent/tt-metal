@@ -5,7 +5,7 @@
 #include "tt_elffile.hpp"
 
 #include <elf.h>
-#include <errno.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -47,14 +47,6 @@ std::string format(std::string m, Args&&...) {
 // Having the same endianness as RISCV makes things easier.
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "Host must be little endian"
-#endif
-
-#ifndef PT_RISCV_ATTRIBUTES
-// Missing from my elf.h
-#define PT_RISCV_ATTRIBUTES (PT_LOPROC + 3)
-enum {
-    Tag_RISCV_arch = 5,
-};
 #endif
 
 // We have to translate these two instructions

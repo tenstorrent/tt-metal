@@ -7,6 +7,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.common import Mode
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
@@ -66,7 +67,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
+        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2, keepdim=True)
 
         top2_mask = torch.full((1, 1, 1, 32), fill_value=torch.finfo(torch.float).min)
         top2_mask[:, :, :, :2] = 0.0
@@ -77,7 +78,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
+        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2, keepdim=True)
 
         reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
         for i in range(self.tile_size):
@@ -90,7 +91,7 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
-    def forward(self, inputs, mode="decode"):
+    def forward(self, inputs, mode: Mode):
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
@@ -111,14 +112,14 @@ class TtMoeLayer(LightweightModule):
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 
-        if mode == "decode":
+        if mode == Mode.DECODE:
             weights_1SB1 = ttnn.moe(gate_logits_1SB8, self.top8_mask_11B_64, self.top2_mask_11BB, 32)
         else:
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
             mask_B2 = ttnn.typecast(mask_B2, dtype=ttnn.bfloat16)
-            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
+            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3, keepdim=True)
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
             mask_B2.deallocate(True)
@@ -127,18 +128,14 @@ class TtMoeLayer(LightweightModule):
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
 
-        if mode == "prefill":
-            weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
-            results_11BH = ttnn.mul(weights, weights_1SB1)
-        else:
-            results_11BH = ttnn.mul(weights, weights_1SB1)
+        results_11BH = ttnn.mul(weights, weights_1SB1)
 
         weights.deallocate(True)
         weights_1SB1.deallocate(True)
 
         seq_len = results_11BH.shape[-2]
 
-        if seq_len >= 2048 and mode == "decode":  # Reshape back to intended shape
+        if seq_len >= 2048 and mode == Mode.DECODE:  # Reshape back to intended shape
             results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.args.dim])
 
         # All gather
@@ -148,10 +145,8 @@ class TtMoeLayer(LightweightModule):
             tt_ccl=self.tt_ccl,
             cluster_axis=0,
             dim=3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
-            sharded=(mode == "decode"),
-            memory_config=(results_11BH.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
+            sharded=(mode == Mode.DECODE),
+            memory_config=(results_11BH.memory_config() if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG),
             dtype=self.args.ccl_dtype,
             use_composite=False,
             topology=self.args.ccl_topology(),
@@ -162,11 +157,11 @@ class TtMoeLayer(LightweightModule):
             output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-        if mode == "decode":  # Decode mode
+        if mode == Mode.DECODE:  # Decode mode
             results_11BH.deallocate(True)
             output = ttnn.to_memory_config(
                 output,
-                self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                self.args.get_residual_mem_config(Mode.DECODE),
             )
 
         output = ttnn.to_memory_config(

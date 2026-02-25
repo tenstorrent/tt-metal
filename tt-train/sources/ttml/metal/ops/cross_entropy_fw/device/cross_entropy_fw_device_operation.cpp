@@ -4,21 +4,12 @@
 
 #include "cross_entropy_fw_device_operation.hpp"
 
-#include "cross_entropy_fw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
 
+#include "cross_entropy_fw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
+
 namespace ttml::metal::ops::cross_entropy_fw::device {
-
-CrossEntropyForwardDeviceOperation::program_factory_t CrossEntropyForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return CrossEntropyForwardProgramFactory{};
-}
-
-void CrossEntropyForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -101,24 +92,31 @@ ttsl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     auto hash = tt::tt_metal::operation::hash_operation<CrossEntropyForwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyForwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::cross_entropy_fw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation::tensor_return_value_t
+ttml_cross_entropy_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{},
-        tensor_args_t{
-            .input = input_tensor,
-            .target = target_tensor,
-            .preallocated_output = preallocated_output,
-        }};
+    using OperationType = ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .target = target_tensor,
+        .preallocated_output = preallocated_output,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::cross_entropy_fw::device
+}  // namespace ttnn::prim

@@ -82,26 +82,22 @@ struct MorehSoftmaxOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static MorehSoftmaxOpParallelizationStrategy get_parallelization_strategy(
         const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t dim,
-        const std::optional<Tensor>& output_tensor,
-        MorehSoftmaxOp op,
-        MorehSoftmaxOpParallelizationStrategy strategy,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_softmax
 
 namespace ttnn::prim {
-constexpr auto moreh_softmax = ttnn::
-    register_operation<"ttnn::prim::moreh_softmax", ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation>();
+ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_value_t moreh_softmax(
+    const Tensor& input_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& output_tensor,
+    ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp op,
+    ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

@@ -14,3 +14,8 @@ def float_to_bfloat16_packed(value):
     # Pack two copies into uint32 (little endian)
     packed = int.from_bytes(bf16_bytes + bf16_bytes, byteorder="little")
     return packed
+
+
+def float_to_uint32(value):
+    """Convert float to uint32"""
+    return int.from_bytes(struct.pack("f", value), byteorder="little")

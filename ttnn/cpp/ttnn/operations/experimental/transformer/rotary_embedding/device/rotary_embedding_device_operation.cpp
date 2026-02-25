@@ -3,24 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding {
-
-RotaryEmbeddingDeviceOperation::program_factory_t RotaryEmbeddingDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return rotary_embedding::program::RotaryEmbeddingProgramFactory{};
-}
-
-void RotaryEmbeddingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::experimental::prim {
 void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -94,7 +85,7 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
+TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.padded_shape();
@@ -135,26 +126,23 @@ spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t RotaryEmbeddingDeviceOperation::create_output_tensors(
+Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
-        args.seq_len,
-        args.output_mem_config,
-        program_factory.index(),
-        tensor_args.input,
-        tensor_args.cos,
-        tensor_args.sin);
+        args.seq_len, args.output_mem_config, tensor_args.input, tensor_args.cos, tensor_args.sin);
     return hash;
 }
 
-std::tuple<RotaryEmbeddingDeviceOperation::operation_attributes_t, RotaryEmbeddingDeviceOperation::tensor_args_t>
-RotaryEmbeddingDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor rotary_embedding(
     const Tensor& input,
     const Tensor& cos,
     const Tensor& sin,
@@ -162,14 +150,17 @@ RotaryEmbeddingDeviceOperation::invoke(
     std::optional<uint32_t> token_idx,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            .seq_len = seq_len,
-            .token_idx = token_idx,
-            .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config,
-        },
-        tensor_args_t{.input = input, .cos = cos, .sin = sin}};
+    using OperationType = ttnn::experimental::prim::RotaryEmbeddingDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .seq_len = seq_len,
+        .token_idx = token_idx,
+        .output_mem_config = output_mem_config,
+        .compute_kernel_config = compute_kernel_config,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .cos = cos, .sin = sin};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding
+}  // namespace ttnn::prim

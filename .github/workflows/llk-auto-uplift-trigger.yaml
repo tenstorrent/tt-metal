@@ -227,8 +227,8 @@ jobs:
           </details>
 
           ### 🏗️ Architecture Impact
-          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit and tt-metal-l2-nightly tests"; fi)
-          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit and tt-metal-l2-nightly tests"; fi)
+          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit, tt-metal-l2-nightly, and perf-device-models tests"; fi)
+          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit, tt-metal-l2-nightly, and perf-device-models tests"; fi)
           $(if [ "$SHOULD_RUN_WH" = "false" ] && [ "$SHOULD_RUN_BH" = "false" ]; then echo "- ℹ️ No architecture-specific changes detected"; fi)
 
           <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
@@ -282,6 +282,9 @@ jobs:
             should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
+            should-run: ${{ (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true') && 'true' || 'false' }}
+          - workflow: "perf-device-models.yaml"
+            name: "Device Perf Regressions"
             should-run: ${{ (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true') && 'true' || 'false' }}
     steps:
       - name: Checkout
@@ -358,11 +361,31 @@ jobs:
           TRIGGER_TIME=$(date +%s)
           echo "Trigger timestamp: $TRIGGER_TIME"
 
+          # Build architecture parameter based on which architectures have changes
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0", "blackhole"]'
+          elif [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0"]'
+          else
+            ARCH_PARAM='["blackhole"]'
+          fi
+
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" -f run_APC_cpp_tests=true
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" \
+            -f architecture="$ARCH_PARAM" \
+            -f run_cpp_tests=true \
+            -f run_metal_iommu_tests=true \
+            -f run_sd_unit_tests=true \
+            -f run_fd_unit_tests=true \
+            -f run_profiler_regression=true \
+            -f run_tt_train_cpp_unit_tests=true \
+            -f run_models_unit_tests=true \
+            -f run_tt_cnn_unit_tests=true
+          elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" \
+            -f architecture="$ARCH_PARAM"
           else
             gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
           fi
@@ -500,6 +523,13 @@ jobs:
               RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
               ALL_PASSED=false
             fi
+
+            if check_workflow "perf-device-models.yaml" "Device Perf Regressions"; then
+              RESULTS+="- $(check_workflow "perf-device-models.yaml" "Device Perf Regressions")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "perf-device-models.yaml" "Device Perf Regressions")"$'\n'
+              ALL_PASSED=false
+            fi
           fi
 
           # Comment with results
@@ -596,6 +626,18 @@ jobs:
             if [ "$L2_RUNS" != "empty" ]; then
               L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
+            fi
+
+            # Get Device Perf Regressions workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$PERF_RUNS" != "empty" ]; then
+              PERF_URL=$(echo "$PERF_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **Device Perf Regressions** passed: [View run]($PERF_URL)"$'\n'
             fi
           fi
 

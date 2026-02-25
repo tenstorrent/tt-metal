@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -22,14 +21,9 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
-
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt::tt_metal;

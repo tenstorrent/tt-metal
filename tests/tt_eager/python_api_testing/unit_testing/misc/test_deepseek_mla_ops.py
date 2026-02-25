@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_decode import (
+from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     page_table_setup,
     to_paged_cache,
     from_paged_cache,
@@ -36,6 +36,7 @@ from transformers import AutoConfig
 from types import SimpleNamespace
 
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.test_utils import get_test_weight_config
 
 TP = 8
 DP = 4
@@ -814,7 +815,7 @@ def run_rmsnorm_impl(
 
     # Setup: Convert weights and get weight_config
     state_dicts = ({"weight": rms_norm.weight.to(torch.bfloat16)},)  # Tuple of dictionaries
-    weight_config = RMSNorm.convert_weights(hf_config, state_dicts, temp_dir, device, convert_meta=True)
+    weight_config = get_test_weight_config(RMSNorm, hf_config, state_dicts, temp_dir, device, force_recalculate=True)
 
     # Generate appropriate config
     if mode == "prefill":
