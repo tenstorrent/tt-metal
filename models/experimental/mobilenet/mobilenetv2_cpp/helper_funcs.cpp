@@ -13,6 +13,8 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/distributed/api.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 template <typename T>
 ttnn::Tensor create_concrete(torch::Tensor& contiguous_tensor, tt::tt_metal::TensorSpec& spec) {
@@ -113,7 +115,7 @@ tt::tt_metal::HostBuffer create_row_major_host_buffer(
     }
 
     // No modifications needed; direclty return buffer
-    if (tt::tt_metal::tensor_impl::logical_matches_physical(tensor_spec)) {
+    if (tt::tt_metal::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 
