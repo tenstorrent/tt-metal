@@ -33,17 +33,14 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
     const ttml::metal::AttentionMaskType mask_type) {
-    auto& pctx = autograd::ctx().get_parallelism_context();
-    std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
-    const uint32_t cp_size = pctx.get_cp_size();
-
-    // If CP not enabled, fall back to regular SDPA
-    if (!cp_axis.has_value() || cp_size <= 1) {
+    if (!autograd::ctx().is_parallelism_context_initialized() ||
+        !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
     }
 
-    const uint32_t cp_axis_value = cp_axis.value();
-    const uint32_t ring_size = cp_size;
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis_value = pctx.get_cp_axis().value();
+    const uint32_t ring_size = pctx.get_cp_size();
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
