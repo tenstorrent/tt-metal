@@ -42,7 +42,7 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
-def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate) -> int:
+def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
         return MESH_ROOT1
@@ -55,7 +55,24 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
         return MESH_ROOT2
 
     # ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
-    root3_row = 2 if root_row == 1 else 1
+    # Determine ROOT3 row based on topology
+    if use_torus:
+        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
+        if root_row == 0:
+            root3_row = 3
+        elif root_row == 3:
+            root3_row = 0
+        else:
+            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+    else:
+        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
+        if root_row == 1:
+            root3_row = 2
+        elif root_row == 2:
+            root3_row = 1
+        else:
+            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
+
     if my_row == root3_row:
         return MESH_ROOT3
 
@@ -339,6 +356,10 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
+        use_torus = False
+        if root_coord[0] in [0, 3]:
+            use_torus = True
+
         # print("validated mesh and root coord\n")
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -431,7 +452,7 @@ class ReduceToOneB1:
                 # print("coord: ", coord)
                 device_idx = row * mesh_cols + col
 
-                role = get_device_role(coord, root_coord)
+                role = get_device_role(coord, root_coord, use_torus)
                 is_leaf = role == MESH_LEAF
                 is_root3 = role == MESH_ROOT3
                 is_root2 = role == MESH_ROOT2
@@ -509,10 +530,16 @@ class ReduceToOneB1:
 
                 # Determine destination coordinate based on role
                 if is_leaf:
-                    if row == 0:
-                        dest_coord = ttnn.MeshCoordinate(row + 1, col)
-                    else:  # row == 3
-                        dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if use_torus:
+                        if row == 1:
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                        else:  # row == 2
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                    else:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
                 elif is_root3:
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
                 elif is_root2:
