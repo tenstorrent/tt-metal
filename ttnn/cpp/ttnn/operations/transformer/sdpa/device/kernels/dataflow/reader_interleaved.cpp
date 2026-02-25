@@ -49,7 +49,6 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
 }
 
 void kernel_main() {
-    DeviceZoneScopedN("SDPA-READER");
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -374,6 +373,7 @@ void kernel_main() {
                             DHt,
                             barrier_threshold);
                     }
+
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -405,7 +405,6 @@ void kernel_main() {
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
                         const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
 
-                        DeviceZoneScopedN("SDPA-RD-K");
                         // K: either read locally (injector or not participant) or receive from previous core
                         uint32_t cb_k_start_address = 0;
 
@@ -482,7 +481,6 @@ void kernel_main() {
 
                         // Mask read — safe after linked write pair is complete
                         if constexpr (use_provided_mask) {
-                            DeviceZoneScopedN("SDPA-RD-MASK");
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             uint32_t barrier_count = 0;
@@ -631,7 +629,6 @@ void kernel_main() {
                                 noc_async_writes_flushed();
                                 noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
-                        }
                         }
                     }
                 }
