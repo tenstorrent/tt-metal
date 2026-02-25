@@ -18,6 +18,7 @@ on:
           - whisper
           - llama3.1-8b
           - unet-shallow
+          - sdxl
           - llama3.3-70b
           - qwen3-32b
           - flux.1-dev
