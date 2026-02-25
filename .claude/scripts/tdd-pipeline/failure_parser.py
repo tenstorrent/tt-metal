@@ -66,7 +66,7 @@ SUGGESTED_ACTIONS = {
         "addresses are valid DRAM addresses from get_arg_val."
     ),
     CLASS_HANG_UNKNOWN: (
-        "Check triage log at /tmp/dev-test-triage.log for more details. "
+        "Check triage log at /tmp/tt-test-triage-dev0.log for more details. "
         "Verify all three kernels (reader/compute/writer) are making progress."
     ),
     CLASS_UNKNOWN: "Inspect the full pytest output for unexpected errors.",
@@ -76,7 +76,7 @@ SUGGESTED_ACTIONS = {
 def classify_failure(
     exit_code: int,
     pytest_output: str,
-    triage_log_path: str = "/tmp/dev-test-triage.log",
+    triage_log_path: str = "/tmp/tt-test-triage-dev0.log",
 ) -> dict:
     """Classify a test failure into a structured summary.
 
