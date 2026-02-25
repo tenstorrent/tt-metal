@@ -142,6 +142,20 @@ class PreSDPA:
         return full_q, new_kv, output
 
     @staticmethod
+    def get_num_semaphores(skip_ccl=False):
+        return 10 if skip_ccl else 13
+
+    @staticmethod
+    def create_semaphores(mesh_device, skip_ccl=False):
+        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+        return semaphores
+
+    @staticmethod
     def op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
@@ -233,14 +247,20 @@ class PreSDPA:
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
 
+        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl)
+
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
         secondary_sync_sem_addr = 0
-        if not skip_ccl and semaphores is not None:
-            out_ready_semaphore = semaphores[0]
-            barrier_semaphore = semaphores[1]
-            secondary_sync_semaphore = semaphores[2]
+        semaphore_index = 0
+        if not skip_ccl:
+            out_ready_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            barrier_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            secondary_sync_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
@@ -476,32 +496,41 @@ class PreSDPA:
         mcast_is_part_of_receiver_grid = main_grid.contains(rmsnorm_core_grid)
 
         # Semaphore IDs for mcast synchronization
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
+        mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mcast_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
+        gather_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        gather_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
         # Gather-reduce for matmul path reuses gather semaphore IDs
-        gather_reduce_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
-        gather_reduce_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
+        gather_reduce_noc0_receiver_semaphore_addr = gather_noc0_receiver_semaphore_addr
+        gather_reduce_noc1_receiver_semaphore_addr = gather_noc1_receiver_semaphore_addr
 
         # CreateQHeads 3-phase semaphore IDs (reuse existing IDs, safe since prior ops have completed)
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
-        nope_phase1_semaphore_id = gather_noc0_receiver_semaphore_id  # ID 2
-        nope_phase2_semaphore_id = gather_noc1_receiver_semaphore_id  # ID 3
-        rope_semaphore_id = mcast_data_sender_semaphore_id  # ID 0 (mcast completed before CreateQHeads)
+        nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
+        nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
+        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
 
         # Semaphore IDs for MLA
-        mla_reducer_semaphore_id = 4
-        mla_output_semaphore_id = 5
-        mla_mcast_semaphore_id = 6
-        mla_ncrisc_brisc_sync_semaphore_id = 7
-        mla_receiver_ready_semaphore_id = 8
-        mla_q_input_mcast_semaphore_id = 9
-        mla_kv_cache_cur_pos_ready_semaphore_id = 10
+        mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_ncrisc_brisc_sync_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_receiver_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_q_input_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_kv_cache_cur_pos_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -621,8 +650,8 @@ class PreSDPA:
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
             ("mcast_num_cores", mcast_num_cores),
-            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
             ("mcast_src_cb", rmsnorm_output_cb),
             ("mcast_dst_cb", matmul_input_cb),
@@ -632,7 +661,7 @@ class PreSDPA:
 
         # Mcast receiver compile-time args (named args for NCRISC)
         mcast_receiver_named_compile_time_args = [
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
         ]
@@ -810,9 +839,9 @@ class PreSDPA:
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
             # 3 semaphores for race-free synchronization
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
             ("cqh_qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
             ("cqh_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
@@ -825,9 +854,9 @@ class PreSDPA:
         # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
         # Prefixed with "cqh_" to avoid name collisions with other BRISC args
         create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
@@ -900,7 +929,7 @@ class PreSDPA:
             ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
             ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
             ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
-            ("gather_reduce_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
+            ("gather_reduce_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("gather_reduce_grid_start_x", matmul_bbox.start.x),
@@ -919,8 +948,8 @@ class PreSDPA:
         gather_reduce_receiver_named_compile_time_args = [
             ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
             ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
-            ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
-            ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
+            ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
             ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
@@ -1008,7 +1037,7 @@ class PreSDPA:
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
             ("dkv_gather_dest_noc_y", dkv_gather_dest_noc_core.y),
             ("dkv_gather_data_size_bytes", dkv_gather_data_size_bytes),
-            ("dkv_gather_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
+            ("dkv_gather_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_src_cb", dkv_matmul_output_cb),  # Source CB for gather (dkv matmul output)
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", dkv_gather_sender_grid_start_x),
@@ -1026,8 +1055,8 @@ class PreSDPA:
         dkv_gather_receiver_named_compile_time_args = [
             ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
             ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
-            ("dkv_gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
-            ("dkv_gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
+            ("dkv_gather_noc0_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
+            ("dkv_gather_noc1_receiver_semaphore_addr", gather_noc1_receiver_semaphore_addr),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
             ("dkv_gather_dst_num_pages", dkv_gather_src_num_pages),
         ]
@@ -1074,7 +1103,7 @@ class PreSDPA:
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
-            ("kv_cache_cur_pos_ready_semaphore_id", mla_kv_cache_cur_pos_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1195,19 +1224,19 @@ class PreSDPA:
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
-            ("mla_reducer_semaphore_id", mla_reducer_semaphore_id),
+            ("mla_reducer_semaphore_addr", mla_reducer_semaphore_addr),
             ("k_chunk_size", k_chunk_size),
             ("q_tile_height", Q_TILE_HEIGHT),
             ("DHt", DHt),
             ("num_mcast_dests", num_mcast_dests),
-            ("mla_mcast_semaphore_id", mla_mcast_semaphore_id),
-            ("mla_q_input_mcast_semaphore_id", mla_q_input_mcast_semaphore_id),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
+            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
             ("k_num_pages", k_num_pages),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
-            ("mla_receiver_ready_semaphore_id", mla_receiver_ready_semaphore_id),
-            ("mla_ncrisc_brisc_sync_semaphore_id", mla_ncrisc_brisc_sync_semaphore_id),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_k_in_cb", mla_k_in_cb),
             ("mla_out_in_cb", mla_out_in_cb),
             ("mla_ms_in_cb", mla_ms_in_cb),
@@ -1221,7 +1250,7 @@ class PreSDPA:
             ("num_cores_per_head", num_cores_per_head),
             ("k_chunk_size", k_chunk_size),
             ("num_mcast_dests", num_mcast_dests),
-            ("mla_mcast_semaphore_id", mla_mcast_semaphore_id),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
             ("q_chunk_size_bytes", q_chunk_size_bytes),
@@ -1230,10 +1259,10 @@ class PreSDPA:
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
-            ("mla_q_input_mcast_semaphore_id", mla_q_input_mcast_semaphore_id),
-            ("mla_ncrisc_brisc_sync_semaphore_id", mla_ncrisc_brisc_sync_semaphore_id),
-            ("mla_receiver_ready_semaphore_id", mla_receiver_ready_semaphore_id),
-            ("mla_kv_cache_cur_pos_ready_semaphore_id", mla_kv_cache_cur_pos_ready_semaphore_id),
+            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
             ("mla_q_in_cb", mla_q_in_cb),
             ("mla_compute_in_cb", mla_compute_in_cb),
@@ -2019,76 +2048,6 @@ class PreSDPA:
                     ("mcast2_dst_num_pages", mcast2_dst_num_pages),
                 ]
 
-                # ========================================================================
-                # Semaphore descriptors
-                # ========================================================================
-
-                # Mcast semaphores (ID 0 and 1)
-                mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_sender_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                # Gather semaphores (ID 2 and 3 - two semaphores for NOC0 and NOC1, but only NOC0 is used)
-                gather_noc0_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc0_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                gather_noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc1_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_reducer_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_reducer_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_output_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_output_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_mcast_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_mcast_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                mla_ncrisc_brisc_sync_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_ncrisc_brisc_sync_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                mla_receiver_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_receiver_ready_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                # Dedicated for sdpa input cores to sync on q heads arrival
-                mla_q_input_mcast_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_q_input_mcast_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                # Dedicated for sdpa input cores to sync on KV cache cur pos arrival
-                mla_kv_cache_cur_pos_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_kv_cache_cur_pos_ready_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
                 k_addr = kv_cache_tensor_device.buffer_address()
 
                 # Setup MLA per core runtime args
@@ -2494,19 +2453,7 @@ class PreSDPA:
                 program = ttnn.ProgramDescriptor(
                     kernels=unified_kernel.get_kernel_descriptors().kernels,
                     cbs=cbs_list,
-                    semaphores=[
-                        mcast_sender_semaphore_descriptor,  # ID 0
-                        mcast_receiver_semaphore_descriptor,  # ID 1
-                        gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by create_q_heads)
-                        gather_noc1_receiver_semaphore_descriptor,  # ID 3
-                        mla_reducer_semaphore_descriptor,  # ID 4
-                        mla_output_semaphore_descriptor,  # ID 5
-                        mla_mcast_semaphore_descriptor,  # ID 6
-                        mla_ncrisc_brisc_sync_semaphore_descriptor,  # ID 7
-                        mla_receiver_ready_semaphore_descriptor,  # ID 8
-                        mla_q_input_mcast_semaphore_descriptor,  # ID 9
-                        mla_kv_cache_cur_pos_ready_semaphore_descriptor,  # ID 10
-                    ],
+                    semaphores=[],
                 )
 
                 # Append fabric connection args to BRISC kernel if needed (CCL mode only)
