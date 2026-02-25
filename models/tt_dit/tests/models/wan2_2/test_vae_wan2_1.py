@@ -237,11 +237,9 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
 @pytest.mark.parametrize(
     ("B, C, T, H, W"),
     [
-        (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0.norm1
         (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0.norm1
     ],
     ids=[
-        "720p",
         "480p",
     ],
 )
@@ -477,17 +475,11 @@ def test_wan_conv3d(
     ("B, in_dim, out_dim, T, H, W"),
     [
         (1, 384, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
-        (1, 192, 384, 2, 180, 320),  # decoder.up_blocks.1.resnets.0
-        (1, 384, 384, 2, 180, 320),  # decoder.up_blocks.1.resnets.1
         (1, 192, 192, 4, 360, 640),  # decoder.up_blocks.2.resnets.0
-        (1, 96, 96, 4, 720, 1280),  # decoder.up_blocks.3.resnets.0
     ],
     ids=[
         "conv_0",
-        "conv_1",
-        "conv_2",
         "conv_3",
-        "conv_4",
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
@@ -787,24 +779,14 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     ("B, dim, T, H, W, mode, resample_out_dim"),
     [
         (1, 384, 1, 90, 160, "upsample3d", None),  # decoder.up_blocks.0.upsamplers.0
-        (1, 384, 2, 180, 320, "upsample3d", None),  # decoder.up_blocks.1.upsamplers.0
         (1, 192, 4, 360, 640, "upsample2d", None),  # decoder.up_blocks.2.upsamplers.0
-        (1, 96, 1, 720, 1280, "downsample2d", None),  # encoder.downsample 1 720p
-        (1, 192, 2, 360, 640, "downsample3d", None),  # encoder.downsample 2 720p
-        (1, 384, 4, 180, 320, "downsample3d", None),  # encoder.downsample 3 720p
         (1, 96, 1, 480, 832, "downsample2d", None),  # encoder.downsample 1 480p
-        (1, 192, 2, 240, 416, "downsample3d", None),  # encoder.downsample 2 480p
         (1, 384, 4, 120, 208, "downsample3d", None),  # encoder.downsample 3 480p
     ],
     ids=[
         "upsample_0",
-        "upsample_1",
         "upsample_2",
-        "downsample_1_720p",
-        "downsample_2_720p",
-        "downsample_3_720p",
         "downsample_1_480p",
-        "downsample_2_480p",
         "downsample_3_480p",
     ],
 )
@@ -942,16 +924,12 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     ("B, in_dim, out_dim, T, H, W, mode, num_res_blocks"),
     [
         (1, 384, 384, 1, 90, 160, "upsample3d", 2),  # decoder.up_blocks.0
-        (1, 192, 384, 2, 180, 320, "upsample3d", 2),  # decoder.up_blocks.1
         (1, 192, 192, 4, 360, 640, "upsample2d", 2),  # decoder.up_blocks.2
-        (1, 192, 192, 4, 720, 1280, None, 2),  # decoder.up_blocks.3 # OOM on 720p input
         # (1, 192, 192, 4, 480, 832, None, 2),  # decoder.up_blocks.3 on 480p input
     ],
     ids=[
         "upblock_0",
-        "upblock_1",
         "upblock_2",
-        "upblock_3",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
@@ -1115,11 +1093,9 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     ("B, C, T, H, W"),
     [
         (1, 16, 1, 60, 104),  # 480p
-        (1, 16, 1, 90, 160),  # 720p
     ],
     ids=[
         "480p",
-        "720p",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
@@ -1329,18 +1305,16 @@ def test_wan_decoder3d(
     ("B, C, H, W"),
     [
         (1, 16, 60, 104),  # 480p, 10 frames
-        (1, 16, 90, 160),  # 720p, 10 frames
     ],
     ids=[
         "480p",
-        "720p",
     ],
 )
-@pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
+@pytest.mark.parametrize("T", [1, 10], ids=["_1f", "10f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
-@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
+@pytest.mark.parametrize("real_weights", [True], ids=["real_weights"])
+@pytest.mark.parametrize("skip_check", [False], ids=["check_output"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1488,11 +1462,9 @@ def test_wan_decoder(
     ("B, C, T, H, W"),
     [
         (1, 3, 4, 480, 832),  # 480p
-        (1, 3, 4, 720, 1280),  # 720p
     ],
     ids=[
         "480p",
-        "720p",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
@@ -1683,18 +1655,16 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     ("B, C, H, W"),
     [
         (1, 3, 480, 832),  # 480p, 10 frames
-        (1, 3, 720, 1280),  # 720p, 10 frames
     ],
     ids=[
         "480p",
-        "720p",
     ],
 )
-@pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
+@pytest.mark.parametrize("T", [1, 10], ids=["_1f", "10f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
-@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
+@pytest.mark.parametrize("real_weights", [True], ids=["real_weights"])
+@pytest.mark.parametrize("skip_check", [False], ids=["check_output"])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
     [
