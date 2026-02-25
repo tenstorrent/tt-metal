@@ -83,11 +83,6 @@ class TtSDXLPipeline(LightweightModule):
 
         self.lora_weights_manager = TtLoRAWeightsManager(self.ttnn_device, self.torch_pipeline)
 
-        LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
-        self.torch_pipeline.load_lora_weights(LORA_PATH)
-        self.torch_pipeline.fuse_lora()
-        self.torch_pipeline.unload_lora_weights()
-
         # Validate config parameters once at initialization
         self.__validate_config()
 
@@ -189,6 +184,9 @@ class TtSDXLPipeline(LightweightModule):
 
     def load_lora_weights(self, lora_path):
         self.lora_weights_manager.load_lora_weights(lora_path)
+
+    def rollback_base_weights(self):
+        self.lora_weights_manager.rollback_base_weights()
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.

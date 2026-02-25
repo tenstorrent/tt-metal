@@ -1,11 +1,7 @@
 import re
-import logging
+from loguru import logger
 from collections import defaultdict
-
-import torch
 import ttnn
-
-logger = logging.getLogger(__name__)
 
 
 class TtLoRAWeightsManager:
@@ -17,6 +13,13 @@ class TtLoRAWeightsManager:
         self.base_weights_device = {}
         self.lora_matrices = {}
         self.lora_weights = {}
+
+        self.mm_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def prepare_lora_linear_params(self, device, weights, bias, dtype, name, permute_weights=True):
         if permute_weights:
@@ -45,7 +48,8 @@ class TtLoRAWeightsManager:
             logger.warning("No LoRA parameters found in the pipeline UNet.")
             return
 
-        qkv_pending = defaultdict(dict)
+        # Process self-attention Q, K and V matrices separately
+        self_attention_matrices = defaultdict(dict)
 
         for layer_path, (lora_a, lora_b, scaling) in lora_params.items():
             scale = scaling * lora_scale
@@ -55,7 +59,7 @@ class TtLoRAWeightsManager:
             lora_a_T = lora_a.movedim(-1, -2).unsqueeze(0).unsqueeze(0)
             lora_b_T = lora_b.movedim(-1, -2).unsqueeze(0).unsqueeze(0)
 
-            # Self-attention QKV: separate LoRA deltas -> single fused QKV weight
+            # Collect self-attention QKV weights matrices
             if layer_path.endswith((".to_q", ".to_k", ".to_v")):
                 attn_path, component = layer_path.rsplit(".", 1)
                 if f"{attn_path}.to_qkv.weight" in self.base_weights_device:
@@ -65,11 +69,13 @@ class TtLoRAWeightsManager:
                     lora_b_tt = ttnn.from_torch(
                         lora_b_T, dtype=ttnn.bfloat8_b, device=self.device, layout=ttnn.TILE_LAYOUT
                     )
-                    delta_t = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b_tt), scale)
-                    qkv_pending[attn_path][component] = delta_t
+                    delta_t = ttnn.mul(
+                        ttnn.matmul(lora_a_tt, lora_b_tt, compute_kernel_config=self.mm_compute_config), scale
+                    )
+                    self_attention_matrices[attn_path][component] = delta_t
                     continue
 
-            # GEGLU: split lora_b on host, two matmuls on device
+            # Process GEGLU weights
             if (
                 f"{layer_path}.linear_1.weight" in self.base_weights_device
                 and f"{layer_path}.linear_2.weight" in self.base_weights_device
@@ -84,22 +90,27 @@ class TtLoRAWeightsManager:
                 lora_b2_tt = ttnn.from_torch(
                     lora_b2_T, dtype=ttnn.bfloat8_b, device=self.device, layout=ttnn.TILE_LAYOUT
                 )
-                delta_1 = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b1_tt), scale)
-                delta_2 = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b2_tt), scale)
-                self._apply_delta_on_device(f"{layer_path}.linear_1.weight", delta_1)
-                self._apply_delta_on_device(f"{layer_path}.linear_2.weight", delta_2)
+                delta_1 = ttnn.mul(
+                    ttnn.matmul(lora_a_tt, lora_b1_tt, compute_kernel_config=self.mm_compute_config), scale
+                )
+                delta_2 = ttnn.mul(
+                    ttnn.matmul(lora_a_tt, lora_b2_tt, compute_kernel_config=self.mm_compute_config), scale
+                )
+                self._apply_delta(f"{layer_path}.linear_1.weight", delta_1)
+                self._apply_delta(f"{layer_path}.linear_2.weight", delta_2)
                 continue
 
-            # Direct 1:1 mapping (cross-attn Q/K/V, to_out, proj_in/out, ff.net.2)
+            # Process cross-attn Q/K/V, to_out, proj_in/out, ff.net.2 weights
             lora_a_tt = ttnn.from_torch(lora_a_T, dtype=ttnn.bfloat8_b, device=self.device, layout=ttnn.TILE_LAYOUT)
             lora_b_tt = ttnn.from_torch(lora_b_T, dtype=ttnn.bfloat8_b, device=self.device, layout=ttnn.TILE_LAYOUT)
-            delta_t = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b_tt), scale)
-            self._apply_delta_on_device(f"{layer_path}.weight", delta_t)
+            delta_t = ttnn.mul(ttnn.matmul(lora_a_tt, lora_b_tt, compute_kernel_config=self.mm_compute_config), scale)
+            self._apply_delta(f"{layer_path}.weight", delta_t)
 
-        self._apply_qkv_deltas(qkv_pending)
+        self._apply_qkv_deltas(self_attention_matrices)
+
+        ttnn.synchronize_device(self.device)
 
     def _collect_lora_params(self):
-        """Extract LoRA A/B matrices and scaling from PEFT-wrapped UNet modules."""
         unet = self.torch_pipeline.unet
         lora_params = {}
 
@@ -120,11 +131,9 @@ class TtLoRAWeightsManager:
 
             lora_params[clean_name] = (lora_a, lora_b, scaling)
 
-        logger.info("Collected LoRA parameters for %d layers.", len(lora_params))
         return lora_params
 
-    def _apply_delta_on_device(self, base_key, delta):
-        """Add a [1,1,in,out]-shaped device delta to a base weight."""
+    def _apply_delta(self, base_key, delta):
         if base_key not in self.base_weights_device:
             logger.warning("Base weight key '%s' not found, skipping.", base_key)
             return
@@ -132,35 +141,24 @@ class TtLoRAWeightsManager:
         ttnn.add_(self.base_weights_device[base_key], delta)
 
     def _apply_qkv_deltas(self, qkv_pending):
-        """Fuse accumulated Q/K/V LoRA deltas into concatenated QKV base weights.
-
-        Stored QKV format: [1, 1, in_dim, 3*out_dim] where each component was
-        transposed before concatenation along dim=-1.
-        Deltas arrive already transposed as [1, 1, in_dim, out_dim].
-
-        Writes the fused result back to the original device buffer so that
-        TT module references see the update.
-        """
         for attn_path, components in qkv_pending.items():
             qkv_key = f"{attn_path}.to_qkv.weight"
             if qkv_key not in self.base_weights_device:
                 continue
 
-            base_host = self.base_weights_host[qkv_key]
-            base_torch = ttnn.to_torch(base_host).float()
-            out_dim_per_component = base_torch.shape[-1] // 3
+            to_q = components["to_q"]
+            to_k = components["to_k"]
+            to_v = components["to_v"]
 
-            parts_torch = []
-            for comp in ("to_q", "to_k", "to_v"):
-                if comp in components:
-                    parts_torch.append(ttnn.to_torch(components[comp]).float())
-                    ttnn.deallocate(components[comp])
-                else:
-                    parts_torch.append(torch.zeros(1, 1, base_torch.shape[-2], out_dim_per_component))
+            qkv_delta_tt = ttnn.concat([to_q, to_k, to_v], dim=-1)
 
-            qkv_delta_torch = torch.cat(parts_torch, dim=-1)
-            fused_torch = base_torch + qkv_delta_torch
+            ttnn.add_(self.base_weights_device[qkv_key], qkv_delta_tt)
+            ttnn.deallocate(qkv_delta_tt)
 
-            fused_host = ttnn.from_torch(fused_torch, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-            ttnn.copy_host_to_device_tensor(fused_host, self.base_weights_device[qkv_key])
-            self.base_weights_host[qkv_key] = fused_host
+    def rollback_base_weights(self):
+        for key in self.base_weights_device.keys():
+            host_tensor = self.base_weights_host[key]
+            device_tensor = self.base_weights_device[key]
+            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+
+        # unload lora weights from the memory: self.torch_pipleline.unload_lora_weights() or something like that
