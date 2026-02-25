@@ -88,6 +88,8 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         default_cache_root = Path(os.path.expanduser("~/.cache/ttnn/models"))
         cache_dir_env = os.environ.get("GLM4_MOE_LITE_CACHE_DIR", "").strip()
         cache_dir = Path(cache_dir_env) if cache_dir_env else (default_cache_root / "glm4_moe_lite" / "vllm")
+        import shutil
+        shutil.rmtree(cache_dir, ignore_errors=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(
@@ -139,6 +141,9 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             )
         self._kv_cache_shape = tuple(int(x) for x in kv_cache_shape)
         self._kv_cache_dtype = dtype
+        
+        # Ensure runner is created
+        self._ensure_tt_runner()
 
         # Allocate per-layer KVPE cache tensors.
         #

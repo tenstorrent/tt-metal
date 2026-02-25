@@ -297,6 +297,8 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
+        TTNN::Ops::Experimental::FusedPersistentMoeDecode
+        TTNN::Ops::Experimental::FusedPagedUpdateAndMla
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
@@ -541,6 +543,8 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_
 add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync)
+add_subdirectory(cpp/ttnn/operations/experimental/fused_persistent_moe_decode)
+add_subdirectory(cpp/ttnn/operations/experimental/fused_paged_update_and_mla)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)

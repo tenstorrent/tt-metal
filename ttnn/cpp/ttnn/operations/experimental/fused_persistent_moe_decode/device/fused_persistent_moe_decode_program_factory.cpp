@@ -121,12 +121,23 @@ ExecuteFusedPersistentMoeDecodeDeviceOperation::SingleCore::create(
     uint32_t w1_addr = w1_experts.buffer()->address();
     uint32_t w3_addr = w3_experts.buffer()->address();
     uint32_t w2_addr = w2_experts.buffer()->address();
-    SetRuntimeArgs(program, reader_kernel_id, all_cores, {input_addr, topk_indices_addr, topk_weights_addr, w1_addr, w3_addr, w2_addr, in0_num_tiles});
+    
+    uint32_t num_experts = w1_experts.logical_shape()[1];
+    uint32_t k = topk_expert_indices.logical_shape()[3];
+    uint32_t w1_expert_tiles = w1_experts.buffer()->num_pages() / num_experts;
+    uint32_t w3_expert_tiles = w3_experts.buffer()->num_pages() / num_experts;
+    uint32_t w2_expert_tiles = w2_experts.buffer()->num_pages() / num_experts;
+
+    SetRuntimeArgs(program, reader_kernel_id, all_cores, {
+        input_addr, topk_indices_addr, topk_weights_addr, 
+        w1_addr, w3_addr, w2_addr, 
+        in0_num_tiles, k, w1_expert_tiles, w3_expert_tiles, w2_expert_tiles
+    });
 
     uint32_t output_addr = output_tensor.buffer()->address();
     SetRuntimeArgs(program, writer_kernel_id, all_cores, {output_addr, in0_num_tiles});
     
-    SetRuntimeArgs(program, compute_kernel_id, all_cores, {in0_num_tiles});
+    SetRuntimeArgs(program, compute_kernel_id, all_cores, {in0_num_tiles, k, w1_expert_tiles, w3_expert_tiles, w2_expert_tiles});
 
     (void)cb_in0;
     (void)cb_out0;
@@ -169,12 +180,22 @@ void ExecuteFusedPersistentMoeDecodeDeviceOperation::SingleCore::override_runtim
     uint32_t output_addr = output_tensor.buffer()->address();
     uint32_t in0_num_tiles = input_tensor.buffer()->num_pages();
     
+    uint32_t num_experts = w1_experts.logical_shape()[1];
+    uint32_t k = topk_expert_indices.logical_shape()[3];
+    uint32_t w1_expert_tiles = w1_experts.buffer()->num_pages() / num_experts;
+    uint32_t w3_expert_tiles = w3_experts.buffer()->num_pages() / num_experts;
+    uint32_t w2_expert_tiles = w2_experts.buffer()->num_pages() / num_experts;
+
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)));
     
-    SetRuntimeArgs(program, reader_kernel_id, all_cores, {input_addr, topk_indices_addr, topk_weights_addr, w1_addr, w3_addr, w2_addr, in0_num_tiles});
+    SetRuntimeArgs(program, reader_kernel_id, all_cores, {
+        input_addr, topk_indices_addr, topk_weights_addr, 
+        w1_addr, w3_addr, w2_addr, 
+        in0_num_tiles, k, w1_expert_tiles, w3_expert_tiles, w2_expert_tiles
+    });
     SetRuntimeArgs(program, writer_kernel_id, all_cores, {output_addr, in0_num_tiles});
-    SetRuntimeArgs(program, compute_kernel_id, all_cores, {in0_num_tiles});
+    SetRuntimeArgs(program, compute_kernel_id, all_cores, {in0_num_tiles, k, w1_expert_tiles, w3_expert_tiles, w2_expert_tiles});
 }
 
 } // namespace ttnn::operations::experimental::fused_persistent_moe_decode
