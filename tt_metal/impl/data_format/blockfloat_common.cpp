@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <vector>
+#include <thread>
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
@@ -367,11 +369,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
 
-    std::vector<uint32_t> packed_result;
-
-    std::vector<uint8_t> exponents;
-    std::vector<uint32_t> data;
-
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword;
     if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
@@ -381,72 +378,143 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     } else {
         num_mantissas_in_dword = 4;
     }
-    int fp32_element_index = 0;
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint32_t> packed_data;
-        std::vector<uint8_t> exponents_with_padding;
-        exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
-        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                for (int i = 0; i < subtile_rows; ++i) {
-                    std::vector<uint32_t> single_row;
-                    // populate a single row
-                    for (int j = 0; j < subtile_cols; ++j) {
-                        int data_index;
-                        if (row_major_input) {
-                            data_index =
-                                (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
+
+    // Lambda to process a range of tiles
+    auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
+        std::vector<uint32_t> local_result;
+        std::vector<uint8_t> exponents;
+        std::vector<uint32_t> data;
+
+        for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+            std::vector<uint32_t> packed_data;
+            std::vector<uint8_t> exponents_with_padding;
+            exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+
+            int fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
+
+            for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                    for (int i = 0; i < subtile_rows; ++i) {
+                        std::vector<uint32_t> single_row;
+                        // populate a single row
+                        for (int j = 0; j < subtile_cols; ++j) {
+                            int data_index;
+                            if (row_major_input) {
+                                data_index =
+                                    (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
+                            } else {
+                                data_index = fp32_element_base +
+                                             (tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) +
+                                             i * subtile_cols + j;
+                            }
+                            float float_num = static_cast<float>(input_data[data_index]);
+                            uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
+                            single_row.push_back(uint32_num);
+                        }
+
+                        uint8_t exp = get_max_exp(single_row, is_exp_a);
+
+                        // check if it satifies the 16B alignment
+                        if (exponent_padding) {
+                            exponents_with_padding.push_back(exp);
                         } else {
-                            data_index = fp32_element_index++;
+                            exponents.push_back(exp);
+                            if (exponents.size() % num_exponents_in_dword == 0) {
+                                local_result.push_back(get_exp_dword(exponents));
+                                exponents.clear();
+                            }
                         }
-                        float float_num = static_cast<float>(input_data[data_index]);
-                        uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
-                        single_row.push_back(uint32_num);
-                    }
 
-                    uint8_t exp = get_max_exp(single_row, is_exp_a);
-
-                    // check if it satifies the 16B alignment
-                    if (exponent_padding) {
-                        exponents_with_padding.push_back(exp);
-                    } else {
-                        exponents.push_back(exp);
-                        if (exponents.size() % num_exponents_in_dword == 0) {
-                            packed_result.push_back(get_exp_dword(exponents));
-                            exponents.clear();
-                        }
-                    }
-
-                    for (uint32_t u32_datum : single_row) {
-                        data.push_back(u32_datum);
-                        if (data.size() % num_mantissas_in_dword == 0) {
-                            uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                            packed_data.push_back(datum);
-                            data.clear();
+                        for (uint32_t u32_datum : single_row) {
+                            data.push_back(u32_datum);
+                            if (data.size() % num_mantissas_in_dword == 0) {
+                                uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
+                                packed_data.push_back(datum);
+                                data.clear();
+                            }
                         }
                     }
                 }
             }
+            // prepend exponents to follow data packing order:
+            //  16 exponents for sub-tile 0​
+            //      exp_row0, exp_row1, … exp_row15​
+            //  16 exponents for sub-tile 1​
+            //  16 exponents for sub-tile 2​
+            //  16 exponents for sub-tile 3​
+            //  entire sub-tile 0 (RM layout)​
+            //  entire sub-tile 1 (RM layout)​
+            //  entire sub-tile 2 (RM layout)​
+            //  entire sub-tile 3 (RM layout)
+            // align the exponent section to 16B
+            if (exponent_padding) {
+                std::vector<uint8_t> pads(
+                    tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
+                exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
+                std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
+                local_result.insert(local_result.end(), packed.begin(), packed.end());
+            }
+            local_result.insert(local_result.end(), packed_data.begin(), packed_data.end());
         }
-        // prepend exponents to follow data packing order:
-        //  16 exponents for sub-tile 0​
-        //      exp_row0, exp_row1, … exp_row15​
-        //  16 exponents for sub-tile 1​
-        //  16 exponents for sub-tile 2​
-        //  16 exponents for sub-tile 3​
-        //  entire sub-tile 0 (RM layout)​
-        //  entire sub-tile 1 (RM layout)​
-        //  entire sub-tile 2 (RM layout)​
-        //  entire sub-tile 3 (RM layout)
-        // align the exponent section to 16B
-        if (exponent_padding) {
-            std::vector<uint8_t> pads(
-                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-            exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
-            std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
-            packed_result.insert(packed_result.end(), packed.begin(), packed.end());
-        }
-        packed_result.insert(packed_result.end(), packed_data.begin(), packed_data.end());
+
+        return local_result;
+    };
+
+    // Determine number of threads to use
+    // Only use multi-threading if we have enough tiles to justify the overhead
+    constexpr uint32_t MIN_TILES_PER_THREAD = 4;
+    uint32_t max_threads = std::thread::hardware_concurrency();
+    if (max_threads == 0) {
+        max_threads = 1;
+    }
+    uint32_t num_threads = std::min(max_threads, num_tiles / MIN_TILES_PER_THREAD);
+    num_threads = std::max(1u, num_threads);
+
+    if (num_threads == 1) {
+        // Single-threaded execution
+        return process_tile_range(0, num_tiles);
+    }
+
+    log_info(
+        tt::LogAlways,
+        "Converting to BFloat8 {} tiles with {} threads ({} tiles/thread)",
+        num_tiles,
+        num_threads,
+        num_tiles / num_threads);
+    // Multi-threaded execution
+    std::vector<std::thread> threads;
+    std::vector<std::vector<uint32_t>> thread_results(num_threads);
+    threads.reserve(num_threads);
+
+    uint32_t tiles_per_thread = num_tiles / num_threads;
+    uint32_t remainder = num_tiles % num_threads;
+
+    uint32_t start_tile = 0;
+    for (uint32_t t = 0; t < num_threads; ++t) {
+        uint32_t tiles_for_this_thread = tiles_per_thread + (t < remainder ? 1 : 0);
+        uint32_t end_tile = start_tile + tiles_for_this_thread;
+
+        threads.emplace_back(
+            [&, t, start_tile, end_tile]() { thread_results[t] = process_tile_range(start_tile, end_tile); });
+
+        start_tile = end_tile;
+    }
+
+    // Wait for all threads to complete
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // Concatenate results from all threads
+    std::vector<uint32_t> packed_result;
+    size_t total_size = 0;
+    for (const auto& result : thread_results) {
+        total_size += result.size();
+    }
+    packed_result.reserve(total_size);
+
+    for (auto& result : thread_results) {
+        packed_result.insert(packed_result.end(), result.begin(), result.end());
     }
 
     return packed_result;
