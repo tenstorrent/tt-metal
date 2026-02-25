@@ -285,7 +285,6 @@ struct FlashMLADecode {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             // Wait for KV cache cur pos ready
-            // TODO: add this back
             if constexpr (IsKVCacheUpdateCore) {
                 noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
             } else {

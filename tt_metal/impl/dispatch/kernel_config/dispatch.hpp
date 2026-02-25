@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <optional>
 
-#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
