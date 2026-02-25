@@ -24,7 +24,7 @@ namespace tt::tt_metal {
 
 class dispatch_core_manager;
 
-class RiscFirmwareInitializer final : public FirmwareInitializer {
+class RiscFirmwareInitializer : public FirmwareInitializer {
 public:
     static constexpr InitializerKey key = InitializerKey::Risc;
 
@@ -41,7 +41,7 @@ public:
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
     void configure() override;
-    void teardown() override;
+    void teardown(std::unordered_set<InitializerKey>& init_done) override;
     bool is_initialized() const override;
 
     void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
