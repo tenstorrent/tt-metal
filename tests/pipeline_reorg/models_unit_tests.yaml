@@ -75,7 +75,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
 - name: Llama 3.3-70B unit tests
@@ -111,7 +111,7 @@
     wh_galaxy:
       timeout: 30
       tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
 - name: Falcon-7B unit tests
@@ -125,7 +125,7 @@
     wh_n300:
       timeout: 5
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: UBHPP2NDP # Joseph Chu
   team: models
 
 - name: Falcon-40B unit tests
@@ -136,7 +136,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
 - name: Qwen2.5-7B unit tests
@@ -162,7 +162,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
 
 - name: Qwen2.5-VL-32B unit tests
@@ -175,7 +175,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
 - name: Phi-3-mini unit tests
@@ -223,5 +223,5 @@
 #     wh_n300:
 #       timeout: 5
 #       tier: 3
-#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
