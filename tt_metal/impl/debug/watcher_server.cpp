@@ -535,10 +535,14 @@ void WatcherServer::Impl::poll_watcher_data() {
         // Wait for the interval, but check stop flag frequently to exit early
         constexpr auto poll_interval = std::chrono::milliseconds(100);
         auto remaining = sleep_duration;
-        while (remaining > std::chrono::milliseconds(0) && !stop_server_.load()) {
+        while (remaining > std::chrono::milliseconds(0)) {
             auto wait_time = std::min(remaining, poll_interval);
             std::unique_lock<std::mutex> lock(watch_mutex_);
-            stop_server_cv_.wait_for(lock, wait_time);
+            // wait_for with predicate returns true if stop requested, false on timeout
+            // Only decrement remaining on timeout (predicate handles spurious wakeups internally)
+            if (stop_server_cv_.wait_for(lock, wait_time, [&] { return stop_server_.load(); })) {
+                break;
+            }
             remaining -= wait_time;
         }
         if (stop_server_.load()) {
