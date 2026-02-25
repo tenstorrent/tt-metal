@@ -225,7 +225,7 @@ def test_cross_attention_transformer_text_inference(
 
         TEXT_ONLY = False
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             T = get_ref_model_logits(
                 i,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
@@ -421,7 +421,7 @@ def test_cross_attention_transformer_text_inference(
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
         prev_pos = cur_pos
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,
