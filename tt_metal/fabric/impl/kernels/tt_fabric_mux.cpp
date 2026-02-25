@@ -179,7 +179,7 @@ void kernel_main() {
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
         full_size_channel_worker_interface_zero;
 
-    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>(
+    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
         &full_size_channels[0],
         &full_size_channel_worker_interface_zero,
         full_size_channel_connection_established[0],
@@ -192,7 +192,7 @@ void kernel_main() {
         StreamId{channel_stream_ids[0]});
 
     for (uint8_t i = 1; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_l1_ptr uint32_t*>(
+        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
             full_size_channel_connection_established[i],

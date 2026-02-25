@@ -388,9 +388,9 @@ void kernel_main() {
 
     // Detect if worker channel 0 uses stream register
     constexpr size_t STREAM_REG_BASE = 0xFFB00000;
-    bool worker_ch0_uses_stream_reg = (worker_connection_handshake_address >= STREAM_REG_BASE);
+    bool constexpr worker_ch0_uses_stream_reg = (connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX] >= STREAM_REG_BASE);
 
-    if (worker_ch0_uses_stream_reg) {
+    if constexpr (worker_ch0_uses_stream_reg) {
         // Setup channel 0 (may use stream register)
         setup_channel<NUM_BUFFERS_WORKER>(
             &worker_channels[0],

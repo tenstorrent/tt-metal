@@ -283,13 +283,13 @@ void kernel_main() {
     // Detect if worker channel 0 uses stream register (address >= 0xFFB00000) via address range check
     // Stream registers: 0xFFB00000 - 0xFFBC0000, L1: 0x0 - ~0x100000
     constexpr size_t STREAM_REG_BASE = 0xFFB00000;
-    bool worker_ch0_uses_stream_reg = (worker_connection_handshake_address >= STREAM_REG_BASE);
+    bool constexpr worker_ch0_uses_stream_reg = (connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX] >= STREAM_REG_BASE);
 
     // Worker channel 0 uses stream register - special handling with tt_reg_ptr
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>
         worker_channel_interface_zero;
 
-    if(worker_ch0_uses_stream_reg) {
+    if constexpr (worker_ch0_uses_stream_reg) {
         setup_channel<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>(
             &worker_channels[0],
             &worker_channel_interface_zero,
@@ -331,13 +331,13 @@ void kernel_main() {
     size_t router_flow_control_address = flow_control_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
 
     // Detect if router channel 0 uses stream register (address >= 0xFFB00000)
-    bool router_ch0_uses_stream_reg = (router_connection_handshake_address >= STREAM_REG_BASE);
+    bool constexpr router_ch0_uses_stream_reg = (connection_handshake_base_addrs[ROUTER_CHANNEL_TYPE_IDX] >= STREAM_REG_BASE);
 
     // Router channel 0 uses stream register - special handling with tt_reg_ptr
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>
         router_channel_interface_zero;
 
-    if (router_ch0_uses_stream_reg) {
+    if constexpr (router_ch0_uses_stream_reg) {
         setup_channel<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>(
             &router_channels[0],
             &router_channel_interface_zero,
@@ -395,7 +395,7 @@ void kernel_main() {
     fabric_connection.open<use_worker_allocated_credit_address>();
 
     // Wait for persistent channels to be ready
-    if (worker_ch0_uses_stream_reg) {
+    if constexpr (worker_ch0_uses_stream_reg) {
         // Handle worker channel 0 separately when using stream register
         if (worker_is_persistent[0] == 1) {
             wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interface_zero);
@@ -414,7 +414,7 @@ void kernel_main() {
         }
     }
 
-    if (router_ch0_uses_stream_reg) {
+    if constexpr (router_ch0_uses_stream_reg) {
         // Handle router channel 0 separately when using stream register
         if (router_is_persistent[0] == 1) {
             wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interface_zero);
@@ -443,7 +443,7 @@ void kernel_main() {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             // Process worker channels (WORKER_CHANNEL)
 
-            if (worker_ch0_uses_stream_reg) {
+            if constexpr (worker_ch0_uses_stream_reg) {
                 // Worker channel 0 with stream register interface
                 forward_data<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>(
                     worker_channels[0],
@@ -468,7 +468,7 @@ void kernel_main() {
             }
 
             // Process router channels (ROUTER_CHANNEL)
-            if (router_ch0_uses_stream_reg) {
+            if constexpr (router_ch0_uses_stream_reg) {
                 // Router channel 0 with stream register interface
                 forward_data<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>(
                     router_channels[0],
