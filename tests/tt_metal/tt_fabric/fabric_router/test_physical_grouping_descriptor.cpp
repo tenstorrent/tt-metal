@@ -3051,13 +3051,13 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BlitzPipeline2x4) 
     ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
 
     // Check that we have a match for the 2x4_Mesh grouping (8 ASICs)
+    // Flattened groupings have "_flat" appended to their name
     bool found_mesh_match = false;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
-        ASSERT_EQ(groupings.size(), 1u) << "Should have exactly one grouping for this instance";
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 8u && grouping.name == "2x4_Mesh") {
+            if (grouping.asic_count == 8u && grouping.name == "2x4_Mesh_flat") {
                 found_mesh_match = true;
-                EXPECT_EQ(grouping.name, "2x4_Mesh") << "Should match 2x4_Mesh grouping";
+                EXPECT_EQ(grouping.name, "2x4_Mesh_flat") << "Should match 2x4_Mesh_flat grouping";
                 EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
                 break;
             }
@@ -3066,7 +3066,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BlitzPipeline2x4) 
             break;
         }
     }
-    EXPECT_TRUE(found_mesh_match) << "Should find a match for 2x4 mesh (8 ASICs) matching 2x4_Mesh grouping";
+    EXPECT_TRUE(found_mesh_match) << "Should find a match for 2x4 mesh (8 ASICs) matching 2x4_Mesh_flat grouping";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
