@@ -54,7 +54,9 @@ struct TernaryKernelConfig {
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
+std::string override_addcmul_compute_kernel(KernelName kernel_name);
+
+uint32_t pack_scalar_runtime_arg(ScalarVariant scalar, DataType dtype);
 
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, DataType b_dtype, std::optional<DataType> c_dtype = std::nullopt);  // for binary & ternary variant

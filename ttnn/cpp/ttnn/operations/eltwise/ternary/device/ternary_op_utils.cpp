@@ -312,11 +312,36 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     }
 }
 
-uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
+std::string override_addcmul_compute_kernel(KernelName kernel_name) {
+    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
+    constexpr std::string_view compute = "{}/compute/{}";
+    switch (kernel_name) {
+        case KernelName::ComputeNoBcastAddcOp: return fmt::format(compute, root, "ternary_addcmul_int_sfpu.cpp");
+        case KernelName::ComputeBcastAddcOp:
+        case KernelName::ComputeRowBcastAddcOp: return fmt::format(compute, root, "ternary_addcmul_int_sfpu_bcast.cpp");
+        default: __builtin_unreachable();
+    }
+}
+
+inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
+}
+
+uint32_t pack_scalar_runtime_arg(const ScalarVariant scalar, const DataType dtype) {
+    return std::visit(
+        [dtype](auto&& v) -> uint32_t {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, float>) {
+                return pack_scalar_runtime_arg_float(v, dtype);
+            } else {
+                static_assert(std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>);
+                return std::bit_cast<uint32_t>(v);
+            }
+        },
+        scalar);
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
