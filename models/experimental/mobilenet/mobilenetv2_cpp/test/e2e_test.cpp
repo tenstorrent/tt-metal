@@ -54,7 +54,7 @@ void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshD
         mobilenetv2_trace_2cq.execute_mobilenetv2_trace_2cqs_inference(tt_inputs_host);
         pf.stop("inference time");
     }
-    
+
     pf.start("sync output");
     mobilenetv2_trace_2cq.get_output();
     pf.stop("sync output");
