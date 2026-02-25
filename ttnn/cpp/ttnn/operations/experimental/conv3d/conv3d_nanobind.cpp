@@ -62,25 +62,34 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
-    auto py_conv3d_config =
-        nb::class_<ttnn::experimental::prim::Conv3dConfig>(
-            mod,
-            "Conv3dConfig",
-            R"doc(
+    auto py_conv3d_config = nb::class_<ttnn::experimental::prim::Conv3dConfig>(
+                                mod,
+                                "Conv3dConfig",
+                                R"doc(
                             Configuration for the Conv3D operation.
                             )doc")
-            .def(nb::init<>())
-            .def(
-                nb::init<DataType, Layout, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
-                nb::kw_only(),
-                nb::arg("weights_dtype") = DataType::BFLOAT16,
-                nb::arg("output_layout") = Layout::ROW_MAJOR,
-                nb::arg("T_out_block") = 1,
-                nb::arg("W_out_block") = 1,
-                nb::arg("H_out_block") = 1,
-                nb::arg("C_out_block") = 0,
-                nb::arg("C_in_block") = 0,
-                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+                                .def(nb::init<>())
+                                .def(
+                                    nb::init<
+                                        DataType,
+                                        Layout,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        uint32_t,
+                                        std::array<uint32_t, 3>,
+                                        CoreCoord>(),
+                                    nb::kw_only(),
+                                    nb::arg("weights_dtype") = DataType::BFLOAT16,
+                                    nb::arg("output_layout") = Layout::ROW_MAJOR,
+                                    nb::arg("T_out_block") = 1,
+                                    nb::arg("W_out_block") = 1,
+                                    nb::arg("H_out_block") = 1,
+                                    nb::arg("C_out_block") = 0,
+                                    nb::arg("C_in_block") = 0,
+                                    nb::arg("dilation") = std::array<uint32_t, 3>{1, 1, 1},
+                                    nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_conv3d_config.def_rw("weights_dtype", &ttnn::experimental::prim::Conv3dConfig::weights_dtype, "");
     py_conv3d_config.def_rw("output_layout", &ttnn::experimental::prim::Conv3dConfig::output_layout, "");
@@ -89,6 +98,7 @@ void bind_conv3d(nb::module_& mod) {
     py_conv3d_config.def_rw("H_out_block", &ttnn::experimental::prim::Conv3dConfig::H_out_block, "");
     py_conv3d_config.def_rw("C_out_block", &ttnn::experimental::prim::Conv3dConfig::C_out_block, "");
     py_conv3d_config.def_rw("C_in_block", &ttnn::experimental::prim::Conv3dConfig::C_in_block, "");
+    py_conv3d_config.def_rw("dilation", &ttnn::experimental::prim::Conv3dConfig::dilation, "");
     py_conv3d_config.def_rw(
         "compute_with_storage_grid_size", &ttnn::experimental::prim::Conv3dConfig::compute_with_storage_grid_size, "");
 
