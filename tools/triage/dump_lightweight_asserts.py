@@ -70,18 +70,18 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
             code_line = lines[line - 1]
             start_index = -1
             while True:
-                new_index = code_line.find("ASSERT(", start_index + 1)
+                new_index = code_line.find("LLK_ASSERT(", start_index + 1)
                 if new_index == -1 or (column is not None and new_index >= column):
                     break
                 start_index = new_index
             if start_index == -1:
-                return "?ASSERT() not found?"
+                return "?LLK_ASSERT() not found?"
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
-            # Find the matching closing parenthesis for ASSERT(
+            # Find the matching closing parenthesis for LLK_ASSERT(
             open_paren_index = code_line.find("(", start_index)
             if open_paren_index == -1:
-                return "?ASSERT() not opened?"
+                return "?LLK_ASSERT() not opened?"
             paren_count = 1
             i = open_paren_index + 1
             while i < len(code_line):
@@ -93,7 +93,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "?ASSERT() not closed?"
+                return "?LLK_ASSERT() not closed?"
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
