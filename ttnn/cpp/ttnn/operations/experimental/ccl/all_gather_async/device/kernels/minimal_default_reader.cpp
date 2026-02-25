@@ -275,53 +275,60 @@ void kernel_main() {
                     }
                 }
 
-                // Step 1: Wait for ALL semaphores (sender's full slice pattern)
-                // This ensures all data is ready in output memory before we read
-                uint32_t sem_iter_pos = input_tile_id_start;
-                while (sem_iter_pos < input_tile_id_end) {
-                    if (chunk_count % chunks_per_sync == 0) {
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                        sem_target++;
-                    }
-                    chunk_count++;
-                    uint32_t tiles_remaining = input_tile_id_end - sem_iter_pos;
-                    sem_iter_pos += std::min(tiles_remaining, num_tiles_to_write_per_packet);
-                }
-
-                // Step 2: Push CB based on writer's half pattern
-                // The CB chunk boundaries must match what the writer expects
+                // CB tile range (writer's expected pattern)
                 uint32_t cb_tile_start = is_split_forwarded_slice && direction == 1
                                              ? input_tile_id_start + first_half_tiles
                                              : input_tile_id_start;
                 uint32_t cb_tile_end = is_split_forwarded_slice && direction == 0
                                            ? input_tile_id_start + first_half_tiles
                                            : input_tile_id_end;
+                uint32_t cb_tiles_pushed = cb_tile_start;
 
-                uint32_t cb_tiles_read = cb_tile_start;
-                while (cb_tiles_read < cb_tile_end) {
-                    uint32_t tiles_remaining = cb_tile_end - cb_tiles_read;
-                    uint32_t num_tiles_to_read = std::min(tiles_remaining, num_tiles_to_write_per_packet);
+                // Iterate over FULL slice for semaphores, push CB when tiles are covered
+                uint32_t sem_iter_pos = input_tile_id_start;
+                while (sem_iter_pos < input_tile_id_end) {
+                    // Wait for semaphore (sender's full slice pattern)
+                    if (chunk_count % chunks_per_sync == 0) {
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                    }
+                    chunk_count++;
 
-                    cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-                    size_t l1_write_addr = get_write_ptr(cb_output_id);
+                    uint32_t tiles_remaining = input_tile_id_end - sem_iter_pos;
+                    sem_iter_pos += std::min(tiles_remaining, num_tiles_to_write_per_packet);
 
-                    for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
-                        uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
-                        uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
-                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                    // Push CB entries for tiles now covered by semaphores (writer's half pattern)
+                    while (cb_tiles_pushed < cb_tile_end) {
+                        uint32_t cb_tiles_remaining = cb_tile_end - cb_tiles_pushed;
+                        uint32_t num_tiles_to_read = std::min(cb_tiles_remaining, num_tiles_to_write_per_packet);
 
-                        l1_write_addr += page_size;
-                        cb_pages_read_in_row++;
-                        if (cb_pages_read_in_row >= slice_Wt) {
-                            cb_row_offset += stride_Wt;
-                            cb_pages_read_in_row = 0;
+                        // Check if all tiles for this CB entry are ready
+                        if (cb_tiles_pushed + num_tiles_to_read <= sem_iter_pos) {
+                            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
+                            size_t l1_write_addr = get_write_ptr(cb_output_id);
+
+                            for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                                uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
+                                uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
+                                noc_async_read(noc_read_addr, l1_write_addr, page_size);
+
+                                l1_write_addr += page_size;
+                                cb_pages_read_in_row++;
+                                if (cb_pages_read_in_row >= slice_Wt) {
+                                    cb_row_offset += stride_Wt;
+                                    cb_pages_read_in_row = 0;
+                                }
+                            }
+
+                            noc_async_read_barrier();
+                            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+                            cb_tiles_pushed += num_tiles_to_read;
+                        } else {
+                            // Need more semaphores before we can push this CB entry
+                            break;
                         }
                     }
-
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
-                    cb_tiles_read += num_tiles_to_read;
                 }
 
                 num_channels_processed_in_current_batch++;
