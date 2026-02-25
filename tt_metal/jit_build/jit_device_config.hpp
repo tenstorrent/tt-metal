@@ -22,6 +22,13 @@ namespace tt::tt_metal {
 
 class Hal;
 
+// Device-specific configuration snapshot consumed by the JIT build system.
+//
+// Captures the hardware topology, dispatch layout, and memory parameters that
+// influence kernel compilation. Instances are intended to be created once per
+// device via `create_jit_device_config` and then treated as read-only; the
+// build pipeline uses these values to produce compiler defines and to compute
+// a cache key that uniquely identifies a build configuration.
 struct JitDeviceConfig {
     const Hal* hal = nullptr;
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -49,10 +56,22 @@ struct JitDeviceConfig {
     uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
 };
 
+// Construct a JitDeviceConfig by querying a live device through MetalContext.
+//
+// All topology and memory parameters (bank counts, PCIe core location,
+// harvesting mask, dispatch layout, etc.) are read from the cluster and SoC
+// descriptor for the given `device_id`; nothing is inferred from static
+// configuration files alone. Because of this, the device must be accessible at
+// call time.
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs);
 
+// Translate a JitDeviceConfig into the set of preprocessor defines that are
+// passed to device-side kernel compilation.
 std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config);
 
+// Produce a deterministic hash that uniquely identifies the build configuration
+// implied by `config` and `rtoptions`. Two devices that yield the same key can
+// share compiled kernel artifacts.
 uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions);
 
 // TODO: Add a factory method to create JitDeviceConfig from a YAML profile
