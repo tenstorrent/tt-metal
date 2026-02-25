@@ -7,10 +7,10 @@ Scaffolding to sweep matmul program-config parameters for Deepseek V3 DIDT
 matmuls and print timing results for tuning maximum compute utilization.
 
 Run with pytest, e.g.:
-  pytest tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 50
+  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 50
 
 Use -s to see printed results. Optionally restrict to one workload with -k, e.g.:
-  pytest tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s -k "dense_mlp_w1" --didt-workload-iterations 20
+  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s -k "dense_mlp_w1" --didt-workload-iterations 20
 
 Input, output, and weights all in DRAM; 11×10 core grid; HiFi2 math fidelity.
 
@@ -22,7 +22,7 @@ core count are used. CSV and summary include core_count.
 
 If the test times out (full sweep can take a long time), increase the timeout via
 pytest-timeout's command-line option, e.g.:
-  pytest tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --timeout=7200 --didt-workload-iterations 50
+  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --timeout=7200 --didt-workload-iterations 50
 (7200 = 2 hours). The test has a default timeout of 3600s (1 hour).
 """
 
@@ -30,12 +30,12 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from loguru import logger
 import pytest
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole, skip_for_wormhole_b0
-
-from tests.didt.deepseek_v3_matmul_config import (
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     DENSE_MLP_MATMUL_PARAMS,
     GATE_MATMUL_CONFIG,
     MLA_MATMUL_PARAMS,
@@ -45,7 +45,6 @@ from tests.didt.deepseek_v3_matmul_config import (
 )
 from tests.didt.op_test_base import OpParameter, OpTestBase
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
-
 
 # 11×10 core grid (110 cores). All tensors in DRAM, HiFi2.
 # Use 11×10 to avoid dispatch cores on Blackhole (last column is reserved).

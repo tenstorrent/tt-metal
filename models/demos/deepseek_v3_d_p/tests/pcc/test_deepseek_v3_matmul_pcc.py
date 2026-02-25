@@ -8,14 +8,12 @@ optimal program configurations. Single-chip only; one matmul per workload,
 compare TT output to torch reference.
 """
 
+import pytest
 import torch
 
-import pytest
 import ttnn
-
 from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_wormhole_b0
-
-from tests.didt.deepseek_v3_matmul_config import (
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     DENSE_MLP_MATMUL_PARAMS,
     GATE_MATMUL_CONFIG,
     GRID_SIZE,
@@ -26,7 +24,6 @@ from tests.didt.deepseek_v3_matmul_config import (
     get_prefill_matmul_program_config,
 )
 from tests.didt.op_test_base import OpParameter, OpTestBase
-
 
 # Minimum PCC to pass (same as comp_pcc default)
 PCC_THRESHOLD = 0.99

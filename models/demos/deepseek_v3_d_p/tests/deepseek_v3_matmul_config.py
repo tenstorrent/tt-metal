@@ -4,8 +4,8 @@
 
 """
 Shared matmul configurations for Deepseek V3 128k DIDT tests, PCC unit tests,
-and the sweep tuner. Imported by test_deepseek_v3_128k_matmul.py,
-test_deepseek_v3_matmul_pcc.py, and sweep_deepseek_v3_matmul_tune.py.
+and the sweep tuner. Imported by tests/didt/test_deepseek_v3_128k_matmul.py,
+tests/didt/sweep_deepseek_v3_matmul_tune.py, and tests/pcc/test_deepseek_v3_matmul_pcc.py.
 """
 
 import math

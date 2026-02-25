@@ -12,24 +12,23 @@ and 8×4 Galaxy (32 chips) configurations.
 Per-chip grid: 11×10 (110 worker cores) only.
 """
 
-from loguru import logger
 import pytest
-import torch
+from loguru import logger
 
-from tests.didt.deepseek_v3_matmul_config import (
-    DENSE_MLP_MATMUL_PARAMS as DENSE_MLP_PARAMS,
-    GATE_MATMUL_CONFIG,
-    GRID_SIZE,
-    MLA_MATMUL_PARAMS as MLA_PARAMS,
-    OPTIMAL_PROGRAM_CONFIG,
-    ROUTED_EXPERT_MATMUL_PARAMS as ROUTED_EXPERT_PARAMS,
-    SHARED_EXPERT_MATMUL_PARAMS as SHARED_EXPERT_PARAMS,
-    get_prefill_matmul_program_config,
-)
-from tests.didt.op_test_base import OpParameter, OpTestBase
 import ttnn
-from models.common.utility_functions import skip_for_wormhole_b0, is_blackhole
-
+from models.common.utility_functions import is_blackhole, skip_for_wormhole_b0
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import DENSE_MLP_MATMUL_PARAMS as DENSE_MLP_PARAMS
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import GATE_MATMUL_CONFIG, GRID_SIZE
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import MLA_MATMUL_PARAMS as MLA_PARAMS
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import OPTIMAL_PROGRAM_CONFIG
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
+    ROUTED_EXPERT_MATMUL_PARAMS as ROUTED_EXPERT_PARAMS,
+)
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
+    SHARED_EXPERT_MATMUL_PARAMS as SHARED_EXPERT_PARAMS,
+)
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import get_prefill_matmul_program_config
+from tests.didt.op_test_base import OpParameter, OpTestBase
 
 # ---------------------------------------------------------------------------
 # Test class
