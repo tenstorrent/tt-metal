@@ -243,19 +243,24 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
 
     # Choose hot tokens spread across different device shards so the all-gather
     # path is exercised. With 8 shards of 32768 each, pick tokens in different shards.
+    # Ensure all hot tokens are within VOCAB_SIZE (not in padding region).
     per_device_vocab = args.padded_vocab_size // num_tp
     num_hot = min(top_k, 8)  # Use up to 8 hot tokens
     hot_tokens = []
     for i in range(num_hot):
-        # Place one hot token in each of the first num_hot shards
         shard_idx = i % num_tp
-        token_in_shard = 100 + i  # Avoid token 0 edge cases
-        hot_tokens.append(shard_idx * per_device_vocab + token_in_shard)
+        candidate = shard_idx * per_device_vocab + 100 + i
+        if candidate >= VOCAB_SIZE:
+            # Fall back to a token in shard 0 if this shard is in the padding region
+            candidate = 200 + i
+        hot_tokens.append(candidate)
 
-    # Create logits: hot tokens at 10.0, everything else near 0, padding at -inf
+    # Create logits: hot tokens at varied high values (8.0-10.0), everything else
+    # near 0, padding at -inf. Varied values ensure softmax produces a non-uniform
+    # distribution so the PRNG actually samples different tokens.
     torch_input = torch.full((1, 1, batch_size, args.padded_vocab_size), 0.001)
-    for tok in hot_tokens:
-        torch_input[:, :, :, tok] = 10.0
+    for idx, tok in enumerate(hot_tokens):
+        torch_input[:, :, :, tok] = 10.0 - idx * 0.25  # 10.0, 9.75, 9.5, ...
     torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")
 
     # Shard to device
