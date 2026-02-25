@@ -3,6 +3,7 @@ include(sources.cmake)
 
 add_executable(unit_tests_llk ${UNIT_TESTS_LLK_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_llk)
+target_precompile_headers(unit_tests_llk REUSE_FROM metal_common_pch)
 
 target_link_libraries(unit_tests_llk PUBLIC test_metal_common_libs)
 target_include_directories(

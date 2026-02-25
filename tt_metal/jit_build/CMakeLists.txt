@@ -15,6 +15,7 @@ add_library(jit_build OBJECT ${JIT_BUILD_SRCS})
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(jit_build)
+target_precompile_headers(jit_build REUSE_FROM metal_common_pch)
 
 target_link_libraries(
     jit_build

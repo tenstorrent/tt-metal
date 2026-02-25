@@ -28,6 +28,7 @@ target_link_libraries(
 )
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
+target_precompile_headers(unit_tests_api_lib REUSE_FROM metal_common_pch)
 
 # Create the test executable
 add_executable(unit_tests_api)
