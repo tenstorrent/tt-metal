@@ -228,13 +228,13 @@ references it via `optimizer_config`.
 
 | File | Type | Description |
 |------|------|-------------|
-| `adamw.yaml` | AdamW | Fused AdamW — single custom kernel per step (default, recommended). Supports stochastic rounding. |
+| `adamw.yaml` | AdamW | Fused AdamW — version with bf16 state (default, recommended). Supports stochastic rounding. |
 | `adamw_full_precision.yaml` | AdamWFullPrecision | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
-| `moreh_adamw.yaml` | MorehAdamW | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation |
-| `adamw_composite.yaml` | AdamWComposite | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
-| `sgd.yaml` | SGD | Fused SGD — single custom kernel per step (default, recommended) |
-| `sgd_composite.yaml` | SGDComposite | SGD built from individual TTNN ops (no custom kernel) |
-| `no_op.yaml` | NoOp | No-op optimizer (no parameter updates) |
+| `moreh_adamw.yaml` | MorehAdamW | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
+| `adamw_composite.yaml` | AdamWComposite | Composite AdamW built from individual TTNN ops. Supports Kahan summation. |
+| `sgd.yaml` | SGD | Fused SGD — version with bf16 state (default, recommended). |
+| `sgd_composite.yaml` | SGDComposite | Composite SGD built from individual TTNN ops. |
+| `no_op.yaml` | NoOp | No-op optimizer (no parameter updates). |
 
 ### AdamW Parameters
 
