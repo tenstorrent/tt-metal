@@ -206,7 +206,7 @@ class MLA1D(AbstractModule):
         }
 
         # DRAM sharding configuration
-        num_dram_banks = 12
+        num_dram_banks = device.dram_grid_size().x
 
         # Create DRAM WIDTH sharded memory config for wq_b
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
@@ -671,7 +671,7 @@ class MLA1D(AbstractModule):
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
         qkv_a_num_out_cores = qkv_a_out_core_grid.x * qkv_a_out_core_grid.y
         qkv_a_in0_block_w = hidden_size_per_device // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
-        qkv_a_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        qkv_a_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
         qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -690,7 +690,7 @@ class MLA1D(AbstractModule):
 
         # Output L1 WIDTH sharded memory config for qkv_a (using padded n)
         qkv_a_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, USERS_PER_ROW, qkv_a_n_padded],
+            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), qkv_a_n_padded],
             core_grid=qkv_a_out_core_grid,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -718,7 +718,7 @@ class MLA1D(AbstractModule):
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
         wq_b_num_out_cores = wq_b_out_core_grid.x * wq_b_out_core_grid.y
         wq_b_in0_block_w = q_lora_rank // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
-        wq_b_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        wq_b_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
         wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -737,7 +737,7 @@ class MLA1D(AbstractModule):
 
         # Output L1 WIDTH sharded memory config for wq_b (using padded n)
         wq_b_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, USERS_PER_ROW, wq_b_n_padded],
+            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wq_b_n_padded],
             core_grid=wq_b_out_core_grid,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -756,7 +756,7 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wkv_b1_batch = num_heads_local  # 16
         wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch)  # 24
-        wkv_b1_m = USERS_PER_ROW  # 32
+        wkv_b1_m = ttnn.core.roundup(USERS_PER_ROW, tile_size)  # roundup(32, 32) = 32
         wkv_b1_k = qk_nope_head_dim  # 128
         wkv_b1_n = kv_lora_rank  # 512
 
@@ -813,10 +813,14 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wkv_b2_batch = num_heads  # 128
         wkv_b2_batch_padded = pad_batch_to_dram_banks(wkv_b2_batch)  # 132
-        wkv_b2_m = 32  # m dimension (tiny tile height)
+
+        # wkv_b2 is meant to run with tiny tiles as K=4
+        # However, this is pending functionality for the preceding transpose to output tensors in a tiny tile shape
+        # For now, this is kept as a full tile instead
+        wkv_b2_m = 32  # m dimension
         wkv_b2_k = kv_lora_rank  # 512
         wkv_b2_n = v_head_dim  # 128
-        wkv_b2_tile_h = 32  # Tiny tile for wkv_b2
+        wkv_b2_tile_h = 32
 
         # Program config for wkv_b2 (batched DRAM sharded)
         wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
@@ -881,7 +885,7 @@ class MLA1D(AbstractModule):
         wo_num_in0_cores = wo_in0_core_grid.x * wo_in0_core_grid.y
         wo_num_out_cores = wo_out_core_grid.x * wo_out_core_grid.y
         wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 16 // 32 = 32
-        wo_per_core_M = USERS_PER_ROW // tile_size  # 32 // 32 = 1
+        wo_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
         wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 12 // 32 = 3
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -900,7 +904,7 @@ class MLA1D(AbstractModule):
 
         # Output L1 WIDTH sharded memory config for wo (using padded n)
         wo_out_memory_config = ttnn.create_sharded_memory_config(
-            [1, 1, USERS_PER_ROW, wo_n_padded],
+            [1, 1, ttnn.core.roundup(USERS_PER_ROW, tile_size), wo_n_padded],
             core_grid=wo_out_core_grid,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
