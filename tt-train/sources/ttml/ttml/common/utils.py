@@ -86,6 +86,9 @@ def create_optimizer(model, yaml_config: dict):
 
     params = model.parameters()
 
+    if cfg.type == "NoOp":
+        return ttml.optimizers.NoOp(params)
+
     if cfg.type == "AdamW":
         adamw_cfg = ttml.optimizers.AdamWConfig.make(
             cfg.lr,
@@ -93,18 +96,21 @@ def create_optimizer(model, yaml_config: dict):
             cfg.beta2,
             cfg.epsilon,
             cfg.weight_decay,
+            cfg.amsgrad,
+            cfg.stochastic_rounding,
         )
         return ttml.optimizers.AdamW(params, adamw_cfg)
 
-    if cfg.type == "MorehAdamW":
-        adamw_cfg = ttml.optimizers.AdamWCompositeConfig.make(
+    if cfg.type == "AdamWFullPrecision":
+        adamw_cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
             cfg.lr,
             cfg.beta1,
             cfg.beta2,
             cfg.epsilon,
             cfg.weight_decay,
+            cfg.amsgrad,
         )
-        return ttml.optimizers.MorehAdamW(params, adamw_cfg)
+        return ttml.optimizers.AdamWFullPrecision(params, adamw_cfg)
 
     if cfg.type == "SGD":
         sgd_cfg = ttml.optimizers.SGDConfig.make(

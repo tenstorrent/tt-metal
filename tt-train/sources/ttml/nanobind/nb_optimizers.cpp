@@ -18,7 +18,8 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/adamw_composite.hpp"
+#include "optimizers/adamw_full_precision.hpp"
+#include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
@@ -31,9 +32,10 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
-    nb::class_<AdamWCompositeConfig>(m, "AdamWCompositeConfig");
+    nb::class_<AdamWFullPrecisionConfig>(m, "AdamWFullPrecisionConfig");
     nb::class_<AdamW, OptimizerBase>(m, "AdamW");
-    nb::class_<MorehAdamW, OptimizerBase>(m, "MorehAdamW");
+    nb::class_<AdamWFullPrecision, OptimizerBase>(m, "AdamWFullPrecision");
+    nb::class_<NoOp, OptimizerBase>(m, "NoOp");
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
 
@@ -82,33 +84,54 @@ void py_module(nb::module_& m) {
         py_adamw_config.def(nb::init<>());
         py_adamw_config.def_static(
             "make",
-            [](float lr, float beta1, float beta2, float epsilon, float weight_decay) {
+            [](float lr,
+               float beta1,
+               float beta2,
+               float epsilon,
+               float weight_decay,
+               bool amsgrad,
+               bool stochastic_rounding) {
                 return AdamWConfig{
-                    .lr = lr, .beta1 = beta1, .beta2 = beta2, .epsilon = epsilon, .weight_decay = weight_decay};
+                    .lr = lr,
+                    .beta1 = beta1,
+                    .beta2 = beta2,
+                    .epsilon = epsilon,
+                    .weight_decay = weight_decay,
+                    .amsgrad = amsgrad,
+                    .stochastic_rounding = stochastic_rounding};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
             nb::arg("beta2"),
             nb::arg("epsilon"),
             nb::arg("weight_decay"),
+            nb::arg("amsgrad") = false,
+            nb::arg("stochastic_rounding") = false,
             "Make an AdamWConfig object");
     }
 
     {
-        auto py_adamw_composite_config = static_cast<nb::class_<AdamWCompositeConfig>>(m.attr("AdamWCompositeConfig"));
-        py_adamw_composite_config.def(nb::init<>());
-        py_adamw_composite_config.def_static(
+        auto py_adamw_full_precision_config =
+            static_cast<nb::class_<AdamWFullPrecisionConfig>>(m.attr("AdamWFullPrecisionConfig"));
+        py_adamw_full_precision_config.def(nb::init<>());
+        py_adamw_full_precision_config.def_static(
             "make",
-            [](float lr, float beta1, float beta2, float epsilon, float weight_decay) {
-                return AdamWCompositeConfig{
-                    .lr = lr, .beta1 = beta1, .beta2 = beta2, .epsilon = epsilon, .weight_decay = weight_decay};
+            [](float lr, float beta1, float beta2, float epsilon, float weight_decay, bool amsgrad) {
+                return AdamWFullPrecisionConfig{
+                    .lr = lr,
+                    .beta1 = beta1,
+                    .beta2 = beta2,
+                    .epsilon = epsilon,
+                    .weight_decay = weight_decay,
+                    .amsgrad = amsgrad};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
             nb::arg("beta2"),
             nb::arg("epsilon"),
             nb::arg("weight_decay"),
-            "Make an AdamWCompositeConfig object");
+            nb::arg("amsgrad") = false,
+            "Make an AdamWFullPrecisionConfig object");
     }
 
     {
@@ -118,11 +141,17 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_moreh_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("MorehAdamW"));
-        py_moreh_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWCompositeConfig&>(),
+        auto py_adamw_full_precision =
+            static_cast<nb::class_<AdamWFullPrecision, OptimizerBase>>(m.attr("AdamWFullPrecision"));
+        py_adamw_full_precision.def(
+            nb::init<serialization::NamedParameters, const AdamWFullPrecisionConfig&>(),
             nb::arg("parameters"),
             nb::arg("config"));
+    }
+
+    {
+        auto py_no_op = static_cast<nb::class_<NoOp, OptimizerBase>>(m.attr("NoOp"));
+        py_no_op.def(nb::init<serialization::NamedParameters>(), nb::arg("parameters"));
     }
 
     {
