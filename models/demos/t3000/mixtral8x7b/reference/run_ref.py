@@ -28,7 +28,7 @@ def main():
         state_dict = model_args.load_state_dict()
     else:  # Use default HF weights
         state_dict = {}
-        for i in range(1 + (n_layers - 1) // 4):
+        for i in range(1 + (model_args.n_layers - 1) // 4):
             state_dict_i = torch.load(model_args.consolidated_weights_path(i), map_location="cpu")
             state_dict.update(state_dict_i)
 

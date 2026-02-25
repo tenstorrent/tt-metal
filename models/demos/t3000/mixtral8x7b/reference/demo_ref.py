@@ -133,5 +133,5 @@ def run_mixtral_demo(user_input, batch_size):
             users_decoding = False
 
 
-def test_ref_demo(user_input="models/demos/mixtral8x7b/reference/input_data.json", batch_size=32):
+def test_ref_demo(user_input="models/demos/t3000/mixtral8x7b/reference/input_data.json", batch_size=32):
     return run_mixtral_demo(user_input=user_input, batch_size=batch_size)
