@@ -14,14 +14,17 @@ from loguru import logger
 
 def generate_pcie_to_logical_mappings(host_vector, mpi_user=None, worker_tt_metal_home=None, output_dir=None):
     """Run on each host to collect PCI->logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs."""
+    # Script path for remote execution (worker) or local
     if worker_tt_metal_home:
         wh = Path(worker_tt_metal_home)
         python_script = wh / "models/demos/deepseek_v3_b1/scaleout_configs/output_pcie_to_logical_mapping.py"
     else:
         python_script = Path(__file__).parent / "output_pcie_to_logical_mapping.py"
 
-    if not python_script.exists():
-        logger.error(f"Mapping script not found: {python_script}")
+    # Existence check uses local path: runner has checkout, worker has copy at worker_tt_metal_home
+    local_script = Path(__file__).parent / "output_pcie_to_logical_mapping.py"
+    if not local_script.exists():
+        logger.error(f"Mapping script not found: {local_script}")
         sys.exit(1)
 
     base_dir = output_dir or "."
