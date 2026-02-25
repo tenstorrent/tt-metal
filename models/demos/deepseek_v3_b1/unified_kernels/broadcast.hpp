@@ -171,6 +171,9 @@ struct Broadcast {
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
                 constexpr uint32_t secondary_connection_idx = num_primary_connections;
+
+                // Reset pool so broadcast can be called across loop iterations
+                PacketHeaderPool::reset();
                 size_t arg_for_fab = 0;
 
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);

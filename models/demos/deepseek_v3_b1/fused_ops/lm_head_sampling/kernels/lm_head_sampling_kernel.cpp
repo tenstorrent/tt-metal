@@ -307,9 +307,13 @@ void kernel_main() {
             sampling_op;
 
     uint32_t iteration_count = 0;
-    mcast.init(mcast_args);
     while (true) {
         iteration_count++;
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::persistent_mode) {
+            PacketHeaderPool::reset();
+        }
+#endif
         // ====================================================================
         // Phase 0: broadcast_rms-style combined path.
         // ====================================================================
@@ -406,7 +410,7 @@ void kernel_main() {
         }
 
         // DPRINT << "MCAST" << ENDL();
-        // Keep mcast init/teardown in-loop to preserve prior ordering semantics.
+        mcast.init(mcast_args);
         {
             DeviceZoneScopedN("MCAST");
 #if defined(COMPILE_FOR_NCRISC)
@@ -455,6 +459,7 @@ void kernel_main() {
             }
 #endif
         }
+        mcast.teardown();
 
         // DPRINT << "MATMUL" << ENDL();
         {
@@ -513,5 +518,4 @@ void kernel_main() {
             break;
         }
     }
-    mcast.teardown();
 }
