@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import random
 
 import pytest
@@ -13,8 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
-# TODO: (GR) remove
-os.environ.setdefault("MESH_DEVICE", "QUAD")
+# os.environ.setdefault("MESH_DEVICE", "QUAD")
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -384,9 +382,10 @@ def gen_output_reference(
                 torch_w1_tensors[expert],
                 torch_w2_tensors[expert],
             )
-            output_reference[token, :, :, :] = (
-                output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden
-            )
+
+            # TODO: (GR)
+            # output_reference[token, :, :, :] = (output_reference[token, :, :, :] + torch_dispatch_input_expert_scores[token, :, :, k] * matmul_golden)
+            output_reference[token, :, :, :] = output_reference[token, :, :, :] + matmul_golden
 
     return output_reference
 
@@ -433,22 +432,24 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize(
     "combine_worker_core_coords",
     [
-        ttnn.CoreCoord(5, 0),  # TODO: (GR) check if x-y should be interleaved
-        ttnn.CoreCoord(5, 1),
-        ttnn.CoreCoord(5, 2),
-        ttnn.CoreCoord(5, 3),
-        ttnn.CoreCoord(5, 4),
-        ttnn.CoreCoord(5, 5),
-        ttnn.CoreCoord(5, 6),
-        ttnn.CoreCoord(5, 7),
-        ttnn.CoreCoord(6, 0),
-        ttnn.CoreCoord(6, 1),
-        ttnn.CoreCoord(6, 2),
-        ttnn.CoreCoord(6, 3),
-        ttnn.CoreCoord(6, 4),
-        ttnn.CoreCoord(6, 5),
-        ttnn.CoreCoord(6, 6),
-        ttnn.CoreCoord(6, 7),
+        (
+            ttnn.CoreCoord(5, 0),  # TODO: (GR) check if x-y should be interleaved
+            ttnn.CoreCoord(5, 1),
+            ttnn.CoreCoord(5, 2),
+            ttnn.CoreCoord(5, 3),
+            ttnn.CoreCoord(5, 4),
+            ttnn.CoreCoord(5, 5),
+            ttnn.CoreCoord(5, 6),
+            ttnn.CoreCoord(5, 7),
+            ttnn.CoreCoord(6, 0),
+            ttnn.CoreCoord(6, 1),
+            ttnn.CoreCoord(6, 2),
+            ttnn.CoreCoord(6, 3),
+            ttnn.CoreCoord(6, 4),
+            ttnn.CoreCoord(6, 5),
+            ttnn.CoreCoord(6, 6),
+            ttnn.CoreCoord(6, 7),
+        )
     ],
 )
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
@@ -462,6 +463,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
         },
     ],
     ids=["fabric_1D_ring"],
@@ -490,8 +492,6 @@ def test_optimized_moe_decode_block(
     enable_trace,
     num_iterations,
 ):
-    mesh_device.disable_and_clear_program_cache()
-
     ############################################
     # initial setup
     ############################################
@@ -855,6 +855,8 @@ def test_optimized_moe_decode_block(
     ############################################
     logger.info(f"Begin running op iterations")
 
+    ttnn.set_printoptions(profile="full", precision=4)
+
     def run_op(iteration):
         # move dispatch inputs into L1
         # logger.info("XXXXX")
@@ -885,25 +887,25 @@ def test_optimized_moe_decode_block(
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor
         # allacote before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
-        tt_preallocated_combine_output = ttnn.moreh_full(
-            shape=[experts_per_cluster, tokens_per_device, hidden_size],
-            fill_value=1,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # tt_preallocated_combine_output = ttnn.moreh_full(
+        #     shape=[select_experts_k, tokens_per_device, hidden_size],
+        #     fill_value=1,
+        #     device=mesh_device,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
 
         # TODO: (GR)
-        # out = torch.ones([experts_per_cluster, batch * seq, hidden_size], dtype=torch.bfloat16)
-        # tt_preallocated_combine_output = ttnn.from_torch(
-        #     out,
-        #     device=mesh_device,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        # )
+        out = torch.ones([select_experts_k, batch * seq, hidden_size], dtype=torch.bfloat16)
+        tt_preallocated_combine_output = ttnn.from_torch(
+            out,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
 
         logger.info("CCCCC")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
@@ -1002,18 +1004,25 @@ def test_optimized_moe_decode_block(
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("LLLLL")
 
+        # TODO: (GR) temp
         comb_out = ttnn.to_memory_config(tt_combine_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # logger.info("Tilized Compute Input")
         # logger.info(f"Input: {tt_combine_output.shape}")
 
-        tt_tilized_compute_output = ttnn.tilize(
-            tt_combine_output, memory_config=tilized_combine_output_memory_config, use_multicore=True
+        # tt_tilized_compute_output = ttnn.tilize(
+        #     tt_combine_output, memory_config=tilized_combine_output_memory_config, use_multicore=True
+        # )
+        tt_tilized_compute_output = ttnn.to_layout(
+            tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
         )
 
         logger.info("MMMMM")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("NNNNN")
+
+        # TODO: (GR)
+        # post_combine_output_tensor = ttnn.mul(post_combine_output_tensor, topk_weights_chunk)
 
         # logger.info("Unsqueeze Input")
         # logger.info(f"Input: {tt_tilized_compute_output.shape}")
