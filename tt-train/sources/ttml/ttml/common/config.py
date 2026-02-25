@@ -102,7 +102,7 @@ class OptimizerConfig:
             yaml_config: Top-level YAML config dict (must contain
                 ``training_config.optimizer_config`` pointing to the
                 optimizer YAML file), **or** the optimizer YAML dict
-                itself when ``is_optimizer_yaml`` would be True.
+                itself (detected by the presence of a ``type`` key).
         """
         if isinstance(yaml_config, str):
             cfg = load_config(yaml_config)
@@ -116,10 +116,7 @@ class OptimizerConfig:
                     "training_config must specify 'optimizer_config' path "
                     "(e.g. 'configs/optimizer_configs/adamw.yaml')"
                 )
-            from ttml.common.utils import get_tt_metal_home
-
-            tt_train_root = f"{get_tt_metal_home()}/tt-train"
-            cfg = load_config(optimizer_config_path, tt_train_root)
+            cfg = load_config(optimizer_config_path, f"{get_tt_metal_home()}/tt-train/")
 
         self.type = cfg.get("type", "AdamW")
         self.lr = float(cfg.get("lr", 3e-4))
