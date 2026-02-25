@@ -1245,7 +1245,7 @@ class MoeRoutedExpert:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores from final_output_tensor shard grid (same as gate_proj cores)
@@ -1950,7 +1950,7 @@ class MoeRoutedExpert:
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
                     # reduce_packet_header_cb (32): persistent packet header storage
-                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
                     reduce_cb_packet_header_desc = ttnn.CBDescriptor(
                         total_size=reduce_packet_header_size,
                         core_ranges=reduce_all_cores_set,

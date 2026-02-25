@@ -143,7 +143,7 @@ class DeepseekMinimalAllReduce:
         compute_cb_temp = 7
 
         # Packet header size
-        packet_header_size_bytes = 32  # Size of one packet header
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()

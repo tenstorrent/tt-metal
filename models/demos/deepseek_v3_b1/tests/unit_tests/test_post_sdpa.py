@@ -42,13 +42,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.model_configs import BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -106,7 +100,7 @@ def compute_forwarder_scratch_size(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
         }
     ],
     indirect=True,
@@ -584,7 +578,7 @@ def test_post_sdpa(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
         }
     ],
     indirect=True,

@@ -24,6 +24,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
+from models.demos.deepseek_v3_b1.model_configs import BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG
 
 
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
@@ -565,7 +566,15 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 573440})],
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "trace_region_size": 573440,
+                "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
+            }
+        )
+    ],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )

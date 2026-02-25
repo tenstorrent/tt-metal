@@ -255,9 +255,6 @@ class LMHeadSampling:
             int(ttnn.get_global_semaphore_address(global_stage2_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
 
-        # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         in0_tile = input_tensor_sample.get_tile()
@@ -273,7 +270,6 @@ class LMHeadSampling:
         # CCL broadcast page info
         bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-        num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # Matmul shape info from input and vocab tensors
         num_tiles_k = input_shape[1] // in0_tile.tile_shape[1]

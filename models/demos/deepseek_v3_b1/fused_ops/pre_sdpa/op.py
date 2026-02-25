@@ -261,9 +261,6 @@ class PreSDPA:
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
-        # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
         # Get tensor properties (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         input_shape = input_tensor_sample.shape
@@ -271,10 +268,8 @@ class PreSDPA:
 
         # CCL broadcast page info
         element_size = 2
-        tile_id_start = 0
         bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-        num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles

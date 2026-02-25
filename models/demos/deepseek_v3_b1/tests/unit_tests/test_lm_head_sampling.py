@@ -26,13 +26,8 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.model_configs import BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -49,7 +44,7 @@ def _is_lm_head_sampling_perf_enabled():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 1163264,
         }
     ],
@@ -344,7 +339,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],
@@ -507,7 +502,7 @@ def test_lm_head_sampling_fused_argmax_single_device(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],
@@ -691,7 +686,7 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],
@@ -914,7 +909,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],
@@ -1156,7 +1151,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],

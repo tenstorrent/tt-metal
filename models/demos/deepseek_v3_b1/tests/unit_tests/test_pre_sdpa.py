@@ -20,12 +20,7 @@ from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.model_configs import BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG
 
 
 @pytest.mark.parametrize(
@@ -48,7 +43,7 @@ def create_fabric_router_config(max_payload_size):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],

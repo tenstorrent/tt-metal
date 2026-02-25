@@ -15,13 +15,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.model_configs import create_fabric_router_config
 
 
 @pytest.mark.parametrize(

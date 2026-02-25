@@ -81,9 +81,6 @@ class DeepseekMinimalBroadcast:
         barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
         secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
-        # Calculate packet size and page info
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
         # Get tile info from input tensor
         input_tensor_sample = input_tensors_per_device[0]
         tile = input_tensor_sample.tile
@@ -97,7 +94,6 @@ class DeepseekMinimalBroadcast:
         shard_spec = input_tensor_sample.memory_config().shard_spec
         shard_width = shard_spec.shape[1]
         input_num_pages = shard_width // tile_width
-        num_pages_per_packet = packet_size_bytes // page_size_bytes
 
         # CB index
         src0_cb_index = 0

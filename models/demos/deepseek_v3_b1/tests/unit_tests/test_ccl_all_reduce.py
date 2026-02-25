@@ -20,14 +20,8 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.demos.deepseek_v3_b1.model_configs import BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 @pytest.mark.parametrize(
@@ -51,7 +45,7 @@ def create_fabric_router_config(max_payload_size):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": BLITZ_DEFAULT_FABRIC_ROUTER_CONFIG,
             "trace_region_size": 573440,
         }
     ],

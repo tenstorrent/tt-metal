@@ -3728,7 +3728,7 @@ class MoeOp:
             reduce_offset += reduce_packet_size
 
             # CB 45: reduce_packet_header_cb (96 bytes)
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_cb_header_desc = ttnn.cb_descriptor_from_sharded_tensor(
                 routed_ctx.reduce_packet_header_cb,
                 out_buf,
