@@ -105,6 +105,7 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
 }
 
 std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitDeviceConfig& dev_config, bool is_fw) {
+    TT_ASSERT(dev_config.hal != nullptr);
     const auto& hal = *dev_config.hal;
     uint32_t total_num_build_states = 0;
     if (is_fw) {
