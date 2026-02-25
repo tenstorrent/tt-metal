@@ -1198,6 +1198,16 @@ def moe_sparse_experts_forward_tt(
     - The older all-to-all dispatch/combine path remains available behind
       `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a` for future DP-sharded inputs.
     """
+    if os.environ.get("GLM4_MOE_LITE_FUSED_MOE", "0") == "1":
+        return ttnn.experimental.fused_persistent_moe_decode(
+            hidden_states,
+            topk_expert_indices,
+            topk_expert_weights,
+            moe_w.w1_experts,
+            moe_w.w3_experts,
+            moe_w.w2_experts
+        )
+
     packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
     # Default to BF16-speed settings for sparse MoE. Users can opt back into
     # higher-precision accumulation via env overrides if needed for debugging.
