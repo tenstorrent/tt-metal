@@ -27,6 +27,7 @@ constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
 constexpr uint32_t input_args_cta_idx = 8;
 constexpr uint32_t input_args_crta_idx = 0;
 
+template <bool FLUSH = true>
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
@@ -34,12 +35,18 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint64_t dst_addr,
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t packet_size) {
-    packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
+    // packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+    //     NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
+    //     packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    if constexpr (FLUSH) {
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    } else {
+        fabric_connection.send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    }
 }
 
 void kernel_main() {
@@ -101,42 +108,51 @@ void kernel_main() {
     // Main loop: push data downstream as fast as possible
     for (uint32_t i = 0; i < num_iterations; ++i) {
         auto l1_read_addr = l1_read_addr_base;
-        socket_reserve_pages(sender_socket, 1);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
 
-        for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection,
-                data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
+        data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+            NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size, false},
+            whole_packet_size);
 
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
+        data_packet_header_addr_2->to_noc_fused_unicast_write_atomic_inc(
+            NocUnicastAtomicIncFusedCommandHeader{
+                dst_addr + whole_packet_size, downstream_bytes_sent_noc_addr, whole_packet_size, false},
+            whole_packet_size);
+        socket_reserve_pages(sender_socket, 1);
 
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                aligned_partial_packet_size);
-        }
+        // for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
+        write_data_to_remote_core_with_ack<false>(
+            fabric_connection,
+            data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        // dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+        // }
+
+        // for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
+        write_data_to_remote_core_with_ack(
+            fabric_connection_2,
+            data_packet_header_addr_2,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        // dst_addr += whole_packet_size;
+        // l1_read_addr += whole_packet_size;
+        // }
+
+        // if constexpr (aligned_partial_packet_size) {
+        //     write_data_to_remote_core_with_ack(
+        //         fabric_connection_2,
+        //         data_packet_header_addr_2,
+        //         l1_read_addr,
+        //         dst_addr,
+        //         downstream_bytes_sent_noc_addr,
+        //         aligned_partial_packet_size);
+        // }
         socket_push_pages(sender_socket, 1);
     }
 

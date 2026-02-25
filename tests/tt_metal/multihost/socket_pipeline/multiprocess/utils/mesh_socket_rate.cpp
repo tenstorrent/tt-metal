@@ -63,12 +63,19 @@ tt::tt_metal::Program create_send_async_rate_program(
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
     uint32_t num_links = 2;
 
-    uint32_t fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    uint32_t fabric_max_payload_size = 7168;  // tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     uint32_t num_whole_packets = input_page_size / fabric_max_payload_size;
     uint32_t partial_packet_size = input_page_size % fabric_max_payload_size;
     uint32_t num_whole_packets_link_0 = 0;
     uint32_t num_whole_packets_link_1 = 0;
+
+    std::cout << "Num whole packets: " << num_whole_packets << std::endl;
+    std::cout << "Partial packet size: " << partial_packet_size << std::endl;
+    std::cout << "Num links: " << num_links << std::endl;
+    std::cout << "Num whole packets link 0: " << num_whole_packets_link_0 << std::endl;
+    std::cout << "Num whole packets link 1: " << num_whole_packets_link_1 << std::endl;
+
     if (num_whole_packets > 0U) {
         num_whole_packets_link_0 = (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
         num_whole_packets_link_0 = std::min(num_whole_packets_link_0, num_whole_packets);
@@ -202,7 +209,7 @@ tt::tt_metal::Program create_socket_forward_rate_program(
     uint32_t num_fwd_links = 2;
     uint32_t num_bwd_links = 1;
 
-    auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_payload_size = 7168;  // tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t partial_packet_size = num_bytes % fabric_max_payload_size;
     uint32_t socket_block_size = socket_aligned_page_size;
 

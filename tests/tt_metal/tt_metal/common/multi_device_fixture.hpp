@@ -152,7 +152,9 @@ protected:
                 tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 std::nullopt,
                 config_.fabric_tensix_config,
-                config_.fabric_udm_mode);
+                config_.fabric_udm_mode,
+                tt_fabric::FabricManagerMode::DEFAULT,
+                tt_fabric::FabricRouterConfig{.max_packet_payload_size_bytes = 15232});
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),

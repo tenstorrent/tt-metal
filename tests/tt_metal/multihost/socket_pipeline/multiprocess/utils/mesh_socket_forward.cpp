@@ -74,7 +74,7 @@ tt::tt_metal::Program create_socket_forward_program(
     uint32_t num_fwd_links = 2;
     uint32_t num_bwd_links = 1;
 
-    auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_payload_size = 7168;  // tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t partial_packet_size = num_bytes % fabric_max_payload_size;
     uint32_t socket_block_size = socket_aligned_page_size;
 
@@ -87,6 +87,12 @@ tt::tt_metal::Program create_socket_forward_program(
         num_whole_packets_link_0 = std::min(num_whole_packets_link_0, num_whole_packets);
         num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
     }
+
+    std::cout << "Num whole packets: " << num_whole_packets << std::endl;
+    std::cout << "Partial packet size: " << partial_packet_size << std::endl;
+    std::cout << "Num links: " << num_fwd_links << std::endl;
+    std::cout << "Num whole packets link 0: " << num_whole_packets_link_0 << std::endl;
+    std::cout << "Num whole packets link 1: " << num_whole_packets_link_1 << std::endl;
 
     uint32_t packet_header_cb_num_pages = num_fwd_links + num_bwd_links;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();

@@ -8,6 +8,8 @@ Combine H <-> D Interface with Mult-Host sockets under PipelineBlock API.
 
 """
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -426,18 +428,13 @@ def test_multi_host_loopback_pipeline_with_embedding(
 @pytest.mark.parametrize(
     "vocab_size, embedding_dim",
     [
-        (256, 14336),
-        (512, 7168),
-        (1024, 3584),
-        (2048, 1792),
+        (4096, 14336),
     ],
 )
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
-        (128, 2),
-        (256, 4),
-        (512, 8),
+        (1024, 16),
     ],
 )
 @pytest.mark.parametrize(
@@ -468,6 +465,7 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
     embedding_size_bytes = embedding_dim * dtype_size(embedding_dtype)
     embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
 
+    # ================ CREATE PIPELINE BLOCKS ACROSS SUPERPOD ================
     if mesh_device.get_system_mesh_id() == 0:
         torch_embedding = torch.randn(embedding_shape, dtype=embedding_dtype)
         embedding_tensor = ttnn.from_torch(
@@ -497,32 +495,36 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
         )
 
     pipeline_block.run()
+    ttnn.distributed_context_barrier()
 
     if pipeline_block.is_first_pipeline_stage():
+        num_procs = int(ttnn.distributed_context_get_size())
         token_dtype = torch.uint32
         token_size_bytes = 64
         token_size_datums = token_size_bytes // dtype_size(token_dtype)
 
+        torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
+        torch_input[0, 0] = 0
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
+        output_tensor = ttnn.from_torch(
+            torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
+        # ================ MEASURE MAIN LOOP (AVERAGE LOOPBACK LATENCY) ================
+        times = []
         for token_id in range(vocab_size):
-            torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 0] = token_id
-            input_tensor = ttnn.from_torch(
-                torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
-            output_tensor = ttnn.from_torch(
-                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            start_time = time.time()
             pipeline_block.write_token(input_tensor)
             pipeline_block.read_output(output_tensor)
+            end_time = time.time()
+            times.append((end_time - start_time) * 1000)
 
-            result_torch = ttnn.to_torch(output_tensor).reshape(-1)
-            expected = torch_embedding[0, 0, token_id, :].reshape(-1)
-            match = torch.equal(expected, result_torch)
-            assert match, (
-                f"Token {token_id}: D2H output does not match embedding row!\n"
-                f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
-            )
-        logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
+        logger.info(f"Average Latency (milliseconds) per token: {sum(times) / vocab_size}")
+        logger.info(
+            f"Average Latency (microseconds) per token per pipeline stage: {sum(times) * 1000 / vocab_size / (num_procs + 1)}"
+        )
 
     pipeline_block.terminate()

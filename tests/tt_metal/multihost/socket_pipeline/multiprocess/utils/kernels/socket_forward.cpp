@@ -22,6 +22,7 @@ constexpr uint32_t num_iterations = get_compile_time_arg_val(7);
 // Send cumulative ack upstream every N iterations (e.g. fifo_size_in_pages/2 for half-buffer acks).
 constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(8);
 
+template <bool FLUSH = true>
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
@@ -30,11 +31,18 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t packet_size) {
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
+        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
+        packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+    if constexpr (FLUSH) {
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    } else {
+        fabric_connection.send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    }
 }
 
 void kernel_main() {
@@ -110,37 +118,37 @@ void kernel_main() {
         auto l1_read_addr = recv_socket.read_ptr;
         uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr + send_socket.downstream_fifo_addr;
         // Forward data to downstream
-        for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection,
-                downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                aligned_partial_packet_size);
-        }
+        // for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
+        write_data_to_remote_core_with_ack<false>(
+            downstream_fabric_connection,
+            downstream_data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+        // }
+        // for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
+        write_data_to_remote_core_with_ack(
+            downstream_fabric_connection_2,
+            downstream_data_packet_header_addr_2,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+        // }
+        // if constexpr (aligned_partial_packet_size) {
+        //     write_data_to_remote_core_with_ack(
+        //         downstream_fabric_connection_2,
+        //         downstream_data_packet_header_addr_2,
+        //         l1_read_addr,
+        //         dst_addr,
+        //         downstream_bytes_sent_noc_addr,
+        //         aligned_partial_packet_size);
+        // }
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);
