@@ -125,21 +125,32 @@ Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
 
 Worktrees provide fully isolated development environments with their own C++ build and Python venv.
 
+### First thing to do in a new worktree
+The hook only creates the git worktree + submodules. You MUST kick off the C++ build yourself as a **background Bash task** immediately on entry:
+```bash
+MAIN_REPO="$(git rev-parse --show-superproject-working-tree 2>/dev/null || echo "")" && ./build_metal.sh --debug --enable-ccache ${MAIN_REPO:+--cpm-source-cache "$MAIN_REPO/.cpmcache"} && ./create_venv.sh --force && touch .worktree_ready
+```
+Run this in the background (`run_in_background: true`), then continue working. Check `.worktree_ready` before running tests.
+
 ### How it works
-- `EnterWorktree` or `isolation: "worktree"` triggers automatic setup
+- `EnterWorktree` or `isolation: "worktree"` creates the worktree and inits submodules
+- Build runs as a background task (~4 min with ccache)
+- No env vars needed — CWD auto-detection handles everything
 - `tt-test.sh` auto-resolves paths from its own location (works in any worktree)
+- Device access is serialized via flock (multiple worktrees share devices safely)
 
 ### Running tests in a worktree
 ```
+source python_env/bin/activate && pytest <test_path>
+# or
 ./tt-test.sh [--dev] <test_path>
 ```
 
-### Manual setup (if hook didn't run)
+### Manual setup (without Claude Code)
 ```
-.claude/scripts/worktree-setup.sh <path> --foreground
+.claude/scripts/worktree-setup.sh <path>
 ```
 
 ### Checking build status
-- `.worktree_building` exists → build in progress
 - `.worktree_ready` exists → ready to use
-- `.worktree_setup.log` → build output
+- `.worktree_setup.log` → build output (if using worktree-setup.sh)
