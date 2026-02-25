@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
@@ -48,7 +49,7 @@ class WanAttentionBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
-        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -287,7 +288,7 @@ class WanCausalConv3d(Module):
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if ttnn.float32
+            if (is_blackhole() or ttnn.float32)
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -504,7 +505,7 @@ class WanResidualBlock(Module):
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if dtype == ttnn.float32
+            if (is_blackhole() or dtype == ttnn.float32)
             else ttnn.MathFidelity.HiFi3,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -790,7 +791,6 @@ class WanConv2d(Module):
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
-
         # Width halo
         if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
             # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
