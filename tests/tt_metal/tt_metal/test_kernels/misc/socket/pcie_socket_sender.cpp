@@ -7,6 +7,7 @@
 #include "socket_benchmark_defs.h"
 
 void kernel_main() {
+    // Get this value from MeshSocket struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
@@ -14,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t measurement_buffer_addr = get_compile_time_arg_val(4);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(5);
 
+    // Get Receiver Side Data Cores through RTAs populated by host Socket Queries
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
 
     uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
@@ -43,5 +45,6 @@ void kernel_main() {
     uint64_t end_timestamp = get_timestamp();
     *reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr) = end_timestamp - start_timestamp;
 
+    // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
     update_socket_config(sender_socket);
 }
