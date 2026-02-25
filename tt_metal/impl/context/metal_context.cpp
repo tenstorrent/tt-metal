@@ -142,7 +142,7 @@ void MetalContext::initialize_device_manager(
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    context_descriptor_ = create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size);
+    init_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size);
     device_manager_->initialize(device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_);
 }
 
@@ -254,8 +254,7 @@ void MetalContext::initialize(
         }
         return out;
     };
-    // Use a different descriptor for risc firmware. l1/trace size/fabric settings don't matter for this.
-    risc_fw_context_descriptor_ = create_context_descriptor(num_hw_cqs_, 0, 0, worker_l1_size_);
+    init_risc_fw_context_descriptor(num_hw_cqs_, worker_l1_size_);
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
         risc_fw_context_descriptor_,
         std::bind(&MetalContext::get_control_plane, this),
@@ -769,9 +768,9 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
-std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
+void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-    return std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
+    context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
         *hal_,
         *cluster_,
         rtoptions_,
@@ -788,6 +787,24 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         dispatch_core_config_,
         l1_bank_remap_,
         rtoptions_.get_mock_cluster_desc_path()));
+}
+
+void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size) {
+    // Various settings are not known and not relevant for risc firmware
+    risc_fw_context_descriptor_ = std::shared_ptr<ContextDescriptor>(new ContextDescriptor(
+        *hal_,
+        *cluster_,
+        rtoptions_,
+        tt::tt_fabric::FabricConfig::DISABLED,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricManagerMode::DEFAULT,
+        tt::tt_fabric::FabricRouterConfig{},
+        num_hw_cqs,
+        /*l1_small_size=*/0,
+        /*trace_region_size=*/0,
+        worker_l1_size));
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {

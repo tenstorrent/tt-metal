@@ -186,8 +186,8 @@ private:
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
 
-    std::shared_ptr<ContextDescriptor> create_context_descriptor(
-        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
+    void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
+    void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
 
     bool initialized_ = false;
     bool force_reinit_ = false;
