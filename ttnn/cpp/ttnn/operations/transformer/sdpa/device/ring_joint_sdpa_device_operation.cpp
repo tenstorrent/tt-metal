@@ -56,6 +56,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
     // Validate all tensors have the same dtype
+    // fix this
     const auto dtype = input_tensor_q.dtype();
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(
