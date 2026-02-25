@@ -23,6 +23,9 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
 #elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_DM)
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(COMPILE_FOR_DM);
 #else
 // Lite Fabric compile
 constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
