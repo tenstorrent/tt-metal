@@ -9,6 +9,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -74,17 +75,28 @@ Tensor prod_impl(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const int size = static_cast<int>(input_a.logical_shape().rank());
+    const int old_rank = static_cast<int>(input_a.logical_shape().rank());
 
-    TT_FATAL(size > 0, "Tensor has no dimensions");
     TT_FATAL(
-        !dim.has_value() || (*dim >= -size && *dim <= size - 1),
+        !dim.has_value() || (*dim >= -old_rank && *dim <= old_rank - 1),
         "Dimension for prod is out of range (expected to be in range of [{}, {}])",
-        -size,
-        size - 1);
+        -old_rank,
+        old_rank - 1);
 
-    const auto old_rank = input_a.logical_shape().rank();
     const ttnn::Shape& input_shape = input_a.logical_shape();
+
+    if (old_rank == 0 || input_a.logical_volume() == 0) {
+        ttnn::SmallVector<int> dim_vector;
+        if (dim.has_value()) {
+            if (dim.value() >= 0) {
+                dim_vector.push_back(dim.value());
+            } else {
+                dim_vector.push_back(dim.value() + old_rank);
+            }
+        }
+        return reduction_common::zero_volume_reduce<reduction_common::ReduceType::Prod>(
+            input_a, dim_vector, keepdim, output_mem_config);
+    }
 
     // If no dim is provided, compute the prod across all dimensions.
     // Similarly, if the tensor has only one dimension, compute the prod across all dimensions
@@ -103,8 +115,8 @@ Tensor prod_impl(
 
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
-        // Bring dim into range [0, size - 1]
-        const int64_t positive_dim = *dim < 0 ? *dim + size : *dim;
+        // Bring dim into range [0, old_rank - 1]
+        const int64_t positive_dim = *dim < 0 ? *dim + old_rank : *dim;
 
         // Prod only can do reduction on dim0 or dim1.
         // After squeezing the ND tensor to 4D, the third last dimension will become the second (i.e, [1]) dimension

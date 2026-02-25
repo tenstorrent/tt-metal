@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <vector>
@@ -11,6 +12,16 @@
 #include <cstdint>
 
 namespace reduction_common {
+
+enum class ReduceType {
+    Sum,
+    Mean,
+    Max,
+    Min,
+    Std,
+    Var,
+    Prod,
+};
 
 template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
 std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
@@ -23,5 +34,54 @@ ttnn::Tensor perform_transpose(
     const ttnn::Tensor& input_tensor, bool is_dim_last_idx, int8_t dim1 = -1, int8_t dim2 = -1);
 
 ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, bool is_rank_le_4d);
+
+/* Creates appropriate output tensor for a given zero volume input tensor.
+   The output tensor has the same shape as the input tensor, except that the dimensions
+   specified in dim are reduced to 1.
+   The output tensor is filled with NaN/0/inf based on the reduce_type.
+*/
+template <ReduceType reduce_type>
+static ttnn::Tensor zero_volume_reduce(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int>& dim,
+    const bool keepdim,
+    const ttnn::MemoryConfig& memory_config) {
+    auto input_shape = input_tensor.logical_shape();
+
+    // min/max is unsupported when reduction dim is zero
+    if constexpr (reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
+        // Check the shape of the reduction dims
+        for (auto red_dim : dim) {
+            if (input_shape[red_dim] == 0) {
+                TT_THROW("Expected reduction dim {} to have non-zero size", red_dim);
+            }
+        }
+    }
+
+    ttnn::SmallVector<uint32_t> output_shape;
+
+    const int rank = static_cast<int>(input_shape.rank());
+    // Iterate over the input shape and adjust the output shape for keepdim
+    for (int i = 0; i < rank; ++i) {
+        // If this is in the reduction dims, keep it only if keepdim is true
+        bool is_reduction_dim = std::find(dim.begin(), dim.end(), i) != dim.end();
+
+        if (is_reduction_dim && keepdim) {
+            output_shape.push_back(1);
+        } else if (!is_reduction_dim) {
+            output_shape.push_back(input_shape[i]);
+        }
+    }
+
+    constexpr float fill_value = (reduce_type == ReduceType::Sum) ? 0 : ((reduce_type == ReduceType::Prod) ? 1 : NAN);
+
+    return ttnn::full(
+        ttnn::Shape(output_shape),
+        fill_value,
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        *input_tensor.device(),
+        memory_config);
+}
 
 }  // namespace reduction_common
