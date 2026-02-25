@@ -8,7 +8,7 @@ Usage:
     metal_device_id_mapping
 
 Description:
-    Mapping between Metal device ID and Unique ID.
+    Mapping between Metal device ID, Unique ID and TT-Exalens device ID.
 
     This mapping is necessary when TT_METAL_VISIBLE_DEVICES is used. When TT_METAL_VISIBLE_DEVICES
     restricts devices, Inspector RPC uses remapped metal device IDs (starting from 0), while
