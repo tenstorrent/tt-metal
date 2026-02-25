@@ -9,106 +9,7 @@ import torch
 import math
 
 import ttnn
-
-
-def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype):
-    """
-    Validate indices using logic from test_mpwi.py
-    Note input tensors should be in [N, H, W, C] format
-    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling)
-    Returns (indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations)
-    """
-    batch_size, input_h, input_w, channels = input_tensor.shape
-    kernel_h, kernel_w = kernel_size
-    stride_h, stride_w = stride
-    pad_tb, pad_lr = padding
-    dilation_h, dilation_w = dilation
-
-    # Check if indices are exactly equal first
-    indices_match = torch.equal(torch_indices, ttnn_indices)
-    if indices_match:
-        return True, 0, 0, 0, 0
-
-    # Find positions where indices don't match
-    diff = torch.abs(torch_indices - ttnn_indices)
-    mismatch_positions = torch.nonzero(diff, as_tuple=False)
-    num_mismatches = len(mismatch_positions)
-
-    tie_breaking_differences = 0
-    actual_errors = 0
-    value_differences = 0
-    window_violations = 0
-    for pos in mismatch_positions:
-        n, h, w, c = pos
-        torch_idx = torch_indices[n, h, w, c]
-        ttnn_idx = ttnn_indices[n, h, w, c]
-
-        # Convert linear indices to spatial coordinates
-        torch_h = torch_idx // input_w
-        torch_w = torch_idx % input_w
-        ttnn_h = ttnn_idx // input_w
-        ttnn_w = ttnn_idx % input_w
-
-        # Get input values at these positions
-        if ttnn_h >= 0 and ttnn_w >= 0 and ttnn_h < input_h and ttnn_w < input_w:
-            torch_input_val = input_tensor[n, torch_h, torch_w, c]
-            ttnn_input_val = input_tensor[n, ttnn_h, ttnn_w, c]
-        else:
-            actual_errors += 1
-            window_violations += 1
-            continue
-
-        # Check if this is a valid tie-breaking difference
-        # Two conditions must be satisfied:
-        # 1. The values must be the same
-        # 2. Both indices must be within the same kernel window
-
-        # Check if values are the same
-        atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-        if dtype == ttnn.bfloat8_b:
-            atol = 0.35
-            values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
-        else:
-            values_same = torch_input_val == ttnn_input_val
-
-        # Check if both indices are within the same kernel window
-        def is_in_dilated_kernel_window(
-            input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-        ):
-            for kh in range(kernel_h):
-                for kw in range(kernel_w):
-                    kernel_pos_h = kernel_top_left_h + kh * dilation_h
-                    kernel_pos_w = kernel_top_left_w + kw * dilation_w
-                    if kernel_pos_h == input_h and kernel_pos_w == input_w:
-                        return True
-            return False
-
-        kernel_top_left_h = h * stride_h - pad_tb
-        kernel_top_left_w = w * stride_w - pad_lr
-        ttnn_in_window = is_in_dilated_kernel_window(
-            ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-        )
-
-        if values_same and ttnn_in_window:
-            tie_breaking_differences += 1
-        elif not ttnn_in_window:
-            actual_errors += 1
-            window_violations += 1
-        else:
-            actual_errors += 1
-            value_differences += 1
-
-    # Indices are valid if there are no actual errors
-    assert num_mismatches == (
-        tie_breaking_differences + actual_errors
-    ), "Total mismatches should equal sum of tie-breaking differences and actual errors"
-    if actual_errors > 0:
-        assert actual_errors == (
-            value_differences + window_violations
-        ), "Actual errors should equal sum of value differences and window violations"
-    else:
-        assert actual_errors == 0 and value_differences == 0 and window_violations == 0, "No errors should be present"
-    return (actual_errors == 0), tie_breaking_differences, actual_errors, value_differences, window_violations
+from ttnn.operations.pool import validate_maxpool2d_indices
 
 
 def run_max_pool2d_with_indices(
@@ -253,7 +154,13 @@ def run_max_pool2d_with_indices(
         atol = 0.35
     output_match = torch.allclose(ttnn_output_reshaped, torch_output_reshaped, atol=atol, rtol=rtol)
 
-    indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations = validate_indices(
+    (
+        indices_valid,
+        tie_breaking_differences,
+        actual_errors,
+        value_differences,
+        window_violations,
+    ) = validate_maxpool2d_indices(
         torch_input_permuted,
         torch_indices_reshaped,
         ttnn_indices_reshaped,
