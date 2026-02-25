@@ -708,7 +708,7 @@
 
 - name: llama3.1-8b LLMBox batch-1 TP device perf decode (layers=10)
   cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
   skus:
     bh_llmbox:
       timeout: 70
@@ -718,7 +718,7 @@
 
 - name: llama3.1-8b LLMBox batch-1 TP device perf prefill (layers=2)
   cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
   skus:
     bh_llmbox:
       timeout: 70
