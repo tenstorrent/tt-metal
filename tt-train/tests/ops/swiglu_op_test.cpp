@@ -223,14 +223,14 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
     auto [fwd_base, dx_base, dw1_base, dw2_base, dw3_base] = run_variant(false);
     auto [fwd_opt, dx_opt, dw1_opt, dw2_opt, dw3_opt] = run_variant(true);
 
-    // Forward outputs must match exactly (same kernel)
+    // Both forward and backward use different code paths (composite ttnn ops
+    // vs fused kernel), so all comparisons use BF16-level tolerance
     EXPECT_EQ(fwd_base.shape(), fwd_opt.shape());
+    const float tol = 1e-2f;
     float fwd_err = relative_l2(fwd_opt, fwd_base);
-    EXPECT_LT(fwd_err, 1e-6f) << "Forward mismatch: rel L2 = " << fwd_err;
+    EXPECT_LT(fwd_err, tol) << "Forward mismatch: rel L2 = " << fwd_err;
 
-    // Backward gradients: both run in BF16 but take different code paths,
-    // so we allow BF16-level tolerance (1e-2)
-    const float grad_tol = 1e-2f;
+    const float grad_tol = tol;
 
     float dx_err = relative_l2(dx_opt, dx_base);
     EXPECT_LT(dx_err, grad_tol) << "dL/dx mismatch: rel L2 = " << dx_err;
