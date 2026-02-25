@@ -35,6 +35,9 @@ def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
     with torch.no_grad():
         variance = input_tensor.pow(2).mean(dim=-1, keepdim=True)
         output = input_tensor * torch.rsqrt(variance + epsilon)
+
+        if activation is not None:
+            pass
         if weight is not None:
             output = output * weight
         if bias is not None:
@@ -43,8 +46,6 @@ def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
             output = torch.nn.functional.silu(output)
         elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
             output = torch.nn.functional.gelu(output)
-        elif activation is None:
-            output = output
         else:
             raise ValueError(
                 f"Unsupported activation: {activation!r}. "
