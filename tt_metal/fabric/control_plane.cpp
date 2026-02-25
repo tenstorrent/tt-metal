@@ -307,10 +307,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    // When unset, assume host rank 0.
+    // When unset, use UNSET sentinel value.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
     const MeshHostRankId host_rank = (host_rank_str == nullptr)
-                                         ? MeshHostRankId{0}
+                                         ? MESH_HOST_RANK_UNSET
                                          : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
 
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
@@ -356,12 +356,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks = this->mesh_graph_->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
-        local_mesh_binding.host_rank = MeshHostRankId{0};
-        TT_FATAL(
-            host_ranks.size() == 1 && *host_ranks.front() == 0,
-            "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
-            "ID {}",
-            *local_mesh_binding.mesh_ids[0]);
+        local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
     } else {
         TT_FATAL(
             std::find(host_ranks.begin(), host_ranks.end(), local_mesh_binding.host_rank) != host_ranks.end(),
@@ -2264,7 +2259,21 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     return local_mesh_ids;
 }
 
-MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
+    // TODO: Change mesh id to use topology mapper as well please
+    // Get host rank from topology mapper based on current host instead of using local_mesh_binding
+    // This ensures we use the actual mapped host rank rather than potentially UNSET values
+    // Use the first local mesh ID to get the host rank
+    const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
+    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found");
+    auto host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[0]);
+    TT_FATAL(
+        host_rank.has_value(),
+        "ControlPlane: Could not determine local host rank for mesh {}. "
+        "This may happen if the topology mapping has not been completed yet.",
+        local_mesh_ids[0].get());
+    return host_rank.value();
+}
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);

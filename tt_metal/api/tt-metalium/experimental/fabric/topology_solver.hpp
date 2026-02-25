@@ -354,6 +354,16 @@ public:
         const;
 
     /**
+     * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
+     *
+     * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
+     * These pairs are stored separately and exclude specific mappings without requiring seeding.
+     *
+     * @return const std::set<std::pair<TargetNode, GlobalNode>>& Set of forbidden pairs
+     */
+    const std::set<std::pair<TargetNode, GlobalNode>>& get_forbidden_pairs() const;
+
+    /**
      * @brief Validate constraints - returns false if invalid
      *
      * If saved_state is provided and validation fails, restores the saved state before returning false
@@ -367,6 +377,10 @@ private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
     std::map<TargetNode, std::set<GlobalNode>> preferred_mappings_;  // Preferred constraints
+
+    // Forbidden (target, global) pairs - used when target has no valid_mappings_ entry.
+    // Allows add_forbidden_constraint to work without seeding valid_mappings_.
+    std::set<std::pair<TargetNode, GlobalNode>> forbidden_pairs_;
 
     // Cardinality constraints: vector of (mapping_pairs, min_count) tuples
     // Each constraint requires that at least min_count of the mapping_pairs must be satisfied
@@ -548,6 +562,10 @@ struct ConstraintIndexData {
     // Restricted mappings: target_idx -> vector of valid global_indices
     // If empty for a target_idx, that target can map to any global node
     std::vector<std::vector<size_t>> restricted_global_indices;
+
+    // Forbidden mappings: target_idx -> sorted vector of forbidden global_indices
+    // Pairs from add_forbidden_constraint when target had no valid_mappings_ entry
+    std::vector<std::vector<size_t>> forbidden_global_indices;
 
     // Preferred mappings: target_idx -> vector of preferred global_indices
     // Used for optimization, doesn't restrict valid mappings

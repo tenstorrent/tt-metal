@@ -225,6 +225,84 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4ControlPlaneInit");
 }
 
+// Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in
+// fabric_node_id_to_mapping_), not from pre-solved mesh_graph, PSD, or local bindings. Uses discovery path
+// (no set_custom_fabric_topology). Run with:
+//   tt-run --mock-cluster-rank-binding
+//   tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml
+//   --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--allow-run-as-root"
+//   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4DiscoveryMappingDerivedAPIs"
+TEST(MultiHost, TestDual2x4DiscoveryMappingDerivedAPIs) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for T3K");
+        GTEST_SKIP();
+    }
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    if (*distributed_context.size() < 2) {
+        log_info(tt::LogTest, "This test requires 2+ MPI ranks (use tt-run with dual T3K rank binding)");
+        GTEST_SKIP();
+    }
+
+    const std::filesystem::path dual_t3k_mesh_graph_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
+
+    // Discovery path: build_mapping, topology solving, chip info exchange, rebuild_host_rank_structs_from_mapping.
+    // TopologyMapper populates mesh_host_rank_to_mpi_rank_ and mesh_host_rank_coord_ranges_ from MappedChipInfo only.
+    auto control_plane = make_control_plane(
+        dual_t3k_mesh_graph_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    auto my_rank = static_cast<int>(*distributed_context.rank());
+    auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
+    EXPECT_EQ(local_mesh_ids.size(), 1u) << "Dual 2x4 has one mesh per rank";
+
+    MeshId local_mesh_id = local_mesh_ids[0];
+
+    // get_distributed_context: built via get_mpi_rank_for_mesh_host_rank which uses mesh_host_rank_to_mpi_rank_
+    // (populated from MappedChipInfo.mpi_rank)
+    const auto& ctx = control_plane->get_distributed_context(local_mesh_id);
+    EXPECT_EQ(static_cast<std::size_t>(*ctx->size()), 1u) << "Dual 2x4 has 1 host per mesh";
+
+    // get_coord_range(LOCAL): uses mesh_host_rank_coord_ranges_ (built from MappedChipInfo.mesh_coord)
+    MeshCoordinateRange local_coord_range = control_plane->get_coord_range(local_mesh_id, MeshScope::LOCAL);
+    EXPECT_EQ(local_coord_range.shape()[0], 2u);
+    EXPECT_EQ(local_coord_range.shape()[1], 4u);
+
+    // get_physical_mesh_shape(LOCAL): uses mesh_host_ranks_ / coord ranges from mapping
+    MeshShape local_shape = control_plane->get_physical_mesh_shape(local_mesh_id, MeshScope::LOCAL);
+    EXPECT_EQ(local_shape[0], 2u);
+    EXPECT_EQ(local_shape[1], 4u);
+
+    // get_local_mesh_offset: uses get_coord_range(LOCAL) -> mapping-derived
+    MeshCoordinate local_offset = control_plane->get_local_mesh_offset();
+    EXPECT_EQ(local_offset[0], 0u);
+    EXPECT_EQ(local_offset[1], 0u);
+
+    // get_global_logical_bindings: built from get_mpi_rank_for_mesh_host_rank (mapping-derived)
+    const auto& global_bindings = control_plane->get_global_logical_bindings();
+    EXPECT_EQ(global_bindings.size(), 2u) << "Dual 2x4: mesh0 rank0, mesh1 rank1";
+
+    // Verify mesh_id assignment: rank 0 -> mesh 0, rank 1 -> mesh 1 (from mapping)
+    // Note: ctx->rank() is rank within the mesh's sub-context; for single-host meshes it is always 0
+    if (my_rank == 0) {
+        EXPECT_EQ(*local_mesh_id, 0u);
+    } else if (my_rank == 1) {
+        EXPECT_EQ(*local_mesh_id, 1u);
+    }
+
+    distributed_context.barrier();
+    log_info(
+        tt::LogTest,
+        "TestDual2x4DiscoveryMappingDerivedAPIs: rank {} verified mapping-derived APIs (coord_range, shape, "
+        "distributed_context, global_bindings)",
+        my_rank);
+}
+
 TEST(MultiHost, TestDual2x4Fabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");

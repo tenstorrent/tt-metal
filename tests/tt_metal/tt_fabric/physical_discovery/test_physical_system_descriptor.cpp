@@ -145,6 +145,40 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     }
 }
 
+TEST(PhysicalDiscovery, PrintHostTopology) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    constexpr bool run_discovery = true;
+
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(),
+        distributed_context,
+        &tt::tt_metal::MetalContext::instance().hal(),
+        rtoptions,
+        run_discovery);
+
+    if (*(distributed_context->rank()) == 0) {
+        auto all_hostnames = physical_system_desc.get_all_hostnames();
+
+        log_info(tt::LogTest, "=== Host Topology ===");
+        for (const auto& hostname : all_hostnames) {
+            auto host_neighbors = physical_system_desc.get_host_neighbors(hostname);
+            std::string neighbors_str = "{";
+            for (size_t i = 0; i < host_neighbors.size(); ++i) {
+                if (i > 0) {
+                    neighbors_str += ", ";
+                }
+                neighbors_str += host_neighbors[i];
+            }
+            neighbors_str += "}";
+            log_info(tt::LogTest, "{}: {}", hostname, neighbors_str);
+        }
+        log_info(tt::LogTest, "=== End Host Topology ===");
+    }
+}
+
 TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
