@@ -25,10 +25,7 @@ Refer to `METALIUM_GUIDE.md` for detailed architecture explanations.
 ### Device-side kernels
 Kernels build at runtime. DO NOT build when changing kernel code.
 
-## Running Tests
-
-
-### Testing rules
+### Running tests
 
 Never use standard pytest, prefer using `tt-test.sh` (add --dev flag for debug mode). This gives standard pytest output while also managing device ownership and state.
 
@@ -41,14 +38,6 @@ Run the tests with
 
 You should be attentive of device hangs when running tests, especially for new / just implemented operations and kernels.
 Watch the bash output at all times, if pytest console output stops, suspect a hang.
-If a hang occurs, kill the process with
-
-`pkill -9 -f pytest || true`
-
-After that, reset the device with
-
-`tt-smi -r`
-
 
 ## Code Organization
 
@@ -57,31 +46,10 @@ After that, reset the device with
 - `ttnn/`: TT-NN high-level operations library (Python/C++ APIs)
 - `models/`: Model implementations and demos
 - `tests/`: Test suites (unit tests, sweep tests, integration tests)
-- `tech_reports/`: Architecture documentation and optimization guides
-- `tt_metal/programming_examples/`: Example kernels and operations
-
-### Important Files
-- `METALIUM_GUIDE.md`: Comprehensive architecture and programming guide
-- `README.md`: High-level project overview
-- `INSTALLING.md`: Installation instructions
-- `build_metal.sh`: Main build script
 
 ## Kernel Development
 
-### Kernel Types
-1. **Reader kernels** (`tt_metal/kernels/dataflow/`): Read data from DRAM/other cores via NoC
-2. **Compute kernels** (`tt_metal/kernels/compute/`): Execute FPU/SFPU operations
-3. **Writer kernels** (`tt_metal/kernels/dataflow/`): Write results to DRAM/other cores
-
-### Circular Buffers
-Circular buffers (CBs): SRAM-based page queues for producer-consumer synchronization between kernels (Reader/Compute/Writer) within and across Tensix cores.
-API calls:
-- cb_reserve_back(cb_id, num_pages): Producer blocks until space available for writing num_pages
-- cb_push_back(cb_id, num_pages): Producer publishes written num_pages to consumer
-- cb_wait_front(cb_id, num_pages): Consumer blocks until num_pages available for reading
-- cb_pop_front(cb_id, num_pages): Consumer frees processed num_pages
-Typical pattern: cb_wait_front → process → cb_pop_front → cb_reserve_back → write → cb_push_back
-
+There are 2 types of kernels (dataflow and compute). The compute kernels run on the 2 data movement threads (mostly compiled and written seperately as reader and writer), compute kernel is compiled down to 3 compute threads (unpack, math, pack)
 
 ### Compute APIs
 - **Abstraction layer** for hardware compatibility across generations (Wormhole, Blackhole)
@@ -100,57 +68,6 @@ Reference when you need to understand how kernels access tensor data.
 **tech_reports/tensor_layouts/tensor_layouts.md**: Explanation of tensor layouts (row-major vs tiled) and memory layouts (interleaved vs sharded) in TT-Metal.
 Reference when dealing with tensor creation, configuring data organization, or understanding page-to-bank mapping.
 
-**tech_reports/tensor_sharding/tensor_sharding.md**: Guide to dividing tensors across memory banks using four strategies (height, width, block, ND sharding) for performance optimization
-Reference when you need to understand how tensors could be sharded between cores for better data locality.
-
-
-## Creating New TTNN Operations
-
-Use the `/create-op` skill to create new TTNN operations using the Python-based generic_op infrastructure with `ttnn.generic_op()` and ProgramDescriptor APIs.
-
-Pipeline: analyzer → architect → generic_op_builder → TDD kernel-writer
-
-Key features:
-- `architect` combines planning + kernel design into a single agent (determines CB layout, maps helpers, registers TDD stages in `.tdd_state.json`), then `generic_op_builder` runs (reads `.tdd_state.json` to discover stages)
-- Kernel implementation uses stage-gated TDD (see `/tdd-kernels` skill) — kernel-writer implements one stage at a time, forbidden from implementing future stages
-- Supports interactive (default) and fully automated modes
-
-Operation code: `ttnn/ttnn/operations/{op_name}/`
-Tests: `tests/ttnn/unit_tests/operations/{op_name}/`
-
-### Additional Resources
-- `.claude/QUICK_START.md` - End-to-end workflow example
-
 ## Worktree Development
 
 Worktrees provide fully isolated development environments with their own C++ build and Python venv.
-
-### First thing to do in a new worktree
-The hook only creates the git worktree + submodules. You MUST kick off the C++ build yourself as a **background Bash task** immediately on entry:
-```bash
-MAIN_REPO="$(git rev-parse --show-superproject-working-tree 2>/dev/null || echo "")" && ./build_metal.sh --debug --enable-ccache ${MAIN_REPO:+--cpm-source-cache "$MAIN_REPO/.cpmcache"} && ./create_venv.sh --force && touch .worktree_ready
-```
-Run this in the background (`run_in_background: true`), then continue working. Check `.worktree_ready` before running tests.
-
-### How it works
-- `EnterWorktree` or `isolation: "worktree"` creates the worktree and inits submodules
-- Build runs as a background task (~4 min with ccache)
-- No env vars needed — CWD auto-detection handles everything
-- `tt-test.sh` auto-resolves paths from its own location (works in any worktree)
-- Device access is serialized via flock (multiple worktrees share devices safely)
-
-### Running tests in a worktree
-```
-source python_env/bin/activate && pytest <test_path>
-# or
-./tt-test.sh [--dev] <test_path>
-```
-
-### Manual setup (without Claude Code)
-```
-.claude/scripts/worktree-setup.sh <path>
-```
-
-### Checking build status
-- `.worktree_ready` exists → ready to use
-- `.worktree_setup.log` → build output (if using worktree-setup.sh)

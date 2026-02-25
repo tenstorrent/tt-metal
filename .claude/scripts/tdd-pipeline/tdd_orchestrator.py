@@ -31,7 +31,7 @@ from typing import Optional
 # Resolve paths relative to this script
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent  # .claude/scripts/tdd-pipeline -> repo root
-TT_TEST_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "tt-test.sh"
+TT_TEST_SCRIPT = REPO_ROOT / "tt-test.sh"
 TEMPLATE_PATH = SCRIPT_DIR / "test_stage_template.py.j2"
 
 # State file name (lives in the operation directory)
@@ -650,7 +650,7 @@ def _generate_failure_report(state: dict, stage: dict, report_path: Path) -> Non
             "2. Check the kernel design document for correctness",
             "3. If all attempts show the same classification, the design may need revision",
             "4. Run `tdd_orchestrator.py status --json` to see full pipeline state",
-            f"5. Full triage log (if hang): `/tmp/dev-test-triage.log`",
+            f"5. Full triage log (if hang): `/tmp/tt-test-triage-dev0.log`",
             "",
             f"## Pipeline State",
             f"- **Last passing commit:** `{state.get('last_passing_commit', 'None')}`",

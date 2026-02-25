@@ -6,7 +6,7 @@ that groups cores by callstack pattern. This is critical for debugging hangs
 where different cores may be stuck at different points (e.g., multicast sender
 vs receiver patterns).
 
-Usage: python3 summarize-triage.py /tmp/dev-test-triage.log
+Usage: python3 summarize-triage.py /tmp/tt-test-triage-dev0.log
 """
 
 import re

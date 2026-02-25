@@ -209,7 +209,7 @@ The script enables watcher, LLK asserts, lightweight kernel asserts, and automat
   - **Watcher assert**: "tripped assert on line X" — check that line in the kernel
   - **NoC error**: Usually unaligned reads/writes — check address and size alignment in reader/writer
   - **Compile error**: Check includes and template parameters
-- **2** — HANG detected. The dispatch timeout fired, ran `tt-triage` to capture device state, then killed the operation. The script prints a **triage summary** (which cores are stuck and where) and the **watcher log**. Full triage at `/tmp/dev-test-triage.log`.
+- **2** — HANG detected. The dispatch timeout fired, ran `tt-triage` to capture device state, then killed the operation. The script prints a **triage summary** (which cores are stuck and where) and the **watcher log**. Full triage at `/tmp/tt-test-triage-dev0.log`.
   - The triage summary groups cores by callstack pattern. Look for `cb_wait_front()` — means CB sync mismatch. Verify you didn't add CB ops around helpers. Check the design's CB Sync Summary table. Count total push vs pop per CB.
   - The pattern of *which* RISC-Vs are stuck tells you what's wrong (e.g. all compute cores stuck waiting = reader never pushed data).
 
