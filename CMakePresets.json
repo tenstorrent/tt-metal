@@ -124,6 +124,18 @@
         "targets": ["all"]
       },
       {
+        "name": "dev-gcc-system",
+        "configurePreset": "gcc-system",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-clang-system",
+        "configurePreset": "clang-system",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
         "name": "debug",
         "configurePreset": "default",
         "configuration": "Debug",

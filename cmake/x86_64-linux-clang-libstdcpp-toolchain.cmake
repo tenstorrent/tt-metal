@@ -8,7 +8,7 @@ set(CMAKE_CXX_COMPILER clang++ CACHE INTERNAL "C++ compiler")
 set(ENABLE_LIBCXX FALSE CACHE INTERNAL "Using clang's libc++")
 
 # Our build is super slow; put a band-aid on it by choosing a linker that can cope better.
-# We really need to fix our code, though.
+# We really need to fix out code, though.
 find_program(MOLD ld.mold)
 if(MOLD)
     set(CMAKE_LINKER_TYPE MOLD)

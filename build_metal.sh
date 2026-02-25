@@ -50,8 +50,12 @@ use_compiler() {
     else
         cxx_compiler_path="$(command -v "$cxx")"
         # Derive C compiler: g++-13 → gcc-13, clang++-18 → clang-18
-        local cc="${cxx/++/}"
-        [[ "$cxx" == g++* ]] && cc="${cxx/g++/gcc}"
+        local cc
+        if [[ "$cxx" == g++* ]]; then
+            cc="${cxx/g++/gcc}"
+        else
+            cc="${cxx/++/}"
+        fi
         c_compiler_path="$(command -v "$cc")"
     fi
 }
@@ -88,12 +92,12 @@ show_help() {
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
+    echo "  --compiler compiler_name         Select compiler: clang (best available), gcc (best available), clang-20, clang-20-libcpp, gcc-12, gcc-14."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
-    echo "  --compiler compiler_name         Select compiler: clang (best available), gcc (best available), clang-20, clang-20-libcpp, gcc-12, gcc-14."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
 }
 
