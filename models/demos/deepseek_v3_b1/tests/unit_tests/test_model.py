@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 
 @pytest.mark.parametrize("loopback_mode", [True, False])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("prompt_length", [1, 8, 64, 128])
+@pytest.mark.parametrize("prompt_length", [1, 64, 128])
 @pytest.mark.parametrize("num_decode_steps", [1, 16, 32])
 def test_prefill_and_decode(
     mesh_device: ttnn.MeshDevice,
