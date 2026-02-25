@@ -342,6 +342,137 @@ def _generate_phase_namespace(
 
 
 # =============================================================================
+# Preprocessor-Based Phase Generation
+# =============================================================================
+
+
+def _strip_include_lines(source: str) -> str:
+    """Strip all ``#include`` lines from source.
+
+    Used before pasting source into a namespace block — includes are
+    collected separately and placed at file scope.
+    """
+    return "\n".join(line for line in source.split("\n") if not line.strip().startswith("#include"))
+
+
+def _strip_file_scope_defines(source: str, define_names: Set[str]) -> str:
+    """Strip ``#define`` lines whose name is in *define_names* from pre-main source.
+
+    These defines are already emitted at file scope (before ``#include`` headers),
+    so keeping them inside the phase namespace block would duplicate them.
+    Only strips lines that appear before the first function body (``run()``
+    after ``kernel_main`` renaming) to avoid touching defines inside functions.
+    """
+    if not define_names:
+        return source
+
+    out_lines: List[str] = []
+    in_body = False
+    for line in source.split("\n"):
+        stripped = line.strip()
+        if not in_body and stripped.startswith("void run()"):
+            in_body = True
+        if not in_body and stripped.startswith("#define"):
+            # Extract the macro name (second token)
+            parts = stripped.split(None, 2)
+            if len(parts) >= 2 and parts[1] in define_names:
+                continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+_SPDX_BLOCK_RE = re.compile(
+    r"(^\s*//\s*SPDX-[^\n]*\n)(^\s*//\s*\n)*(^\s*//\s*SPDX-[^\n]*\n?)*",
+    re.MULTILINE,
+)
+
+
+def _clean_phase_source(source: str) -> str:
+    """Remove SPDX comment blocks and collapse consecutive blank lines."""
+    source = _SPDX_BLOCK_RE.sub("", source)
+    return re.sub(r"\n{3,}", "\n\n", source).strip()
+
+
+def _offset_tensor_accessor_in_source(source: str, ct_arg_offset: int) -> str:
+    """Offset ``TensorAccessorArgs<N>`` template parameters.
+
+    ``TensorAccessorArgs``'s header expands ``get_compile_time_arg_val``
+    at include time (before our phase-scoped ``#define`` redirects), so
+    the template parameter must be offset directly via regex.
+    """
+    if ct_arg_offset == 0:
+        return source
+
+    def _offset(match: re.Match) -> str:
+        return f"TensorAccessorArgs<{int(match.group(1)) + ct_arg_offset}>"
+
+    return re.sub(r"TensorAccessorArgs<(\d+)>", _offset, source)
+
+
+def _generate_phase_block(
+    phase_idx: int,
+    source_no_includes: str,
+    defines: List[Tuple[str, str]],
+    ct_arg_offset: int,
+    phase_name: str = "",
+) -> List[str]:
+    """Generate a preprocessor-based phase block.
+
+    Instead of extracting the ``kernel_main()`` body, pastes the entire
+    source (with ``#include`` lines stripped, ``kernel_main`` renamed to
+    ``run``, literal CT arg indices offset) into ``namespace phase_N {}``
+    with preprocessor redirects:
+
+    - ``get_named_compile_time_arg_val(name)`` → ``get_named_ct_arg("phase_N_" name)``
+    - ``get_arg_val`` → ``phase_N_get_arg_val``
+
+    Positional CT arg offsetting (``get_compile_time_arg_val(N)``) is done
+    via regex in the caller, not via ``#define``, because some kernels use
+    non-literal indices (e.g., ``method.next_compile_time_args_offset()``)
+    that are already correct after ``TensorAccessorArgs<N>`` offsetting.
+    """
+    ns_name = f"phase_{phase_idx}"
+    lines: List[str] = []
+
+    label = f"Phase {phase_idx}: {phase_name}" if phase_name else f"Phase {phase_idx}"
+    lines.append("// " + "=" * 76)
+    lines.append(f"// {label}")
+    lines.append("// " + "=" * 76)
+
+    # Per-phase defines (from descriptor — preprocessor is namespace-unaware)
+    if defines:
+        lines.extend(_emit_define_lines(defines))
+
+    # RT arg redirect (all phases, including phase 0)
+    lines.append(_emit_rt_arg_define(phase_idx))
+
+    # Named CT arg redirect (phase N>0 — phase 0 keeps original names)
+    if phase_idx > 0:
+        lines.append(f'#define get_named_compile_time_arg_val(name) get_named_ct_arg("phase_{phase_idx}_" name)')
+
+    # Open namespace + paste entire source
+    lines.append(f"namespace {ns_name} {{")
+    lines.append("")
+    lines.append(source_no_includes)
+    lines.append("")
+    lines.append(f"}} // namespace {ns_name}")
+
+    # Undo named CT arg redirect
+    if phase_idx > 0:
+        lines.append("#undef get_named_compile_time_arg_val")
+
+    # Undo RT arg redirect
+    lines.append(_emit_rt_arg_undef())
+
+    # Undo per-phase defines
+    if defines:
+        lines.extend(_emit_undef_lines(defines))
+
+    lines.append("")
+    return lines
+
+
+# =============================================================================
 # Fused Kernel Source Generation
 # =============================================================================
 
@@ -361,9 +492,12 @@ def _generate_fused_source(
 ) -> Optional[str]:
     """Generate fused kernel source for any RISC type.
 
-    Each phase's source goes into ``namespace phase_N { ... }`` with its
-    body in ``run()``.  The outer ``kernel_main()`` calls
-    ``phase_N::run()`` with barrier wait/reset between phases.
+    Uses preprocessor ``#define``/``#undef`` redirects instead of
+    regex-based source transformations.  Each phase's entire source
+    (with ``#include`` lines stripped) goes into ``namespace phase_N {}``
+    with ``kernel_main`` redirected to ``run()``.  The outer
+    ``kernel_main()`` calls ``phase_N::run()`` with barrier wait/reset
+    between phases.
     """
     # Read and inline kernel sources for this role
     role_sources: List[Tuple[int, str]] = []
@@ -383,12 +517,25 @@ def _generate_fused_source(
     if not role_sources:
         return None
 
-    # Collect includes, defines, pre-main blocks
+    # Collect system includes and source-embedded defines from combined content
     all_combined = ["\n".join(c for _, c in phase_headers.get(i, [])) + "\n" + s for i, s in role_sources]
     includes = collect_includes(all_combined)
     source_defines = collect_defines(all_combined)
     must_match_defines, per_phase_defines = _collect_phase_defines(phase_kernels, role_key)
-    file_scope_blocks, pre_mains = _extract_phase_pre_main(role_sources, phase_headers)
+
+    # Deduplicate inlined header content for file scope
+    header_path_seen: Set[str] = set()
+    file_scope_blocks: List[str] = []
+    for phase_idx, _ in role_sources:
+        for resolved_path, content in phase_headers.get(phase_idx, []):
+            if resolved_path not in header_path_seen:
+                header_path_seen.add(resolved_path)
+                # Strip #include lines (already collected at file scope)
+                # and SPDX comments / blank line runs
+                content_cleaned = _strip_include_lines(content)
+                content_cleaned = _clean_phase_source(content_cleaned)
+                if content_cleaned:
+                    file_scope_blocks.append(content_cleaned)
 
     # File preamble
     lines = _spdx_header() + [
@@ -397,9 +544,21 @@ def _generate_fused_source(
         "",
     ]
 
-    # File-scope: MUST_MATCH defines + source defines + includes
+    # File-scope: MUST_MATCH defines + source-embedded defines + includes
+    # Source-embedded defines (e.g., REDUCE_OP) must be at file scope so
+    # system headers can reference them as template defaults.
     lines.extend(_emit_define_lines(must_match_defines))
     lines.extend(source_defines)
+
+    # Build set of define names already at file scope so we can strip
+    # their duplicates from phase source blocks.
+    file_scope_define_names: Set[str] = set()
+    for name, _ in must_match_defines:
+        file_scope_define_names.add(name)
+    for line in source_defines:
+        parts = line.strip().split(None, 2)
+        if len(parts) >= 2:
+            file_scope_define_names.add(parts[1])
     lines.append("")
     lines.extend(includes)
     lines.append(_PROFILER_INCLUDE)
@@ -423,16 +582,23 @@ def _generate_fused_source(
                 lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
         lines.append("")
 
-    # Phase namespaces
+    # Phase blocks (preprocessor-based)
     for phase_idx, raw_source in role_sources:
-        pre_main = pre_mains.get(phase_idx, "")
         defines = per_phase_defines.get(phase_idx, [])
         ct_offset = ct_arg_offsets.get(phase_idx, 0)
+
+        # Strip includes + file-scope defines, rename kernel_main → run,
+        # offset literal CT args + TensorAccessorArgs
+        source_no_includes = _strip_include_lines(raw_source)
+        source_no_includes = _strip_file_scope_defines(source_no_includes, file_scope_define_names)
+        source_no_includes = _clean_phase_source(source_no_includes)
+        source_no_includes = re.sub(r"\bkernel_main\b", "run", source_no_includes)
+        source_no_includes = _offset_compile_time_args_in_source(source_no_includes, phase_idx, ct_offset)
+
         lines.extend(
-            _generate_phase_namespace(
+            _generate_phase_block(
                 phase_idx,
-                pre_main,
-                raw_source,
+                source_no_includes,
                 defines,
                 ct_offset,
                 phase_name=phase_names.get(phase_idx, ""),
@@ -454,7 +620,7 @@ def _generate_fused_source(
             )
         )
 
-    # kernel_main
+    # kernel_main dispatcher
     lines.append("void kernel_main() {")
     if needs_barrier:
         lines.append("    barrier::init();")
@@ -469,7 +635,13 @@ def _generate_fused_source(
         pname = phase_names.get(phase_idx, "")
         label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
         lines.append(f"    // {label}")
-        lines.append(f"    phase_{phase_idx}::run();")
+        if pname:
+            lines.append("    {")
+            lines.append(f'        DeviceZoneScopedN("{pname}");')
+            lines.append(f"        phase_{phase_idx}::run();")
+            lines.append("    }")
+        else:
+            lines.append(f"    phase_{phase_idx}::run();")
         is_last = count == len(role_sources) - 1
         if needs_barrier and (not is_last or has_trailing):
             lines.append("    barrier::phase::wait();")
