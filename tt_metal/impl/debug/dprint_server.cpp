@@ -1463,7 +1463,8 @@ DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) {
         log_warning(
             tt::LogMetal,
             "DPRINT is deprecated and will be removed in a future release. "
-            "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1.");
+            "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1"
+            " and using DEVICE_PRINT() macro when writing kernels.");
         impl_ = std::make_unique<DPrintImpl>(rtoptions);
     }
 }
