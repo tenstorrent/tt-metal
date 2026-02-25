@@ -83,7 +83,7 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
         h2d_socket.write_tensor(input_tensor)
         d2h_socket.read_tensor(output_tensor)
 
-        result_torch = ttnn.to_torch(output_tensor)
+        result_torch = ttnn.to_torch(output_tensor).to(torch.int32)
         match = torch.equal(torch_input, result_torch)
         assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
@@ -376,7 +376,7 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         h2d_socket.write_tensor(input_tensor)
         d2h_socket.read_tensor(output_tensor)
 
-        result_torch = ttnn.to_torch(output_tensor)
+        result_torch = ttnn.to_torch(output_tensor).to(torch.int32)
         match = torch.equal(torch_input, result_torch)
         assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
