@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -33,3 +34,8 @@ DispatchCoreConfig get_dispatch_core_config() {
 }
 
 }  // namespace tt::tt_metal
+
+std::size_t std::hash<tt::tt_metal::DispatchCoreConfig>::operator()(
+    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) const {
+    return tt::stl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
+}
