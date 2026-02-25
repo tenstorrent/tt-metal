@@ -12,15 +12,15 @@ on:
           - all
           - llama3.2-1b
           - llama3.2-3b
-          - falcon-7b
-          - mamba-2.8b
-          - qwen2.5-7b
-          - phi-3-mini
-          - phi-4-mini
-          - falcon-40b
           - llama3.2-11b-vision
+          - falcon-7b
+          - falcon-40b
+          - qwen2.5-7b
           - qwen2.5-72b
           - qwen2.5-vl-32b
+          - phi-3-mini
+          - phi-4-mini
+          - mamba-2.8b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

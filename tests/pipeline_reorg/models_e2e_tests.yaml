@@ -58,6 +58,44 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Llama 3.2-11B Vision e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-11B-Vision-Instruct MESH_DEVICE=T3K
+    pytest --timeout 900 models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace"
+  model: llama3.2-11b-vision
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: llama3.3-70b
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B e2e tests (Galaxy)
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
+  model: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Falcon-7B e2e tests
   cmd: |
     pytest --timeout 420 --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!" models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
@@ -72,20 +110,16 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
-# - name: Mamba-2.8B e2e tests
-#   cmd: |
-#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
-#   model: mamba-2.8b
-#   skus:
-#     wh_n150:
-#       timeout: 5
-#       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
-#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
-#   team: models
+- name: Falcon-40B e2e tests
+  cmd: |
+    pytest --timeout 720 models/demos/t3000/falcon40b/tests/test_demo.py
+  model: falcon-40b
+  skus:
+    wh_llmbox_perf:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
@@ -95,6 +129,32 @@
   skus:
     wh_n300:
       timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# Qwen2.5-72B: disabled, ci-token-matching hanging on CI
+# - name: Qwen2.5-72B e2e tests
+#   cmd: |
+#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
+#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+#   model: qwen2.5-72b
+#   skus:
+#     wh_llmbox_perf:
+#       timeout: 10
+#       tier: 3
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+
+- name: Qwen2.5-VL-32B e2e tests
+  cmd: |
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+  model: qwen2.5-vl-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -130,77 +190,17 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-- name: Falcon-40B e2e tests
-  cmd: |
-    pytest --timeout 720 models/demos/t3000/falcon40b/tests/test_demo.py
-  model: falcon-40b
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Llama 3.2-11B Vision e2e tests
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-11B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 900 models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace"
-  model: llama3.2-11b-vision
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-# Qwen2.5-72B: disabled, ci-token-matching hanging on CI
-# - name: Qwen2.5-72B e2e tests
+# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# - name: Mamba-2.8B e2e tests
 #   cmd: |
-#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
-#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-#   model: qwen2.5-72b
+#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
+#   model: mamba-2.8b
 #   skus:
-#     wh_llmbox_perf:
-#       timeout: 10
+#     wh_n150:
+#       timeout: 5
+#       tier: 3
+#     wh_n300:
+#       timeout: 5
 #       tier: 3
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
-
-- name: Qwen2.5-VL-32B e2e tests
-  cmd: |
-    uv pip install -r models/demos/qwen25_vl/requirements.txt
-    export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
-  model: qwen2.5-vl-32b
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Llama 3.3-70B e2e tests
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
-  model: llama3.3-70b
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Llama 3.3-70B e2e tests (Galaxy)
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
-  model: llama3.3-70b-galaxy
-  skus:
-    wh_galaxy:
-      timeout: 30
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
