@@ -227,6 +227,48 @@ BenchResult bench_phase1(
     };
 }
 
+// Benchmark Phase 1 using minimal_matmul (G = X @ X^T via minimal_matmul + transpose)
+BenchResult bench_phase1_minimal(
+    const BenchShape& shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const ttnn::Tensor& x,
+    int device_id) {
+    auto* dev_ptr = device.get();
+    auto xt_tensor = ttnn::transpose(x, -2, -1);
+
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
+        auto out = ttnn::experimental::minimal_matmul(
+            x, xt_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        out.deallocate();
+    }
+
+    std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
+    for (int i = 0; i < test_config.num_measurement_iterations; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        auto out = ttnn::experimental::minimal_matmul(
+            x, xt_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_hifi4_config());
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        auto end = std::chrono::high_resolution_clock::now();
+        total_time += end - start;
+        out.deallocate();
+    }
+
+    double avg_s = total_time.count() / test_config.num_measurement_iterations;
+    uint64_t M = shape.M;
+    uint64_t K = shape.K;
+    double flops = 2.0 * M * M * K;
+    double tflops = flops / 1e12 / avg_s;
+    double utilization = compute_utilization(avg_s, flops, device, device_id);
+
+    return BenchResult{
+        .impl_name = "  phase1 minimal_mm",
+        .time_us = avg_s * 1e6,
+        .tflops = tflops,
+        .utilization_pct = utilization,
+    };
+}
+
 // Benchmark Phase 2 only (H = cG^2 + bG)
 BenchResult bench_phase2(
     const BenchShape& shape,
@@ -627,6 +669,7 @@ void BM_NewtonSchulzIteration(benchmark::State& state) {
 
         // Individual phases
         results.push_back(bench_phase1(shape, device, x, device_id));
+        results.push_back(bench_phase1_minimal(shape, device, x, device_id));
         results.push_back(bench_phase2(shape, device, G, b, c, device_id));
         results.push_back(bench_phase3(shape, device, H, x, a, device_id));
 
