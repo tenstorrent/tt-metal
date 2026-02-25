@@ -22,7 +22,7 @@ class WarmupForwardMixin:
     - self.decode_forward(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode):
+    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, batch_size):
         """
         non_greedy_decoding_on_device: when True, device supports non-greedy sampling (temperature,
         top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
@@ -38,15 +38,15 @@ class WarmupForwardMixin:
                 presence_penalty, frequency_penalty, repetition_penalty = None, None, None
 
                 if penalties:
-                    presence_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
-                    frequency_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
-                    repetition_penalty = [1.5] * max_batch_size if mode == "decode" else 1.5
+                    presence_penalty = [1.2] * batch_size
+                    frequency_penalty = [1.2] * batch_size
+                    repetition_penalty = [1.5] * batch_size
 
-                enable_log_probs = [log_probs] * max_batch_size if mode == "decode" else log_probs
+                enable_log_probs = [log_probs] * batch_size
 
-                temperature = [1.0] * max_batch_size if mode == "decode" else 1.0
-                top_k = [10] * max_batch_size if mode == "decode" else 10
-                top_p = [0.9] * max_batch_size if mode == "decode" else 0.9
+                temperature = [1.0] * batch_size
+                top_k = [10] * batch_size
+                top_p = [0.9] * batch_size
 
                 sampling_configs.append(
                     SamplingParams(
@@ -62,9 +62,9 @@ class WarmupForwardMixin:
 
         sampling_configs.append(
             SamplingParams(
-                temperature=[0.0] * max_batch_size if mode == "decode" else 0.0,
-                top_k=[1] * max_batch_size if mode == "decode" else 1,
-                top_p=[1.0] * max_batch_size if mode == "decode" else 1.0,
+                temperature=[0.0] * batch_size,
+                top_k=[1] * batch_size,
+                top_p=[1.0] * batch_size,
             )
         )
 
@@ -75,7 +75,8 @@ class WarmupForwardMixin:
     def _create_decode_warmup_inputs(self, max_batch_size, num_blocks):
         tokens = torch.zeros(max_batch_size, 1, dtype=torch.int32)
         start_pos = torch.zeros(max_batch_size, dtype=torch.int32)
-        page_table = torch.zeros(max_batch_size, num_blocks, dtype=torch.int32)
+        # None is passed from tests if paged attention is not enabled
+        page_table = torch.zeros(max_batch_size, num_blocks, dtype=torch.int32) if num_blocks is not None else None
         return tokens, start_pos, page_table
 
     def warmup_model_decode(
@@ -91,7 +92,7 @@ class WarmupForwardMixin:
         This function is called by vLLM
         """
         sampling_params = self._create_sampling_params(
-            can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode="decode"
+            can_sample_on_device, non_greedy_decoding_on_device, max_batch_size
         )
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
@@ -99,7 +100,7 @@ class WarmupForwardMixin:
         logger.info("Starting decode warmup")
         logger.info(f"Tokens shape: {tokens.shape}")
         logger.info(f"Start pos shape: {start_pos.shape}")
-        logger.info(f"Page table shape: {page_table.shape}")
+        logger.info(f"Page table shape: {page_table.shape if page_table is not None else 'None'}")
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")

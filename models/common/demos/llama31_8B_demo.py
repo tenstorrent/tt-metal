@@ -594,6 +594,22 @@ def test_mlp1d_llama_demo(
     # Create generator
     generator = Generator(model_list, model_args_list, mesh_device, tokenizer=tokenizer)
 
+    # warmup the model
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache_list,
+        enable_trace=True,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache_list,
+        enable_trace=True,
+        max_batch_size=batch_size,
+        num_blocks=paged_attention_config.max_num_blocks,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+
     # --- Prefill Phase ---
     logger.info("Starting prefill warmup...")
     profiler.start("compile_prefill")

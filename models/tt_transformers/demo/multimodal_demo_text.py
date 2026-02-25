@@ -72,6 +72,7 @@ def test_multimodal_demo_text(
         processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
         tokenizer = processor.tokenizer
         generator = Generator([model], [model_args], mesh_device, preprocessor=processor, tokenizer=tokenizer)
+        # call warmup_model_prefill and warmup_model_decode when vision warmup is implemented
 
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")

@@ -27,7 +27,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 
 MAX_SEQ_LEN = 2048
 
-
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Return a copy of the HF state_dict with leading 'model.' stripped.
 

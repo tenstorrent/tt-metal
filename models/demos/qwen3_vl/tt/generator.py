@@ -44,6 +44,9 @@ class Generator(WarmupForwardMixin):
     def processor(self):
         return self._ttt_generator.processor
 
+    def metal_supports_on_device_sampling(self):
+        return self._ttt_generator.metal_supports_on_device_sampling()
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,

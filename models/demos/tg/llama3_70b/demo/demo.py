@@ -103,6 +103,7 @@ def demo_warmup(args):
     data_args = replace(args.data, max_output_tokens=2)
 
     generator = build_generator(model_args, tt_args)
+
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
