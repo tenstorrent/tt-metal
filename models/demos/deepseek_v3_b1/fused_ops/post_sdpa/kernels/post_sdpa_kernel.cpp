@@ -552,6 +552,7 @@ void kernel_main() {
         uint64_t ccl_sender_semaphore_addr =
             get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather2_completion_semaphore_id));
         noc_semaphore_inc(ccl_sender_semaphore_addr, 1);
+        noc_async_atomic_barrier();
     }
 #endif
 
