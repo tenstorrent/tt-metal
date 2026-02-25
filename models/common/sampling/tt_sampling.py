@@ -74,11 +74,11 @@ class TTSampling(LightweightModule):
         # if vocab is larger than uint16 max, return uint32 for indices
         if per_device_vocab_size > torch.iinfo(torch.uint16).max:
             return ttnn.uint32
-        
+
         # if vocab size is missaligned with tile size and multi-step reduction is used, we need uint32 because of slice op compatibility
         if multi_step_reduction and (per_device_vocab_size // 2) % ttnn.TILE_SIZE != 0:
             return ttnn.uint32
-        
+
         return ttnn.uint16
 
     @property
