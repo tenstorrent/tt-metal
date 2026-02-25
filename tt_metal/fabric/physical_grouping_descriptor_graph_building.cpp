@@ -965,7 +965,6 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
             sizes.push_back(meshes.size());
         }
 
-        size_t combination_index = 0;
         tt::tt_fabric::iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
             std::vector<FlattenedMesh> chosen;
             chosen.reserve(sub_grouping.items.size());
@@ -991,7 +990,6 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
             // Note: We don't filter here because build_flattened_meshes_for_item already filtered sub-items
             // and the top-level join will be validated in build_flattened_adjacency_mesh
             all_results.push_back(std::move(mesh));
-            combination_index++;
         });
     }
     return all_results;
@@ -1019,6 +1017,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
     if (grouping.items.empty()) {
         GroupingInfo result = grouping;
+        result.name = grouping.name + "_flat";
         result.adjacency_graph = tt::tt_fabric::AdjacencyGraph<uint32_t>();
         return {result};
     }
@@ -1036,9 +1035,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         for (size_t i = 0; i < meshes.size(); ++i) {
             GroupingInfo info = grouping;
-            if (meshes.size() > 1) {
-                info.name = grouping.name + "_" + std::to_string(i);
-            }
+            info.name = grouping.name + "_flat";
 
             // Rebuild items from flattened mesh node metadata BEFORE moving the graph
             // (rebuild_items_from_flattened_mesh needs mesh.graph.get_nodes() and mesh.node_metadata)
@@ -1089,12 +1086,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     for (const auto& meshes : meshes_per_item) {
         sizes.push_back(meshes.size());
     }
-    size_t total_combinations = 1;
-    for (size_t s : sizes) {
-        total_combinations *= s;
-    }
 
-    size_t combination_index = 0;
     tt::tt_fabric::iterate_cartesian_product(sizes, [&](const std::vector<size_t>& indices) {
         std::vector<FlattenedMesh> chosen;
         chosen.reserve(grouping.items.size());
@@ -1121,9 +1113,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
         }
 
         GroupingInfo info = grouping;
-        if (total_combinations > 1) {
-            info.name = grouping.name + "_" + std::to_string(combination_index);
-        }
+        info.name = grouping.name + "_flat";
 
         // Rebuild items from flattened mesh node metadata BEFORE moving the graph
         // (rebuild_items_from_flattened_mesh needs joined_mesh.graph.get_nodes() and joined_mesh.node_metadata)
@@ -1140,7 +1130,6 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
         }
 
         result.push_back(std::move(info));
-        combination_index++;
     });
     return result;
 }
