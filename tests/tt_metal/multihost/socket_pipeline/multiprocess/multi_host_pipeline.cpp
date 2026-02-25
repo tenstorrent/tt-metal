@@ -1049,6 +1049,8 @@ void run_single_galaxy_rate_pipeline(
     const uint32_t downstream_rank = my_rank + 1;
     const uint32_t upstream_rank = my_rank - 1;  // wraps for rank 0, but unused there
 
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     // Helper to safely unwrap the global logical binding.
     // The control plane returns an optional to signal that a binding might not exist (e.g. for disconnected ranks),
     // but in this test pipeline we expect these specific ranks to be bound, so we check explicitly and abort if missing
