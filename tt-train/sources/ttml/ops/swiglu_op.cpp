@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
@@ -124,25 +125,24 @@ autograd::TensorPtr swiglu_optimized(
             w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
         }
 
-        auto dL_dgated = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);
+        auto dL_dprod = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);
         dL_dout.deallocate();
 
-        auto dL_dswished = ttnn::multiply(dL_dgated, gate);
-        gate.deallocate();
+        ttnn::multiply_(gate, dL_dprod);
+        auto& dL_dswished = gate;
 
-        auto dL_dgate = ttnn::multiply(dL_dgated, swished);
-        swished.deallocate();
-        dL_dgated.deallocate();
+        ttnn::multiply_(swished, dL_dprod);
+        auto& dL_dgate = swished;
+        dL_dprod.deallocate();
 
-        // Fused SiLU backward — single kernel replaces sigmoid + 4 eltwise + temporaries
-        auto dL_dlinear1 = ttml::metal::silu_bw(linear1, dL_dswished);
-        linear1.deallocate();
+        // Fused SiLU backward — reuse linear1's buffer for the output
+        auto dL_dlinear1 = ttml::metal::silu_bw(linear1, dL_dswished, linear1);
         dL_dswished.deallocate();
 
-        // Input grads: two matmuls + add
+        // Input grads: two matmuls + in-place add
         auto dL_dtensor = ttnn_fixed::matmul(dL_dlinear1, w1->get_value(), false, true);
         auto dL_dtensor_from_w3 = ttnn_fixed::matmul(dL_dgate, w3->get_value(), false, true);
-        dL_dtensor = ttnn::add(dL_dtensor, dL_dtensor_from_w3);
+        ttnn::add_(dL_dtensor, dL_dtensor_from_w3);
         dL_dtensor_from_w3.deallocate();
         tensor->add_grad(dL_dtensor);
         dL_dtensor.deallocate();
