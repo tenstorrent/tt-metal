@@ -48,41 +48,41 @@ void kernel_main() {
         // DeviceZoneScopedN("WRITER_KERNEL_DATA_MOVEMENT");
         {
             DeviceZoneScopedN("WAIT_CB_DATA");
-            cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
+            // cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
         }
 
-        uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
-        // print_full_tile(c_args.cb_dst, tile_id, true);
+        // uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
+        // // print_full_tile(c_args.cb_dst, tile_id, true);
 
-        for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
-            noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
-            // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
-            dst_noc_ofs += tile_size;
-        }
-        {
-            DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
-            noc_async_write_barrier();
-        }
-        cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
+        // for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
+        //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
+        //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
+        //     dst_noc_ofs += tile_size;
+        // }
+        // {
+        //     DeviceZoneScopedN("WRITER_KERNEL_BARRIER");
+        //     noc_async_write_barrier();
+        // }
+        // cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
     }
 
     if (num_tail_tiles != 0) {
         num_tiles_per_batch = num_tail_tiles;
-        cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
+        // cb_wait_front(c_args.cb_dst, num_tiles_per_batch);
 
-        uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
-        // print_full_tile(c_args.cb_dst, tile_id, true);
+        // uint32_t l1_read_addr = get_read_ptr(c_args.cb_dst);
+        // // print_full_tile(c_args.cb_dst, tile_id, true);
 
-        for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
-            noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
-            // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
-            dst_noc_ofs += tile_size;
-        }
-        {
-            DeviceZoneScopedN("TILE WRITER_KERNEL_BARRIER");
-            noc_async_write_barrier();
-        }
-        cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
+        // for (uint32_t k = 0; k < num_tiles_per_batch; k++) {
+        //     noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
+        //     // DPRINT << "wrote tile " << dst_noc_ofs << ENDL();
+        //     dst_noc_ofs += tile_size;
+        // }
+        // {
+        //     DeviceZoneScopedN("TILE WRITER_KERNEL_BARRIER");
+        //     noc_async_write_barrier();
+        // }
+        // cb_pop_front(c_args.cb_dst, num_tiles_per_batch);
     }
     // DPRINT << "Writing kernel finish" << ENDL();
 }
