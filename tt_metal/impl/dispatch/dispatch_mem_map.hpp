@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <utility>
+#include <cstdint>
 #include <vector>
 
 #include <umd/device/types/core_coordinates.hpp>
@@ -31,8 +30,8 @@ public:
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-    // Uses hal only during init; does not hold the HAL.
-    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal);
+    // Create a DispatchMemMap
+    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster);
 
     uint32_t prefetch_q_entries() const;
 

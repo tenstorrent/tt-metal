@@ -3,28 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <enchantum/enchantum.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
 
-DispatchMemMap::DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs, const Hal& hal) :
+DispatchMemMap::DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster) :
+    settings(DispatchSettings(num_hw_cqs, core_type, is_galaxy_cluster, hal.get_alignment(HalMemType::L1))),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
     noc_stream_reg_space_size_(hal.get_noc_stream_reg_space_size()),
     noc_stream_remote_dest_buf_space_available_update_reg_index_(
         hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index()) {
-    const auto dispatch_settings = DispatchSettings::get(core_type, num_hw_cqs);
-    this->settings = dispatch_settings;
-
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {

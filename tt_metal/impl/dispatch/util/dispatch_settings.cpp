@@ -33,45 +33,26 @@ static_assert(
     "DISPATCH_MESSAGES_MAX_OFFSET does not match the maximum value of go_msg_t::dispatch_message_offset. "
     "Fix the value in dispatch_settings.hpp");
 
-namespace {
-
-struct DispatchSettingsContainerKey {
-    CoreType core_type;
-    uint32_t num_hw_cqs;
-
-    bool operator==(const DispatchSettingsContainerKey& other) const {
-        return core_type == other.core_type && num_hw_cqs == other.num_hw_cqs;
+DispatchSettings::DispatchSettings(
+    uint32_t num_hw_cqs, const CoreType& core_type, bool is_galaxy_cluster, uint32_t l1_alignment) {
+    switch (core_type) {
+        case CoreType::WORKER: init_worker_defaults(num_hw_cqs, is_galaxy_cluster, l1_alignment); break;
+        case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;
+        default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
     }
-};
-
-struct DispatchSettingsContainerKeyHasher {
-    size_t operator()(const DispatchSettingsContainerKey& k) const {
-        const auto h1 = std::hash<uint32_t>{}(static_cast<int>(k.core_type));
-        const auto h2 = std::hash<uint32_t>{}(k.num_hw_cqs);
-        return h1 ^ (h2 << 1);
-    }
-};
-
-using DispatchSettingsContainer =
-    std::unordered_map<DispatchSettingsContainerKey, DispatchSettings, DispatchSettingsContainerKeyHasher>;
-
-DispatchSettingsContainer& get_store() {
-    static DispatchSettingsContainer store;
-    return store;
+    this->core_type_ = core_type;
+    this->num_hw_cqs_ = num_hw_cqs;
 }
-}  // namespace
 
-DispatchSettings DispatchSettings::worker_defaults(
-    const tt::Cluster& cluster, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
+void DispatchSettings::init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_cluster, uint32_t l1_alignment) {
     uint32_t prefetch_q_entries;
-    if (cluster.is_galaxy_cluster()) {
+    if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
         prefetch_q_entries = 1534;
     }
 
-    return DispatchSettings()
-        .num_hw_cqs(num_hw_cqs)
+    this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::WORKER)
         .prefetch_q_entries(prefetch_q_entries)
         .prefetch_max_cmd_size(128_KB)
@@ -88,10 +69,8 @@ DispatchSettings DispatchSettings::worker_defaults(
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(
-    const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
-    return DispatchSettings()
-        .num_hw_cqs(num_hw_cqs)
+void DispatchSettings::init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment) {
+    this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
         .prefetch_q_entries(128)
         .prefetch_max_cmd_size(32_KB)
@@ -106,22 +85,6 @@ DispatchSettings DispatchSettings::eth_defaults(
         .with_alignment(l1_alignment)
 
         .build();
-}
-
-DispatchSettings DispatchSettings::defaults(
-    const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs, const uint32_t l1_alignment) {
-    if (!num_hw_cqs) {
-        TT_THROW("0 CQs is invalid");
-    }
-
-    if (core_type == CoreType::WORKER) {
-        return worker_defaults(cluster, num_hw_cqs, l1_alignment);
-    }
-    if (core_type == CoreType::ETH) {
-        return eth_defaults(cluster, num_hw_cqs, l1_alignment);
-    }
-
-    TT_THROW("Default settings for core_type {} is not implemented", enchantum::to_string(core_type));
 }
 
 std::vector<std::string> DispatchSettings::get_errors() const {
@@ -161,38 +124,6 @@ DispatchSettings& DispatchSettings::build() {
         return *this;
     }
     TT_THROW("Validation errors in dispatch_settings. Call validate() for a list of errors");
-}
-
-// Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
-// before command queue kernels are created.
-DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_t num_hw_cqs) {
-    DispatchSettingsContainerKey k{core_type, num_hw_cqs};
-    auto& store = get_store();
-    if (!store.contains(k)) {
-        TT_THROW(
-            "DispatchSettings is not initialized for CoreType {}, {} CQs", enchantum::to_string(core_type), num_hw_cqs);
-    }
-    return store[k];
-}
-
-// Reset the settings
-void DispatchSettings::initialize(const tt::Cluster& cluster, const Hal& hal) {
-    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
-    auto& store = get_store();
-    for (const auto& core_type : k_SupportedCoreTypes) {
-        for (uint32_t hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
-            DispatchSettingsContainerKey k{core_type, hw_cqs};
-            store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs, l1_alignment);
-        }
-    }
-}
-
-// Reset the settings for a core type and number hw cqs to the provided settings
-void DispatchSettings::initialize(const DispatchSettings& other) {
-    auto& store = get_store();
-    DispatchSettingsContainerKey k{other.core_type_, other.num_hw_cqs_};
-    store[k] = other;
 }
 
 bool DispatchSettings::operator==(const DispatchSettings& other) const {

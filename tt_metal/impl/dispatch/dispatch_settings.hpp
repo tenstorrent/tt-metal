@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "llrt/hal.hpp"
 
 namespace tt {
 class Cluster;
@@ -23,25 +24,8 @@ class Hal;
 //
 class DispatchSettings {
 public:
-    // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs, uint32_t l1_alignment);
-
-    // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs, uint32_t l1_alignment);
-
-    // Returns the default settings
-    static DispatchSettings defaults(
-        const CoreType& core_type, const tt::Cluster& cluster, uint32_t num_hw_cqs, uint32_t l1_alignment);
-
-    // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
-    // before command queue kernels are created.
-    static DispatchSettings& get(const CoreType& core_type, uint32_t num_hw_cqs);
-
-    // Reset the settings. Uses hal only to read L1 alignment; does not hold the HAL.
-    static void initialize(const tt::Cluster& cluster, const Hal& hal);
-
-    // Reset the settings for a core type and number hw cqs to the provided settings
-    static void initialize(const DispatchSettings& other);
+    explicit DispatchSettings(
+        uint32_t num_hw_cqs, const CoreType& core_type, bool is_galaxy_cluster, uint32_t l1_alignment);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -171,6 +155,10 @@ public:
     uint32_t dispatch_s_buffer_pages_{};  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
     CoreType core_type_{0};  // Which core this settings is for
+
+private:
+    void init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_cluster, uint32_t l1_alignment);
+    void init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment);
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.
