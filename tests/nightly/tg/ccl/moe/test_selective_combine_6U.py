@@ -52,7 +52,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
        uint32_t token_id; // which token in source device's buffer
        uint32_t k[2]; // k+1 if not activated
        uint32_t expert_weight[2]; // bfloat16 scores
-       ... 16 byte padding
+       uint32_t [3] _unused // 24 bytes padding
     }
     """
 
@@ -65,7 +65,8 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
 
     dense_metadata_len = torch.zeros([devices], dtype=torch.uint32)
     active_token_counts = torch.zeros([experts], dtype=torch.int32)
-    dense_token_maps = torch.zeros([experts, batch * seq], dtype=torch.int32)
+    # 1 mapping value per token + 12 bytes padding
+    dense_token_maps = torch.ones([experts, batch * seq, 4], dtype=torch.int32) * 69
 
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
@@ -79,7 +80,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
                         local_e_idx = device_expert_list.index(ek)
                         k_entries[local_e_idx] = k
                         global_e_idx = rec_d * num_local_experts + local_e_idx
-                        dense_token_maps[global_e_idx, active_token_counts[global_e_idx]] = b * seq + s
+                        dense_token_maps[global_e_idx, active_token_counts[global_e_idx], 0] = b * seq + s
                         active_token_counts[global_e_idx] += 1
                 if any(map(lambda x: x != select_experts_k, k_entries)):
                     metadata_entry = torch.zeros([metadata_entry_size], dtype=torch.uint32)
@@ -455,7 +456,7 @@ def _get_tt_dense_token_maps(dense_token_maps_tensor, mesh_device):
     )
 
     shape = tt_dense_token_maps.shape
-    return ttnn.reshape(tt_dense_token_maps, [1, shape[-1] * shape[-2]])
+    return ttnn.reshape(tt_dense_token_maps, [shape[0], shape[1] * shape[2]])
 
 
 def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
