@@ -50,7 +50,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        self.use_no_op = tc.get("use_no_op", False)
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -871,12 +870,6 @@ def main():
         help="Number of training epochs - overrides config",
     )
     parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=None,
-        help="Learning rate - overrides config",
-    )
-    parser.add_argument(
         "--clip_grad_norm",
         type=float,
         default=None,
@@ -1155,15 +1148,9 @@ def main():
     else:
         print("\n3. Setting up optimizer...")
         instance.set_seed(training_config.seed)
-        if training_config.use_no_op:
-            print("   WARNING: Using NoOp optimizer - parameters will NOT be updated.")
-            optimizer = None
-        else:
-            optimizer = create_optimizer(model, yaml_config)
-            if args.learning_rate is not None:
-                optimizer.set_lr(args.learning_rate)
-            print(f"   - Optimizer: {optimizer.get_name()}")
-            print(f"   - Learning rate: {optimizer.get_lr()}")
+        optimizer = create_optimizer(model, yaml_config)
+        print(f"   - Optimizer: {optimizer.get_name()}")
+        print(f"   - Learning rate: {optimizer.get_lr()}")
 
         print("\n4. Setting up learning rate scheduler...")
         scheduler_fn = None

@@ -33,7 +33,6 @@ Training hyperparameters and optimization settings.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `optimizer_config` | str | — | Path to optimizer config YAML (e.g. `"configs/optimizer_configs/adamw.yaml"`) |
-| `use_no_op` | bool | false | Use no-op optimizer (no parameter updates) |
 
 Optimizer hyperparameters (type, lr, weight_decay, etc.) are specified in the optimizer config YAML file. See [Optimizer Configuration](#optimizer-configuration-optimizer_configs) below.
 
