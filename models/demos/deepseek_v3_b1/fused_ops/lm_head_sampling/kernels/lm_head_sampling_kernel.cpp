@@ -311,7 +311,7 @@ void kernel_main() {
         iteration_count++;
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         if constexpr (Core::persistent_mode) {
-            PacketHeaderPool::reset();
+            PacketHeaderPool::reset();  // somehow causes DPRINT to crash
         }
 #endif
         // ====================================================================

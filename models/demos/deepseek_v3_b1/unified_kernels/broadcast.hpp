@@ -142,7 +142,7 @@ struct Broadcast {
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         DPRINT << "BRISC: Moving data" << ENDL();
                         tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size, 0);
                         DPRINT << "BRISC: Pushing data" << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         DPRINT << "BRISC: Popping pages" << ENDL();

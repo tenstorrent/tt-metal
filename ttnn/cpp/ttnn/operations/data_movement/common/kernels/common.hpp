@@ -21,32 +21,33 @@ namespace tt::data_movement::common {
 
 template <uint32_t max_transfer_size, bool only_reads>
 FORCE_INLINE void enhanced_noc_async_read(
-    const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
+    const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes, const uint8_t noc = noc_index) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
     if constexpr (only_reads && max_transfer_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
+        noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes, noc);
     } else {
         noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
-            src_noc_addr, dst_l1_addr, bytes);
+            src_noc_addr, dst_l1_addr, bytes, noc);
     }
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
 FORCE_INLINE void enhanced_noc_async_write(
-    const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
+    const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes, const uint8_t noc = noc_index) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only writes is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as False
     if constexpr (only_writes && max_transfer_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes);
+        noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes, noc);
     } else {
         noc_async_write<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
-            src_l1_addr, dst_noc_addr, bytes);
+            src_l1_addr, dst_noc_addr, bytes, noc);
     }
 }
 
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
-FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
+FORCE_INLINE void tt_memmove(
+    const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes, const uint8_t noc = noc_index) {
     // Function performs a memory copy between two l1 addresses in the local core
     // Uses noc_async_read when possible to copy the data over
     // Set guaranteed 16B aligned to true if the source and destination are externally guaranteed to be 16B aligned
@@ -57,17 +58,18 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
     if constexpr (use_read_datamover) {
         DPRINT << "tt_memmove: use_read_datamover=true" << ENDL();
         if constexpr (guaranteed_16B_aligned) {
-            enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
+            enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr, noc), dst_l1_addr, bytes, noc);
             if constexpr (!copy_async) {
-                noc_async_read_barrier();
+                noc_async_read_barrier(noc);
             }
         } else {
             DPRINT << "tt_memmove: guaranteed_16B_aligned=false" << ENDL();
             if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
                 DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)" << ENDL();
-                enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
+                enhanced_noc_async_read<max_transfer_size, false>(
+                    get_noc_addr(src_l1_addr, noc), dst_l1_addr, bytes, noc);
                 if constexpr (!copy_async) {
-                    noc_async_read_barrier();
+                    noc_async_read_barrier(noc);
                 }
             } else {
                 DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) != (src_l1_addr & OFFSET_16)" << ENDL();
@@ -78,18 +80,19 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
     } else {
         if constexpr (guaranteed_16B_aligned) {
             DPRINT << "tt_memmove: guaranteed_16B_aligned=true" << ENDL();
-            enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
+            enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr, noc), bytes, noc);
             if constexpr (!copy_async) {
                 DPRINT << "tt_memmove: noc_async_write_barrier" << ENDL();
-                noc_async_write_barrier();
+                noc_async_write_barrier(noc);
             }
         } else {
             DPRINT << "tt_memmove: guaranteed_16B_aligned=false" << ENDL();
             if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
                 DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)" << ENDL();
-                enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
+                enhanced_noc_async_write<max_transfer_size, false>(
+                    src_l1_addr, get_noc_addr(dst_l1_addr, noc), bytes, noc);
                 if constexpr (!copy_async) {
-                    noc_async_write_barrier();
+                    noc_async_write_barrier(noc);
                 }
             } else {
                 DPRINT << "tt_memmove: (dst_l1_addr & OFFSET_16) != (src_l1_addr & OFFSET_16)" << ENDL();
