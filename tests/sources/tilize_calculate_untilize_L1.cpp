@@ -8,11 +8,14 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+using namespace ckernel;
 
 // TODO: CLEANUP
 
@@ -78,7 +81,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         FACE_R_DIM,
         4 /* num_faces */,
         4 /* num_faces */);
-    _llk_unpack_AB_init_<>();
+    _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
     _llk_unpack_AB_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized));
 }
 
@@ -124,10 +127,10 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(4, 0);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        4, res_dst_index, false);
+    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en>(
+        DEFAULT_TENSOR_SHAPE, res_dst_index, false /* clear_fp32_dst_acc */);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

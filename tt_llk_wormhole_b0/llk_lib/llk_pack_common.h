@@ -96,10 +96,17 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
     }
     else
     {
+        // For non-untilize, faces are stored sparsely in dest register
+        // Each face occupies FACE_R_DIM (16) rows regardless of actual face_r_dim
+        // Face 0: rows 0-15 (data in 0 to face_r_dim-1, padding in face_r_dim to 15)
+        // Face 1: rows 16-31
+        // Face 2: rows 32-47
+        // Face 3: rows 48-63
+        // So face stride is always FACE_R_DIM, not face_r_dim
         TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-        TTI_SETDMAREG(0, 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
-        TTI_SETDMAREG(0, 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
-        TTI_SETDMAREG(0, 0x30, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+        TTI_SETDMAREG(0, 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1)); // FACE_R_DIM = 16 = 0x10
+        TTI_SETDMAREG(0, 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2)); // 2 * FACE_R_DIM
+        TTI_SETDMAREG(0, 0x30, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3)); // 3 * FACE_R_DIM
         TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
         TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
         TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));

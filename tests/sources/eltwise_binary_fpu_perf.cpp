@@ -12,11 +12,14 @@
 #include "params.h"
 #include "perf.h"
 #include "profiler.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+using namespace ckernel;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
@@ -38,11 +41,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_AB_init_<>(
-            FACE_R_DIM,
-            TILE_NUM_FACES,
-            /* narrow tile */ false,
-            /* transpose within face */ 0);
+        _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -79,7 +78,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(TILE_NUM_FACES, false);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
         PROFILER_SYNC();
     }
     {
@@ -100,11 +99,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    LLK_ASSERT(
-                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                        TILE_NUM_FACES, block_tile, false);
+                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        DEFAULT_TENSOR_SHAPE, block_tile, false);
                 }
             }
         }
@@ -117,11 +113,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    LLK_ASSERT(
-                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                        TILE_NUM_FACES, block_tile, false);
+                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        DEFAULT_TENSOR_SHAPE, block_tile, false);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
@@ -160,9 +153,6 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    LLK_ASSERT(
-                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                 }
             }
@@ -176,9 +166,6 @@ void run_kernel(const volatile struct RuntimeParams* params)
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    LLK_ASSERT(
-                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                 }
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

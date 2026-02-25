@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -48,8 +47,7 @@ from helpers.tile_constants import FACE_C_DIM, SUPPORTED_TILE_SIZES, get_tile_pa
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
-BLACKHOLE_TILE_DIMENSIONS = [[32, 32], [16, 32], [32, 16]]
-WORMHOLE_TILE_DIMENSIONS = [list(t) for t in SUPPORTED_TILE_SIZES if t != (16, 16)]
+ALL_TILE_DIMENSIONS = [list(td) for td in SUPPORTED_TILE_SIZES]
 
 
 def _get_valid_formats(dest_acc):
@@ -104,25 +102,17 @@ def _get_valid_transpose(broadcast_type):
 
 def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     """
-    Filter tile dimensions based on architecture, transpose, and broadcast constraints:
-    - Blackhole: only [32,32], [16,32], [32,16]
-    - Wormhole: all SUPPORTED_TILE_SIZES except 16x16
+    Filter tile dimensions based on transpose and broadcast constraints:
     - Transpose only works for 32x32 tiles
     - 32x16 tiles are not supported for Column or Row broadcast
     """
-    arch = get_chip_architecture()
-    if arch == ChipArchitecture.BLACKHOLE:
-        all_tiles = BLACKHOLE_TILE_DIMENSIONS
-    else:
-        all_tiles = WORMHOLE_TILE_DIMENSIONS
-
     if transpose_srca == Transpose.Yes:
         return [[32, 32]]
 
     if broadcast_type in (BroadcastType.Column, BroadcastType.Row):
-        return [td for td in all_tiles if td != [32, 16]]
+        return [td for td in ALL_TILE_DIMENSIONS if td != [32, 16]]
 
-    return all_tiles
+    return ALL_TILE_DIMENSIONS
 
 
 @parametrize(
@@ -137,7 +127,7 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
     transpose_srca=lambda broadcast_type: _get_valid_transpose(broadcast_type),
     math_op=lambda math_fidelity: _get_valid_math_ops(math_fidelity),
-    input_dimensions=[[256, 64]],
+    input_dimensions=[[256, 32]],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -172,9 +162,14 @@ def test_eltwise_binary(
         tile_dimensions=tile_dimensions,
     )
 
+    effective_dest_acc = (
+        DestAccumulation.Yes
+        if formats.output_format == DataFormat.Float32
+        else dest_acc
+    )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        dest_acc,
+        effective_dest_acc,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -357,9 +352,14 @@ def test_eltwise_binary_dest_reuse(
     )
 
     # Compute block/tile counts for output (determines dest register blocking)
+    effective_dest_acc = (
+        DestAccumulation.Yes
+        if formats.output_format == DataFormat.Float32
+        else DestAccumulation.No
+    )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        effective_dest_acc,
         formats,
         output_dimensions,
         tile_dimensions,

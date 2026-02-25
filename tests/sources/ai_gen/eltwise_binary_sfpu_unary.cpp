@@ -8,11 +8,14 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+using namespace ckernel;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -22,10 +25,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
+    const std::uint32_t face_r_dim = DEFAULT_TENSOR_SHAPE.face_r_dim;
+    const std::uint32_t num_faces  = DEFAULT_TENSOR_SHAPE.total_num_faces();
+
     // Configure hardware for unpacking AB (two inputs for binary elementwise operation)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_AB_init_<>();
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, face_r_dim, face_r_dim, num_faces, num_faces);
+    _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
 
     // Unpack one tile from each input buffer
     _llk_unpack_AB_<>(L1_ADDRESS(params->buffer_A[0]), L1_ADDRESS(params->buffer_B[0]));
@@ -50,14 +56,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Initialize math operations
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(4, 0);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
 
     // Wait for destination to be available
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // Perform elementwise binary operation (ELWADD, ELWMUL, or ELWSUB)
-    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        4, 0, false);
+    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DST_SYNC, is_fp32_dest_acc_en>(
+        DEFAULT_TENSOR_SHAPE, 0 /* dst_index */, false /* clear_fp32_dst_acc */);
 
     // Now perform SFPU unary operation on the result in dest
     _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();

@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -93,12 +94,27 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    const std::uint8_t num_faces_c_dim =
+        (params->num_faces == ckernel::MAX_NUM_FACES_C_DIM || params->num_faces == ckernel::MAX_NUM_FACES) ? ckernel::MAX_NUM_FACES_C_DIM : 1;
+    const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params->num_faces / num_faces_c_dim);
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(params->TEST_FACE_R_DIM), static_cast<std::uint8_t>(params->TEST_FACE_C_DIM), num_faces_r_dim, num_faces_c_dim};
+
+    const std::uint32_t tile_size = tensor_shape.total_tensor_size();
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
+    const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(formats.pack_src, formats.pack_dst, tile_size);
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(formats.pack_src, formats.pack_dst, tile_size);
+#endif
+
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_init_<false, false>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+#else
+    _llk_pack_init_<false, false>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
 
     _llk_pack_reduce_mask_config_<false /* untilize */, REDUCE_DIM>();

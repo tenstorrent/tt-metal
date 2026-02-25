@@ -111,7 +111,7 @@ operations:
         approximation_mode: false
         iterations: 128
     packer: "Packer"
-    math_fidelity: "HiFi3"
+    math_fidelity: "LoFi"
     dest_sync: "SyncFull"
 
   - src_a: "elwadd1"

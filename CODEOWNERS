@@ -10,6 +10,9 @@
 # Tests
 tests/ @amokanTT @fvranicTT @ldjurovicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT
 
+# Common
+common/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @nvelickovicTT @rdjogoTT @rtawfik01
+
 # Blackhole
 tt_llk_blackhole/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @nvelickovicTT @rdjogoTT @rtawfik01
 

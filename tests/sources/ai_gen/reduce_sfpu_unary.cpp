@@ -8,11 +8,14 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+using namespace ckernel;
 
 // -----------------------------------------------------------------------------
 // Test description:
@@ -49,7 +52,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
 
     // Initialise unpacker state machine
-    _llk_unpack_AB_init_<>(FACE_R_DIM, 4, false, within_face_16x16_transpose);
+    _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE, within_face_16x16_transpose);
 
     // Unpack the two input tiles (A & B) into the destination register file
     _llk_unpack_AB_<>(L1_ADDRESS(params->buffer_A[0]), L1_ADDRESS(params->buffer_B[0]));

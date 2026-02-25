@@ -11,11 +11,11 @@
 #include "llk_defs.h"
 #include "operand.h"
 #include "tensix_types.h"
+#include "tensor_shape.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
-
 #define UNUSED __attribute__((unused))
 
 #ifdef LLK_TRISC_UNPACK
@@ -80,7 +80,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_init_<BroadcastType::COL>(16, 4, false, false);
+        _llk_unpack_AB_init_<BroadcastType::COL>(DEFAULT_TENSOR_SHAPE);
         _llk_unpack_AB_<BroadcastType::COL>(L1_ADDRESS(buffer_A2[batch * 1 + 0]), L1_ADDRESS(buffer_B2[batch * 1 + 0]));
     }
     // Operation 3: Fused Unpack
@@ -163,12 +163,14 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     // Operation 2: Eltwise ELWSUB FPU
     // REDUCE -> SUB TRANSITION REINIT NEEDS TO BE DONE MOSTLY FULL BECAUSE OF MOP RECONFIG
-    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::ELWSUB, BroadcastType::COL, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(4, 0);
+    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::ELWSUB, BroadcastType::COL, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+        DEFAULT_TENSOR_SHAPE, 0);
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_math_wait_for_dest_available_<dest_sync2>();
-        _llk_math_eltwise_binary_<ELWSUB, BroadcastType::COL, dest_sync2, false, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(4, 0, false);
+        _llk_math_eltwise_binary_<ELWSUB, BroadcastType::COL, dest_sync2, false, ckernel::MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+            DEFAULT_TENSOR_SHAPE, 0, false);
         _llk_math_dest_section_done_<dest_sync2, false>();
     }
     // Operation 3: Math Setup

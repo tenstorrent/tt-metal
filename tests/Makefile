@@ -98,7 +98,7 @@ endif
 
 OPTIONS_LINK	:= -nodefaultlibs -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
 
-INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
+INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../common \
 			-I../$(ARCH_LLK_ROOT)/common/inc/sfpu -Isfpi/compiler/lib/gcc/riscv-tt-elf/*/include -I$(HEADER_DIR) -Ifirmware/riscv/common \
 			-Isfpi/include -Ihelpers/include -I$(TEST_DIR)
 

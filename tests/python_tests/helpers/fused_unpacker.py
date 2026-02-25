@@ -349,7 +349,16 @@ class UnpackerAB(Unpacker):
                     "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
                 )
 
-            return f"_llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
+            face_c_dim = operation.face_c_dim
+            num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
+            num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
+            transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+            shape_var = f"tensor_shape_stage_{operation.stage_id}"
+            return (
+                f"const ckernel::TensorShape {shape_var} = "
+                f"{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}};\n"
+                f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {transpose_value});\n"
+            )
 
     def unpack(
         self,
