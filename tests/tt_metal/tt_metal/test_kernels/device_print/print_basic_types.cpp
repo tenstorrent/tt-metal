@@ -32,6 +32,11 @@ void kernel_main() {
     bool b = true;
     DEVICE_PRINT("bool: {}\n", b);
 
+    // Here we are testing how compile-time code generation in kernels handles argument reordering.
+    // Arguments are reordered by size when sent to the host to guarantee proper alignment during serialization.
+    // This means the format string in the ELF will be stored as "Reordered args: {3,?} {2,h} {1,i} {0,q}\n" instead of
+    // "Reordered args: {0,?} {1,h} {2,i} {3,q}\n". In other words, the compiler generates code as if the user wrote:
+    // DEVICE_PRINT("Reordered args: {3} {2} {1} {0}\n", i64, i32, i16, b);
     DEVICE_PRINT("Reordered args: {} {} {} {}\n", b, i16, i32, i64);
     DEVICE_PRINT("Reordered args: {0} {1} {2} {3}\n", b, i16, i32, i64);
 }
