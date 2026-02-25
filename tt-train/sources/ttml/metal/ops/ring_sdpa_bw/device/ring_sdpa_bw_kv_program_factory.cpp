@@ -245,42 +245,4 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     }
 }
 
-tt::tt_metal::distributed::MeshWorkload create_ring_sdpa_bw_kv_workload(
-    const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
-    const ttnn::Tensor& query,
-    const ttnn::Tensor& key,
-    const ttnn::Tensor& value,
-    const ttnn::Tensor& intermediates,
-    ttnn::Tensor& grad_key,
-    ttnn::Tensor& grad_value,
-    uint32_t ring_size,
-    uint32_t ring_axis,
-    uint32_t step,
-    AttentionMaskType mask_type) {
-    operation_attributes_t params{.ring_size = ring_size, .ring_axis = ring_axis, .step = step, .mask_type = mask_type};
-
-    tensor_args_t inputs{
-        .grad_output = grad_output,
-        .attn_output = attn_output,
-        .query = query,
-        .key = key,
-        .value = value,
-        .intermediates = intermediates,
-        .preallocated_grad_key = grad_key,
-        .preallocated_grad_value = grad_value};
-
-    std::tuple<ttnn::Tensor, ttnn::Tensor> return_value{grad_key, grad_value};
-
-    auto* mesh_device = query.device();
-    const auto mesh_shape = mesh_device->shape();
-    ttnn::MeshCoordinateRange full_range(mesh_shape);
-    ttnn::MeshCoordinateRangeSet tensor_coords{full_range};
-
-    auto cached_workload =
-        RingSDPABwKVProgramFactory::create_mesh_workload(params, tensor_coords, inputs, return_value);
-
-    return std::move(cached_workload.workload);
-}
-
 }  // namespace ttml::metal::ops::ring_sdpa_bw::kv

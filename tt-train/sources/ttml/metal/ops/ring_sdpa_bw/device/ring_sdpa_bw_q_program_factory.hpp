@@ -39,22 +39,4 @@ struct RingSDPABwQProgramFactory {
         const tensor_args_t& tensor_args,
         ttnn::Tensor& tensor_return_value);
 };
-
-// Create MeshWorkload for backward Q gradient computation
-// mask_type determines which mask is used per device:
-// - None: No masking (full attention)
-// - Causal: Uses causal mask for step 0, full for earlier chunks, skips later chunks
-tt::tt_metal::distributed::MeshWorkload create_ring_sdpa_bw_q_workload(
-    const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
-    const ttnn::Tensor& query,
-    const ttnn::Tensor& key,
-    const ttnn::Tensor& value,
-    const ttnn::Tensor& intermediates,
-    ttnn::Tensor& grad_query,
-    uint32_t ring_size,
-    uint32_t ring_axis,
-    uint32_t step,
-    ttml::metal::AttentionMaskType mask_type);
-
 }  // namespace ttml::metal::ops::ring_sdpa_bw::q

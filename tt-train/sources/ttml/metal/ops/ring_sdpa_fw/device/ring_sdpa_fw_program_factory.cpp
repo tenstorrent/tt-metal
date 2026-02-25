@@ -266,36 +266,4 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             cached_program, sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
     }
 }
-
-tt::tt_metal::distributed::MeshWorkload create_ring_sdpa_fw_workload(
-    const ttnn::Tensor& query,
-    const ttnn::Tensor& key,
-    const ttnn::Tensor& value,
-    ttnn::Tensor& output,
-    ttnn::Tensor& intermediates,
-    uint32_t ring_size,
-    uint32_t ring_axis,
-    uint32_t step,
-    AttentionMaskType mask_type) {
-    operation_attributes_t params{.ring_size = ring_size, .ring_axis = ring_axis, .step = step, .mask_type = mask_type};
-
-    tensor_args_t inputs{
-        .query = query,
-        .key = key,
-        .value = value,
-        .preallocated_output = output,
-        .preallocated_intermediates = intermediates};
-
-    tensor_return_value_t return_value{output, intermediates};
-
-    auto* mesh_device = query.device();
-    const auto mesh_shape = mesh_device->shape();
-    ttnn::MeshCoordinateRange full_range(mesh_shape);
-    ttnn::MeshCoordinateRangeSet tensor_coords{full_range};
-
-    auto cached_workload = RingSDPAFwProgramFactory::create_mesh_workload(params, tensor_coords, inputs, return_value);
-
-    return std::move(cached_workload.workload);
-}
-
 }  // namespace ttml::metal::ops::ring_sdpa_fw
