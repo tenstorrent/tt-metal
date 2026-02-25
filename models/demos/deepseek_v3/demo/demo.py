@@ -520,6 +520,9 @@ def run_demo(
             checkpoint_fh.close()
 
         return {"generations": results, "statistics": statistics}
+    except Exception:
+        logger.exception("run_demo failed with exception")
+        raise
     finally:
         # Clean up generator resources
         try:

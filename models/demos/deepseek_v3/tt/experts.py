@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
+    COMPUTE_KERNEL_CONFIG_LOFI,
     dequantize,
     even_int_div,
     shard_and_save,
@@ -73,7 +74,7 @@ class Experts(AbstractModule):
                     .transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
@@ -122,7 +123,7 @@ class Experts(AbstractModule):
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -132,7 +133,7 @@ class Experts(AbstractModule):
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "mul_experts": MulConfig(
                 memory_config=output_memory_config,
