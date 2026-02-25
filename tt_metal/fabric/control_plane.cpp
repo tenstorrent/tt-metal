@@ -860,7 +860,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_i
         if (this->teardown_in_progress_.load(std::memory_order_acquire)) [[unlikely]] {
             return 0;
         }
-        TT_FATAL(
+        TT_THROW(
             "Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
