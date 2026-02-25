@@ -781,7 +781,18 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
+    bool use_llk_bcast =
+        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+
+    // LLK bcast skips the software row-fill in the reader; the compute kernel
+    // calls unary_bcast to broadcast row 0 after PREPROCESS.  EXP/EXP2
+    // applied to unfilled rows produces Inf which corrupts BFP8 block
+    // exponents.  Fall back to the software-fill path for these ops only.
+    if (use_llk_bcast && op_has_exp) {
+        use_llk_bcast = false;
+    }
+
+    if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";
