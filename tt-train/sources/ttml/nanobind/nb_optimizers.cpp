@@ -42,6 +42,7 @@ void py_module_types(nb::module_& m) {
 void py_module(nb::module_& m) {
     {
         auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
+        py_optimizer_base.def("get_name", &OptimizerBase::get_name, "Get optimizer name");
         py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad, "Zero out gradient");
         py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
