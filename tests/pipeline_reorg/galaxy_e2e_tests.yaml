@@ -99,4 +99,4 @@
     bh_galaxy:
       timeout: 40
   owner_id: U06ECNVR0EN # Evan Smal
-  team: fabric
+  team: models
