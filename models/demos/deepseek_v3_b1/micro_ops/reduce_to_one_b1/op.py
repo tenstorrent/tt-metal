@@ -9,17 +9,23 @@ This module implements a multi-device reduce-to-one operation for a 4x2 mesh
 where all 8 devices reduce their data to a single root device using a 3-level
 reduction tree.
 
+
 Mesh layout (coord = [row, col]):
-    [0,0] a0  |  b0 [0,1]   row 0 - LEAF (sends to row 1)
-    [1,0] a1  |  b1 [1,1]   row 1 - ROOT2 (a1) / ROOT1 (b1)
-    [2,0] a2  |  b2 [2,1]   row 2 - ROOT3 (receives from row 3, sends to row 1)
-    [3,0] a3  |  b3 [3,1]   row 3 - LEAF (sends to row 2)
+    [0,0] a0  |  b0 [0,1]   row 0
+    [1,0] a1  |  b1 [1,1]   row 1
+    [2,0] a2  |  b2 [2,1]   row 2
+    [3,0] a3  |  b3 [3,1]   row 3
+
+DEVICE ROLES (Linear mode example with root at [1,1] = b1):
+    [0,0] LEAF    |  LEAF    [0,1]   row 0 - sends to row 1
+    [1,0] ROOT2   |  ROOT1   [1,1]   row 1 - ROOT1 = final accumulator
+    [2,0] ROOT3   |  ROOT3   [2,1]   row 2 - receives from row 3, sends to row 1
+    [3,0] LEAF    |  LEAF    [3,1]   row 3 - sends to row 2
 
 3-Level Reduction Tree:
-    Level 1: Row 0 LEAFs → Row 1 (a0→a1, b0→b1)
-             Row 3 LEAFs → Row 2 (a3→a2, b3→b2)
-    Level 2: ROOT3 → ROOT2/ROOT1 (a2→a1, b2→b1)
-    Level 3: ROOT2 → ROOT1 (a1→b1, cross-column)
+    Level 1: LEAF rows → ROOT3 rows
+    Level 2: ROOT3 → ROOT2/ROOT1
+    Level 3: ROOT2 → ROOT1 (cross-column)
 
 Final result at ROOT1 = sum of all 8 devices
 """
@@ -42,9 +48,29 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
-def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate) -> int:
-    """Determine the role of a device based on its coordinate and the root coordinate."""
+def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
+    """
+    Determine the role of a device based on its coordinate and the root coordinate.
+
+    Torus mode (use_torus=True): Root must be at corner row (0 or 3)
+      - ROOT3 is the opposite corner row (0↔3 wrap-around)
+      - LEAFs are the inner rows (1, 2)
+
+    Linear mode (use_torus=False): Root must be at inner row (1 or 2)
+      - ROOT3 is the other inner row (1↔2)
+      - LEAFs are the outer rows (0, 3)
+
+    Args:
+        coord: Device coordinate [row, col]
+        root_coord: Root device coordinate [row, col]
+        use_torus: If True, assumes torus topology (row 0 ↔ row 3 connected)
+                   If False, uses linear topology (root must be at row 1 or 2)
+
+    Returns:
+        Device role: MESH_ROOT1, MESH_ROOT2, MESH_ROOT3, or MESH_LEAF
+    """
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
+        print("root1 coord: ", coord)
         return MESH_ROOT1
 
     root_row = root_coord[0]
@@ -52,13 +78,32 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
 
     # ROOT2: same row as ROOT1, different column
     if my_row == root_row:
+        print("root2 coord: ", coord)
         return MESH_ROOT2
 
-    # ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
-    root3_row = 2 if root_row == 1 else 1
+    # Determine ROOT3 row based on topology
+    if use_torus:
+        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
+        if root_row == 0:
+            root3_row = 3
+        elif root_row == 3:
+            root3_row = 0
+        else:
+            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+    else:
+        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
+        if root_row == 1:
+            root3_row = 2
+        elif root_row == 2:
+            root3_row = 1
+        else:
+            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
+
     if my_row == root3_row:
+        print("root3 coord: ", coord)
         return MESH_ROOT3
 
+    print("leaf coord: ", coord)
     return MESH_LEAF
 
 
@@ -295,8 +340,8 @@ class ReduceToOneB1:
         root_coord: ttnn.MeshCoordinate,
         exit_coord: Optional[ttnn.MeshCoordinate] = None,
         enable_d2d0_output: bool = False,  # Enable D2D_0 aggregation output
-        d2d0_infrastructure: Optional[dict] = None,
-        num_iterations: int = 1,  # Pre-created D2D_0 infrastructure
+        d2d0_infrastructure: Optional[dict] = None,  # Pre-created D2D_0 infrastructure
+        num_iterations: int = 1,
     ) -> tuple:
         """
         Execute reduce-to-one operation using generic_op with optional D2D_0 aggregation output.
@@ -306,10 +351,15 @@ class ReduceToOneB1:
             intermediate_tensors: List of 3 pre-allocated intermediate tensor meshes
             output_tensor: Pre-allocated output tensor mesh (single-core sharded)
             semaphores: List of 4 global semaphores for synchronization
-            root_coord: MeshCoordinate of the root device (must be row 1 or 2)
+            root_coord: MeshCoordinate of the root device
+                        - Torus topology: root can be at any row (0-3)
+                        - Linear topology: root must be at row 1 or 2
             exit_coord: Optional MeshCoordinate for exit signaling (defaults to root_coord)
             enable_d2d0_output: If True, creates D2D_0 aggregation infrastructure
             d2d0_infrastructure: Optional pre-created D2D_0 infrastructure dict
+            num_iterations: Number of reduction iterations to run
+            use_torus: If True, assumes torus fabric topology (row 0 ↔ row 3 connected)
+                       If False, uses linear topology (root must be at row 1 or 2)
 
         Returns:
             Tuple of (output_tensor, d2d0_infrastructure or None)
@@ -333,9 +383,25 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
-        # Validate root_coord
-        if root_coord[0] not in [1, 2]:
-            raise ValueError(f"Root coordinate row must be 1 or 2, got {root_coord[0]}")
+        use_torus = False
+        if root_coord[0] in [0, 3]:
+            use_torus = True
+
+        # Validate root_coord based on topology
+        if use_torus:
+            if root_coord[0] not in [0, 3]:
+                raise ValueError(
+                    f"With torus topology (use_torus=True), root row must be 0 or 3 (corner), got {root_coord[0]}. "
+                    "For root at row 1 or 2, use linear topology with use_torus=False."
+                )
+        else:
+            if root_coord[0] not in [1, 2]:
+                raise ValueError(
+                    f"With linear topology (use_torus=False), root row must be 1 or 2 (inner), got {root_coord[0]}. "
+                    "For root at row 0 or 3, enable torus topology with use_torus=True."
+                )
+        if root_coord[0] not in [0, 1, 2, 3]:
+            raise ValueError(f"Root row must be 0-3, got {root_coord[0]}")
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -420,7 +486,7 @@ class ReduceToOneB1:
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                role = get_device_role(coord, root_coord)
+                role = get_device_role(coord, root_coord, use_torus)
                 is_leaf = role == MESH_LEAF
                 is_root3 = role == MESH_ROOT3
                 is_root2 = role == MESH_ROOT2
@@ -490,18 +556,38 @@ class ReduceToOneB1:
                 fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in fabric_cores])
                 all_cores_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list + fabric_cores])
 
-                # Determine destination coordinate based on role
+                # Determine ROOT3 row based on topology (needed by LEAF and potentially other roles)
+                if use_torus:
+                    # Torus: ROOT3 is the opposite corner from root (0↔3)
+                    root3_row = 3 if root_coord[0] == 0 else 0
+                else:
+                    # Linear: ROOT3 is the other inner row (1↔2)
+                    root3_row = 2 if root_coord[0] == 1 else 1
+
+                # Determine destination coordinate based on role and topology
                 if is_leaf:
-                    if row == 0:
-                        dest_coord = ttnn.MeshCoordinate(row + 1, col)
-                    else:  # row == 3
-                        dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    # LEAF devices: determine which row to send to
+                    # Each LEAF row sends to either ROOT row or ROOT3 row
+                    if use_torus:
+                        if row == 1:
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                        else:  # row == 2
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                    else:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    print("dest coord for leaf coord: ", coord, " is: ", dest_coord)
                 elif is_root3:
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
+                    print("dest coord for root3 coord: ", coord, " is: ", dest_coord)
                 elif is_root2:
                     dest_coord = root_coord
+                    print("dest coord for root2 coord: ", coord, " is: ", dest_coord)
                 else:
                     dest_coord = exit_coord
+                    print("dest coord for root1 coord: ", coord, " is: ", dest_coord)
 
                 # Get fabric node IDs
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)

@@ -27,9 +27,13 @@ from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOn
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
     indirect=["device_params"],
     ids=["fabric_2d"],
+)
+@pytest.mark.parametrize(
+    "device_coord",
+    [(2, 1), (3, 1)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -45,6 +49,7 @@ from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOn
 def test_reduce_to_one_b1_with_d2d1_d2h(
     mesh_device,
     tensor_shape,
+    device_coord,
 ):
     logger.info(f"mesh_device shape: {mesh_device.shape}")
     logger.info(f"mesh_device num_devices: {mesh_device.get_num_devices()}")
@@ -62,8 +67,8 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     ttnn.enable_asynchronous_slow_dispatch(submesh_device)
 
     # Configuration
-    root_coord = ttnn.MeshCoordinate(1, 1)
-    exit_coord = ttnn.MeshCoordinate(0, 1)
+    root_coord = ttnn.MeshCoordinate(device_coord)
+    exit_coord = ttnn.MeshCoordinate(1, 1)
 
     element_size = 2  # bfloat16
     shard_shape = [1, 896]  #
@@ -181,11 +186,16 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     logger.info(f"Created input tensor with data: {data_per_device[0][0, :5]}")
 
     # Create synchronization semaphores
-    all_devices_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))])
-    sem_round1 = ttnn.create_global_semaphore(submesh_device, all_devices_grid, 0)
-    sem_round2 = ttnn.create_global_semaphore(submesh_device, all_devices_grid, 0)
-    sem_round3 = ttnn.create_global_semaphore(submesh_device, all_devices_grid, 0)
-    sem_exit = ttnn.create_global_semaphore(submesh_device, all_devices_grid, 0)
+    # Semaphores must be created on all cores that will use them (all worker cores)
+    compute_grid = submesh_device.compute_with_storage_grid_size()
+    num_cores = compute_grid.x * compute_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    ttnn.synchronize_device(submesh_device)
+    sem_round1 = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
+    sem_round2 = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
+    sem_round3 = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
+    sem_exit = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
+    ttnn.synchronize_device(submesh_device)
     semaphores = [sem_round1, sem_round2, sem_round3, sem_exit]
 
     logger.info("\n=== Setting up D2D_0 → D2D_1 → D2H chain using SocketInterface ===")
@@ -260,7 +270,8 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
         intermediate_tensors,
         output_tensor,
         semaphores,
-        root_coord,
+        device_coord,
+        exit_coord=(1, 1),
         enable_d2d0_output=True,
         d2d0_infrastructure=d2d0_infra,
     )
@@ -276,12 +287,6 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
     host_io.run()
     socket_interface.run()
     logger.info("✓ HostInterface and D2D_1 pipeline started")
-
-    # Read from D2H socket
-    logger.info("\n=== Termination Semaphore Set ===")
-
-    termination_semaphore = d2d_infra["d2d0_termination_semaphore"]
-    ttnn.reset_global_semaphore_value(termination_semaphore, 1)
 
     # D2D_1 sends ONE aggregated page containing data from all 8 worker cores
     # Total bytes = 8 workers × 896 elements/worker × 2 bytes/element = 14,336 bytes
@@ -315,8 +320,7 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
 
     # Terminate socket interface and host interface
     socket_interface.terminate(False)
+    logger.info("✓ Socket interface terminated")
     host_io.terminate(True)
-    ttnn.synchronize_device(submesh_device)
-    logger.info("✓ Socket interface and host interface terminated")
-
+    logger.info("✓ Host interface terminated")
     logger.info("\n✓ Test passed: Reduce-to-one with D2D_0 + D2D_1 (SocketInterface) + D2H (HostInterface) successful!")
