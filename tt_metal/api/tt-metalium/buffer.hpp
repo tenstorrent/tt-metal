@@ -5,7 +5,6 @@
 #pragma once
 
 #include <nlohmann/json_fwd.hpp>
-#include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
 #include <condition_variable>

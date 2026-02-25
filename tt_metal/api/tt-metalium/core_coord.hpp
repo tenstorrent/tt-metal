@@ -7,7 +7,6 @@
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
 #include <stdint.h>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -19,12 +18,12 @@
 
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <typename T>
 struct from_json_t;
 template <typename T>
 struct to_json_t;
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 
