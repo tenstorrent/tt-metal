@@ -251,6 +251,12 @@ struct Broadcast {
                     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
                     // 3. wait for mcast output ready semaphore
+                    // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
+                    // is async and a fast device increments the semaphore multiple times before a slow
+                    // device observes it. With wait+reset the slow device could miss an increment and
+                    // hang. In a real decoder this shouldn't be a problem because other ops
+                    // between iterations will naturally sync the devices, but wait_min is a
+                    // pragmatic choice to streamline standalone testing.
                     if (args.wait_output_semaphore) {
                         WATCHER_RING_BUFFER_PUSH(0xA1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
