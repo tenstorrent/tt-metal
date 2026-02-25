@@ -1326,20 +1326,23 @@ void TestDevice::create_latency_sender_kernel(
     uint32_t link_idx = available_links[0];  // Use first available link
 
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, measure_wait_for_slot, measure_send_payload,
-    // measure_send_header
+    // measure_send_header, measure_individual_phases
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     // Set all detailed benchmarks to false by default to minimize overhead
     bool measure_wait_for_slot = true;
     bool measure_send_payload = true;
     bool measure_send_header = true;
+    bool measure_individual_phases =
+        true;  // Set to false to measure only total send latency without per-phase overhead
     std::vector<uint32_t> ct_args = {
         enable_fused_payload_with_sync ? 1u : 0u,
         sem_inc_only ? 1u : 0u,
         is_2d_fabric ? 1u : 0u,
         measure_wait_for_slot ? 1u : 0u,
         measure_send_payload ? 1u : 0u,
-        measure_send_header ? 1u : 0u};
+        measure_send_header ? 1u : 0u,
+        measure_individual_phases ? 1u : 0u};
 
     // Runtime args
     // Calculate send and receive buffer addresses after timestamp storage
