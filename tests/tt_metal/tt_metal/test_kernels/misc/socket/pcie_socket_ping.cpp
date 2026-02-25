@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "socket_benchmark_defs.h"
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -17,12 +18,7 @@ void kernel_main() {
 
     set_sender_socket_page_size(sender_socket, page_size);
 
-    uint32_t measurement_start = measurement_buffer_addr;
-
-    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-
     // Warmup
-    constexpr uint32_t WARMUP_ITERS = 5;
     for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         socket_reserve_pages(sender_socket, 1);
         socket_push_pages(sender_socket, 1);
@@ -42,7 +38,7 @@ void kernel_main() {
 
         uint64_t end_timestamp = get_timestamp();
 
-        *reinterpret_cast<volatile uint64_t*>(measurement_start + i * sizeof(uint64_t)) =
+        *reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr + i * sizeof(uint64_t)) =
             end_timestamp - start_timestamp;
     }
     socket_barrier(sender_socket);
