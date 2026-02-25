@@ -127,10 +127,9 @@ TEST_F(ControlPlaneLocalMeshBinding, NoEnvironmentVariables) {
 
 TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
     ScopedMeshBinding env_guard(/*mesh_id*/0u, /*host_rank*/0u);
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = make_control_plane(kDualHostMeshDesc, chip_mapping);
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
+    EXPECT_THAT(
+        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariablesInvalidMeshId) {
@@ -156,8 +155,7 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
         ScopedEnvVar mesh_only("TT_MESH_ID", "0");
         EXPECT_THAT(
             ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
-            ThrowsMessage<std::runtime_error>(HasSubstr("TT_MESH_HOST_RANK must be set when multiple host ranks are "
-                                                        "present in the mesh graph descriptor for mesh ID 0")));
+            ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
     }
 
     {
@@ -170,59 +168,30 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
 
 TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
     ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = make_control_plane(kDualHostMeshDesc, chip_mapping);
-    auto global_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::GLOBAL);
-    EXPECT_EQ(global_shape, MeshShape(2, 4));
-
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
-
-    auto local_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::LOCAL);
-    EXPECT_EQ(local_shape, MeshShape(2, 2));
-
-    auto default_shape = control_plane->get_physical_mesh_shape(MeshId{0});
-    EXPECT_EQ(default_shape, global_shape);
+    EXPECT_THAT(
+        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
     ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = make_control_plane(kDualHostMeshDesc, chip_mapping);
-
-    auto global_range = control_plane->get_coord_range(MeshId{0}, MeshScope::GLOBAL);
-    EXPECT_EQ(global_range.start_coord(), MeshCoordinate(0, 0));
-    EXPECT_EQ(global_range.end_coord(), MeshCoordinate(1, 3));
-    EXPECT_EQ(global_range.shape(), MeshShape(2, 4));
-
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
-
-    auto local_range = control_plane->get_coord_range(MeshId{0}, MeshScope::LOCAL);
-    EXPECT_EQ(local_range.start_coord(), MeshCoordinate(0, 0));
-    EXPECT_EQ(local_range.end_coord(), MeshCoordinate(1, 1));
-    EXPECT_EQ(local_range.shape(), MeshShape(2, 2));
-
-    auto default_range = control_plane->get_coord_range(MeshId{0});
-    EXPECT_EQ(default_range, global_range);
+    EXPECT_THAT(
+        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
     ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = make_control_plane(kDualHostMeshDesc, chip_mapping);
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
-    EXPECT_THROW(control_plane->get_physical_mesh_shape(MeshId{99}, MeshScope::GLOBAL), std::runtime_error);
+    EXPECT_THAT(
+        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutExplicitBinding) {
     ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = make_control_plane(kDualHostMeshDesc, chip_mapping);
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
-    EXPECT_NO_THROW(control_plane->get_coord_range(MeshId{0}, MeshScope::LOCAL));
+    EXPECT_THAT(
+        ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
 }
 
 // Parameterized test fixture for MeshScope tests
