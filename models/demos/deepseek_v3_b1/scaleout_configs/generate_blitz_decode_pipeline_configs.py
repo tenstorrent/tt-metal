@@ -12,6 +12,69 @@ import yaml
 from loguru import logger
 
 
+def generate_pcie_to_logical_mappings(host_vector, mpi_user=None, worker_tt_metal_home=None, output_dir=None):
+    """Run on each host to collect PCI->logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs."""
+    if worker_tt_metal_home:
+        wh = Path(worker_tt_metal_home)
+        python_script = wh / "models/demos/deepseek_v3_b1/scaleout_configs/output_pcie_to_logical_mapping.py"
+    else:
+        python_script = Path(__file__).parent / "output_pcie_to_logical_mapping.py"
+
+    if not python_script.exists():
+        logger.error(f"Mapping script not found: {python_script}")
+        sys.exit(1)
+
+    base_dir = output_dir or "."
+    mappings = {}
+
+    for host in host_vector:
+        if mpi_user:
+            host_str = f"{mpi_user}@{host}"
+        else:
+            host_str = host
+
+        output_file = str(Path(base_dir) / f"{host}_pcie_to_logical.yaml")
+
+        cmd = [
+            "mpirun",
+            "--np",
+            "1",
+            "--host",
+            host_str,
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--bind-to",
+            "none",
+        ]
+        if output_dir:
+            cmd.extend(["--wdir", output_dir])
+        if worker_tt_metal_home:
+            wh = Path(worker_tt_metal_home)
+            cmd.extend(["-x", f"LD_LIBRARY_PATH={wh / 'build/lib'}", "-x", f"TT_METAL_RUNTIME_ROOT={wh}"])
+        cmd.extend(
+            [
+                "python3",
+                str(python_script),
+                "--hostname",
+                host,
+                "--output",
+                output_file,
+            ]
+        )
+
+        logger.info(f"Running PCI->logical mapping on {host}: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            logger.error(f"Failed to get PCI->logical mapping for {host}")
+            sys.exit(result.returncode)
+
+        with open(output_file, "r") as f:
+            mappings.update(yaml.safe_load(f))
+
+    return mappings
+
+
 def generate_slice_to_pcie_device_mapping(
     mapping_file, host_vector, mpi_user=None, worker_tt_metal_home=None, output_dir=None
 ):
@@ -78,7 +141,9 @@ def generate_slice_to_pcie_device_mapping(
     return actual_mapping_file
 
 
-def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_metal_home=None):
+def generate_rank_bindings(
+    pipeline_config, physical_mapping_file, pcie_to_logical_mappings=None, worker_tt_metal_home=None
+):
     with open(physical_mapping_file, "r") as f:
         slice_to_pcie_device_mapping = yaml.safe_load(f)
 
@@ -92,6 +157,12 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_met
         stage_host = pipeline_config["stage_to_slice_mapping"][stage]["host"]
         stage_slice = pipeline_config["stage_to_slice_mapping"][stage]["slice"]
         devices_for_stage = sorted(slice_to_pcie_device_mapping["device_mapping"][stage_host][stage_slice])
+
+        # UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs
+        if pcie_to_logical_mappings and stage_host in pcie_to_logical_mappings:
+            mapping = pcie_to_logical_mappings[stage_host]
+            devices_for_stage = sorted(mapping.get(int(pcie_id), pcie_id) for pcie_id in devices_for_stage)
+
         rank_bindings.append(
             {
                 "rank": stage,
@@ -167,7 +238,10 @@ def generate_pipeline_config_files(
     actual_mapping_file = generate_slice_to_pcie_device_mapping(
         physical_mapping_file, host_vector, mpi_user, worker_tt_metal_home, output_dir
     )
-    generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home)
+    pcie_to_logical_mappings = generate_pcie_to_logical_mappings(
+        host_vector, mpi_user, worker_tt_metal_home, output_dir
+    )
+    generate_rank_bindings(config, actual_mapping_file, pcie_to_logical_mappings, worker_tt_metal_home)
     generate_rank_file(config)
 
 
