@@ -29,6 +29,11 @@ from models.experimental.ops.descriptors.fusion.codegen.source_gen import (  # n
     _emit_rt_arg_undef,
     _transform_phase_source,
     _generate_phase_namespace,
+    _strip_include_lines,
+    _strip_file_scope_defines,
+    _clean_phase_source,
+    _offset_tensor_accessor_in_source,
+    _generate_phase_block,
     _generate_fused_source,
 )
 from models.experimental.ops.descriptors.fusion.codegen.barrier import (  # noqa: F401
