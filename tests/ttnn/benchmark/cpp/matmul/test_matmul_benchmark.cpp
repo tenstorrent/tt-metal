@@ -12,7 +12,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt_stl/span.hpp>

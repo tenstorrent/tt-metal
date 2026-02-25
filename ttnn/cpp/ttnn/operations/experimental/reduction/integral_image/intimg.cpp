@@ -4,7 +4,6 @@
 
 #include "device/intimg_device_operation.hpp"
 
-#include <tt_stl/assert.hpp>
 #include "intimg.hpp"
 
 namespace ttnn::operations::experimental::reduction {

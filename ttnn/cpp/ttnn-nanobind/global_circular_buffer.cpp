@@ -13,8 +13,6 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/global_circular_buffer.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
-
 namespace ttnn::global_circular_buffer {
 
 void py_module_types(nb::module_& mod) {

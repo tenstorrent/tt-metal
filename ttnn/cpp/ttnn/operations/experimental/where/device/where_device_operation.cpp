@@ -11,8 +11,6 @@
 
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-
 #include <tracy/Tracy.hpp>
 #include <tt_stl/assert.hpp>
 

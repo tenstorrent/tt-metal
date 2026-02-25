@@ -13,7 +13,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>

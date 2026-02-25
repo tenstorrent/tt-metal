@@ -8,7 +8,6 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include <tt-logger/tt-logger.hpp>
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 

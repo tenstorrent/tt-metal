@@ -4,7 +4,6 @@
 
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 

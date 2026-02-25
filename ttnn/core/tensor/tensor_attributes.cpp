@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_buffer.hpp>
-
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"

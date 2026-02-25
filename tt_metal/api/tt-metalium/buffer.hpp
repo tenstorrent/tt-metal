@@ -5,7 +5,6 @@
 #pragma once
 
 #include <nlohmann/json_fwd.hpp>
-#include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -22,7 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -31,7 +29,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::stl::json {

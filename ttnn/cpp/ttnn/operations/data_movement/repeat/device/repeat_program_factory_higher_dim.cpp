@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"

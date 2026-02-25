@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <mutex>
 #include <core_coord.hpp>
 #include <stdint.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>

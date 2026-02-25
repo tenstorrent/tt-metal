@@ -9,8 +9,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/host_api.hpp>
-
 namespace ttnn::events {
 
 using ::tt::tt_metal::distributed::EventSynchronize;

@@ -6,7 +6,6 @@
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/functions.hpp>
 #include <array>
 #include <cstring>

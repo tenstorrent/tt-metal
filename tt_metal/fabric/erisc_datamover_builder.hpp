@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
