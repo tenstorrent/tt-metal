@@ -36,6 +36,7 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
+        self.unload_set = None  # set of modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -213,6 +214,14 @@ class Module(ABC):
 
     def is_loaded(self) -> bool:
         return self._is_loaded
+
+    def set_unload_set(self, *args: Module) -> None:
+        """
+        Set the modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        Args:
+            *args: Arbitrary number of Modules that cannot be loaded together with this module.
+        """
+        self.unload_set = set(args)
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
