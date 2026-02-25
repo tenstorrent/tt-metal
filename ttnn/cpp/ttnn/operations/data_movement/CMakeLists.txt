@@ -294,7 +294,7 @@ target_sources(
             tilize/device/tilize_device_operation.hpp
             tilize/device/tilize_device_operation_types.hpp
             tilize/device/tilize_multi_core_block_program_factory.hpp
-            tilize/device/tilize_multi_core_interleaved_program_factory.hpp
+            tilize/device/tilize_multi_core_default_program_factory.hpp
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
             tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
@@ -466,7 +466,7 @@ target_sources(
         squeeze/squeeze.cpp
         stack/stack.cpp
         tilize/device/tilize_device_operation.cpp
-        tilize/device/tilize_multi_core_interleaved_program_factory.cpp
+        tilize/device/tilize_multi_core_default_program_factory.cpp
         tilize/device/tilize_multi_core_block_program_factory.cpp
         tilize/device/tilize_single_core_program_factory.cpp
         tilize/device/tilize_multi_core_sharded_program_factory.cpp

@@ -4,7 +4,7 @@
 
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
@@ -133,7 +133,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_is_nd_sharded) {
-            return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
+            return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
         }
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
@@ -174,7 +174,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }
-    return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
+    return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
 }
 
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(

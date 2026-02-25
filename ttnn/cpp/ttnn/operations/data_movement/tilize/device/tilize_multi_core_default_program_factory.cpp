@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterleavedProgramFactory::create(
+TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultProgramFactory::create(
     const ttnn::prim::TilizeParams& operation_attributes,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
@@ -58,11 +58,12 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     uint32_t num_sticks_in_row = 1;
     uint32_t stick_size_of_last_stick_in_row = stick_size;
     if (a.is_sharded()) {
-        stick_size = a.nd_shard_spec().value().shard_shape[-1] *
-                     a.element_size();  // For ND sharding, a stick is a row of the shard.
+        uint32_t shard_width =
+            a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
+        stick_size = shard_width * a.element_size();  // For ND sharding, a stick is a row of the shard.
         num_sticks_in_row = tt::div_up(
             a.padded_shape()[-1],
-            a.nd_shard_spec().value().shard_shape[-1]);  // Compute number of sticks in one tensor row.
+            shard_width);  // Compute number of sticks in one tensor row.
         uint32_t padding_size = (num_sticks_in_row * stick_size) -
                                 block_size_nbytes;  // Compute padding size for the last stick in the row.
         stick_size_of_last_stick_in_row = stick_size - padding_size;
@@ -178,7 +179,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+void TilizeMultiCoreDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,
