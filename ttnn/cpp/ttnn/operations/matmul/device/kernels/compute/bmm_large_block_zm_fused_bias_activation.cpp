@@ -312,7 +312,10 @@ void kernel_main() {
                                 // Pack out to output buffer
                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                                 tile_regs_wait();
-
+                                // Experiment 1: Add a bunch of NOPs here
+                                for (uint32_t i = 0; i < 100; i++) {
+                                    TTI_NOP;
+                                }
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
