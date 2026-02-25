@@ -29,7 +29,7 @@ from collections import defaultdict
 from collections.abc import Callable
 import threading
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from triage import log_warning
 
