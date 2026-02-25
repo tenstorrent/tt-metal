@@ -18,8 +18,8 @@ Usage (branching tree):
 """
 
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, List, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
@@ -77,11 +77,14 @@ def _flatten_ops(items) -> List[OpDescriptor]:
     return result
 
 
-def _cache_key(items) -> tuple:
-    """Compute a hash key from the input items."""
+def _cache_key_and_ops(items):
+    """Compute a hash key and flattened ops list from the input items.
+
+    Returns (key, ops) to avoid redundant _flatten_ops calls.
+    """
     ops = _flatten_ops(items)
     h = ttnn.compute_program_descriptor_hash
-    return tuple(h(op.descriptor) for op in ops)
+    return tuple(h(op.descriptor) for op in ops), ops
 
 
 def _setup_cache_entry(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
@@ -273,6 +276,149 @@ def clear_build_cache() -> None:
 
 
 # =============================================================================
+# Zero-Factory Launch: Tensor Slot Discovery
+# =============================================================================
+
+
+@dataclass
+class _TensorSlot:
+    """Tracks one external tensor's address positions in the fused descriptor."""
+
+    tensor: Any  # The ttnn.Tensor reference
+    address: int  # Current buffer_address()
+    is_sharded: bool  # Whether this tensor backs a sharded CB
+    input_list_index: int  # Position in fused.input_tensors (-1 if output-only)
+    output_list_index: int  # Position in fused.output_tensors (-1 if input-only)
+    # Per fused kernel: list of RT arg positions holding this address
+    rt_positions: Dict[int, List[int]] = field(default_factory=dict)
+    # Per fused kernel: list of common_runtime_args positions
+    common_positions: Dict[int, List[int]] = field(default_factory=dict)
+    # Merged CB entries: [(merged_cb_idx, cb_buffer_index)] for sharded tensors
+    sharded_cb_entries: List[Tuple[int, int]] = field(default_factory=list)
+
+
+def _discover_tensor_slots(
+    fused_op: "FusedOp",
+    ops: List[OpDescriptor],
+) -> Tuple[List[_TensorSlot], Dict[int, int], Dict[int, int]]:
+    """Discover which RT arg positions hold each tensor's buffer address.
+
+    Called once after first build. Scans all fused kernels' RT args (up to
+    barrier_rt_offset) for known tensor addresses.
+
+    Returns:
+        (slots, id_to_slot_idx, addr_to_slot_idx) where:
+        - slots: list of _TensorSlot
+        - id_to_slot_idx: maps id(original_tensor) -> slot index
+        - addr_to_slot_idx: maps buffer_address -> slot index (prefers input slots)
+    """
+    desc = fused_op.descriptor
+
+    # Step 1: Collect all unique tensors (inputs + outputs, deduped)
+    all_tensors: List[Any] = []
+    seen_ids: Set[int] = set()
+    for op in ops:
+        for t in list(op.input_tensors) + list(op.output_tensors):
+            tid = id(t)
+            if tid not in seen_ids:
+                all_tensors.append(t)
+                seen_ids.add(tid)
+
+    # Build index maps for fused input/output tensors
+    fused_input_id_to_idx = {id(t): i for i, t in enumerate(fused_op.input_tensors)}
+    fused_output_id_to_idx = {id(t): i for i, t in enumerate(fused_op.output_tensors)}
+
+    # Step 2: For each fused kernel, get barrier_rt_offset and read RT args
+    kernel_rt_data: List[Tuple[Optional[int], List[int], List[int]]] = []
+    for fused_kernel in desc.kernels:
+        barrier_offset = None
+        for name, value in fused_kernel.named_compile_time_args:
+            if name == "barrier_rt_offset":
+                barrier_offset = value
+                break
+
+        coords = _get_core_coords_from_ranges(fused_kernel.core_ranges)
+        if coords:
+            c = coords[0]
+            all_args = list(fused_kernel.runtime_args[c.x][c.y])
+        else:
+            all_args = []
+
+        try:
+            common_args = list(fused_kernel.common_runtime_args)
+        except (AttributeError, TypeError):
+            common_args = []
+
+        kernel_rt_data.append((barrier_offset, all_args, common_args))
+
+    # Step 3: For each tensor, discover positions
+    slots: List[_TensorSlot] = []
+    id_to_slot: Dict[int, int] = {}
+
+    for t in all_tensors:
+        try:
+            addr = t.buffer_address()
+        except Exception:
+            continue
+
+        if addr == 0:
+            continue
+
+        rt_positions: Dict[int, List[int]] = {}
+        common_positions: Dict[int, List[int]] = {}
+
+        for k_idx, (barrier_offset, all_args, common_args) in enumerate(kernel_rt_data):
+            # Scan RT args up to barrier_rt_offset
+            limit = barrier_offset if barrier_offset is not None else len(all_args)
+            positions = [i for i in range(limit) if all_args[i] == addr]
+            if positions:
+                rt_positions[k_idx] = positions
+
+            # Scan common_runtime_args
+            c_positions = [i for i in range(len(common_args)) if common_args[i] == addr]
+            if c_positions:
+                common_positions[k_idx] = c_positions
+
+        # Check sharded CBs
+        is_sharded = False
+        sharded_cb_entries: List[Tuple[int, int]] = []
+        for merged_idx, merged_cb in enumerate(desc.cbs):
+            if merged_cb.has_buffer() and merged_cb.buffer_address() == addr:
+                is_sharded = True
+                # Get buffer_index from first format descriptor
+                fmt_descs = merged_cb.format_descriptors
+                buf_idx = fmt_descs[0].buffer_index if fmt_descs else 0
+                sharded_cb_entries.append((merged_idx, buf_idx))
+
+        # Only create slot if we found at least one position
+        if rt_positions or common_positions or sharded_cb_entries:
+            tid = id(t)
+            slot = _TensorSlot(
+                tensor=t,
+                address=addr,
+                is_sharded=is_sharded,
+                input_list_index=fused_input_id_to_idx.get(tid, -1),
+                output_list_index=fused_output_id_to_idx.get(tid, -1),
+                rt_positions=rt_positions,
+                common_positions=common_positions,
+                sharded_cb_entries=sharded_cb_entries,
+            )
+            id_to_slot[tid] = len(slots)
+            slots.append(slot)
+
+    # Build address-to-slot map (prefer input slots for duplicate addresses)
+    addr_to_slot: Dict[int, int] = {}
+    for idx, slot in enumerate(slots):
+        if slot.address not in addr_to_slot:
+            addr_to_slot[slot.address] = idx
+        elif slot.input_list_index >= 0 and slots[addr_to_slot[slot.address]].input_list_index < 0:
+            # Prefer slots that are in fused.input_tensors
+            addr_to_slot[slot.address] = idx
+
+    return slots, id_to_slot, addr_to_slot
+
+
+# =============================================================================
 # FusedOp
 # =============================================================================
 
@@ -292,7 +438,15 @@ class FusedOp:
     with a TypeError.
     """
 
-    __slots__ = ("op", "semaphores", "kernel_labels")
+    __slots__ = (
+        "op",
+        "semaphores",
+        "kernel_labels",
+        "_tensor_slots",
+        "_tensor_id_to_slot",
+        "_tensor_addr_to_slot",
+        "_io_tensors",
+    )
 
     def __init__(
         self,
@@ -303,6 +457,10 @@ class FusedOp:
         self.op = op
         self.semaphores = semaphores
         self.kernel_labels = kernel_labels
+        self._tensor_slots: Optional[List[_TensorSlot]] = None
+        self._tensor_id_to_slot: Dict[int, int] = {}
+        self._tensor_addr_to_slot: Dict[int, int] = {}  # buffer_address -> slot_idx
+        self._io_tensors: Optional[List[Any]] = None  # cached for launch()
 
     @property
     def descriptor(self):
@@ -315,6 +473,123 @@ class FusedOp:
     @property
     def output_tensors(self):
         return self.op.output_tensors
+
+    def launch(self, replacements=None):
+        """Dispatch the fused op, optionally replacing input/output tensors.
+
+        Args:
+            replacements: Optional dict mapping original tensor refs (or int
+                indices into input_tensors) to new tensors. Only changed
+                addresses are patched. Keys can be:
+                - Original tensor references (matched by identity, not equality)
+                - Integer indices into self.input_tensors
+
+        Returns:
+            self.output_tensors (tuple of output tensors)
+        """
+        if replacements and self._tensor_slots:
+            self._patch_addresses(replacements)
+            self._io_tensors = None  # invalidate cached list
+
+        if self._io_tensors is None:
+            self._io_tensors = list(self.input_tensors) + list(self.output_tensors)
+        ttnn.generic_op(self._io_tensors, self.descriptor)
+        return self.output_tensors
+
+    def _patch_addresses(self, replacements):
+        """Patch tensor addresses in RT args and CBs for changed tensors."""
+        desc = self.descriptor
+        input_list = list(self.input_tensors)
+        output_list = list(self.output_tensors)
+        inputs_changed = False
+        outputs_changed = False
+
+        for key, new_tensor in replacements.items():
+            # Resolve key to slot index
+            if isinstance(key, int):
+                # Integer index into input_tensors
+                old_tensor = input_list[key]
+                slot_idx = self._tensor_id_to_slot.get(id(old_tensor))
+                if slot_idx is None:
+                    # Fallback: match by address
+                    try:
+                        slot_idx = self._tensor_addr_to_slot.get(old_tensor.buffer_address())
+                    except Exception:
+                        pass
+            else:
+                # Tensor reference — try id() first, fall back to address
+                slot_idx = self._tensor_id_to_slot.get(id(key))
+                if slot_idx is None:
+                    try:
+                        slot_idx = self._tensor_addr_to_slot.get(key.buffer_address())
+                    except Exception:
+                        pass
+
+            if slot_idx is None:
+                continue
+
+            slot = self._tensor_slots[slot_idx]
+            new_addr = new_tensor.buffer_address()
+
+            if new_addr == slot.address:
+                # Address unchanged — still update tensor ref in io lists if needed
+                if slot.input_list_index >= 0:
+                    input_list[slot.input_list_index] = new_tensor
+                    inputs_changed = True
+                if slot.output_list_index >= 0:
+                    output_list[slot.output_list_index] = new_tensor
+                    outputs_changed = True
+                # Update id mapping
+                old_id = id(slot.tensor)
+                if old_id in self._tensor_id_to_slot:
+                    del self._tensor_id_to_slot[old_id]
+                self._tensor_id_to_slot[id(new_tensor)] = slot_idx
+                slot.tensor = new_tensor
+                continue
+
+            # Address changed — patch RT args via C++ helper
+            for k_idx, positions in slot.rt_positions.items():
+                desc.kernels[k_idx].replace_runtime_args_at_positions(positions, new_addr)
+
+            # Patch common_runtime_args
+            for k_idx, positions in slot.common_positions.items():
+                common = list(desc.kernels[k_idx].common_runtime_args)
+                for pos in positions:
+                    common[pos] = new_addr
+                desc.kernels[k_idx].common_runtime_args = common
+
+            # Patch sharded CBs
+            for merged_cb_idx, cb_buf_idx in slot.sharded_cb_entries:
+                new_cb = ttnn.cb_descriptor_from_sharded_tensor(cb_buf_idx, new_tensor)
+                desc.cbs[merged_cb_idx].set_buffer_from_cb(new_cb)
+
+            # Update slot state
+            old_id = id(slot.tensor)
+            old_addr = slot.address
+            slot.address = new_addr
+            slot.tensor = new_tensor
+
+            # Update id mapping
+            if old_id in self._tensor_id_to_slot:
+                del self._tensor_id_to_slot[old_id]
+            self._tensor_id_to_slot[id(new_tensor)] = slot_idx
+
+            # Update address mapping
+            if old_addr in self._tensor_addr_to_slot and self._tensor_addr_to_slot[old_addr] == slot_idx:
+                del self._tensor_addr_to_slot[old_addr]
+            self._tensor_addr_to_slot[new_addr] = slot_idx
+
+            # Update io lists
+            if slot.input_list_index >= 0:
+                input_list[slot.input_list_index] = new_tensor
+                inputs_changed = True
+            if slot.output_list_index >= 0:
+                output_list[slot.output_list_index] = new_tensor
+                outputs_changed = True
+
+        # Rebuild OpDescriptor if any tensors changed
+        if inputs_changed or outputs_changed:
+            self.op = OpDescriptor(desc, tuple(input_list), tuple(output_list))
 
     def dump_kernel_sources(self, output_dir: str) -> None:
         """Write fused kernel sources to reader.cpp, writer.cpp, compute.cpp.
@@ -453,10 +728,9 @@ class Sequential:
                 files are NOT overwritten — delete them to force regeneration.
         """
         # Try patch cache first (fast path: ~50us)
-        key = _cache_key(self._items)
+        key, ops = _cache_key_and_ops(self._items)
         entry = _PATCH_CACHE.get(key)
         if entry is not None:
-            ops = _flatten_ops(self._items)
             result = _patch_cached(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
@@ -470,8 +744,13 @@ class Sequential:
             kernel_labels=r.kernel_labels,
         )
 
+        # Discover tensor slots for launch() support
+        if len(ops) > 1:
+            fused._tensor_slots, fused._tensor_id_to_slot, fused._tensor_addr_to_slot = _discover_tensor_slots(
+                fused, ops
+            )
+
         # Record cache entry for future hits
-        ops = _flatten_ops(self._items)
         if len(ops) > 1:
             _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
 
@@ -528,10 +807,9 @@ class Parallel:
                 files are NOT overwritten — delete them to force regeneration.
         """
         # Try patch cache first (fast path)
-        key = _cache_key(self._items)
+        key, ops = _cache_key_and_ops(self._items)
         entry = _PATCH_CACHE.get(key)
         if entry is not None:
-            ops = _flatten_ops(self._items)
             result = _patch_cached(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
@@ -545,8 +823,13 @@ class Parallel:
             kernel_labels=r.kernel_labels,
         )
 
+        # Discover tensor slots for launch() support
+        if len(ops) > 1:
+            fused._tensor_slots, fused._tensor_id_to_slot, fused._tensor_addr_to_slot = _discover_tensor_slots(
+                fused, ops
+            )
+
         # Record cache entry for future hits
-        ops = _flatten_ops(self._items)
         if len(ops) > 1:
             _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
 

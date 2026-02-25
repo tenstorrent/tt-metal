@@ -828,7 +828,21 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             nb::arg("values"),
-            "Extend all cores' runtime args with the same values");
+            "Extend all cores' runtime args with the same values")
+        .def(
+            "replace_runtime_args_at_positions",
+            [](tt::tt_metal::KernelDescriptor& self, const std::vector<size_t>& positions, uint32_t new_value) {
+                for (auto& [coord, args] : self.runtime_args) {
+                    for (size_t pos : positions) {
+                        if (pos < args.size()) {
+                            args[pos] = new_value;
+                        }
+                    }
+                }
+            },
+            nb::arg("positions"),
+            nb::arg("new_value"),
+            "Replace values at specific positions in all cores' runtime args");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
