@@ -9,6 +9,15 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: t3k_mixtral_tests
+  cmd: run_t3000_mixtral_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: mixtral
+
 - name: t3k_falcon40b_tests
   cmd: run_t3000_falcon40b_tests
   skus:

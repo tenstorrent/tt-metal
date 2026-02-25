@@ -12,6 +12,17 @@ Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - The host machine must have at least 512 GB of memory.
 
+## How to Run
+1. Download the Llama2-70B weights from [Meta](https://llama.meta.com/llama2/):
+
+2. Repack the weights:
+    ```bash
+    python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
+    ```
+    Note: Use `5` for `chunk_size`.
+
+3. Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
+
 ### Running the Demo
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 

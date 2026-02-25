@@ -254,6 +254,30 @@ run_t3000_mistral_tests() {
 
 }
 
+run_t3000_mixtral_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
+
+  # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
+  # pytest models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  mixtral8x7=mistralai/Mixtral-8x7B-v0.1
+  tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
+
+  CI=true TT_CACHE_PATH=$tt_cache_path HF_MODEL=$mixtral8x7 pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mixtral_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_resnet50_tests() {
   # Record the start time
   fail=0
@@ -453,6 +477,9 @@ run_t3000_tests() {
 
   # Run mistral tests
   run_t3000_mistral_tests
+
+  # Run mixtral tests
+  run_t3000_mixtral_tests
 
   # Run resnet50 tests
   run_t3000_resnet50_tests

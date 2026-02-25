@@ -23,6 +23,7 @@ on:
           - motif
           - qwenimage
           - mistral
+          - mixtral
           - whisper
           - qwen3
           - qwen25

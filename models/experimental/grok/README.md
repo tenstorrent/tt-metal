@@ -2,10 +2,17 @@
 
 ## How to Run
 
-### Download the weights
+### Download the weights and repack
 
 1. Download the PyTorch version of the weights from Huggingface.
 - [General weights](https://huggingface.co/hpcai-tech/grok-1)
+
+2. Repack the weights using the provided script in `models/experimental/grok/scripts/repack_weights.py`. It requires the consolidated weights from Huggingface to be inside `<path_to_checkpoint_dir>`.
+
+```
+# This separates the 8 experts to facilitate sending them to multiple devices.
+python models/experimental/grok/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
+```
 
 ### Set up environment
 1. Set async env var:

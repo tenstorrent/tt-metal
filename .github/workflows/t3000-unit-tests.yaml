@@ -20,6 +20,7 @@ on:
           # - llama3.1-70b
           - llama3.2-90b
           - mistral
+          - mixtral
           - grok
           - unet shallow
           - qwen25_vl
