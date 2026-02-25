@@ -119,7 +119,7 @@ void bind_fill_cache(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_function<"fill_cache", "ttnn.kv_cache.">(
+    ttnn::bind_function<"fill_cache">(
         mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
 }
 
