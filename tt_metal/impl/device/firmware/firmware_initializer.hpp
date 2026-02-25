@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #include <llrt/rtoptions.hpp>
@@ -40,7 +41,7 @@ public:
     // This is called after all init calls have completed
     virtual void configure() = 0;
 
-    virtual void teardown() = 0;
+    virtual void teardown(std::unordered_set<InitializerKey>& init_done) = 0;
 
     // This is called after all teardown calls have completed and devices have been closed
     virtual void post_teardown();

@@ -97,13 +97,16 @@ void DispatchKernelInitializer::configure() {
     initialized_ = true;
 }
 
-void DispatchKernelInitializer::teardown() {
+void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    // Dispatch is torn down first; no prior teardown order to assert.
     if (!using_fast_dispatch()) {
+        init_done.erase(key);
         return;
     }
 
     // Mock devices don't have sysmem_manager, skip FD teardown
     if (descriptor_->is_mock_device()) {
+        init_done.erase(key);
         return;
     }
 
@@ -114,6 +117,7 @@ void DispatchKernelInitializer::teardown() {
 
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }

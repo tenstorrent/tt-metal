@@ -16,7 +16,7 @@ public:
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
     void configure() override;
-    void teardown() override;
+    void teardown(std::unordered_set<InitializerKey>& init_done) override;
     bool is_initialized() const override;
 
 private:
