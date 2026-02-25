@@ -322,17 +322,13 @@ class WanCausalConv3d(Module):
             mask_shape = (1, 1, padded_h, 1, 1)
             mask = torch.ones(mask_shape)
             mask[:, :, logical_h:, :, :] = 0.0
-            mapper_dims = [None, None]
-            mapper_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-            mask = ttnn.from_torch(
+            mask = typed_tensor(
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
+                shard_dim=2,
                 dtype=self.dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
-                ),
             )
             self.mask_cache[key] = mask
         return self.mask_cache[key]
@@ -746,17 +742,13 @@ class WanConv2d(Module):
             mask_shape = (1, 1, padded_h, 1, 1)
             mask = torch.ones(mask_shape)
             mask[:, :, logical_h:, :, :] = 0.0
-            mapper_dims = [None, None]
-            mapper_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-            mask = ttnn.from_torch(
+            mask = typed_tensor(
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
+                shard_dim=2,
                 dtype=self.dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
-                ),
             )
             self.mask_cache[key] = mask
         return self.mask_cache[key]
