@@ -876,7 +876,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_i
     }
     if (!eth_chans_in_direction.has_value() && this->teardown_in_progress_.load(std::memory_order_acquire))
         [[unlikely]] {
-        return 0;
+        s { return 0; }
     }
     TT_FATAL(
         eth_chans_in_direction.has_value(),
@@ -951,7 +951,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                     *src_fabric_node_id.mesh_id,
                     src_fabric_node_id.chip_id);
                 this->log_available_fabric_node_ids();
-                TT_FATAL(
+                TT_THROW(
                     "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
                     src_fabric_node_id.mesh_id,
                     src_fabric_node_id.chip_id);
@@ -1371,7 +1371,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
             *fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
         this->log_available_fabric_node_ids();
-        TT_FATAL(
+        TT_THROW(
             "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
@@ -1417,7 +1417,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     *dst_fabric_node.mesh_id,
                     dst_fabric_node.chip_id);
                 this->log_available_fabric_node_ids();
-                TT_FATAL(
+                TT_THROW(
                     "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
                     dst_fabric_node.mesh_id,
                     dst_fabric_node.chip_id);
@@ -1457,7 +1457,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     *dst_fabric_node.mesh_id,
                     dst_fabric_node.chip_id);
                 this->log_available_fabric_node_ids();
-                TT_FATAL(
+                TT_THROW(
                     "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
                     dst_fabric_node.mesh_id,
                     dst_fabric_node.chip_id);
@@ -2404,7 +2404,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
                 *fabric_node_id.mesh_id,
                 fabric_node_id.chip_id);
             this->log_available_fabric_node_ids();
-            TT_FATAL(
+            TT_THROW(
                 "FabricNodeId Mesh {} Chip {} not found in router_port_directions_to_physical_eth_chan_map_",
                 fabric_node_id.mesh_id,
                 fabric_node_id.chip_id);
