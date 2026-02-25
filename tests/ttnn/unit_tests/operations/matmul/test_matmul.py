@@ -263,9 +263,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
-        pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
+        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul.")
 
     torch.manual_seed(0)
 
@@ -373,9 +371,9 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
     if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
-        pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
+        pytest.skip("Combination of tile_w=16 and transpose_tile=True is not supported in llk_math_matmul.")
     if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
-        pytest.skip("Known failure: tile_w=16, tile_h=32 with bias")
+        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
 
     # PCC issue when height not equal to tile height
     m = tile_h
@@ -829,8 +827,8 @@ def test_matmul_2d_tiny_tile(
 ):
     if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
-        pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
+        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
 
     for _ in range(2):
         run_matmul_2d_tiny_tile(
@@ -991,8 +989,8 @@ def test_matmul_1d_tiny_tile(
 ):
     if transpose_tile and tile_w == 16 and is_llk_assert_enabled():
         pytest.skip("in1=32x16 with transpose is not supported (no addr_mod handling) in llk_math_matmul")
-    if not transpose_tile and tile_w == 16 and tile_h == 32 and is_llk_assert_enabled():
-        pytest.skip("Known failure: tile_w=16, tile_h=32 without transpose")
+    if not transpose_tile and tile_w == 16 and tile_h == 32 and has_bias and is_llk_assert_enabled():
+        pytest.skip("Broadcast Row with 32x16 narrow tile not supported.")
 
     for _ in range(2):
         run_matmul_1d_tiny_tile(
