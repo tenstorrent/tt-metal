@@ -506,7 +506,7 @@ class WanResidualBlock(Module):
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
             if (is_blackhole() or dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
