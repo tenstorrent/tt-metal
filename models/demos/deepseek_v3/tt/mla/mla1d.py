@@ -1481,6 +1481,7 @@ class MLA1D(AbstractModule):
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
+        ttnn.deallocate(tt_q)
 
         # wkv_b1 (interleaved in0 + DRAM HEIGHT sharded in1)
         # Pad batch dimension to match DRAM sharded weight layout
