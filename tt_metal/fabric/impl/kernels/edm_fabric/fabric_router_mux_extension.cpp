@@ -14,7 +14,6 @@
 
 #include <cstddef>
 #include <array>
-#include <functional>
 // clang-format on
 
 // ========== Scalar configuration values from MuxConfig::get_compile_time_args ==========
