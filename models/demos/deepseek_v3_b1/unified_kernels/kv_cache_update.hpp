@@ -60,7 +60,7 @@ struct KVCacheUpdate {
         uint32_t full_grid_mcast_end_x;
         uint32_t full_grid_mcast_end_y;
         uint32_t full_grid_mcast_num_dests;
-        uint32_t kv_cache_cur_pos_ready_semaphore_id;
+        uint32_t kv_cache_cur_pos_ready_semaphore_addr;
     };
     struct ComputeArgs {
         uint32_t kv_cache_input_cb;
@@ -82,6 +82,7 @@ struct KVCacheUpdate {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
+                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
@@ -148,27 +149,26 @@ struct KVCacheUpdate {
                     noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
                     cb_addr += kv_tensor_accessor.page_size;
                 }
-                const uint32_t kv_cache_cur_pos_ready_semaphore_addr =
-                    get_semaphore(args.kv_cache_cur_pos_ready_semaphore_id);
-                // TODO: move to NOC 0 and enable dynamic NOC
                 constexpr uint8_t MCAST_NOC = 0;
                 uint64_t kv_cache_cur_pos_ready_sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
                     args.full_grid_mcast_start_x,
                     args.full_grid_mcast_start_y,
                     args.full_grid_mcast_end_x,
                     args.full_grid_mcast_end_y,
-                    kv_cache_cur_pos_ready_semaphore_addr);
+                    args.kv_cache_cur_pos_ready_semaphore_addr);
                 noc_async_write_barrier();
                 // KV CACHE update is done, signal to all core to start compute
                 noc_semaphore_inc_multicast(
                     kv_cache_cur_pos_ready_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
+                noc_async_atomic_barrier(MCAST_NOC);
             }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsNopeCore || IsRopeCore) {
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
+                // half dest calculations
                 constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
                 constexpr uint32_t full_ct_dim = IsRopeCore ? 1 : 16;
                 constexpr uint32_t block_ct_dim = IsRopeCore ? 1 : 8;
@@ -180,12 +180,16 @@ struct KVCacheUpdate {
                 pack_untilize_init<block_ct_dim, full_ct_dim>(kv_cache_input_cb, kv_cache_intermed_cb);
                 pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 0);
                 cb_pop_front(kv_cache_input_cb, block_ct_dim);  // consume first 8 so second block reads tiles 8-15
-                pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 1);
+                if (IsNopeCore) {
+                    pack_untilize_block<block_ct_dim, full_ct_dim>(kv_cache_input_cb, 1, kv_cache_intermed_cb, 1);
+                    cb_pop_front(kv_cache_input_cb, kv_cache_num_tiles - block_ct_dim);  // pop remaining 8
+                }
                 pack_untilize_uninit(kv_cache_intermed_cb);
 
+                // Push back to unblock brisc to update kv cache with new data
                 cb_push_back(kv_cache_intermed_cb, kv_cache_num_tiles);
-                cb_pop_front(kv_cache_input_cb, kv_cache_num_tiles - block_ct_dim);  // pop remaining 8
 
+                // Waits for brisc to push one more "tile"
                 cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
                 cb_reserve_back(kv_cache_output_cb, kv_cache_num_tiles);
 
@@ -195,7 +199,7 @@ struct KVCacheUpdate {
                 tilize_block(kv_cache_intermed_cb, kv_cache_num_tiles, kv_cache_output_cb);
                 tilize_uninit(kv_cache_intermed_cb, kv_cache_output_cb);
                 cb_push_back(kv_cache_output_cb, kv_cache_num_tiles);
-                cb_pop_front(kv_cache_intermed_cb, kv_cache_num_tiles);
+                cb_pop_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
             }
 #endif
         }

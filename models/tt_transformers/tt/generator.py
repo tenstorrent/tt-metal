@@ -146,8 +146,12 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -191,6 +195,7 @@ class Generator(WarmupForwardMixin):
         prefill_seq_len=None,
         **kwargs,
     ):
+        global_user_id = kwargs.get("global_user_id", None)
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -198,6 +203,7 @@ class Generator(WarmupForwardMixin):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                global_user_id=global_user_id,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -210,6 +216,7 @@ class Generator(WarmupForwardMixin):
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            global_user_id=global_user_id,
         )
 
         return tt_out_trace
@@ -223,8 +230,12 @@ class Generator(WarmupForwardMixin):
         user_id=0,
         page_table=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
