@@ -1,48 +1,121 @@
 # E05: Debugging
 
-Learn to debug kernels using DPRINT, Watcher, and tt-triage.
+Learn to debug kernels using tt-triage, DPRINT, and Watcher.
 
 ## Goal
 
 Master kernel debugging techniques:
-- Use DPRINT to inspect data inside kernels
-- Use Watcher to detect illegal memory accesses and hangs
-- Understand the different core types
 - Use tt-triage to analyze crashes and hangs
+- Use DPRINT to inspect data inside kernels
+- Use Watcher to detect illegal memory accesses
 
 ## Reference
 
-- `docs/source/tt-metalium/tools/kernel_print.rst`
-- `docs/source/tt-metalium/tools/watcher.rst`
-- `docs/source/tt-metalium/tools/tt_triage.rst`
+Read these first:
+- `docs/source/tt-metalium/tools/tt_triage.rst` - Hang/crash analysis
+- `docs/source/tt-metalium/tools/kernel_print.rst` - DPRINT usage
+- `docs/source/tt-metalium/tools/watcher.rst` - Runtime error detection
 
-## Key Concepts
+## Operation
 
-### DPRINT Debugging
-- Enable with `TT_METAL_DPRINT_CORES` environment variable
-- Print values from inside kernels
-- Useful for inspecting tile values, loop indices, addresses
+This exercise implements a sign function using a three-kernel pipeline:
 
-### Watcher
-- Enable with `TT_METAL_WATCHER=1`
-- Detects illegal NOC transactions, L1 buffer overflows, CB misuse
-- Catches errors that would otherwise cause silent corruption or hangs
-- Adds runtime overhead but invaluable for debugging
+```
+Reader (RISCV_1) → Compute (TRISC) → Writer (RISCV_0)
+     ↓                  ↓                  ↓
+  DRAM → cb_in      sign(x)           cb_out → DRAM
+```
 
-### Core Types
-Each Tensix core has 5 RISC-V processors:
-- **RISCV_0**: Writer kernel
-- **RISCV_1**: Reader kernel
-- **TRISC0/1/2**: Unpack, Math, Pack
+The compute kernel applies `sign(x)`: returns -1, 0, or 1 based on input sign.
 
-### tt-triage
-- Analyzes crash dumps and hangs
-- Shows core states, program counters, CB states
-- Helps identify where kernel got stuck
+## Exercise
+
+The exercise has a **built-in bug that causes a hang**. Your task:
+
+1. Run the exercise and observe the hang
+2. Use tt-triage to identify which kernel is stuck
+3. Add DPRINT statements to understand what's happening
+4. Find and fix the bug
+5. Study the solution for DPRINT patterns
+
+## Walkthrough
+
+### Step 1: Run and Observe the Hang
+
+```bash
+./run.sh "e05 and exercise"
+```
+
+The test will hang indefinitely.
+
+### Step 2: Diagnose with tt-triage
+
+In another terminal:
+
+```bash
+tt-metal/scripts/install_debugger.sh
+tt-metal/tools/tt-triage.py
+```
+
+Look for the stuck kernel in the output:
+
+```
+│ 1-1 (0,0) │ trisc1 │ ... │ compute │ ... │ 0x8fc8 │
+│           │        │     │         │     │        │ #0 in chlkc_math::math_main() at
+│           │        │     │         │     │        │ .../exercise_cpp/device/kernels/compute.cpp
+│           │        │     │         │     │        │ 34:5
+```
+
+This tells you: **trisc1** (compute kernel) is stuck at **line 34** of `compute.cpp`.
+
+### Step 3: Recover the Device
+
+```bash
+# In the terminal where the test is running:
+Ctrl+Z          # Pause the process
+kill %1         # Kill it
+tt-smi -r       # Reset the device
+```
+
+### Step 4: Add DPRINT to Understand the Issue
+
+Without a debugger, DPRINT is your primary tool for understanding kernel behavior.
+Add print statements to the compute kernel to trace execution:
+
+```cpp
+#include "api/debug/dprint.h"
+
+// Inside kernel_main():
+DPRINT << "Processing tile " << i << ENDL();
+```
+
+Run with DPRINT enabled:
+
+```bash
+export TT_METAL_DPRINT_CORES=0,0
+./run.sh "e05 and exercise"
+```
+
+You'll see output up to where the kernel hangs, helping you localize the issue.
+
+### Step 5: Fix the Bug
+
+Open `exercise_cpp/device/kernels/compute.cpp` and find line 33:
+
+```cpp
+asm volatile("ebreak");  // RISC-V breakpoint - delete this line
+```
+
+Delete or comment out this line, then run again.
+Kernel will be re-compiled JIT.
+
+### Step 6: Study the Solution
+
+Review `solution_cpp/device/kernels/compute.cpp` for DPRINT patterns and best practices.
 
 ## Common Pitfalls
 
-1. **DPRINT slows execution** - Don't leave in production code
-2. **Core type confusion** - DPRINT from wrong core won't print where expected
-3. **Barrier issues** - Missing barriers cause hangs, not crashes
+1. **DPRINT slows execution** - Remove from production code
+2. **Forgetting ENDL()** - Buffer won't flush without it
+3. **MATH can't access CBs** - TileSlice is invalid in DPRINT_MATH
 4. **Watcher overhead** - Disable for performance measurements
