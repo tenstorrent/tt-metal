@@ -32,6 +32,11 @@ from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
 
+# --- Test case collection instrumentation (TTTv2 Phase A) ---
+# Captures raw (pre-format_sampling_params) sampling config at demo level.
+# Remove this block after test cases are hardcoded in pytest (Phase D).
+_demo_collected = set()
+
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -1044,6 +1049,70 @@ def test_demo_text(
             sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
 
         prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
+
+        # --- Test case collection: demo-level CSV (Phase A) ---
+        # Captures raw sampling params BEFORE format_sampling_params() transforms them.
+        _csv_file = "demo_sampling_params_collected.csv"
+        _model_name = model_args[0].model_name
+        _device_name = model_args[0].device_name
+        _device_sampling_on = device_sampling_params is not None
+        if device_sampling_params is not None:
+            _sp = device_sampling_params
+            _raw_temp = _sp.temperature[0] if isinstance(_sp.temperature, list) else _sp.temperature
+            _raw_k = _sp.top_k[0] if isinstance(_sp.top_k, list) else _sp.top_k
+            _raw_p = _sp.top_p[0] if isinstance(_sp.top_p, list) else _sp.top_p
+            _raw_pres = (
+                _sp.presence_penalty[0]
+                if isinstance(_sp.presence_penalty, list)
+                else getattr(_sp, "presence_penalty", 0.0)
+            )
+            _raw_freq = (
+                _sp.frequency_penalty[0]
+                if isinstance(_sp.frequency_penalty, list)
+                else getattr(_sp, "frequency_penalty", 0.0)
+            )
+            _raw_rep = (
+                _sp.repetition_penalty[0]
+                if isinstance(_sp.repetition_penalty, list)
+                else getattr(_sp, "repetition_penalty", 1.0)
+            )
+        else:
+            _raw_temp = (
+                sampling_params["temperature"]
+                if not isinstance(sampling_params["temperature"], list)
+                else sampling_params["temperature"][0]
+            )
+            _raw_k = (
+                sampling_params["top_k"]
+                if not isinstance(sampling_params["top_k"], list)
+                else sampling_params["top_k"][0]
+            )
+            _raw_p = (
+                sampling_params["top_p"]
+                if not isinstance(sampling_params["top_p"], list)
+                else sampling_params["top_p"][0]
+            )
+            _raw_pres = 0.0
+            _raw_freq = 0.0
+            _raw_rep = 1.0
+        _entry = (
+            f"{_model_name},{_device_name},{num_devices},{data_parallel},{global_batch_size},"
+            f"{_device_sampling_on},"
+            f"{_raw_temp},{_raw_k},{_raw_p},"
+            f"{_raw_pres},{_raw_freq},{_raw_rep}"
+        )
+        if _entry not in _demo_collected:
+            _demo_collected.add(_entry)
+            _file_exists = os.path.exists(_csv_file)
+            with open(_csv_file, "a") as f:
+                if not _file_exists:
+                    f.write(
+                        "model_name,device_name,num_devices,data_parallel,global_batch_size,"
+                        "device_sampling_on,"
+                        "raw_temperature,raw_top_k,raw_top_p,"
+                        "raw_presence_penalty,raw_frequency_penalty,raw_repetition_penalty\n"
+                    )
+                f.write(f"{_entry}\n")
 
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")

@@ -737,6 +737,8 @@ class Generator(WarmupForwardMixin):
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_params)
                 sampling_module.seed_manager.get_new_values()
+                # NOTE: this is not part of prefill because seq_id reshuffle in V1 vLLM!
+                #       reset_batch is set by vLLM to True when seq_id reshuffle is detected!
                 if reset_batch:
                     sampling_module.reset_prompt_tokens(prompt_chunks[i])
                     sampling_module.reset_output_state(output_chunks[i])
