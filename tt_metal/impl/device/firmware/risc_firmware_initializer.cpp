@@ -39,13 +39,11 @@ RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
     dispatch_core_manager& dispatch_core_manager,
-    size_t fw_compile_hash,
     std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores) :
     FirmwareInitializer(std::move(descriptor)),
     get_control_plane_(get_control_plane),
     dispatch_core_manager_(dispatch_core_manager),
     get_dispatch_ignore_cores_(std::move(get_dispatch_ignore_cores)),
-    fw_compile_hash_(fw_compile_hash),
     num_hw_cqs_(static_cast<uint8_t>(descriptor_->num_cqs())) {
     const Hal& hal = descriptor_->hal();
     size_t worker_l1_size = descriptor_->worker_l1_size();
