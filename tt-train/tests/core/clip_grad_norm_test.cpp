@@ -27,8 +27,6 @@ protected:
 };
 
 TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
-    // Skip with watcher enabled due to assert failure github issue #37040
-    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();

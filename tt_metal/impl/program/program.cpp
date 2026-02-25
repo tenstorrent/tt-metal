@@ -44,8 +44,9 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -54,7 +55,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
@@ -65,7 +65,6 @@
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -164,23 +163,20 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    // watcher/dprint enabled are accounted for in the build key.
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -190,7 +186,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 
 namespace experimental {
 
-void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+void ClearKernelCache() { jit_build_cache_clear(); }
 
 }  // namespace experimental
 
@@ -443,7 +439,6 @@ KernelGroup::KernelGroup(
             kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
             kernel_config.enables() |= 1u << processor_index;
         }
-        auto class_id = kernel->dispatch_class();
 
         // Dynamic NOC assignment is only supported on certain core types
         const bool is_tensix_core =
@@ -458,7 +453,7 @@ KernelGroup::KernelGroup(
                     if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
                         // The code below sets the brisc_noc_id for use by the device firmware
                         // Use 0 if neither brisc nor ncrisc specify a noc
-                        if (class_id ==
+                        if (kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
@@ -469,7 +464,7 @@ KernelGroup::KernelGroup(
                                 kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                             }
                         } else if (
-                            class_id ==
+                            kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
@@ -692,9 +687,19 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 num_dfbs);
             local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
-            // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
-            std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
-                return handle_to_kernel.at(a)->dispatch_class() < handle_to_kernel.at(b)->dispatch_class();
+            // Sort kernel ids by processor index, so loops over this array will be in processor order
+            std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
+                auto ka = handle_to_kernel.at(a);
+                auto kb = handle_to_kernel.at(b);
+                auto idx_a = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    ka->get_kernel_processor_class(),
+                    ka->get_kernel_processor_type(0));
+                auto idx_b = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    kb->get_kernel_processor_class(),
+                    kb->get_kernel_processor_type(0));
+                return idx_a < idx_b;
             });
             kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
                 *this,
@@ -1196,12 +1201,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     kernel_ids.push_back(device_local_kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
-                    int proc_sub_class = 0;
-                    for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                        // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                        dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                        proc_sub_class++;
+                    auto processor_class = kernel->get_kernel_processor_class();
+                    auto& transfer_info = kernel_transfer_info.at(device_local_kernel_id);
+                    for (uint32_t span_idx = 0; span_idx < transfer_info.dst_base_addrs.size(); span_idx++) {
+                        auto processor_type = transfer_info.processor_ids[span_idx];
+                        auto processor_index = hal.get_processor_index(
+                            hal.get_programmable_core_type(index), processor_class, processor_type);
+                        transfer_info.dst_base_addrs[span_idx] = kernel_group->kernel_text_offsets[processor_index];
                     }
                 }
 
@@ -1223,15 +1229,17 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
                     kernel_ids.push_back(device_local_kernel_id);
 
                     // Update destination address by kernel config offset
                     if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
-                        int proc_sub_class = 0;
-                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                            proc_sub_class++;
+                        auto processor_class = kernel->get_kernel_processor_class();
+                        auto& transfer_info = kernel_transfer_info.at(device_local_kernel_id);
+                        for (uint32_t span_idx = 0; span_idx < transfer_info.dst_base_addrs.size(); span_idx++) {
+                            auto processor_type = transfer_info.processor_ids[span_idx];
+                            auto processor_index = hal.get_processor_index(
+                                hal.get_programmable_core_type(index), processor_class, processor_type);
+                            transfer_info.dst_base_addrs[span_idx] = kernel_group->kernel_text_offsets[processor_index];
                         }
                     }
                 }
@@ -1475,7 +1483,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
                                    tt::TargetDevice::Mock;
 
-                    if (detail::HashLookup::inst().add(kernel_hash)) {
+                    jit_build_once(kernel_hash, [&] {
                         if (!is_mock) {
                             GenerateBinaries(device, build_options, kernel);
                         } else {
@@ -1483,9 +1491,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                    }
-                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
+                    });
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
@@ -1666,8 +1672,6 @@ detail::ProgramImpl::get_cached_program_command_sequences() noexcept {
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
     auto& program_config = get_program_config(index);
     program_config.rta_offset = state.rta_offset;
-    program_config.crta_offsets = state.crta_offsets;
-    program_config.crta_sizes = state.crta_sizes;
     program_config.sem_offset = state.sem_offset;
     program_config.sem_size = state.sem_size;
     program_config.cb_offset = state.cb_offset;
@@ -1738,13 +1742,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index),
-            kernel_groups_getter(index),
-            state.config_base_offset,
-            index,
-            state.rta_offset,
-            state.crta_offsets,
-            state.crta_sizes);
+            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

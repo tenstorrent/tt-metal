@@ -39,16 +39,18 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
 
-    PACK((llk_pack_init<false /*untilize*/, false /*zero_output*/, false /*tilize*/>(ocb)));
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero_output*/, false /*tilize*/>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
 
     ComputeKernelSentinel::instance().set_srca(icb0).set_srcb(icb1).set_pack(ocb);
+#endif  // TODO: AM; add Quasar implementation
 }
 
 // clang-format off
@@ -63,6 +65,10 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kernel_hw_startup(icb0, icb0, ocb); }
+ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+#ifndef ARCH_QUASAR
+    compute_kernel_hw_startup(icb0, icb0, ocb);
+#endif  // TODO: AM; add Quasar implementation
+}
 
 }  // namespace ckernel

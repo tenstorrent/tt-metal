@@ -9,7 +9,6 @@
 #include <cstdint>
 #include "internal/tt-2xx/quasar/noc/tt_tensix_noc_overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h"
-#include "internal/tt-2xx/quasar/noc/registers/noc_config_reg.h"
 
 #define MEM_PORT_CACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR

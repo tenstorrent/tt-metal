@@ -184,6 +184,13 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
+)
+
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
 )
 
 from ttnn.types import (
@@ -257,11 +264,13 @@ from ttnn.types import (
     SemaphoreDescriptor,
     ProgramDescriptor,
     MeshProgramDescriptor,
+    merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
@@ -273,6 +282,9 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_optimal_dram_bank_to_logical_worker_assignment,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -359,6 +371,8 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+from ttnn.operations.unary import SigmoidMode
+
 divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
@@ -397,12 +411,23 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (

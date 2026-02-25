@@ -49,12 +49,45 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [wormhole_b0]
+        scenario: [single, tp2, tray]
+        include:
+          # Wormhole B0 configuration
+          - arch: wormhole_b0
+            scenario: single
+            num_containers: 32
+            chips_per_container: 1
+            container_prefix: chip
+            mesh_descriptor: n150_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+            test_args: "-k test_fill"
+          - arch: wormhole_b0
+            scenario: tp2
+            num_containers: 16
+            chips_per_container: 2
+            container_prefix: tp2
+            mesh_descriptor: n300_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
+            test_args: ""
+          - arch: wormhole_b0
+            scenario: tray
+            num_containers: 4
+            chips_per_container: 8
+            container_prefix: tray
+            mesh_descriptor: t3k_mesh_graph_descriptor.textproto
+            test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            test_args: ""
     runs-on:
       - topology-6u
-      - arch-wormhole_b0
+      - arch-${{ matrix.arch }}
       - ${{ inputs.extra-tag || 'in-service' }}
+    name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -72,51 +105,83 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install Wheel
+        run: |
+          python3 -m pip install --force-reinstall ttnn-*.whl
+      - name: Generate tray to PCIe device mapping
+        run: |
+          python3 .github/scripts/utils/generate_tray_mapping.py
       - name: Create Docker Compose file
-        run: python3 .github/scripts/utils/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
+        run: |
+          TRAY_MAPPING_ARG=""
+          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
+            TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
+          fi
+          python3 .github/scripts/utils/multi-user-create-files.py \
+            --image "${{ needs.build-artifact.outputs.dev-docker-image }}" \
+            --num-containers ${{ matrix.num_containers }} \
+            --chips-per-container ${{ matrix.chips_per_container }} \
+            $TRAY_MAPPING_ARG \
+            --mesh-descriptor ${{ matrix.mesh_descriptor }} \
+            --container-prefix ${{ matrix.container_prefix }}
       - name: Run Docker Compose
         timeout-minutes: 10
         run: |
-          TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
-          REQUIRED_PODS=4
+          CONTAINERS_DIR=".multi-user-galaxy-docker-files"
+          REQUIRED_CONTAINERS=${{ matrix.num_containers }}
           TIMEOUT=300
+          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
-          rm -rf "$TRAY_PODS_DIR"
-          mkdir -p "$TRAY_PODS_DIR"
+          rm -rf "$CONTAINERS_DIR"
+          mkdir -p "$CONTAINERS_DIR"
 
           EPOCH_START=$(date +%s)
 
           docker compose -p multi-user -f multi-user-dc.yaml up -d
 
-          # wait for REQUIRED .txt files to appear (with timeout)
+          # wait for container marker files to appear (with timeout)
           while true; do
-            files=( "$TRAY_PODS_DIR"/tray-*.txt )
+            files=( "$CONTAINERS_DIR"/${CONTAINER_PREFIX}-*.txt )
             count=${#files[@]}
             elapsed=$(( $(date +%s) - EPOCH_START))
-            if [ "$count" -ge "$REQUIRED_PODS" ]; then
+            if [ "$count" -ge "$REQUIRED_CONTAINERS" ]; then
               break
             fi
             if [ "$elapsed" -ge "$TIMEOUT" ]; then
-              echo "Error: Not all $REQUIRED_PODS files appeared within $TIMEOUT seconds (found $count)."
+              echo "Error: Not all $REQUIRED_CONTAINERS containers started within $TIMEOUT seconds (found $count)."
               exit 1
             fi
             sleep 1
           done
 
-          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
+          echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
 
       - name: Run the tests
         timeout-minutes: 15
         run: |
+          NUM_CONTAINERS=${{ matrix.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+          TEST_PATH="${{ matrix.test_path }}"
+          TEST_ARGS="${{ matrix.test_args }}"
+          RESULTS_DIR=".multi-user-test-results"
+
+          mkdir -p "$RESULTS_DIR"
+
           run_test() {
             testname="$1"
             command="$2"
             pids=()
-            for tray in tray-0 tray-1 tray-2 tray-3; do
-              echo ">>> Running $testname in $tray"
+            for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
+              container="${CONTAINER_PREFIX}-${i}"
+              echo ">>> Running $testname in $container"
               (
-                docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
+                docker exec "$container" bash -c "$command" | sed "s/^/[$container] /"
                 status=${PIPESTATUS[0]}
+                echo $status > "$RESULTS_DIR/${container}.status"
                 exit $status
               ) &
               pids+=($!)
@@ -135,7 +200,38 @@ jobs:
           }
 
           export -f run_test
-          run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+          export NUM_CONTAINERS
+          export CONTAINER_PREFIX
+          export RESULTS_DIR
+
+          TEST_NAME=$(basename "${TEST_PATH}" .py)
+          # Output: ">>> Running single/test_fill in chip-0" etc.
+          run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+
+      - name: Check test results
+        run: |
+          RESULTS_DIR=".multi-user-test-results"
+          NUM_CONTAINERS=${{ matrix.num_containers }}
+          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+
+          failed=0
+          for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
+            container="${CONTAINER_PREFIX}-${i}"
+            status_file="$RESULTS_DIR/${container}.status"
+            if [ -f "$status_file" ]; then
+              status=$(cat "$status_file")
+              if [ "$status" != "0" ]; then
+                failed=1
+              fi
+            else
+              # No status file means container didn't complete
+              failed=1
+            fi
+          done
+
+          if [ $failed -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Tear down containers
         if: always()

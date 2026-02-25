@@ -8,14 +8,33 @@ on:
         required: false
         type: boolean
         default: false
-      platform:
+      model:
+        description: 'Select model to test'
         required: false
+        default: 'llama3.1-8b'
         type: choice
-        default: "Ubuntu 22.04"
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
+          - all
+          - whisper
+          - llama3.1-8b
+          - unet-shallow
+          - llama3.3-70b
+          - qwen3-32b
+          - flux.1-dev
+          - wan2.2-t2v-a14b
+      system-type:
+        description: 'Select system type to test'
+        required: false
+        default: "P150 (1xP150)"
+        type: choice
+        options:
+          - all
+          - P150 (1xP150)
+          - Quietbox (4xP150)
+          - DeskBox (2xP150)
+          - LoudBox (8xP150)
+          - P300 (1xP300)
+          - QuietBox 2 (2xP300)
       build-type:
         required: false
         type: choice
@@ -27,6 +46,14 @@ on:
           - ASan
           - TSan
         description: "Build type configuration"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       enable-lto:
         required: false
         type: boolean
@@ -39,6 +66,16 @@ on:
         type: boolean
         default: false
         description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+      model:
+        required: false
+        type: string
+        default: 'all'
+        description: "Select model to test"
+      system-type:
+        description: 'Select system type to test'
+        required: false
+        default: "all"
+        type: string
       platform:
         required: false
         type: string
@@ -58,6 +95,37 @@ on:
     - cron: "0 4 * * *"  # Every day at 4:00 UTC
 
 jobs:
+  generate-card-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          all_systems='[
+            {"name": "P150 (1xP150)", "runner-label": "P150", "extra-tag": "pipeline-perf", "num_devices": 1, "key": "p150"},
+            {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
+            {"name": "DeskBox (2xP150)", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
+            {"name": "LoudBox (8xP150)", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
+            {"name": "P300 (1xP300)", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
+            {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
+          ]'
+          # Schedule or "all": use all systems; otherwise filter by selected system name
+          selected_system_type="${{ inputs.system-type || 'all' }}"
+          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
+            matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
+          else
+            filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
+            if [[ "$filtered" == "[]" ]]; then
+              echo "Error: No system found matching system-type=\"$selected_system_type\". Valid options: all, or one of the system names from the matrix." >&2
+              exit 1
+            fi
+            matrix_output=$(echo "{\"test-group\": $filtered}" | jq -c .)
+          fi
+          echo "Selected system type: $selected_system_type"
+          echo "Matrix output: $matrix_output"
+          echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -65,20 +133,23 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  single-card-demo-tests:
-    needs: build-artifact
+  blackhole-demo-tests:
+    needs: [build-artifact, generate-card-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix:
-        test-group: ["P100", "P150", "p150b"]
+      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ matrix.test-group }}
+      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
+      model: ${{ inputs.model || 'all' }}

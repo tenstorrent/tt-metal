@@ -11,17 +11,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-GroupAttnMatmulDeviceOperation::program_factory_t GroupAttnMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return GroupAttnMatmulProgramFactory{};
-}
-
-void GroupAttnMatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -220,19 +209,9 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
+    TT_FATAL(is_device_tensor(input_tensor_b), "Unexpected Tensor type {}", input_tensor_b.storage_type());
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
-        program_factory.index(),
         operation_attributes.transpose_hw,
         operation_attributes.out_subblock_w,
         operation_attributes.compute_with_storage_grid_size.str(),
