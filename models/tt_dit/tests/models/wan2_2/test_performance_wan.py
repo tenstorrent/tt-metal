@@ -24,14 +24,14 @@ def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "encoder": 19.0,
+            "encoder": 0.1,
             "denoising": 800.0,
             "vae": 9.0,
             "total": 850.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 0.1,
             "denoising": 163.0,
             "vae": 18.2,
             "total": 192.0,
@@ -39,14 +39,14 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 15.0,
+                "encoder": 0.1,
                 "denoising": 185.0,
                 "vae": 8.0,
                 "total": 208.0,
             }
         else:
             expected_metrics = {
-                "encoder": 15.0,
+                "encoder": 0.1,
                 "denoising": 440.0,
                 "vae": 8.0,
                 "total": 463.0,
@@ -55,7 +55,7 @@ def t2v_metrics(mesh_device, height):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 27.0,
+            "encoder": 0.06,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -63,7 +63,7 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (1, 8) and height == 480:
         assert is_blackhole(), "1x8 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 23.0,
+            "encoder": 0.08,
             "denoising": 426.6,
             "vae": 10.0,
             "total": 449.3,
