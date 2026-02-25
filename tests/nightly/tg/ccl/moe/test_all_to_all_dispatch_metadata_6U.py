@@ -354,7 +354,7 @@ def run_all_to_all_dispatch_metadata_test(
         drain_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core, drain_core)})
         metadata_shard_spec = ttnn.ShardSpec(
             drain_core_range_set,
-            [total_tokens * devices, select_experts_k],
+            [total_tokens, select_experts_k],
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         metadata_sharded_mem_config = ttnn.MemoryConfig(
@@ -551,8 +551,12 @@ def run_all_to_all_dispatch_metadata_test(
         selected_experts_k = tt_metadata_tensor.shape[2]
 
         # Verify metadata (indices)
-        metadata_all_close = torch.allclose(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
-        metadata_all_equal = torch.equal(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
+        metadata_all_close = torch.allclose(
+            tt_metadata_tensor, output_metadata_goldens_list[tensor_index].to(torch.uint16)
+        )
+        metadata_all_equal = torch.equal(
+            tt_metadata_tensor, output_metadata_goldens_list[tensor_index].to(torch.uint16)
+        )
         if not metadata_all_close or not metadata_all_equal:
             metadata_passed = False
             first_failed_metadata_index = tensor_index
@@ -646,10 +650,10 @@ def run_all_to_all_dispatch_metadata_test(
 
 
 # Correctness test - single focused test case for pipeline validation
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 16x1 mesh descriptor before running
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -667,7 +671,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device, cluster_axis",
     [
-        pytest.param((16, 1), (16, 1), 0, id="16x1"),
+        pytest.param((1, 16), (1, 16), 1, id="1x16"),
     ],
     indirect=["mesh_device"],
 )
