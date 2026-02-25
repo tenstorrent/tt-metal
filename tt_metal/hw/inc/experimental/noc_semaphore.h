@@ -170,4 +170,61 @@ private:
     uint32_t local_l1_addr_;
 };
 
+namespace quasar {
+class Semaphore {
+public:
+    explicit Semaphore(uint32_t semaphore_id) {
+        this->reg_addr_ = TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_REG_FILE_BASE_ADDR + (semaphore_id * 0x40);
+    }
+
+    void up(uint32_t value) {
+        // const uint32_t current_value = READ_REG(this->reg_addr_);
+        DPRINT << "Upping semaphore " << this->reg_addr_ << " by " << value << ENDL();
+        READ_REG(this->reg_addr_ + 4 * (value + 8));
+        DPRINT << "Semaphore value: " << READ_REG(this->reg_addr_) << ENDL();
+    }
+
+    void down(uint32_t value) {
+        auto* sem_addr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(this->reg_addr_);
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) < value);
+        DPRINT << "Downing semaphore " << this->reg_addr_ << " by " << value << ENDL();
+        READ_REG(this->reg_addr_ + (4 * value));
+        DPRINT << "Semaphore value: " << READ_REG(this->reg_addr_) << ENDL();
+    }
+
+    void wait(uint32_t value) {
+        auto* sem_addr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(this->reg_addr_);
+        DPRINT << "Waiting for semaphore " << this->reg_addr_ << " to be " << value << ENDL();
+        do {
+            invalidate_l1_cache();
+            // DPRINT << "Semaphore value: " << READ_REG(this->reg_addr_) << ENDL();
+        } while ((*sem_addr) != value);
+    }
+
+    /**
+     * @brief Block until the semaphore is at least the specified value.
+     *
+     * @param value The minimum value to wait for.
+     */
+    void wait_min(uint32_t value) {
+        auto* sem_addr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(this->reg_addr_);
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) < value);
+    }
+
+    /**
+     * @brief Set the semaphore to the specified value.
+     *
+     * @param value The value to set the semaphore to.
+     */
+    void set(uint32_t value) { WRITE_REG(this->reg_addr_, value); }
+
+private:
+    uint32_t reg_addr_;
+};
+}  // namespace quasar
+
 }  // namespace experimental
