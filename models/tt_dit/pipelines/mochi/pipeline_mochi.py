@@ -299,35 +299,27 @@ class MochiPipeline(DiffusionPipeline):
         reload_dit_model=None,
     ):
         if ttnn.device.is_blackhole():
+            assert tuple(mesh_device.shape) in [(2, 4), (4, 8)], "Mochi has only been successfully tested on 2x2"
             default_config = {
-                (1, 4): {
-                    "sp_axis": 0,
-                    "tp_axis": 1,
-                    "num_links": 2,
-                    "vae_mesh_shape": (1, 4),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "reload_dit_model": True,
-                },
                 (2, 2): {
                     "sp_axis": 0,
                     "tp_axis": 1,
                     "num_links": 2,
-                    "vae_mesh_shape": (1, 4),
+                    "vae_mesh_shape": (2, 2),
                     "vae_sp_axis": 0,
                     "vae_tp_axis": 1,
                     "reload_dit_model": True,
                 },
-                (1, 8): {
+                (2, 4): {  # Hangs on BH
                     "sp_axis": 0,
                     "tp_axis": 1,
                     "num_links": 2,
-                    "vae_mesh_shape": (1, 8),
+                    "vae_mesh_shape": (2, 4),
                     "vae_sp_axis": 0,
                     "vae_tp_axis": 1,
                     "reload_dit_model": False,
                 },
-                (4, 8): {
+                (4, 8): {  # Untested.
                     "sp_axis": 1,
                     "tp_axis": 0,
                     "num_links": 2,

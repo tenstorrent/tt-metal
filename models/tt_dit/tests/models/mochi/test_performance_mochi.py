@@ -263,8 +263,8 @@ def test_mochi_pipeline_performance(
                     target=expected_metrics["total" if step_name == "run" else step_name],
                 )
         device_name_map = {
-            (1, 4): "BH_QB",
-            (2, 4): "WH_T3K",
+            (2, 2): "BH_QB",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(
