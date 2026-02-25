@@ -5,6 +5,7 @@ allocation_policies:
 Tests:
   ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
   - name: "NeighborExchangeUnicast"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -24,6 +25,7 @@ Tests:
 
   ### LINEAR BANDWIDTH TESTS ###
   - name: "LinearMulticast"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -43,6 +45,7 @@ Tests:
         iterations: 3
 
   - name: "UnidirLinearMulticast"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -62,6 +65,7 @@ Tests:
         iterations: 3
 
   - name: "SingleSenderLinearUnicastAllDevices"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -81,6 +85,7 @@ Tests:
         iterations: 3
 
   - name: "NeighborExchangeLinear"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -101,6 +106,7 @@ Tests:
 
   ### LINEAR LATENCY TESTS ###
   - name: "LatencyLinearUnicast"
+    skip: [watcher]  # gh issue #38537
     latency_test_mode: true
     fabric_setup:
       topology: Linear
@@ -260,6 +266,7 @@ Tests:
 
   ### CUSTOM MAX PACKET SIZE LINEAR BANDWIDTH TESTS ###
   - name: "CustomMaxPacketSizeLinear3K"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -280,6 +287,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeLinear5K"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -300,6 +308,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeLinear7K"
+    skip: [watcher]  # gh issue #38537
     benchmark_mode: true
     sync: true
     fabric_setup:
