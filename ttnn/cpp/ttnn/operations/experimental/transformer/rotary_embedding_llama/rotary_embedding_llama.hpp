@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "device/rotary_embedding_llama_device_operation_types.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
@@ -19,7 +20,9 @@ struct RotaryEmbeddingLlamaOperation {
         const Tensor& trans_mat,
         bool is_decode_mode = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        ttnn::experimental::prim::RotaryEmbeddingTranspose input_transpose =
+            ttnn::experimental::prim::RotaryEmbeddingTranspose::NONE);
 };
 
 }  // namespace operations::experimental::transformer

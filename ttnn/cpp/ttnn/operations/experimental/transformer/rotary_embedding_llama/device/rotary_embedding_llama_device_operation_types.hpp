@@ -4,10 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
+
+enum class RotaryEmbeddingTranspose : uint8_t {
+    NONE = 0,
+    HC = 1,
+};
 
 struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};

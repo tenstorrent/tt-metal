@@ -7,6 +7,7 @@
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::experimental::prim {
@@ -191,8 +192,10 @@ tt::tt_metal::Tensor rotary_embedding_llama(
     const tt::tt_metal::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    ttnn::experimental::prim::RotaryEmbeddingTranspose input_transpose) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
+    using RotaryTranspose = ttnn::experimental::prim::RotaryEmbeddingTranspose;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -204,14 +207,28 @@ tt::tt_metal::Tensor rotary_embedding_llama(
         default_memory_config = input_tensor.memory_config();
     }
 
+    auto resolved_memory_config = memory_config.value_or(default_memory_config);
+
+    // When HC transpose is requested, transpose dims 1 and 2 before and after the RoPE kernel
+    auto effective_input = input_tensor;
+    if (input_transpose == RotaryTranspose::HC) {
+        effective_input = ttnn::transpose(input_tensor, 1, 2, resolved_memory_config);
+    }
+
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
-        .output_mem_config = memory_config.value_or(default_memory_config),
+        .output_mem_config = resolved_memory_config,
         .compute_kernel_config = kernel_config_val};
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
+        .input_tensor = effective_input, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    auto result = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+
+    if (input_transpose == RotaryTranspose::HC) {
+        result = ttnn::transpose(result, 1, 2, resolved_memory_config);
+    }
+
+    return result;
 }
 
 }  // namespace ttnn::prim
