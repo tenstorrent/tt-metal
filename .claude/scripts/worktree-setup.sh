@@ -1,10 +1,10 @@
 #!/bin/bash
 # worktree-setup.sh - Create an isolated git worktree with full C++ build + Python venv
 #
-# Usage: .claude/scripts/worktree-setup.sh <worktree-path> [--branch <branch>] [--foreground]
+# Usage: .claude/scripts/worktree-setup.sh <worktree-path> [--branch <branch>]
 #
-# Creates a git worktree, then kicks off build_metal.sh + create_venv.sh.
-# By default the build runs in the background; use --foreground to block.
+# For manual use outside of Claude Code. Creates a git worktree, inits
+# submodules, builds C++, and creates the Python venv. Blocks until done.
 #
 # Marker files (created in the worktree root):
 #   .worktree_building  - present while build is running
@@ -18,14 +18,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # --- Parse arguments ---
 WORKTREE_PATH=""
 BASE_BRANCH=""
-FOREGROUND=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --branch)
             BASE_BRANCH="$2"; shift 2 ;;
-        --foreground)
-            FOREGROUND=true; shift ;;
         -*)
             echo "Unknown option: $1" >&2; exit 1 ;;
         *)
@@ -39,7 +36,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$WORKTREE_PATH" ]]; then
-    echo "Usage: $0 <worktree-path> [--branch <branch>] [--foreground]" >&2
+    echo "Usage: $0 <worktree-path> [--branch <branch>]" >&2
     exit 1
 fi
 
@@ -60,56 +57,39 @@ WT_BRANCH="${BASE_BRANCH}-wt-${WT_NAME}"
 echo "Creating worktree at ${WORKTREE_PATH} (branch: ${WT_BRANCH})..."
 git -C "$REPO_DIR" worktree add -b "$WT_BRANCH" "$WORKTREE_PATH" "$BASE_BRANCH"
 
-# --- Build function ---
-do_build() {
-    cd "$WORKTREE_PATH"
-    touch .worktree_building
+# --- Build ---
+cd "$WORKTREE_PATH"
+touch .worktree_building
 
-    # Run build in a subshell so set -e doesn't kill the parent on failure
-    local rc=0
-    (
-        set -e
-        echo "=== Build started at $(date) ==="
-        echo "Worktree: $WORKTREE_PATH"
-        echo "Base branch: $BASE_BRANCH"
-        echo ""
+rc=0
+(
+    set -e
+    echo "=== Build started at $(date) ==="
+    echo "Worktree: $WORKTREE_PATH"
+    echo ""
 
-        echo "=== Initializing git submodules ==="
-        git submodule update --init --recursive 2>&1
+    echo "=== Initializing git submodules ==="
+    git submodule update --init --recursive 2>&1
 
-        echo ""
-        echo "=== Running build_metal.sh ==="
-        ./build_metal.sh --debug --enable-ccache --cpm-source-cache "${REPO_DIR}/.cpmcache" 2>&1
+    echo ""
+    echo "=== Running build_metal.sh ==="
+    ./build_metal.sh --debug --enable-ccache --cpm-source-cache "${REPO_DIR}/.cpmcache" 2>&1
 
-        echo ""
-        echo "=== Running create_venv.sh ==="
-        ./create_venv.sh --force 2>&1
+    echo ""
+    echo "=== Running create_venv.sh ==="
+    ./create_venv.sh --force 2>&1
 
-        echo ""
-        echo "=== Build completed successfully at $(date) ==="
-    ) > .worktree_setup.log 2>&1 || rc=$?
+    echo ""
+    echo "=== Build completed successfully at $(date) ==="
+) > .worktree_setup.log 2>&1 || rc=$?
 
-    rm -f .worktree_building
+rm -f .worktree_building
 
-    if [[ $rc -eq 0 ]]; then
-        touch .worktree_ready
-        echo "Worktree ready: $WORKTREE_PATH"
-    else
-        echo "BUILD FAILED (exit $rc) — see ${WORKTREE_PATH}/.worktree_setup.log" >&2
-    fi
-
-    return $rc
-}
-
-# --- Kick off build ---
-if [[ "$FOREGROUND" == "true" ]]; then
-    do_build
+if [[ $rc -eq 0 ]]; then
+    touch .worktree_ready
+    echo "Worktree ready: $WORKTREE_PATH"
 else
-    # Fully detach: redirect all fds so the hook caller doesn't block
-    # waiting for inherited pipes to close.
-    do_build </dev/null >/dev/null 2>&1 &
-    disown
+    echo "BUILD FAILED (exit $rc) — see ${WORKTREE_PATH}/.worktree_setup.log" >&2
 fi
 
-# Print the worktree path (hook contract: stdout = path)
-echo "$WORKTREE_PATH"
+exit $rc

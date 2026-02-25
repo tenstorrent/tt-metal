@@ -1,8 +1,10 @@
 #!/bin/bash
-# worktree-create-hook.sh - WorktreeCreate hook wrapper
+# worktree-create-hook.sh - WorktreeCreate hook
 #
 # Reads JSON input from stdin with { name, cwd, session_id } fields.
-# Creates a worktree via worktree-setup.sh and prints the path to stdout.
+# Creates a git worktree + inits submodules, then prints the path.
+# The C++ build is NOT done here — CLAUDE.md instructs the agent to
+# kick it off as a background task once the session starts.
 
 set -euo pipefail
 
@@ -16,6 +18,14 @@ fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKTREE_PATH="${REPO_DIR}/.claude/worktrees/${NAME}"
+BASE_BRANCH="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
+WT_BRANCH="${BASE_BRANCH}-wt-${NAME}"
 
-# Create worktree + start background build
-exec "${REPO_DIR}/.claude/scripts/worktree-setup.sh" "$WORKTREE_PATH"
+# Create worktree
+git -C "$REPO_DIR" worktree add -b "$WT_BRANCH" "$WORKTREE_PATH" "$BASE_BRANCH" >&2
+
+# Init submodules (uses shared object store, fast)
+git -C "$WORKTREE_PATH" submodule update --init --recursive >&2
+
+# Hook contract: print the absolute worktree path to stdout
+echo "$WORKTREE_PATH"
