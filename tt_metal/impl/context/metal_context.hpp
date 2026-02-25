@@ -8,6 +8,7 @@
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "device/firmware/firmware_initializer.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
@@ -227,6 +228,7 @@ private:
     // at the time of creating this descriptor.
     std::shared_ptr<ContextDescriptor> risc_fw_context_descriptor_;
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
+    std::unordered_set<InitializerKey> risc_fw_init_done_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
