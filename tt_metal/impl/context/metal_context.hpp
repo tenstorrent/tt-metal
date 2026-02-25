@@ -221,7 +221,11 @@ private:
     std::unique_ptr<DataCollector> data_collector_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
+    // The context descriptor used for runtime components.
     std::shared_ptr<ContextDescriptor> context_descriptor_;
+    // The context descriptor used for risc firmware only. L1/trace size/fabric settings were not known
+    // at the time of creating this descriptor.
+    std::shared_ptr<ContextDescriptor> risc_fw_context_descriptor_;
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
