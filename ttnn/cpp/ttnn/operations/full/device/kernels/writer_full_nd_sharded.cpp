@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,15 @@
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
     uint32_t fill_value = get_arg_val<uint32_t>(1);
-    uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
+    uint32_t start_shard_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_value = get_compile_time_arg_val(0);
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t num_shards = get_compile_time_arg_val(4);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(5);
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
     value val;
     val.u = fill_value;
@@ -49,15 +51,19 @@ void kernel_main() {
 
     cb_push_back(cb_value, 1);
 
-    const auto s = TensorAccessor(dst_args, output_addr, page_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_addr, aligned_page_size);
 
     cb_wait_front(cb_value, 1);
 
-    uint32_t end_id = start_id + num_pages_per_core;
-    for (std::uint32_t i = start_id; i < end_id; i++) {
-        const auto cb_value_addr = get_read_ptr(cb_value);
-        noc_async_write_page(i, s, cb_value_addr);
+    for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
+        auto shard_pages = dst_accessor.shard_pages(shard_id);
+        for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); ++page_iter) {
+            uint32_t page_id = page_iter->page_id();
+            const auto cb_value_addr = get_read_ptr(cb_value);
+            noc_async_write_page(page_id, dst_accessor, cb_value_addr);
+        }
     }
+
     noc_async_writes_flushed();
     cb_pop_front(cb_value, 1);
     noc_async_write_barrier();
