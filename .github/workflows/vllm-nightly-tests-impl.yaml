@@ -136,35 +136,6 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
-              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 12,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "structured-output": true,
-              "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ"
-            },
-            {
-              "name": "[WH-T3K][v1] Qwen3-VL-32B-Instruct",
-              "model": "Qwen/Qwen3-VL-32B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "structured-output": true,
-              "multimodal": true,
-              "co-owner-1-id": "U08H31YMN4Q"
-            },
-            {
               "name": "[BH-DB][v1] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
@@ -207,6 +178,22 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
+              "name": "[WH-GLX][v1] Llama-3.1-8B-Instruct DP=4",
+              "model": "meta-llama/Llama-3.1-8B-Instruct",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "TG",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
+              "tt-llama-text-ver": "tt_transformers",
+              "additional-server-args": "--data_parallel_size 4",
+              "structured-output": true,
+              "multimodal": false,
+              "co-owner-1-id": "U08E1JCDVNX",
+              "co-owner-2-id": "U08BH66EXAL"
+            },
+            {
               "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device with sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
@@ -239,20 +226,33 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX][v1] Llama-8B DP=4",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 20,
-              "benchmark-timeout": 5,
-              "runner-label": "topology-6u",
+              "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
+              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
+              "server-timeout": 12,
+              "benchmark-timeout": 10,
+              "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
+              "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--data_parallel_size 4",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08BH66EXAL"
+              "multimodal": true,
+              "additional-server-args": "--max_model_len 2048",
+              "co-owner-1-id": "U07RY6B5FLJ"
+            },
+            {
+              "name": "[WH-T3K][v1] Qwen3-VL-32B-Instruct",
+              "model": "Qwen/Qwen3-VL-32B-Instruct",
+              "server-timeout": 10,
+              "benchmark-timeout": 10,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-llama-text-ver": "tt_transformers",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+              "structured-output": true,
+              "multimodal": true,
+              "co-owner-1-id": "U08H31YMN4Q"
             },
             {
               "name": "[WH-T3K][v1] Multi-process reduce scatter test model",
