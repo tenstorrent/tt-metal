@@ -20,6 +20,7 @@ void kernel_main() {
     experimental::DataflowBuffer dfb(logical_dfb_id);
     experimental::Noc noc;
 
+    // TODO: Replace with get_thread_idx() kernel API when available
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));

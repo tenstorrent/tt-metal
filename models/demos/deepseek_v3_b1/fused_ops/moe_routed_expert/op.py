@@ -199,8 +199,8 @@ def setup_dram_matmul(
     in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
     in1_block_size_bytes = subblock_k * weights_tile_size
 
-    # CB in1: weights working buffer
-    num_in1_buffers = 3 * num_subblocks_k
+    # CB in1: weights working buffer (triple-buffered)
+    num_in1_buffers = 3
     assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
     in1_CB_tiles = subblock_k * num_in1_buffers
     in1_CB_size = in1_CB_tiles * weights_tile_size
