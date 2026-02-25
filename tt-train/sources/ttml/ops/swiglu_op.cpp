@@ -103,9 +103,12 @@ autograd::TensorPtr swiglu_optimized(
         throw std::runtime_error("swiglu only supports rank-4 input tensors.");
     }
 
-    ttnn::Tensor swiglu_fw_result =
-        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
-    auto out = autograd::create_tensor(swiglu_fw_result);
+    // Composite forward: 3 optimized ttnn matmuls + 2 in-place eltwise
+    auto linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value());
+    auto gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value());
+    ttnn::silu(linear1, std::nullopt, linear1);
+    ttnn::multiply_(linear1, gate);
+    auto out = autograd::create_tensor(ttnn_fixed::matmul(linear1, w2->get_value()));
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {
         auto dL_dout = out->get_grad();
