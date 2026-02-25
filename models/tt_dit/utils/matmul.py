@@ -102,6 +102,18 @@ grid_12_10_configs = {
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
 }
 
+grid_11_10_configs = {
+    (512, 5120, 2560): (2, 5, 8, (1, 4)),
+    (2368, 5120, 3840): (4, 8, 12, (1, 4)),
+    (2368, 5120, 1280): (8, 4, 4, (1, 4)),
+    (2368, 5120, 3456): (8, 2, 12, (2, 2)),
+    (2368, 3456, 5120): (4, 4, 8, (1, 4)),
+    (9472, 5120, 3840): (16, 4, 4, (1, 4)),
+    (9472, 5120, 1280): (16, 8, 4, (1, 4)),
+    (9472, 5120, 3456): (16, 8, 4, (1, 4)),
+    (9472, 3456, 5120): (16, 3, 4, (1, 4)),
+}
+
 
 _BH_GALAXY_MIN_DEVICES = 32
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
@@ -140,6 +152,11 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
             config_tuple = config_tuple[:3]
     elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 10:
         config_tuple = grid_12_10_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
+    elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
+        config_tuple = grid_11_10_configs.get((M, K, N))
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
