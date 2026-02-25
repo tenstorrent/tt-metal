@@ -709,21 +709,6 @@ inline void program_packer_dest_offset_registers(std::uint32_t dest_tile_offset)
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // assumes all configured packers have these fields as common values
-    //  pack_config_u pack_config;
-    //  pack_config.val[3] = 0;
-    //  pack_config.f.pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
-
-    // TT_SETDMAREG(0, pack_config.val[3] & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    // TT_SETDMAREG(0, (pack_config.val[3] >> 16) & 0xffff, 0, HI_16(p_gpr_pack::TMP0));
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Pack_L1_Acc_ADDR32);
-    // TTI_DMANOP;TTI_DMANOP;
-
-    // TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::TRISC_CFG);
-
     const std::uint32_t pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
 
     cfg_reg_rmw_tensix<

@@ -198,6 +198,12 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     }
 }
 
+inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
+{
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
@@ -266,6 +272,9 @@ inline void set_packer_config(
     cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
     cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
     // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
+
+    // Reset L1 accumulation flag
+    reconfigure_packer_l1_acc(0);
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -552,31 +561,6 @@ inline void program_packer_dest_offset_registers(std::uint32_t dest_tile_offset)
     TTI_WRCFG(p_gpr_pack::TEMP_TILE_OFFSET, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_0_Base_ADDR32);
     TTI_DMANOP;
     TTI_DMANOP;
-}
-
-inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
-{
-    // assumes all configured packers have these fields as common values
-    //  pack_config_u pack_config;
-    //  pack_config.val[3] = 0;
-    //  pack_config.f.pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
-
-    // TT_SETDMAREG(0, pack_config.val[3] & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    // TT_SETDMAREG(0, (pack_config.val[3] >> 16) & 0xffff, 0, HI_16(p_gpr_pack::TMP0));
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Pack_L1_Acc_ADDR32);
-    // TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Pack_L1_Acc_ADDR32);
-    // TTI_DMANOP;TTI_DMANOP;
-
-    // TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::TRISC_CFG);
-
-    const std::uint32_t pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
-
-    cfg_reg_rmw_tensix<
-        THCON_SEC0_REG1_Pack_L1_Acc_ADDR32,
-        THCON_SEC0_REG1_Pack_L1_Acc_SHAMT,
-        THCON_SEC0_REG1_Disable_pack_zero_flags_MASK | THCON_SEC0_REG1_Pack_L1_Acc_MASK>(pack_l1_acc_disable_pack_zero_flag);
 }
 
 // READERS FOR CONFIG STRUCTS
