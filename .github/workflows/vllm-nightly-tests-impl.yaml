@@ -44,7 +44,7 @@ jobs:
           # Note: This matrix must be kept in sync with the original static matrix
           all_tests='[
             {
-              "name": "[WH-T3K][v1] Gemma3-27B",
+              "name": "[WH-T3K] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
               "server-timeout": 45,
               "benchmark-timeout": 5,
@@ -58,7 +58,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] Gemma3-27B DP=4",
+              "name": "[WH-GLX] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
               "server-timeout": 45,
               "benchmark-timeout": 5,
@@ -74,7 +74,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] GPT-OSS-120B (low-latency)",
+              "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -89,7 +89,7 @@ jobs:
               "co-owner-2-id": "U06F3ER8X9A"
             },
             {
-              "name": "[WH-GLX][v1] GPT-OSS-120B (high-throughput)",
+              "name": "[WH-GLX] GPT-OSS-120B (high-throughput)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -105,7 +105,7 @@ jobs:
               "co-owner-2-id": "U06F3ER8X9A"
             },
             {
-              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct with sampling-tests",
+              "name": "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 15,
               "benchmark-timeout": 5,
@@ -121,7 +121,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct (prefix caching)",
+              "name": "[WH-T3K] Llama-3.1-8B-Instruct (prefix caching)",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
@@ -136,7 +136,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct with sampling-tests",
+              "name": "[BH-DB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
@@ -151,7 +151,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-QB-GE][v1] Llama-3.1-8B-Instruct",
+              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 10,
@@ -164,7 +164,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -178,7 +178,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[WH-GLX][v1] Llama-3.1-8B-Instruct DP=4",
+              "name": "[WH-GLX] Llama-3.1-8B-Instruct DP=4",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 20,
               "benchmark-timeout": 5,
@@ -194,7 +194,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device with sampling-tests",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -210,7 +210,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct hostsample",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -226,7 +226,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
+              "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
               "server-timeout": 12,
               "benchmark-timeout": 10,
@@ -241,7 +241,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[WH-T3K][v1] Qwen3-VL-32B-Instruct",
+              "name": "[WH-T3K] Qwen3-VL-32B-Instruct",
               "model": "Qwen/Qwen3-VL-32B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 10,
@@ -255,7 +255,7 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[WH-T3K][v1] Multi-process reduce scatter test model",
+              "name": "[WH-T3K] Multi-process reduce scatter test model",
               "model": "models/vllm_test_utils/t3000_multiproc_test",
               "server-timeout": 4,
               "benchmark-timeout": 4,
@@ -269,7 +269,7 @@ jobs:
               "co-owner-1-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-N300][v1] NoOp test model (vLLM overhead)",
+              "name": "[WH-N300] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
