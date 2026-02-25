@@ -12,6 +12,8 @@ include(sources.cmake)
 
 add_executable(unit_tests_legacy)
 target_sources(unit_tests_legacy PRIVATE ${UNIT_TESTS_LEGACY_SRC})
+TT_ENABLE_UNITY_BUILD(unit_tests_legacy)
+target_precompile_headers(unit_tests_legacy REUSE_FROM metal_common_pch)
 target_link_libraries(unit_tests_legacy PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_legacy
@@ -32,6 +34,7 @@ list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 
 # Standalone test_clean_init executable (not a gtest - requires custom main with skip-teardown handling)
 add_executable(test_clean_init test_clean_init.cpp)
+target_precompile_headers(test_clean_init REUSE_FROM metal_common_pch)
 target_link_libraries(test_clean_init PUBLIC Metalium::Metal)
 target_include_directories(
     test_clean_init
