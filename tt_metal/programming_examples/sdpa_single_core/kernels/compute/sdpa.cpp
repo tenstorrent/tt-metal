@@ -31,6 +31,7 @@
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
+#include "api/compute/experimental/pack_custom.h"
 #endif
 
 #include <tools/profiler/kernel_profiler.hpp>
@@ -579,8 +580,8 @@ void sub_exp_block_bcast_cols(
         }
 
         // Reduce: MOP=1 to L1-accumulate each tile individually into one position per row.
+        PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
         if constexpr (do_reduce) {
-            PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
             dst_index = 0;
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 if (global_col_base > 0) {
@@ -591,9 +592,33 @@ void sub_exp_block_bcast_cols(
                     if (global_col_base == 0 && j == 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
+                    PACK((llk_pack_w_acc_custom<true, false>(dst_index, reduce_cb, max_row_base + i, 7)));
+                    dst_index += 7;
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 2)));
+                    // PACK((llk_pack_w_acc_custom<true, false>(dst_index, reduce_cb, max_row_base + i, 2)));
+                    // dst_index += 2;
+                    // // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 2)));
+                    // PACK((llk_pack_w_acc_custom<true, false>(dst_index, reduce_cb, max_row_base + i, 2)));
+                    // dst_index += 2;
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
+                    // PACK((llk_pack_w_acc_custom<true, false>(dst_index, reduce_cb, max_row_base + i)));
+                    // dst_index += 1;
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
+                    // pack_tile<true>(dst_index, reduce_cb, max_row_base + i);
+                    // dst_index += 1;
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
+                    // pack_tile<true>(dst_index, reduce_cb, max_row_base + i);
+                    // dst_index += 1;
+                    // PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, 1)));
+                    // pack_tile<true>(dst_index, reduce_cb, max_row_base + i);
+                    // dst_index += 1;
+
+                    j += tiles_per_column;
                 }
             }
         }
+        PACK((llk_pack_mop_config_custom<false, false, false>(reduce_cb, tiles_per_column)));
     }
 
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
@@ -662,7 +687,6 @@ void reduce_c_row_group(
     tile_regs_commit();
     tile_regs_wait();
 
-    PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         pack_tile<false>(i, out_cb);
     }
@@ -671,9 +695,9 @@ void reduce_c_row_group(
 }
 
 /**
- * Initializes matmul HW, performs a blocked matmul of a subblock, and packs the result tiles to an output CB.
+ * Performs a blocked matmul of a subblock and packs the result tiles to an output CB.
+ * Caller is responsible for matmul init and any MOP reconfiguration.
  *
- * Init: configures unpacker/math for the matmul dimensions (always called to ensure correct HW state).
  * Matmul phase: accumulates in0[row] @ in1[col] over the inner dimension into DST.
  * Pack phase: writes DST tiles to out_cb at row-major positions.
  *
@@ -683,6 +707,7 @@ void reduce_c_row_group(
  * @tparam INNER_DIM   Inner (accumulation) dimension in tiles
  * @tparam IN1_STRIDE  Stride for in1 index per inner-dim step
  * @tparam OUT_NUM_COLS Total columns in the output matrix (for row offset calculation)
+ * @tparam SEQUENTIAL_OUTPUT If true, pack tiles one-by-one (no MOP); if false, MOP-based row packing
  */
 template <
     bool TRANSPOSE,
@@ -691,9 +716,7 @@ template <
     uint32_t INNER_DIM,
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
-    bool SEQUENTIAL_OUTPUT = false,
-    bool SKIP_INIT = false,
-    bool RECONFIG_PACK = true>
+    bool SEQUENTIAL_OUTPUT = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -702,19 +725,8 @@ void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
-    if constexpr (!SKIP_INIT) {
-#ifdef ARCH_BLACKHOLE
-        mm_no_mop_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
-#else
-        mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
-#endif
-    }
-
     // --- Matmul phase ---
     tile_regs_acquire();
-    if constexpr (!SEQUENTIAL_OUTPUT && RECONFIG_PACK) {
-        PACK((llk_pack_mop_config<false, false, false>(out_cb, SUBBLOCK_W)));
-    }
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
@@ -737,13 +749,10 @@ void blocked_matmul_and_pack(
         for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
             uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
             for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
-                // Sequential per-tile pack with explicit output coordinates avoids MOP reprogramming
-                // while preserving deterministic placement for overlap/L1-accumulate paths.
                 pack_tile<true>(dst_idx++, out_cb, out_row_offset + out_col_offset + c);
             }
         }
     } else {
-        // MOP=SUBBLOCK_W: one pack_tile<true> packs a full row of tiles
         uint32_t dst_idx = 0;
         for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
             uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
@@ -752,9 +761,6 @@ void blocked_matmul_and_pack(
         }
     }
     tile_regs_release();
-    if constexpr (!SEQUENTIAL_OUTPUT && RECONFIG_PACK) {
-        PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
-    }
 }
 
 // ===================== Normalization Functions =====================
@@ -912,8 +918,8 @@ void sdpa_inner_loop_step(
     cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
-    // ========== PHASE 1: Q@KT with alternating row buffers ==========
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
+    // ========== PHASE 1: Q@KT with alternating row buffers ==========
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
@@ -942,16 +948,14 @@ void sdpa_inner_loop_step(
                     VectorMode::RC,
                     true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
             }
 
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, false, true, false>(
+            blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                 cb_q_in, cb_kt_in, alias_cur_qkt_row, q_index_offset, kt_index_offset, 0, kt_subblock * qkt_subblock_w);
             kt_index_offset += qkt_subblock_w;
         }
         // Set MOP=1 before reduce.
-        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 
         if (q_subblock > 0) {
             // Push softmax'd prev row to cb_qkt_im, free prev row buffer
@@ -965,8 +969,10 @@ void sdpa_inner_loop_step(
         // Max reduce: reads from current row buffer, writes to cur_max (sequential)
         MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
         {
+            PACK((llk_pack_mop_config<false, false, false>(cur_max, sbh)));
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
+
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh>(
                 alias_cur_qkt_row,
                 cur_max,
@@ -975,15 +981,15 @@ void sdpa_inner_loop_step(
                 !is_first_iter /*do_eltwise_max*/,
                 0 /*in0_row_group_index*/);
             cb_push_back(cur_max, sbh);
+            PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
         }
-        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
 
         // Current row still has data (not popped) — becomes prev row in next iteration's sub_exp
         std::swap(alias_cur_qkt_row, alias_prev_qkt_row);
         q_index_offset += sbh * in0_block_w;
         q_wait_tiles += q_subblock_num_tiles;
     }
-    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
+    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, sbh)));
 
     cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
@@ -1031,7 +1037,7 @@ void sdpa_inner_loop_step(
                         true,
                         VectorMode::RC,
                         true>(alias_prev_qkt_row, cur_max, cb_qkt_im, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
-                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
+                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, sbh)));
 
                     // After last sub_exp: push softmax'd row, free raw row buffer.
                     // cur_sum stays RESERVED — SALAD will L1-accumulate onto it later.
@@ -1072,7 +1078,6 @@ void sdpa_inner_loop_step(
                                 matmul_inner,
                                 head_dim_t,
                                 head_dim_t,
-                                true,
                                 true>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -1162,7 +1167,6 @@ void sdpa_inner_loop_step(
                         qktv_in0_block_w,
                         head_dim_t,
                         head_dim_t,
-                        true,
                         true>(
                         cb_qkt_im,
                         cb_v_in,
