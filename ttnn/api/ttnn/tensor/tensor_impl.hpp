@@ -99,10 +99,11 @@ void copy_to_host(
     HostTensor& host_tensor,
     bool blocking = true);
 
-// TODO: figure out what to do with this.
+// TODO: this only exist to support the async runtime, this will be considered a backdoor support if not out-right
+// removed here. See: #38592
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
-    const Tensor& device_tensor,
+    const MeshTensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
@@ -114,11 +115,12 @@ MeshTensor to_device(
 
 void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
-// TODO: figure out what to do with this.
+// TODO: this only exist to support the async runtime, this will be considered a backdoor support if not out-right
+// removed here. See: #38592
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
-    Tensor& device_tensor,
+    MeshTensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
 
 // ======================================================================================
