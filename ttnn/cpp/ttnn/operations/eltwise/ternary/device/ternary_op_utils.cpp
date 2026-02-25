@@ -11,6 +11,127 @@
 
 namespace ttnn::operations::ternary {
 
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+    return tensor_spec.memory_config().shard_spec();
+}
+
+bool is_uneven(const TensorSpec& t) {
+    if (not t.memory_config().is_sharded()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& shard = get_shard_spec(t)->shape;
+    const auto rank = shape.rank();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+// Check based on input specs and output memory config (two tensors, same shape and memory config).
+static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
+    using namespace tt::tt_metal;
+    if (a.logical_shape() != b.logical_shape() || a.memory_config() != b.memory_config()) {
+        return false;
+    }
+    if (is_uneven(a) || is_uneven(b)) {
+        return false;
+    }
+    if (a.memory_config().buffer_type() == BufferType::DRAM || b.memory_config().buffer_type() == BufferType::DRAM ||
+        c.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    // Check if output grid differs from input grids - if so, cannot use native sharding
+    if (c.is_sharded() && c.shard_spec().has_value()) {
+        const auto& out_grid = c.shard_spec()->grid;
+        if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value() &&
+            a.memory_config().shard_spec()->grid != out_grid) {
+            return false;
+        }
+        if (b.memory_config().is_sharded() && b.memory_config().shard_spec().has_value() &&
+            b.memory_config().shard_spec()->grid != out_grid) {
+            return false;
+        }
+    }
+    if (a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1) {
+        return true;
+    }
+    if (b.memory_config().is_sharded() && b.memory_config().buffer_type() == BufferType::L1) {
+        return true;
+    }
+    if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+        return true;
+    }
+    return false;
+}
+
+bool is_native_L1_sharding(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    using namespace tt::tt_metal;
+    if (!output_memory_config.is_sharded()) {
+        return false;
+    }
+    // TST: predicate + false_spec
+    if (!true_spec.has_value() && false_spec.has_value() && predicate_spec.memory_config().is_sharded()) {
+        return is_native_L1_sharding(predicate_spec, *false_spec, output_memory_config);
+    }
+    // TTS: predicate + true_spec
+    if (true_spec.has_value() && !false_spec.has_value() && predicate_spec.memory_config().is_sharded()) {
+        return is_native_L1_sharding(predicate_spec, *true_spec, output_memory_config);
+    }
+    // TTT: all three specs present (identical shape and memory config)
+    if (true_spec.has_value() && false_spec.has_value() &&
+        predicate_spec.logical_shape() == true_spec->logical_shape() &&
+        predicate_spec.logical_shape() == false_spec->logical_shape() &&
+        predicate_spec.memory_config() == true_spec->memory_config() &&
+        predicate_spec.memory_config() == false_spec->memory_config()) {
+        if (is_uneven(predicate_spec) || is_uneven(*true_spec) || is_uneven(*false_spec)) {
+            return false;
+        }
+        if (predicate_spec.memory_config().buffer_type() == BufferType::DRAM ||
+            true_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            false_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            output_memory_config.buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+        // Check if output grid differs from input grids - if so, cannot use native sharding
+        if (output_memory_config.is_sharded() && output_memory_config.shard_spec().has_value()) {
+            const auto& out_grid = output_memory_config.shard_spec()->grid;
+            if (predicate_spec.memory_config().is_sharded() &&
+                predicate_spec.memory_config().shard_spec().has_value() &&
+                predicate_spec.memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+            if (true_spec->memory_config().is_sharded() && true_spec->memory_config().shard_spec().has_value() &&
+                true_spec->memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+            if (false_spec->memory_config().is_sharded() && false_spec->memory_config().shard_spec().has_value() &&
+                false_spec->memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+        }
+        if (predicate_spec.memory_config().is_sharded() &&
+            predicate_spec.memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (true_spec->memory_config().is_sharded() && true_spec->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (output_memory_config.is_sharded() && output_memory_config.buffer_type() == BufferType::L1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Composite key for kernel lookup
 struct KernelLookupKey {
     TernaryOpType op_type;
@@ -201,7 +322,7 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
 std::map<std::string, std::string> make_dataflow_defines(
     const DataType dtype, const DataType b_dtype, std::optional<DataType> c_dtype) {
     std::map<std::string, std::string> defines;
-    // Exact copy of binary_ng make_dataflow_defines for compatibility
+    // Dataflow defines for fill/broadcast compatibility
     if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
@@ -507,6 +628,68 @@ TernaryBroadcastType get_broadcast_type(
     return TernaryBroadcastType::INVALID_BCAST;
 }
 
+ttnn::Shape compute_broadcasted_output_ternary(
+    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape) {
+    const int rank_a = a_shape.rank();
+    const int rank_b = b_shape.rank();
+    const int rank_c = c_shape.rank();
+    const int largest_rank = std::max({rank_a, rank_b, rank_c});
+
+    tt::stl::SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+    for (int i = -1; i >= -largest_rank; --i) {
+        auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
+        auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
+        auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
+
+        uint32_t max_dim = 1;
+        if (dim_a != 1) {
+            max_dim = std::max(max_dim, dim_a);
+        }
+        if (dim_b != 1) {
+            max_dim = std::max(max_dim, dim_b);
+        }
+        if (dim_c != 1) {
+            max_dim = std::max(max_dim, dim_c);
+        }
+
+        bool compatible = true;
+        if (dim_a != 1 && dim_a != max_dim) {
+            compatible = false;
+        }
+        if (dim_b != 1 && dim_b != max_dim) {
+            compatible = false;
+        }
+        if (dim_c != 1 && dim_c != max_dim) {
+            compatible = false;
+        }
+
+        TT_FATAL(
+            compatible,
+            "Broadcasting rule violation at dimension index {} (output rank {}), dim a: {}, dim b: {}, dim c: {}",
+            i,
+            largest_rank,
+            dim_a,
+            dim_b,
+            dim_c);
+
+        if (i <= -6) {
+            TT_FATAL(
+                dim_a == dim_b && dim_b == dim_c,
+                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}, dim c: {}",
+                i,
+                largest_rank,
+                dim_a,
+                dim_b,
+                dim_c);
+        }
+
+        output_shape[i + largest_rank] = max_dim;
+    }
+    return ttnn::Shape(output_shape);
+}
+
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
@@ -536,6 +719,17 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
     ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
+}
+
+tt::tt_metal::MemoryConfig compute_mem_config_actual(
+    const Tensor& input_tensor, const ttnn::Shape& output_logical_shape) {
+    const auto& padded_a_shape = input_tensor.padded_shape();
+    const auto& padded_out_shape =
+        input_tensor.tensor_spec().tensor_layout().compute_padded_shape(output_logical_shape);
+    auto adjusted_shard_spec =
+        adjust_to_shape(*input_tensor.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+    return tt::tt_metal::MemoryConfig(
+        input_tensor.memory_config().memory_layout(), input_tensor.memory_config().buffer_type(), adjusted_shard_spec);
 }
 
 }  // namespace ttnn::operations::ternary

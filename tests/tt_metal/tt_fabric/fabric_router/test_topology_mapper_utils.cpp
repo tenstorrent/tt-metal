@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <random>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/cluster.hpp>
@@ -2696,6 +2697,86 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     EXPECT_TRUE(std::any_of(exit_neighbors.begin(), exit_neighbors.end(), [&](const PhysicalExitNode& n) {
         return n.mesh_id == physical_mesh_1 && n.asic_id == asic_1_0;
     }));
+}
+
+// =============================================================================
+// Partial Rank Binding (UNSET Pooling) Tests
+// =============================================================================
+// When some ranks have explicit mesh_host_rank bindings and others are UNSET,
+// the solver should pool UNSET hosts' ASICs and allow them to map to fabric
+// nodes with any unclaimed rank (not pre-assign each UNSET host to a fixed rank).
+// This avoids overconstraint when e.g. only rank 3 is bound.
+//
+// Uses map_multi_mesh_to_physical with build_hierarchical_from_flat_graph to
+// exercise add_rank_binding_constraints with hostname_to_asics and UNSET pooling.
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset_Succeeds) {
+    using namespace ::tt::tt_fabric;
+
+    constexpr size_t kGridSize = 2;
+    constexpr size_t kNumNodes = kGridSize * kGridSize;
+    const MeshId mesh_id{0};
+
+    // Build physical flat graph: 2x2 grid
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(kNumNodes, 100);
+    auto physical_adj = build_grid_adjacency(physical_asics, kGridSize, kGridSize);
+    PhysicalAdjacencyMap flat_physical_adj(physical_adj.begin(), physical_adj.end());
+
+    // ASIC ranks: host_0 (100,101) -> rank 0; host_1 (102,103) -> UNSET
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[mesh_id][physical_asics[0]] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[mesh_id][physical_asics[1]] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[mesh_id][physical_asics[2]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+    asic_id_to_mesh_rank[mesh_id][physical_asics[3]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Build logical graph: 2x2 grid
+    std::vector<FabricNodeId> logical_nodes;
+    logical_nodes.reserve(kNumNodes);
+    for (uint32_t i = 0; i < kNumNodes; ++i) {
+        logical_nodes.push_back(FabricNodeId(mesh_id, i));
+    }
+    auto logical_adj = build_grid_adjacency(logical_nodes, kGridSize, kGridSize);
+
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[mesh_id] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // Fabric node ranks: row 0 -> rank 0, row 1 -> rank 1
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (uint32_t i = 0; i < kNumNodes; ++i) {
+        fabric_node_id_to_mesh_rank[mesh_id][FabricNodeId(mesh_id, i)] =
+            MeshHostRankId{i / kGridSize};  // row 0 -> rank 0, row 1 -> rank 1
+    }
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.hostname_to_asics["host_0"] = {physical_asics[0], physical_asics[1]};
+    config.hostname_to_asics["host_1"] = {physical_asics[2], physical_asics[3]};
+
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success)
+        << "Partial rank binding (one host explicit, others UNSET) should succeed with UNSET pooling: "
+        << result.error_message;
+
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), kNumNodes);
+
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        auto rank_it = fabric_node_id_to_mesh_rank.at(mesh_id).find(fabric_node);
+        ASSERT_NE(rank_it, fabric_node_id_to_mesh_rank.at(mesh_id).end());
+        if (rank_it->second == MeshHostRankId{0}) {
+            EXPECT_TRUE(asic.get() == 100 || asic.get() == 101)
+                << "Fabric nodes at rank 0 must map to host_0 ASICs (100-101)";
+        }
+    }
 }
 
 }  // namespace
