@@ -314,21 +314,36 @@ void kernel_main() {
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
 #if defined(COMPILE_FOR_BRISC)
             constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-            if constexpr (Core::persistent_mode && is_sender) {
+            if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
                 DPRINT << "Iteration " << iteration_count << ENDL();
-                DPRINT << "WAITING FOR NEXT ITERATION SEMAPHORE" << ENDL();
+                DPRINT << "WAITING FOR NEXT ITERATION SEMAPHORE " << iteration_count << ENDL();
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
+                while (*next_iteration_semaphore != 1) {
+                    invalidate_l1_cache();
+                    DPRINT << "NEXT ITERATION SEMAPHORE NOT READY AT ITERATION" << iteration_count << " "
+                           << *next_iteration_semaphore << ENDL();
+                }
                 noc_semaphore_wait(next_iteration_semaphore, 1);
                 noc_semaphore_set(next_iteration_semaphore, 0);
-                DPRINT << "NEXT ITERATION SEMAPHORE WAIT COMPLETE" << ENDL();
+                DPRINT << "NEXT ITERATION SEMAPHORE WAIT COMPLETE " << iteration_count << ENDL();
             }
 #endif
             // DPRINT << "CCL Broadcast" << ENDL();
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
+#if defined(COMPILE_FOR_NCRISC)
+                if constexpr (Core::is_argmax_final_core) {
+                    DPRINT << "NCRISC: Entering BROADCAST" << ENDL();
+                }
+#endif
                 bcast(bcast_args);
+#if defined(COMPILE_FOR_NCRISC)
+                if constexpr (Core::is_argmax_final_core) {
+                    DPRINT << "NCRISC: BROADCAST complete" << ENDL();
+                }
+#endif
             }
         }
 
@@ -336,7 +351,17 @@ void kernel_main() {
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
         {
             DeviceZoneScopedN("RMSNORM");
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: Entering RMSNORM" << ENDL();
+            }
+#endif
             rmsnorm(rmsnorm_args);
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: RMSNORM complete" << ENDL();
+            }
+#endif
         }
 
         // DPRINT << "MCAST" << ENDL();
@@ -344,19 +369,44 @@ void kernel_main() {
         mcast.init(mcast_args);
         {
             DeviceZoneScopedN("MCAST");
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: Entering MCAST" << ENDL();
+            }
+#endif
             mcast(mcast_args);
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: MCAST complete" << ENDL();
+            }
+#endif
         }
         mcast.teardown();
 
         // DPRINT << "MATMUL" << ENDL();
         {
             DeviceZoneScopedN("MATMUL");
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: Entering MATMUL" << ENDL();
+            }
+#endif
             matmul(matmul_args);
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: MATMUL complete" << ENDL();
+            }
+#endif
         }
 
         // DPRINT << "ARGMAX" << ENDL();
         {
             DeviceZoneScopedN("ARGMAX");
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "NCRISC: Entering ARGMAX" << ENDL();
+            }
+#endif
             sampling_op(sampling_args);
         }
 

@@ -2404,6 +2404,7 @@ def test_persistent_mode(mesh_device, use_fp32):
         pipeline_block.run()
 
         if my_mesh_id == 1:
+            logger.info(f"Running LMHeadSampling for P{my_mesh_id}")
             LMHeadSampling.op(
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
@@ -2456,5 +2457,4 @@ def test_persistent_mode(mesh_device, use_fp32):
         logger.info(f"Barrier completed for P{my_mesh_id}")
 
     finally:
-        if pipeline_block is not None:
-            pipeline_block.terminate()
+        pass
