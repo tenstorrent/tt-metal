@@ -10,54 +10,10 @@
 
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp"
+#include "ring_sdpa_bw_factory_utils.hpp"
 #include "ring_sdpa_bw_q_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_bw::q {
-
-using ttml::metal::AttentionMaskType;
-
-namespace {
-
-using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
-
-// Determine if device should execute at this step and which mask type to use
-// Returns: (should_execute, mask_type_to_use)
-std::pair<bool, AttentionMaskType> get_device_execution_info(
-    uint32_t device_ring_id,
-    uint32_t step,
-    uint32_t ring_size,
-    AttentionMaskType mask_type,
-    RingDirection ring_direction) {
-    if (mask_type != AttentionMaskType::Causal) {
-        // Non-causal: all devices execute with no mask (full attention)
-        return {true, AttentionMaskType::None};
-    }
-
-    // Causal masking logic for ring attention:
-    // At step s, device d processes K/V from source device based on ring direction
-    // - Backward direction: src = (d + s) % ring_size
-    // - Forward direction: src = (d - s + ring_size) % ring_size
-    // Then apply causal logic:
-    // - If src == device_id: diagonal chunk, use causal mask
-    // - If src < device_id: earlier chunk, use full attention (no mask)
-    // - If src > device_id: later chunk, skip (all positions masked)
-    uint32_t src_device;
-    if (ring_direction == RingDirection::Backward) {
-        src_device = (device_ring_id + step) % ring_size;
-    } else {
-        src_device = (device_ring_id - step + ring_size) % ring_size;
-    }
-
-    if (src_device == device_ring_id) {
-        return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
-    } else if (src_device < device_ring_id) {
-        return {true, AttentionMaskType::None};  // Earlier: full attention (no mask)
-    } else {
-        return {false, AttentionMaskType::None};  // Later: skip
-    }
-}
-
-}  // namespace
 
 // ============== Backward Q Program Factory ==============
 
