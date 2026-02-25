@@ -31,9 +31,7 @@ def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     """
     Returns powers of 2 from 128 up to max_seq_len (inclusive).
     """
-    return ([128] if max_seq_len >= 128 else []) + [
-        2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len
-    ]
+    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
