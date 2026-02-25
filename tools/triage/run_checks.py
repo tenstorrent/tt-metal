@@ -140,13 +140,13 @@ def get_devices(
 def _convert_to_on_chip_coordinates(
     device: Device, block_locations: list, block_type: BlockType
 ) -> list[OnChipCoordinate]:
-    on_chip_coordinates: list[OnChipCoordinate] = []
+    on_chip_coordinates: set[OnChipCoordinate] = set()
     for location in block_locations:
         coord_str = f"e{location.x},{location.y}" if "eth" in block_type.lower() else f"{location.x},{location.y}"
         # We skip e0,15 on wormhole devices since it is reserved for syseng use
         if coord_str == "e0,15" and device.is_wormhole() and device.is_local and block_type != "eth":
             continue
-        on_chip_coordinates.append(OnChipCoordinate.create(coord_str, device))
+        on_chip_coordinates.add(OnChipCoordinate.create(coord_str, device))
     return on_chip_coordinates
 
 
@@ -158,9 +158,9 @@ def get_block_locations(
     devices: list[Device],
     inspector_data: InspectorData,
     metal_device_id_mapping: MetalDeviceIdMapping,
-) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
+) -> dict[Device, dict[BlockType, set[OnChipCoordinate]]]:
     device_map = _make_device_map(devices)
-    block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict[Device, dict](dict)
+    block_locations: dict[Device, dict[BlockType, set[OnChipCoordinate]]] = defaultdict[Device, dict](dict)
     chip_blocks_list = inspector_data.getBlocksByType().chips
 
     for i in range(len(chip_blocks_list)):
@@ -228,9 +228,8 @@ class RunChecks:
 
     def get_block_type(self, location: OnChipCoordinate):
         for block_type in self.block_locations[location._device]:
-            for loc in self.block_locations[location._device][block_type]:
-                if loc == location:
-                    return block_type
+            if location in self.block_locations[location._device][block_type]:
+                return block_type
         return None
 
     def _collect_results(
@@ -416,7 +415,6 @@ def run(args, context: Context):
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
-    print(block_locations)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
 
 
