@@ -228,6 +228,13 @@ class RunChecks:
         with self._skip_lock:
             return self._broken_cores.get(device).copy()
 
+    def get_block_type(self, location: OnChipCoordinate):
+        for block_type in self.block_locations[location._device]:
+            for loc in self.block_locations[location._device][block_type]:
+                if loc == location:
+                    return block_type
+        return None
+
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
     ) -> list[CheckResult]:
