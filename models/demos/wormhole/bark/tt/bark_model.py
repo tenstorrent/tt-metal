@@ -151,36 +151,37 @@ class TtBarkModel:
         logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True)
 
         # Greedy decoding for optimization (Stage 2)
-        ttnn_next_token = ttnn.argmax(logits, dim=-1)
-        # Squeeze out any extra dims to get [seq_len] and then grab the last one
-        next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
+        tt_next_token = ttnn.argmax(logits, dim=-1)
         ttnn.deallocate(logits)
-        ttnn.deallocate(ttnn_next_token)
 
-        tokens = [input_ids, next_token.unsqueeze(-1)]
+        # Get scalar for EOS check and to keep torch sequence
+        next_token_torch = ttnn.to_torch(tt_next_token).squeeze().view(-1)[-1:]
+        tokens_torch = [input_ids, next_token_torch.unsqueeze(-1)]
 
         # Autoregressive loop
         max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", 256)
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
-            # Process only the last token with KV cache
+            # Process only the last token with KV cache (next_token is already on device)
             logits, layer_past = self.semantic_model(
-                input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
+                input_ids=tt_next_token, layer_past=layer_past, use_cache=True
             )
-
-            ttnn_next_token = ttnn.argmax(logits, dim=-1)
-            # Pull only the scalar next_token back to host
-            next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
             
+            # We can deallocate the previous token now
+            ttnn.deallocate(tt_next_token)
+
+            tt_next_token = ttnn.argmax(logits, dim=-1)
             ttnn.deallocate(logits)
-            ttnn.deallocate(ttnn_next_token)
 
-            tokens.append(next_token.unsqueeze(-1))
+            # Pull only the scalar next_token back to host for EOS check
+            next_token_torch = ttnn.to_torch(tt_next_token).squeeze().view(-1)[-1:]
+            tokens_torch.append(next_token_torch.unsqueeze(-1))
 
-            if next_token.item() == self.tokenizer.eos_token_id:
+            if next_token_torch.item() == self.tokenizer.eos_token_id:
                 break
 
-        semantic_output = torch.cat(tokens, dim=-1)
+        ttnn.deallocate(tt_next_token)
+        semantic_output = torch.cat(tokens_torch, dim=-1)
         return semantic_output
 
     def generate_coarse_tokens(self, semantic_tokens: torch.Tensor) -> torch.Tensor:
@@ -201,35 +202,32 @@ class TtBarkModel:
         # Initial pre-fill
         logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True)
 
-        ttnn_next_token = ttnn.argmax(logits, dim=-1)
-        # Squeeze out any extra dims to get [seq_len] and then grab the last one
-        next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
-        
+        tt_next_token = ttnn.argmax(logits, dim=-1)
         ttnn.deallocate(logits)
-        ttnn.deallocate(ttnn_next_token)
 
-        tokens = [next_token.unsqueeze(-1)]
+        next_token_torch = ttnn.to_torch(tt_next_token).squeeze().view(-1)[-1:]
+        tokens_torch = [next_token_torch.unsqueeze(-1)]
 
         # Autoregressive loop
         max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", 512)
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
             logits, layer_past = self.coarse_model(
-                input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
+                input_ids=tt_next_token, layer_past=layer_past, use_cache=True
             )
 
-            ttnn_next_token = ttnn.argmax(logits, dim=-1)
-            next_token = ttnn.to_torch(ttnn_next_token).squeeze().view(-1)[-1:]
-            
+            ttnn.deallocate(tt_next_token)
+            tt_next_token = ttnn.argmax(logits, dim=-1)
             ttnn.deallocate(logits)
-            ttnn.deallocate(ttnn_next_token)
 
-            tokens.append(next_token.unsqueeze(-1))
+            next_token_torch = ttnn.to_torch(tt_next_token).squeeze().view(-1)[-1:]
+            tokens_torch.append(next_token_torch.unsqueeze(-1))
 
-            if next_token.item() == 10_047:  # End of codebook marker for Bark
+            if next_token_torch.item() == 10_047:  # End of codebook marker for Bark
                 break
 
-        coarse_output = torch.cat(tokens, dim=-1)
+        ttnn.deallocate(tt_next_token)
+        coarse_output = torch.cat(tokens_torch, dim=-1)
         return coarse_output
 
     def generate_fine_tokens(self, coarse_tokens: torch.Tensor) -> torch.Tensor:
