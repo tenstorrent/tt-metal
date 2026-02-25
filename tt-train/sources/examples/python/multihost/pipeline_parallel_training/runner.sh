@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --partition=bh_pod_8x16_C34
+#SBATCH --partition=bh_pod_4x32_C12
 #SBATCH --nodes=4
-#SBATCH --nodelist=bh-glx-c03u02,bh-glx-c04u02,bh-glx-c04u08,bh-glx-c03u08
-#SBATCH --job-name=pipeline_parallel_training
+#SBATCH --nodelist=bh-glx-c01u02,bh-glx-c02u02,bh-glx-c02u08,bh-glx-c01u08
+#SBATCH --job-name=pipeline_parallel_training_batch_1
 #SBATCH --output=pipeline_parallel_training_%j.out
 #SBATCH --error=pipeline_parallel_training_%j.err
 
@@ -20,7 +20,8 @@ scontrol show hostnames $SLURM_JOB_NODELIST | while read host; do
     echo "${host} slots=1"
 done > ${HOSTFILE}
 
-CONFIG_FILE="training_configs/training_shakespeare_llama7b_pp_fabric.yaml"
+CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp_fabric_galaxy.yaml"
+#CONFIG_FILE="training_configs/training_shakespeare_llama8b_intra_pp.yaml"
 PP_ROOT="${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training"
 HOST_CONFIG="4galaxies"
 

@@ -123,7 +123,7 @@ def train(
         accum_loss = 0.0
 
         # Gradient accumulation loop
-        for _ in range(cfg.gradient_accumulation_steps):
+        for gas in range(cfg.gradient_accumulation_steps):
             # Generate batch data
             # Note: All ranks generate batches, but only rank 0's input is used.
             # Pipeline model handles activation passing between ranks automatically.
@@ -141,7 +141,9 @@ def train(
 
             # Forward and backward pass
             # Pipeline model automatically handles inter-stage communication
+            print(f"rank {rank} calling model impl for GAS {gas} in step {step}")
             logits = model(tt_x, tt_mask)
+            print(f"rank {rank} forward done for GAS {gas} in step {step}")
             # ttnn.distributed_context_barrier()
 
             if is_final_stage:
@@ -172,6 +174,11 @@ def train(
             print("resetting computation graph")
             # Reset computation graph after each micro-batch
             autograd_ctx.reset_graph()
+
+            # Limit runahead to one gradient accumulation step
+            print(f"{rank} reaching barrier for step {step}")
+            distributed_ctx.barrier()
+            print(f"{rank} post barrier for step {step}")
 
         # Synchronize gradients across data parallel dimension (if enabled)
         if use_ddp:
