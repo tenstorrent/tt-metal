@@ -6,8 +6,8 @@
 DIDT tests for Deepseek V3 matmuls at 128k sequence length (prefill only).
 
 Tests cover per-chip matmul shapes for MLA (TP=4, SP=32), MoE gate,
-dense MLP, shared expert, and routed expert operations on a 4×32 mesh
-(128 chips) and single-chip configurations.
+dense MLP, shared expert, and routed expert operations on single-chip
+and 8×4 Galaxy (32 chips) configurations.
 
 Per-chip grid: 11×10 (110 worker cores) only.
 """
@@ -78,10 +78,10 @@ class DeepseekV3MatmulTest(OpTestBase):
 # Shared parametrization
 # ---------------------------------------------------------------------------
 
-# Mesh device parametrization: single-chip and 4×32 (128 chips)
+# Mesh device parametrization: single-chip and 8×4 Galaxy (32 chips), aligned with other DIDT tests
 MESH_DEVICE_PARAMS = [
     pytest.param(1, id="1chips"),
-    pytest.param((4, 32), id="4_galaxy_128chips"),
+    pytest.param((8, 4), id="galaxy"),
 ]
 
 
