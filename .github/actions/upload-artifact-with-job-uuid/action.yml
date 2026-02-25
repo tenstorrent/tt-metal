@@ -27,6 +27,7 @@ runs:
         path: ${{ inputs.path }}
 
     - name: Upload triage debug bus signals
+      if: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: "debug_bus_signals_${{ steps.generate-artifact-name.outputs.artifact-name }}"

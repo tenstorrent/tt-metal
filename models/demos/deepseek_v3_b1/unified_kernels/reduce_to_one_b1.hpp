@@ -42,6 +42,9 @@
 
 namespace deepseek_b1_ops {
 
+// Atomic semaphore decrement by 1
+inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
+
 // Device roles
 constexpr uint32_t MESH_LEAF = 0;
 constexpr uint32_t MESH_ROOT3 = 1;
@@ -81,6 +84,7 @@ struct ReduceToOneB1 {
         uint32_t localCb,
         uint32_t scratchCb,
         uint32_t packetCb,
+        uint32_t packetHeaderCb,
         uint32_t numHops,
         uint32_t dstFabricNodeChipId,
         uint32_t dstFabricNodeMeshId,
@@ -88,7 +92,8 @@ struct ReduceToOneB1 {
         uint32_t outputCoreNocY,
         uint32_t numWorkers,
         uint32_t slotSizeBytes,
-        uint32_t isFabricCore>
+        uint32_t isFabricCore,
+        uint32_t fabricRtArgBase = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -96,6 +101,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t packet_cb = packetCb;
+        static constexpr uint32_t packet_header_cb = packetHeaderCb;
         static constexpr uint32_t num_hops = numHops;
         static constexpr uint32_t dst_fabric_node_chip_id = dstFabricNodeChipId;
         static constexpr uint32_t dst_fabric_node_mesh_id = dstFabricNodeMeshId;
@@ -104,7 +110,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t num_workers = numWorkers;
         static constexpr uint32_t slot_size_bytes = slotSizeBytes;
         static constexpr uint32_t is_fabric_core = isFabricCore;
-        // packet_header_size_bytes derived from sizeof(PACKET_HEADER_TYPE) in kernel
+        static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
     };
 
     // Compute (TRISC) compile-time args
@@ -214,8 +220,8 @@ struct ReduceToOneB1 {
                 cb_reserve_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
-                noc_semaphore_wait(recv_sem1_ptr, 1);
-                noc_semaphore_set(recv_sem1_ptr, 0);
+                noc_semaphore_wait_min(recv_sem1_ptr, 1);
+                semaphore_dec(recv_sem1_ptr);
                 cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
             }
 
@@ -224,8 +230,8 @@ struct ReduceToOneB1 {
                 cb_reserve_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
-                noc_semaphore_wait(recv_sem2_ptr, 1);
-                noc_semaphore_set(recv_sem2_ptr, 0);
+                noc_semaphore_wait_min(recv_sem2_ptr, 1);
+                semaphore_dec(recv_sem2_ptr);
                 cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
             }
 
@@ -234,8 +240,8 @@ struct ReduceToOneB1 {
                 cb_reserve_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
-                noc_semaphore_wait(recv_sem3_ptr, 1);
-                noc_semaphore_set(recv_sem3_ptr, 0);
+                noc_semaphore_wait_min(recv_sem3_ptr, 1);
+                semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
             }
 
@@ -252,7 +258,7 @@ struct ReduceToOneB1 {
                 }
 
                 // Read worker semaphore IDs from runtime args
-                size_t arg_idx = 0;
+                size_t arg_idx = CTArgs::fabric_rt_arg_base;
                 uint32_t worker_sem_addr[CTArgs::num_workers];
                 for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
                     uint32_t sem_id = get_arg_val<uint32_t>(arg_idx++);
@@ -274,8 +280,8 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
-                    noc_semaphore_wait(worker_sem_ptr, 1);
-                    noc_semaphore_set(worker_sem_ptr, 0);
+                    noc_semaphore_wait_min(worker_sem_ptr, 1);
+                    semaphore_dec(worker_sem_ptr);
 
                     fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
@@ -349,9 +355,10 @@ struct ReduceToOneB1 {
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = get_semaphore(args.worker_sem_id);
 
-            // Allocate packet header
-            auto route_id = PacketHeaderPool::allocate_header_n(1);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+            // Get packet header from CB (persistent across iterations)
+            uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
+                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
             set_unicast_route(
@@ -400,12 +407,19 @@ struct ReduceToOneB1 {
                 get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
             noc_semaphore_inc(arrival_sem_noc_addr, 1);
 
-            if constexpr (CTArgs::device_role != MESH_LEAF) {
-                cb_pop_front(source_cb, CTArgs::num_tiles);
-            }
-
             noc_async_write_barrier();
             noc_async_atomic_barrier();
+
+            // Pop source_cb to free it for the next iteration.
+            // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)
+            // uses sharded setup (no push/pop tracking), so skip the pop.
+            if constexpr (CTArgs::device_role == MESH_LEAF) {
+                if constexpr (SkipLocalCbPush) {
+                    cb_pop_front(source_cb, CTArgs::num_tiles);
+                }
+            } else {
+                cb_pop_front(source_cb, CTArgs::num_tiles);
+            }
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

@@ -93,24 +93,18 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tile=tiny_tile,
     )
 
-    # For decode mode, cos/sin are indexed by position: [1, batch, 1, head_dim]
-    # Shape stays [1, 1, 1, head_dim] - broadcast multiply will use row 0
-    cos_selected = cos[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, head_dim]
-    sin_selected = sin[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, head_dim]
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, 1, max_seq_len * num_heads, head_dim]
+    # Each position's cos/sin row is repeated num_heads times to match the input tile height.
+    # Kernel indexes by position_id at runtime via TensorAccessor.
+    cos_repeated = cos.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
+    sin_repeated = sin.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
+    cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len * num_heads, head_dim]
+    sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
 
-    # Use same tiny tile as input - data in row 0, rows 1+ are padding
-    # Broadcast multiply reads row 0 and broadcasts to all rows
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        core_grid,
-        (num_heads, head_dim // (core_grid.num_cores())),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
-    )
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
-        cos_selected,
+        cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -118,7 +112,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tile=tiny_tile,
     )
     tt_sin = ttnn.from_torch(
-        sin_selected,
+        sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -148,6 +142,24 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tile=trans_tile,
     )
 
+    device_grid_size = device.compute_with_storage_grid_size()
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
+
     # Create output tensor with same sharded memory config and tiny tile as input
     torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
     tt_out = ttnn.from_torch(
@@ -165,6 +177,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tt_cos,
         tt_sin,
         tt_trans_replicated,
+        ttnn_position_ids,
         tt_out,
     )
 
@@ -261,23 +274,16 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tile=tiny_tile,
     )
 
-    # Cos/sin indexed by position: [1, batch, 1, head_dim]
-    # Shape stays [1, 1, 1, head_dim] - broadcast multiply will use row 0
-    cos_selected = cos[position_ids].unsqueeze(0).unsqueeze(2)
-    sin_selected = sin[position_ids].unsqueeze(0).unsqueeze(2)
+    # Full cos/sin cache in DRAM INTERLEAVED: [1, batch, max_seq_len * num_heads, head_dim]
+    cos_repeated = cos.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
+    sin_repeated = sin.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim)
+    cos_full = cos_repeated.unsqueeze(0).unsqueeze(0)
+    sin_full = sin_repeated.unsqueeze(0).unsqueeze(0)
 
-    # Use same tiny tile as input - data in row 0, rows 1+ are padding
-    cos_sin_shard_spec = ttnn.ShardSpec(
-        core_grid,
-        (num_heads, head_dim),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
-    )
+    cos_sin_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     tt_cos = ttnn.from_torch(
-        cos_selected,
+        cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -285,7 +291,7 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tile=tiny_tile,
     )
     tt_sin = ttnn.from_torch(
-        sin_selected,
+        sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -313,6 +319,23 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         memory_config=trans_mem_config,
         tile=trans_tile,
     )
+    device_grid_size = device.compute_with_storage_grid_size()
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
 
     # Create output tensor with same sharded memory config and tiny tile as input
     torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
@@ -331,6 +354,7 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tt_cos,
         tt_sin,
         tt_trans,
+        ttnn_position_ids,
         tt_out,
     )
 
