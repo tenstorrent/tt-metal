@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;          // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
     constexpr auto cb_ex = tt::CBIndex::c_18;     // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;    // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;   // xmm^2
