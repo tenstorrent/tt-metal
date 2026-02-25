@@ -10,11 +10,7 @@ import pytest
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
 MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"))
-CACHE_DIR = Path(
-    os.getenv(
-        "DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/Matmul_Integration_Cache"
-    )
-)
+CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
 
 @pytest.mark.parametrize(
@@ -29,7 +25,7 @@ CACHE_DIR = Path(
             None,
             False,
             id="tg_stress",
-            marks=[pytest.mark.requires_device(["TG"]), pytest.mark.timeout(5400)],
+            marks=pytest.mark.requires_device(["TG"]),
         ),
         pytest.param(
             256,
