@@ -24,7 +24,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
-from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
@@ -353,7 +352,6 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize(
     "image_resolution",
     [
