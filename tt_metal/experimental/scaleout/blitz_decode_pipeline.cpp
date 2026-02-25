@@ -30,7 +30,8 @@ struct PhysicalPipelineStageConfig {
 };
 
 std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
-    const distributed::MeshDevice& mesh_device) {
+    const distributed::MeshDevice& mesh_device,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
 
@@ -38,6 +39,9 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
         tt_fabric::FabricNodeId fabric_node_id = mesh_device.get_fabric_node_id(coord);
         tt_metal::AsicID asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
         asic_id_to_mesh_coord_map.emplace(asic_id, coord);
+        auto asic_desc = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+        std::cout << "Mesh Coord: " << coord << " Tray ID: " << *asic_desc.tray_id
+                  << " ASIC Location: " << *asic_desc.asic_location << std::endl;
     }
 
     auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
@@ -102,24 +106,24 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
             return {
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 2,
+                 .entry_node_asic_location = 5,
                  .exit_node_asic_location = 6},
                 {.entry_node_tray_id = 3,
                  .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 6,
+                 .entry_node_asic_location = 3,
                  .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
                  .exit_node_asic_location = 7},
                 {.entry_node_tray_id = 2,
                  .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 4},
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3}};
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2}};
         case 16:
             return {
                 // First Tray
@@ -477,6 +481,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
     logical_pipeline_stage_configs.reserve(physical_pipeline_stage_configs.size());
 
     for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
+        printf("stage index: %zu\n", stage_index);
         const auto& stage_config = physical_pipeline_stage_configs[stage_index];
         auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
@@ -491,6 +496,10 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
             .stage_index = stage_index,
             .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
             .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
+        if (stage_index == 1) {
+            std::cout << stage_config.exit_node_tray_id << ", " << stage_config.exit_node_asic_location << std::endl;
+            std::cout << asic_id_to_mesh_coord.at(exit_node_asic_id) << std::endl;
+        }
     }
 
     return logical_pipeline_stage_configs;
@@ -500,7 +509,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
 
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(const distributed::MeshDevice& mesh_device) {
     auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device, physical_system_descriptor);
     return build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 }
 

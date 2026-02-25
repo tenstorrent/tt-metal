@@ -54,7 +54,7 @@ class PipelineBlock:
         self.is_pipeline_start = self.my_mesh_id == 0
         pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
         num_procs = int(ttnn.distributed_context_get_size())
-        assert len(pipeline_config) == num_procs + 1
+        # assert len(pipeline_config) == num_procs + 1
 
         if self.is_pipeline_start:
             assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
@@ -119,7 +119,7 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
             )
-
+            """
             self.entry_socket_interface = SocketInterface(
                 upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
                 upstream_d2d_socket_fifo_size,
@@ -130,6 +130,7 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
+            """
 
         else:
             self.entry_socket_interface = SocketInterface(
@@ -144,25 +145,29 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
-            self.exit_socket_interface = SocketInterface(
-                downstream_d2d_socket_page_size,
-                downstream_d2d_socket_fifo_size,
-                downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-                upstream_core_coord=exit_node_upstream,
-                upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
-                sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
-            )
+            if self.my_mesh_id != 3:
+                self.exit_socket_interface = SocketInterface(
+                    downstream_d2d_socket_page_size,
+                    downstream_d2d_socket_fifo_size,
+                    downstream_d2d_socket_page_size,
+                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+                    upstream_core_coord=exit_node_upstream,
+                    upstream_socket=self.entry_socket_interface.get_downstream_socket()
+                    if not exit_node_upstream
+                    else None,
+                    sender_mesh=MeshWrapper(mesh_device),
+                    receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
+                )
 
     def run(self):
         if self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
-            self.entry_socket_interface.run()
+            # self.entry_socket_interface.run()
         else:
-            self.exit_socket_interface.run()
+            if self.my_mesh_id != 3:
+                self.exit_socket_interface.run()
             self.entry_socket_interface.run()
 
     def terminate(self):

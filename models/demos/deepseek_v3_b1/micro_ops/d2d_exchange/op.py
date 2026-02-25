@@ -5,8 +5,7 @@
 """
 Device-to-Device Exchange Interface.
 
-Provides a SocketInterface class that manages bidirectional data exchange between
-two cores (potentially on different devices) via D2D sockets and fabric connections.
+This interface facilitates data exchange between two cores (potentially on different devices) via D2D sockets and fabric connections.
 
 The SocketInterface sets up:
 - An upstream socket (receiving data from a previous stage)
@@ -83,10 +82,17 @@ class SocketInterface:
                 assert upstream_core_coord is None
             else:
                 # Upstream socket not provided, create a new socket, on the sender mesh
+                from loguru import logger
+
                 socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
+                logger.info(f"Creating upstream socket pair: {upstream_core_coord} -> {send_core_coord}")
+                logger.info(f"  Cross-device: {upstream_core_coord.device_coord != send_core_coord.device_coord}")
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.upstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
+                logger.info(
+                    f"  Created socket pair: sender={self.upstream_socket_pair[0].get_active_cores()}, receiver={self.upstream_socket_pair[1].get_active_cores()}"
+                )
                 # Initialize upstream as receiver socket
                 self.upstream_socket = self.upstream_socket_pair[1]
 
@@ -183,6 +189,19 @@ class SocketInterface:
         use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
         use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
 
+        from loguru import logger
+
+        logger.info(f"D2D Exchange kernel setup for core {my_core_coord}:")
+        logger.info(f"  my_fabric_node_id: {my_fabric_node_id}")
+        logger.info(
+            f"  upstream_fabric_node_id: {my_upstream_fabric_node_id} (device {my_upstream_sender_device_coord})"
+        )
+        logger.info(
+            f"  downstream_fabric_node_id: {my_downstream_fabric_node_id} (device {my_downstream_recv_device_coord})"
+        )
+        logger.info(f"  use_fabric_on_receiver: {use_fabric_on_receiver}")
+        logger.info(f"  use_fabric_on_sender: {use_fabric_on_sender}")
+
         if use_fabric_on_receiver or use_fabric_on_sender:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             num_whole_fabric_packets = self.page_size // fabric_max_payload_size
@@ -275,6 +294,12 @@ class SocketInterface:
         return program
 
     def run(self):
+        from loguru import logger
+
+        logger.info(
+            f"SocketInterface.run(): local_socket={self.local_socket}, send_core={self.send_core_coord}, recv_core={self.recv_core_coord}"
+        )
+
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
         )
@@ -296,6 +321,11 @@ class SocketInterface:
             )
         else:
             if self.upstream_socket:
+                from loguru import logger
+
+                logger.info(
+                    f"SocketInterface.run(): Creating SENDER program at {self.send_core_coord}, upstream_socket exists"
+                )
                 # Has an upstream socket - is sender
                 program = self._create_program(
                     self.mesh_device,
@@ -305,6 +335,11 @@ class SocketInterface:
                     self.sender_packet_header_cb_index,
                 )
             else:
+                from loguru import logger
+
+                logger.info(
+                    f"SocketInterface.run(): Creating RECEIVER program at {self.recv_core_coord}, no upstream_socket"
+                )
                 assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
                 program = self._create_program(
                     self.mesh_device,
@@ -316,6 +351,9 @@ class SocketInterface:
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         if self.local_socket:
+            from loguru import logger
+
+            logger.info(f"SocketInterface.run(): local_socket=True, combining sender+receiver programs")
             same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
             if same_device:
                 sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
@@ -343,9 +381,12 @@ class SocketInterface:
                     ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
                 ] = receiver_program
         else:
+            from loguru import logger
+
             device_coord = (
                 self.send_core_coord.device_coord if self.upstream_socket else self.recv_core_coord.device_coord
             )
+            logger.info(f"SocketInterface.run(): Cross-host socket, running program on device {device_coord}")
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
 
         io_tensors = [
@@ -368,3 +409,7 @@ class SocketInterface:
 
     def get_upstream_socket(self):
         return self.upstream_socket_pair[0]
+
+    def has_upstream_socket_pair(self):
+        """Check if this SocketInterface created an internal upstream socket pair"""
+        return hasattr(self, "upstream_socket_pair")

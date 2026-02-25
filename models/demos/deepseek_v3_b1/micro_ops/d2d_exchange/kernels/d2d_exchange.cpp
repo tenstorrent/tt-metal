@@ -108,6 +108,7 @@ FORCE_INLINE void send_pages_over_socket(
 
 void kernel_main() {
     // Build Fabric Connections
+    DPRINT << "start of d2d exchange\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -173,10 +174,12 @@ void kernel_main() {
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "receiver page size: " << (uint32_t)page_size << "\n";
+        DPRINT << "waiting for pages on receiver socket\n";
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-
+        DPRINT << "got pages on receiver socket\n";
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
@@ -189,6 +192,7 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
+        DPRINT << "after sending pages over socket\n";
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
             fabric_socket_notify_sender_stateful(
@@ -196,11 +200,13 @@ void kernel_main() {
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
+            DPRINT << "after fabric notify sender\n";
         } else {
             socket_notify_sender(receiver_socket);
+            DPRINT << "after socket notify sender\n";
         }
     }
-
+    DPRINT << "exiting main loop\n";
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
 
@@ -212,4 +218,5 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "end of d2d exchange\n";
 }

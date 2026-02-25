@@ -217,25 +217,30 @@ struct ReduceToOneB1 {
                 }
 
                 // Round 1: Wait for shard from LEAF
+                DPRINT << "waiting for round 1 data from LEAF\n";
                 cb_reserve_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
                 semaphore_dec(recv_sem1_ptr);
                 cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
+                DPRINT << "received round 1 data from LEAF\n";
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
                 // Round 2: Wait for result from ROOT3
+                DPRINT << "waiting for round 2 data from ROOT3\n";
                 cb_reserve_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
                 semaphore_dec(recv_sem2_ptr);
                 cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                DPRINT << "received round 2 data from ROOT3\n";
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                DPRINT << "waiting for round 3 data from ROOT2\n";
                 // Round 3: Wait for result from ROOT2
                 cb_reserve_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
@@ -243,17 +248,26 @@ struct ReduceToOneB1 {
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
                 semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                DPRINT << "received round 3 data from ROOT2\n";
             }
+            DPRINT << "end of nrisc \n";
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
+            DPRINT << "start of reduce to one op\n";
+            DPRINT << "device is root1:" << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
+            DPRINT << "device is root2:" << (uint32_t)(CTArgs::device_role == MESH_ROOT2) << "\n";
+            DPRINT << "device is root3:" << (uint32_t)(CTArgs::device_role == MESH_ROOT3) << "\n";
+            DPRINT << "device is leaf:" << (uint32_t)(CTArgs::device_role == MESH_LEAF) << "\n";
+            DPRINT << "device is fabric core:" << (uint32_t)(CTArgs::is_fabric_core) << "\n";
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     // ROOT1 fabric cores have nothing to do
+                    DPRINT << "end of reduce to one op\n";
                     return;
                 }
 
@@ -294,6 +308,7 @@ struct ReduceToOneB1 {
 
                 fabric_sender.close();
                 noc_async_write_barrier();
+                DPRINT << "end of reduce to one op\n";
                 return;
             }
 
@@ -304,6 +319,7 @@ struct ReduceToOneB1 {
             // ROOT1: send final results via socket (if D2H enabled) or NOC gather
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
                 // Wait for compute to finish
+                DPRINT << "wait for compute to finish\n";
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
 
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
@@ -313,17 +329,21 @@ struct ReduceToOneB1 {
                     get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
 
                 // Always write to output tensor via NOC
-                noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
-                noc_async_write_barrier();
+                DPRINT << "write to output tensor\n";
+                // noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
+                // noc_async_write_barrier();
 
                 // Send to D2H socket if enabled (socket_config_addr != 0)
                 if (args.socket_config_addr != 0) {
+                    DPRINT << "ROOT1 worker core (" << (uint32_t)my_noc_x << "," << (uint32_t)my_noc_y
+                           << ") sending to D2D socket, config_addr=" << (uint32_t)args.socket_config_addr << "\n";
                     // Create socket sender interface
                     SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                     set_sender_socket_page_size(sender_socket, CTArgs::payload_size_bytes);
 
                     // Reserve space in socket
                     socket_reserve_pages(sender_socket, 1);
+                    DPRINT << "ROOT1 worker reserved socket page\n";
 
                     // Get downstream encoding
                     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
@@ -341,17 +361,24 @@ struct ReduceToOneB1 {
                     socket_push_pages(sender_socket, 1);
                     socket_notify_receiver(sender_socket);
                     noc_async_writes_flushed();
+                    DPRINT << "ROOT1 worker pushed and notified D2D socket\n";
 
+                    invalidate_l1_cache();
+                    DPRINT << "ROOT1 worker invalidated L1 cache after pushing to socket\n";
                     socket_barrier(sender_socket);
+                    DPRINT << "ROOT1 worker passed socket barrier\n";
                     noc_async_write_barrier();
+                    DPRINT << "ROOT1 worker completed socket barrier\n";
                 }
 
                 // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "end of reduce to one op\n";
                 return;
             }
 
             // Non-ROOT1: send via fabric
+            DPRINT << "non root sending over fabric\n";
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = get_semaphore(args.worker_sem_id);
 
@@ -373,6 +400,8 @@ struct ReduceToOneB1 {
             packet_header->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, dst_sem_noc_addr, 1, false},
                 CTArgs::payload_size_bytes);
+
+            DPRINT << "after noc unicast\n";
 
             // Calculate slot in fabric core's packet buffer
             uint32_t slot_offset = args.my_slot_idx * CTArgs::slot_size_bytes;
@@ -398,10 +427,12 @@ struct ReduceToOneB1 {
             }
             uint32_t data_addr = get_read_ptr(source_cb);
 
+            DPRINT << "send header and paylod to fabric\n";
             // Send header and payload to fabric core
             noc_async_write(reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
             noc_async_write(data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
 
+            DPRINT << "after write\n";
             // Signal fabric core
             uint64_t arrival_sem_noc_addr =
                 get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
@@ -409,6 +440,7 @@ struct ReduceToOneB1 {
 
             noc_async_write_barrier();
             noc_async_atomic_barrier();
+            DPRINT << "after barrier\n";
 
             // Pop source_cb to free it for the next iteration.
             // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)
@@ -420,6 +452,7 @@ struct ReduceToOneB1 {
             } else {
                 cb_pop_front(source_cb, CTArgs::num_tiles);
             }
+            DPRINT << "end of reduce to one op\n";
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
@@ -452,6 +485,7 @@ struct ReduceToOneB1 {
             cb_pop_front(CTArgs::received_cb_r1, CTArgs::num_tiles);
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
+                DPRINT << "accumulating from ROOT3 data\n";
                 // Accumulate from received_cb_r2 (ROOT3 data)
                 cb_wait_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
@@ -459,16 +493,19 @@ struct ReduceToOneB1 {
                         CTArgs::received_cb_r2, i, i);
                 }
                 cb_pop_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                DPRINT << "finished accumulating from ROOT3 data\n";
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
                 // Accumulate from received_cb_r3 (ROOT2 data)
+                DPRINT << "accumulating from ROOT2 data\n";
                 cb_wait_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                         CTArgs::received_cb_r3, i, i);
                 }
                 cb_pop_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                DPRINT << "finished accumulating from ROOT2 data\n";
             }
 
             // Pack result to scratch_cb
@@ -478,6 +515,7 @@ struct ReduceToOneB1 {
             }
             release_dst();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+            DPRINT << "END of trisc reduce to one op\n";
 #endif
         }
     };  // class Op

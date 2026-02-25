@@ -142,4 +142,5 @@ void kernel_main() {
     if constexpr (use_fabric) {
         upstream_fabric_connection.close();
     }
+    DPRINT << "Finished d2h sender kernel" << ENDL();
 }
