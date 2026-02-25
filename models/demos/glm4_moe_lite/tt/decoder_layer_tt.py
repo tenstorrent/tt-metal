@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -1476,17 +1477,30 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     t0 = time.perf_counter() if profile is not None else 0.0
     if use_dense_decode:
-        routed_out = moe_dense_experts_forward_decode_tt(
-            device=device,
-            hidden_states=x,  # consumed
-            topk_expert_indices=topk_indices,  # consumed
-            topk_expert_weights=topk_weights,  # consumed
-            moe_w=w.moe,
-            hparams=hparams,
-            memory_config=moe_decode_mc,
-            compute_kernel_config=mlp_compute_kernel_config,
-            skip_defensive_clones=skip_defensive_clones,
-        )
+        if int(x.shape[2]) > 1:
+            routed_out = moe_dense_experts_forward_prefill_tt(
+                device=device,
+                hidden_states=x,  # consumed
+                topk_expert_indices=topk_indices,  # consumed
+                topk_expert_weights=topk_weights,  # consumed
+                moe_w=w.moe,
+                rt=moe_runtime,
+                memory_config=moe_decode_mc,
+                compute_kernel_config=mlp_compute_kernel_config,
+                skip_defensive_clones=skip_defensive_clones,
+            )
+        else:
+            routed_out = moe_dense_experts_forward_decode_tt(
+                device=device,
+                hidden_states=x,  # consumed
+                topk_expert_indices=topk_indices,  # consumed
+                topk_expert_weights=topk_weights,  # consumed
+                moe_w=w.moe,
+                hparams=hparams,
+                memory_config=moe_decode_mc,
+                compute_kernel_config=mlp_compute_kernel_config,
+                skip_defensive_clones=skip_defensive_clones,
+            )
     elif use_packed_prefill:
         routed_out = moe_packed_experts_forward_prefill_tt(
             device=device,
