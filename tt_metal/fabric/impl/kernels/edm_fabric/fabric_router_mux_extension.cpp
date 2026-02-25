@@ -248,9 +248,9 @@ void kernel_main() {
     std::array<bool, NUM_ROUTER_CHANNELS> router_channel_connection_established;
 
     // ========== Parse stream IDs and persistent flags (grouped by type) ==========
-    std::array<uint32_t, NUM_WORKER_CHANNELS> worker_stream_ids =
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_stream_ids =
         fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_WORKER_CHANNELS>();
-    std::array<uint32_t, NUM_ROUTER_CHANNELS> router_stream_ids = fill_array_with_next_n_args<
+    constexpr std::array<uint32_t, NUM_ROUTER_CHANNELS> router_stream_ids = fill_array_with_next_n_args<
         uint32_t,
         CHANNEL_STREAM_IDS_START_IDX + NUM_WORKER_CHANNELS,
         NUM_ROUTER_CHANNELS>();
