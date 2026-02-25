@@ -317,15 +317,15 @@ void bind_sdpa(nb::module_& mod) {
         mla_doc,
         // Overload: head_dim_v as uint32_t (original MLA)
         ttnn::overload_t(
-            [](const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const uint32_t head_dim_v,
-               const std::optional<ttnn::Tensor>& attn_mask,
-               bool is_causal,
-               std::optional<float> scale,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+            +[](const ttnn::Tensor& input_tensor_q,
+                const ttnn::Tensor& input_tensor_k,
+                const uint32_t head_dim_v,
+                const std::optional<ttnn::Tensor>& attn_mask,
+                bool is_causal,
+                std::optional<float> scale,
+                const std::optional<MemoryConfig>& memory_config,
+                const std::optional<SDPAProgramConfig>& program_config,
+                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return ttnn::transformer::flash_mla_prefill(
                     input_tensor_q,
                     input_tensor_k,
@@ -350,15 +350,15 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()),
         // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::overload_t(
-            [](const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const ttnn::Tensor& input_tensor_v,
-               const std::optional<ttnn::Tensor>& attn_mask,
-               bool is_causal,
-               std::optional<float> scale,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<SDPAProgramConfig>& program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+            +[](const ttnn::Tensor& input_tensor_q,
+                const ttnn::Tensor& input_tensor_k,
+                const ttnn::Tensor& input_tensor_v,
+                const std::optional<ttnn::Tensor>& attn_mask,
+                bool is_causal,
+                std::optional<float> scale,
+                const std::optional<MemoryConfig>& memory_config,
+                const std::optional<SDPAProgramConfig>& program_config,
+                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return ttnn::transformer::flash_mla_prefill(
                     input_tensor_q,
                     input_tensor_k,
