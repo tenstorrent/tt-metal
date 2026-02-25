@@ -306,6 +306,7 @@ void kernel_main() {
             sampling_op;
 
     uint32_t iteration_count = 0;
+    mcast.init(mcast_args);
     while (true) {
         iteration_count++;
         // ====================================================================
@@ -337,11 +338,17 @@ void kernel_main() {
                 if constexpr (Core::is_argmax_final_core) {
                     DPRINT << "NCRISC: Entering BROADCAST" << ENDL();
                 }
+                if constexpr (Core::is_input_core) {
+                    DPRINT << "NCRISC(input): Entering BROADCAST" << ENDL();
+                }
 #endif
                 bcast(bcast_args);
 #if defined(COMPILE_FOR_NCRISC)
                 if constexpr (Core::is_argmax_final_core) {
                     DPRINT << "NCRISC: BROADCAST complete" << ENDL();
+                }
+                if constexpr (Core::is_input_core) {
+                    DPRINT << "NCRISC(input): BROADCAST complete" << ENDL();
                 }
 #endif
             }
@@ -355,23 +362,46 @@ void kernel_main() {
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: Entering RMSNORM" << ENDL();
             }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): Entering RMSNORM" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "TRISC(input): Entering RMSNORM" << ENDL();
+            }
 #endif
             rmsnorm(rmsnorm_args);
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: RMSNORM complete" << ENDL();
             }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): RMSNORM complete" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "TRISC(input): RMSNORM complete" << ENDL();
+            }
 #endif
         }
 
         // DPRINT << "MCAST" << ENDL();
         // Keep mcast init/teardown in-loop to preserve prior ordering semantics.
-        mcast.init(mcast_args);
         {
             DeviceZoneScopedN("MCAST");
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: Entering MCAST" << ENDL();
+            }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): Entering MCAST" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "TRISC(input): Entering MCAST" << ENDL();
             }
 #endif
             mcast(mcast_args);
@@ -379,9 +409,26 @@ void kernel_main() {
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: MCAST complete" << ENDL();
             }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): MCAST complete" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_input_core) {
+                DPRINT << "TRISC(input): MCAST complete" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "BRISC: Entering MCAST" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "TRISC: Entering MCAST" << ENDL();
+            }
 #endif
         }
-        mcast.teardown();
 
         // DPRINT << "MATMUL" << ENDL();
         {
@@ -390,11 +437,30 @@ void kernel_main() {
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: Entering MATMUL" << ENDL();
             }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): Entering MATMUL" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "BRISC: Entering MATMUL" << ENDL();
+            }
+#endif
+#if defined(COMPILE_FOR_TRISC)
+            if constexpr (Core::is_argmax_final_core) {
+                DPRINT << "TRISC: Entering MATMUL" << ENDL();
+            }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "TRISC(input): Entering MATMUL" << ENDL();
+            }
 #endif
             matmul(matmul_args);
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_argmax_final_core) {
                 DPRINT << "NCRISC: MATMUL complete" << ENDL();
+            }
+            if constexpr (Core::is_input_core) {
+                DPRINT << "NCRISC(input): MATMUL complete" << ENDL();
             }
 #endif
         }
@@ -421,4 +487,5 @@ void kernel_main() {
             break;
         }
     }
+    mcast.teardown();
 }
