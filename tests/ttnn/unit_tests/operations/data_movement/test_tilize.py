@@ -86,12 +86,18 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
-    "tensor_shape, shard_shape",
+    "tensor_shape, shard_shape, output_shard_shape",
     [
-        ([4, 128, 128], [2, 64, 64]),
-        ([3, 160, 160], [2, 64, 64]),
-        ([5, 4, 160, 160], [2, 3, 64, 96]),
-        ([23, 96, 160], [4, 64, 96]),  # Test with uneven sharding and cliff core
+        # output_shard_shape=None means reuse shard_shape for the output nd_shard_spec
+        ([4, 128, 128], [2, 64, 64], None),
+        ([3, 160, 160], [2, 64, 64], None),
+        ([5, 4, 160, 160], [2, 3, 64, 96], None),
+        ([23, 96, 160], [4, 64, 96], None),  # uneven input sharding with cliff cores
+        # Different output nd_shard_spec (last 2 dims tile-aligned for tilized output)
+        ([4, 128, 128], [2, 64, 64], [1, 64, 128]),
+        ([3, 160, 160], [2, 64, 64], [1, 64, 96]),  # uneven output: 160 % 96 != 0
+        ([5, 4, 160, 160], [2, 3, 64, 96], [3, 2, 96, 64]),  # uneven output: 5 % 3, 160 % 96, 160 % 64
+        ([23, 96, 160], [4, 64, 96], [6, 64, 64]),  # uneven output: 23 % 6, 160 % 64. With cliff cores
     ],
 )
 @pytest.mark.parametrize(
@@ -102,21 +108,37 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
 @pytest.mark.parametrize("output_is_nd_sharded", [True, False])
 @pytest.mark.parametrize("use_multicore", [True, False])
 def test_tilize_nd_sharded(
-    device, dtype, tensor_shape, shard_shape, shard_core_grid, input_is_nd_sharded, output_is_nd_sharded, use_multicore
+    device,
+    dtype,
+    tensor_shape,
+    shard_shape,
+    output_shard_shape,
+    shard_core_grid,
+    input_is_nd_sharded,
+    output_is_nd_sharded,
+    use_multicore,
 ):
+    if not output_is_nd_sharded and output_shard_shape is not None:
+        pytest.skip("output_shard_shape only applies when output is nd-sharded")
+
     torch.manual_seed(42)
 
-    nd_shard_spec = ttnn.NdShardSpec(
+    input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
     )
+    effective_output_shard_shape = output_shard_shape if output_shard_shape is not None else shard_shape
+    output_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=effective_output_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+
     if input_is_nd_sharded:
-        input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+        input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=input_nd_shard_spec)
         if not use_multicore:
             pytest.skip("Singlecore is not supported for sharded input")
     else:
         input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     if output_is_nd_sharded:
-        output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+        output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
     else:
         output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
