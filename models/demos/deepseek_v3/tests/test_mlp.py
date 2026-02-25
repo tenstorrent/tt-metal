@@ -183,7 +183,15 @@ def test_forward_pass(
 
     # Generate module configs and state
     weight_config = get_test_weight_config(
-        MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
+        MLPClass,
+        hf_config,
+        (state_dict,) * num_module_layers,
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_mlp",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
     model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)

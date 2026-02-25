@@ -30,7 +30,6 @@
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
