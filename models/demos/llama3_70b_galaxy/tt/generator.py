@@ -366,12 +366,17 @@ class Generator(WarmupForwardMixin):
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+            if sampled_tensor.dtype == torch.uint32:
+                sampled_tensor = sampled_tensor.to(torch.long)
             output_toks = sampled_tensor[empty_slots]
 
             if tt_log_probs is not None:
                 tt_lp = tt_log_probs
                 log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
-                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
+                lp_tensor = log_probs_torch[0, 0, 0, :]
+                if lp_tensor.dtype == torch.uint32:
+                    lp_tensor = lp_tensor.to(torch.long)
+                prefill_log_probs = lp_tensor[empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits

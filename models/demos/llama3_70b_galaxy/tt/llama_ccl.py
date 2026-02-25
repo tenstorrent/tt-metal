@@ -117,6 +117,27 @@ class TT_CCL:
                     self.persistent_buffers[seqlen] = {}
                     self.all_gather_buffers[seqlen] = {}
 
+            # Fused AG+MM semaphores and persistent buffers
+            self.use_fused_ag_mm_prefill = self.model_config.get("USE_FUSED_AG_MM_PREFILL", False)
+            self.fused_ag_mm_semaphores = None
+            self.fused_ag_mm_barrier = None
+            self.fused_ag_mm_persistent_buffers = {}
+            if self.use_fused_ag_mm_prefill:
+                self.fused_ag_mm_semaphores = [
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)
+                ]
+                self.fused_ag_mm_barrier = ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                hidden_dim_per_device = 3584 if not self.is_qwen else 3200
+                for seqlen in self.support_seqlens:
+                    self.fused_ag_mm_persistent_buffers[seqlen] = ttnn.as_tensor(
+                        torch.zeros((seqlen, hidden_dim_per_device)),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
+
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]

@@ -940,6 +940,30 @@ class TtModelArgs:
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
+            # Fused AllGather + MinimalMatmul for W2 in prefill
+            self.model_config["USE_FUSED_AG_MM_PREFILL"] = os.environ.get("USE_FUSED_AG_MM_PREFILL", "0") == "1"
+
+            def prefill_fused_ag_mm_w2_config(seq_len):
+                use_padded = os.environ.get("USE_PADDED_W2", "0") == "1"
+                if use_padded:
+                    grid_x = int(os.environ.get("FUSED_AG_MM_GRID_X", "7"))
+                    grid_y = int(os.environ.get("FUSED_AG_MM_GRID_Y", "8"))
+                    n_block = 10
+                else:
+                    grid_x = int(os.environ.get("FUSED_AG_MM_GRID_X", "4"))
+                    grid_y = int(os.environ.get("FUSED_AG_MM_GRID_Y", "8"))
+                    n_block = 8
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=n_block,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                )
+
+            self.model_config["PREFILL_FUSED_AG_MM_W2_CONFIG"] = prefill_fused_ag_mm_w2_config
+
             def w2_prg_config(seq_len):
                 if seq_len == 128:
                     return self.matmul_1d_config(128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=2)

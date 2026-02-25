@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -101,6 +102,24 @@ class TtLlamaMLP(LightweightModule):
         self.w3_interleaved = as_interleaved_tensor(
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
+
+        self.use_fused_ag_mm_prefill = model_config.get("USE_FUSED_AG_MM_PREFILL", False)
+        self.use_padded_w2 = self.use_fused_ag_mm_prefill and os.environ.get("USE_PADDED_W2", "0") == "1"
+
+        if self.use_padded_w2:
+            w2_torch = torch_weight("w2").unsqueeze(0).unsqueeze(0)  # (1, 1, K_full, N_full)
+            pad_per_device = 192  # 2240 - 2048 = 192 values = 6 tiles per device
+            total_pad = pad_per_device * args.cluster_shape[1]  # 192 * 4 = 768
+            w2_padded_torch = F.pad(w2_torch, (0, total_pad))
+            self.w2_padded = ttnn.as_tensor(
+                w2_padded_torch,
+                dtype=ttnn.bfloat8_b,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=w2_dim, mesh_shape=args.cluster_shape),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name("w2_padded_interleaved"),
+            )
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
@@ -286,29 +305,67 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-        w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
-        )
-        ttnn.deallocate(w2_in)
+        if self.use_fused_ag_mm_prefill and seq_len >= 4096 and batch_size == 1:
+            fused_ag_mm_config = self.model_config["PREFILL_FUSED_AG_MM_W2_CONFIG"](seq_len)
+            w2_weight = self.w2_padded if self.use_padded_w2 else self.w2_interleaved
+            import logging
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
-            w2_out = ttnn.linear(
-                w2_in_gathered,
-                self.w2_interleaved,
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"[FUSED AG+MM W2] seq_len={seq_len}, w2_in.shape={w2_in.shape}, "
+                f"w2_weight.shape={w2_weight.shape}, padded={self.use_padded_w2}, "
+                f"config={fused_ag_mm_config}, "
+                f"topology={self.model_config['CCL_TOPOLOGY']}, cluster_axis=1"
+            )
+            has_persistent = self.tt_ccl.fused_ag_mm_persistent_buffers.get(seq_len) is not None
+            logger.warning(f"[FUSED AG+MM W2] has_persistent_buffer={has_persistent}, num_links=1, num_workers=4")
+            logger.warning("[FUSED AG+MM W2] Calling all_gather_minimal_matmul_async...")
+            w2_out = ttnn.experimental.all_gather_minimal_matmul_async(
+                w2_in,
+                w2_weight,
+                config=fused_ag_mm_config,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
-                program_config=short_lens_pc_2,
+                multi_device_global_semaphore=self.tt_ccl.fused_ag_mm_semaphores,
+                persistent_output_buffer=self.tt_ccl.fused_ag_mm_persistent_buffers.get(seq_len),
+                barrier_semaphore=self.tt_ccl.fused_ag_mm_barrier
+                if not self.tt_ccl.fused_ag_mm_persistent_buffers.get(seq_len)
+                else None,
+                num_links=1,
+                topology=self.model_config["CCL_TOPOLOGY"],
+                cluster_axis=1,
+                force_transpose=True,
+                num_workers_per_link=4,
+                num_buffers_per_channel=48,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            logger.warning("[FUSED AG+MM W2] all_gather_minimal_matmul_async COMPLETED")
+            if self.use_padded_w2:
+                w2_out = ttnn.slice(w2_out, [0, 0, 0, 0], [1, 1, seq_len, 2048])
+                logger.warning(f"[FUSED AG+MM W2] Sliced output to {w2_out.shape}")
+            ttnn.deallocate(w2_in)
         else:
-            w2_out = ttnn.experimental.minimal_matmul(
-                input_tensor=w2_in_gathered,
-                weight_tensor=self.w2_interleaved,
-                config=minimal_pc_2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
             )
+            ttnn.deallocate(w2_in)
+
+            if seq_len < 4096 or batch_size > 1:
+                w2_out = ttnn.linear(
+                    w2_in_gathered,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=short_lens_pc_2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                w2_out = ttnn.experimental.minimal_matmul(
+                    input_tensor=w2_in_gathered,
+                    weight_tensor=self.w2_interleaved,
+                    config=minimal_pc_2,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
