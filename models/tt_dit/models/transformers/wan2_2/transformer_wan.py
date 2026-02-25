@@ -512,7 +512,7 @@ class WanTransformer3DModel(Module):
     def forward(
         self,
         spatial: torch.Tensor,
-        prompt: torch.Tensor,
+        prompt: ttnn.Tensor,
         timestep: torch.Tensor,
         y: torch.Tensor | None = None,
     ) -> torch.Tensor:
