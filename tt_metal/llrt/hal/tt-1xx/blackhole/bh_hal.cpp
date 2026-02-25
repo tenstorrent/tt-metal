@@ -421,6 +421,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
 
+    this->max_dram_banks_ = 8;
+    this->translated_pcie_core_ = {19, 24};
+
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
 }
