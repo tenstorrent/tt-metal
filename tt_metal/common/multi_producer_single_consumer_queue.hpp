@@ -7,7 +7,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <tt_stl/assert.hpp>
 
 template <typename T>
 class MultiProducerSingleConsumerQueue {

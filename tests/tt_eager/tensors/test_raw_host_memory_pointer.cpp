@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <functional>

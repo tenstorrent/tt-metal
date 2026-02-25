@@ -4,7 +4,6 @@
 
 #include "index_fill.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
 
 namespace ttnn::operations::index_fill {

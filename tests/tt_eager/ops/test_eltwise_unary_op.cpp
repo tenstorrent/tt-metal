@@ -4,7 +4,6 @@
 
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
 #include <numbers>

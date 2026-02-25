@@ -6,7 +6,6 @@
 #include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include "tt-metalium/buffer.hpp"
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;

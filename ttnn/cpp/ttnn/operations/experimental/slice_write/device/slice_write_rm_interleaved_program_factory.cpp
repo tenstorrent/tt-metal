@@ -5,7 +5,6 @@
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>

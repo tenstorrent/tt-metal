@@ -9,7 +9,6 @@
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt_stl/assert.hpp>
+#include <cassert>
 namespace tt::tt_metal {
 
 template <typename T>
@@ -14,7 +14,7 @@ bool is_power_of_two(T val) {
 
 template <typename T>
 bool is_power_of_two_at_least(T val, T power2) {
-    TT_ASSERT(is_power_of_two(power2));
+    assert(is_power_of_two(power2));
     return (val & (val - power2)) == T(0);
 }
 

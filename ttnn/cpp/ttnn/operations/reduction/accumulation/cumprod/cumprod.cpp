@@ -12,7 +12,6 @@
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>
 #include <utility>
 
-#include <tt_stl/assert.hpp>
 #include "cumprod.hpp"
 
 namespace ttnn {
