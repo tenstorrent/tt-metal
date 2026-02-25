@@ -212,8 +212,8 @@ int main() {
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Matrix dimensions — both must be divisible by the tile size (32).
-        constexpr uint32_t M = 640;
-        constexpr uint32_t N = 640;
+        constexpr uint32_t M = 5120;
+        constexpr uint32_t N = 5120;
 
         static_assert(M % TILE_HEIGHT == 0, "M must be divisible by TILE_HEIGHT (32)");
         static_assert(N % TILE_WIDTH == 0, "N must be divisible by TILE_WIDTH (32)");

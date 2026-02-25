@@ -1,2 +1,3 @@
 add_subdirectory(reduce_max_single_core)
 add_subdirectory(reduce_max_multi_core)
+add_subdirectory(reduce_max_mcast)
