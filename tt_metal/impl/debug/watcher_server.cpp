@@ -519,9 +519,6 @@ void WatcherServer::Impl::poll_watcher_data() {
 
     while (true) {
         std::unique_lock<std::mutex> lock(watch_mutex_);
-        if (stop_server_cv_.wait_for(lock, sleep_duration, [&] { return stop_server_.load(); })) {
-            break;
-        }
 
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
@@ -544,6 +541,10 @@ void WatcherServer::Impl::poll_watcher_data() {
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
         fflush(logfile_);
         dump_count_++;
+
+        if (stop_server_cv_.wait_for(lock, sleep_duration, [&] { return stop_server_.load(); })) {
+            break;
+        }
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
