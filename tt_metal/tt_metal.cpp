@@ -1659,9 +1659,9 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
             processors.size());
     } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
         TT_FATAL(
-            processors.size() % NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
+            processors.size() % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
             "Number of compute processors reserved per cluster must be a multiple of {}.",
-            NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+            QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
         TT_FATAL(
             processors.size() == num_processors_per_cluster,
             "Unable to reserve {} compute processors per cluster as only {} compute processors per cluster are "
@@ -1709,7 +1709,7 @@ KernelHandle CreateQuasarComputeKernel(
         "Requested number of Tensix engines per cluster must be between 1 and {} (inclusive)",
         QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER);
     const std::set<QuasarComputeProcessor> compute_processors = GetProcessorsPerClusterQuasar<QuasarComputeProcessor>(
-        program, core_ranges, config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        program, core_ranges, config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
     std::shared_ptr<Kernel> kernel =
         std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);

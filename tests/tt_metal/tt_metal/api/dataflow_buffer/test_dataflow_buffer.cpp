@@ -137,7 +137,7 @@ void run_single_dfb_program(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             logical_core,
-            ComputeConfig{.compile_args = producer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = producer_cta});
     }
 
     uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
@@ -162,17 +162,19 @@ void run_single_dfb_program(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
             logical_core,
-            ComputeConfig{.compile_args = consumer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = consumer_cta});
     }
 
     auto logical_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, dfb_config);
 
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, logical_dfb_id, producer_kernel, consumer_kernel);
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, logical_dfb_id, producer_kernel, consumer_kernel);
 
     auto dfb = program.impl().get_dataflow_buffer(logical_dfb_id);
 
     SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)dfb->config.producer_risc_mask});
-    SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
+    SetRuntimeArgs(
+        program, consumer_kernel, logical_core, {(uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
 
     execute_program_and_verify(
         mesh_device,
@@ -228,7 +230,7 @@ void run_in_dfb_out_dfb_program(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp",
         logical_core,
-        ComputeConfig{.compile_args = compute_cta});
+        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_cta});
 
     uint32_t num_entries_per_consumer = tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
     std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == ::experimental::AccessPattern::BLOCKED};

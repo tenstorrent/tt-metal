@@ -15,12 +15,12 @@
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
 #include "api/tt-metalium/experimental/host_api.hpp"
-#include "context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
-#include "program/program_impl.hpp"
+#include "impl/program/program_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
@@ -373,9 +373,8 @@ private:
 
 namespace experimental::quasar {
 
-static constexpr uint32_t NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
+static constexpr uint32_t QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
 
-// TODO: Add enum values for remaining Tensix engines once those are supported
 enum class QuasarComputeProcessor : uint8_t {
     NEO_0_COMPUTE_0 = 0,
     NEO_0_COMPUTE_1 = 1,
@@ -471,7 +470,8 @@ public:
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarComputeKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == compute_processors.size(),
+            config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE ==
+                compute_processors.size(),
             "Number of Tensix engines per cluster specified in config multiplied by the number of compute processors "
             "per Tensix engine must match number of compute cores per cluster that have been reserved");
         TT_FATAL(

@@ -5,6 +5,7 @@
 #include "hal_2xx_common.hpp"
 #include "rtoptions.hpp"
 #include <enchantum/enchantum.hpp>
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::hal_2xx {
 
@@ -141,7 +142,18 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
                 case HalProcessorClassType::DM: return fmt::format("dm{}", params.processor_id); break;
-                case HalProcessorClassType::COMPUTE: return fmt::format("trisc{}", params.processor_id);
+                case HalProcessorClassType::COMPUTE:
+                    return (
+                        params.is_fw ? fmt::format(
+                                           "trisc{}",
+                                           params.processor_id %
+                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE)
+                                     : fmt::format(
+                                           "neo{}_trisc{}",
+                                           params.processor_id /
+                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE,
+                                           params.processor_id %
+                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE));
             }
         case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
         case HalProgrammableCoreType::IDLE_ETH:
@@ -158,7 +170,8 @@ std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuil
     }
     if (params.core_type == HalProgrammableCoreType::TENSIX &&
         params.processor_class == HalProcessorClassType::COMPUTE) {
-        return fmt::format("trisc{}", params.processor_id % 4);
+        return fmt::format(
+            "trisc{}", params.processor_id % experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
     }
     return target_name(params);
 }
