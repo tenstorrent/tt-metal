@@ -126,18 +126,19 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
-    // Find all possible ASIC IDs that could be part of any valid mapping of a grouping to a physical system descriptor
-    // Returns vector of unordered_sets, where each set corresponds to one copy of the grouping
-    // Returns empty vector if no valid mapping exists
+    // Find all possible ASIC IDs that could be part of any valid mapping of groupings to a physical system descriptor
+    // Returns vector of unordered_sets, where each set corresponds to one mapped copy (no differentiation by grouping
+    // type) Returns empty vector if no valid mapping exists
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
-        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Find all possible ASIC IDs that could be part of any valid mapping of a grouping to a physical system descriptor
-    // Returns vector of unordered_sets, where each set corresponds to one copy of the grouping
-    // Returns empty vector if no valid mapping exists
-    // errors_out will be populated with detailed error messages if mapping fails
+    // Find all possible ASIC IDs that could be part of any valid mapping of groupings to a physical system descriptor
+    // Returns vector of unordered_sets, where each set corresponds to one mapped copy (no differentiation by grouping
+    // type) Returns empty vector if no valid mapping exists errors_out will be populated with detailed error messages
+    // if mapping fails
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
-        const GroupingInfo& grouping,
+        const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
@@ -217,12 +218,10 @@ private:
     static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
     // Internal validation helpers (used by static_validate)
-    static void uniquify_duplicate_names(proto::PhysicalGroupings& proto);
     static void validate_required_groupings(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_references(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
-    static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
 }  // namespace tt::tt_fabric

@@ -580,8 +580,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
     // ===== PHASE 1: Build flattened adjacency graphs for all mesh group infos =====
-    std::unordered_map<std::string, GroupingInfo> mesh_flat_groupings;  // Lookup map for flattened GroupingInfo by name
-    // Find MESH type groupings across all names
+    std::vector<GroupingInfo> mesh_flat_groupings;
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto mesh_it = type_map.find("MESH");
@@ -589,8 +588,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             found_mesh = true;
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
-                for (auto& meshe : meshes) {
-                    mesh_flat_groupings[mesh_group_info.name] = std::move(meshe);
+                for (auto& m : meshes) {
+                    mesh_flat_groupings.push_back(std::move(m));
                 }
             }
         }
@@ -610,20 +609,21 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
         // Group valid candidates by node difference (map is ordered by key ascending)
-        std::map<size_t, std::vector<std::string>> candidates_by_diff;
-        for (const auto& [name, grouping_info] : mesh_flat_groupings) {
+        std::map<size_t, std::vector<size_t>> candidates_by_diff;
+        for (size_t i = 0; i < mesh_flat_groupings.size(); ++i) {
+            const auto& grouping_info = mesh_flat_groupings[i];
             size_t n = grouping_info.adjacency_graph.get_nodes().size();
             if (n >= required_nodes) {
-                candidates_by_diff[n - required_nodes].push_back(name);
+                candidates_by_diff[n - required_nodes].push_back(i);
             }
         }
 
         // Process difference levels from closest to farthest; stop at first level with any match
-        std::vector<std::string> best_matches;
-        for (const auto& [node_diff, names] : candidates_by_diff) {
+        std::vector<size_t> best_matches;
+        for (const auto& [node_diff, indices] : candidates_by_diff) {
             (void)node_diff;
-            for (const std::string& name : names) {
-                const auto& grouping_info = mesh_flat_groupings.at(name);
+            for (size_t i : indices) {
+                const auto& grouping_info = mesh_flat_groupings[i];
                 // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
@@ -632,7 +632,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
-                    best_matches.push_back(name);
+                    best_matches.push_back(i);
                 }
             }
             if (!best_matches.empty()) {
@@ -640,19 +640,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
-        // Store all best matches (add all entries that are possible)
+        // Store all best matches
         if (best_matches.empty()) {
             // No match found - use the MGD grouping info itself
             result[instance_type][instance_name].push_back(mgd_grouping_info);
         } else {
-            for (const std::string& match_name : best_matches) {
-                // Look up the flattened GroupingInfo from lookup map (already contains flattened adjacency graphs)
-                auto lookup_it = mesh_flat_groupings.find(match_name);
-                if (lookup_it != mesh_flat_groupings.end()) {
-                    // Return the flattened GroupingInfo (not the original)
-                    const GroupingInfo& flattened_grouping = lookup_it->second;
-                    result[instance_type][instance_name].push_back(flattened_grouping);
-                }
+            for (size_t i : best_matches) {
+                result[instance_type][instance_name].push_back(mesh_flat_groupings[i]);
             }
         }
     }
@@ -794,6 +788,7 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
+// TODO: Opimize constraints for maximum usage
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -853,6 +848,87 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     }
 
     return results;
+}
+
+// Heterogeneous version: pack multiple different grouping types onto the physical graph.
+// Each grouping can have a different topology. ASICs are shared globally - no overlap between any mappings.
+// Returns map from each GroupingInfo to its vector of mapping results.
+// Uses the same constraint pattern as homogeneous: add forbidden constraints after each success.
+std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
+solve_for_many_groupings_to_psd_heterogeneous(
+    const std::vector<GroupingInfo>& groupings,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
+    // Per-grouping constraints, same pattern as homogeneous current_constraints
+    std::vector<MappingConstraints<uint32_t, AsicID>> current_constraints(groupings.size());
+
+    while (true) {
+        bool found_any = false;
+        bool overconstrained = false;
+        for (size_t i = 0; const auto& grouping : groupings) {
+            const AdjacencyGraph<uint32_t>& flat_mesh = grouping.adjacency_graph;
+
+            if (flat_mesh.get_nodes().empty()) {
+                ++i;
+                continue;
+            }
+
+            MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
+                grouping, physical_graph, physical_system_descriptor, current_constraints[i]);
+
+            if (!result.success) {
+                ++i;
+                continue;
+            }
+
+            results[i].push_back(result);
+            found_any = true;
+
+            // Add forbidden constraints after success (same as homogeneous)
+            std::set<AsicID> used_asic_ids;
+            for (const auto& [_, asic_id] : result.target_to_global) {
+                used_asic_ids.insert(asic_id);
+            }
+
+            bool all_constraints_added = true;
+            for (const auto& asic_id : used_asic_ids) {
+                // Add to ALL groupings' constraints - ASICs are shared globally
+                for (size_t j = 0; const auto& other_grouping : groupings) {
+                    if (other_grouping.adjacency_graph.get_nodes().empty()) {
+                        ++j;
+                        continue;
+                    }
+                    std::set<uint32_t> targets_j(
+                        other_grouping.adjacency_graph.get_nodes().begin(),
+                        other_grouping.adjacency_graph.get_nodes().end());
+                    if (!current_constraints[j].add_forbidden_constraint(targets_j, asic_id)) {
+                        all_constraints_added = false;
+                        break;
+                    }
+                    ++j;
+                }
+                if (!all_constraints_added) {
+                    break;
+                }
+            }
+
+            if (!all_constraints_added) {
+                overconstrained = true;  // Matches homogeneous: stop entirely
+                break;
+            }
+            ++i;
+        }
+        if (!found_any || overconstrained) {
+            break;
+        }
+    }
+
+    std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>> map_result;
+    for (size_t i = 0; i < groupings.size(); ++i) {
+        map_result.emplace(&groupings[i], std::move(results[i]));
+    }
+    return map_result;
 }
 }  // namespace tt::tt_fabric
 
@@ -932,48 +1008,48 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
 }
 
 std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
-    const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    const std::vector<GroupingInfo>& groupings,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     std::vector<std::string> errors;
-    return find_all_in_psd(grouping, physical_system_descriptor, errors);
+    return find_all_in_psd(groupings, physical_system_descriptor, errors);
 }
 
 // NOTE this only works on flattenable meshes right now
 std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
-    const GroupingInfo& grouping,
+    const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::vector<std::string>& errors_out) const {
     // Build physical adjacency map from PSD (empty map means include all ASICs)
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
-    // Convert to AdjacencyGraph
     AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
 
-    // Detect if its flattened or not, if it its not then flatten it
+    // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
-    if (!is_flattened(grouping)) {
-        flat_meshes = build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
-    } else {
-        flat_meshes.push_back(grouping);
+    for (const auto& grouping : groupings) {
+        auto flattened = is_flattened(grouping) ? std::vector<GroupingInfo>{grouping}
+                                                : build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
+        for (const auto& f : flattened) {
+            if (!f.adjacency_graph.get_nodes().empty()) {
+                flat_meshes.push_back(f);
+            }
+        }
     }
 
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
+    if (!flat_meshes.empty()) {
+        auto heterogeneous_results =
+            solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
 
-    // Try all flat meshes and collect all successful mappings
-    for (const auto& flat_mesh : flat_meshes) {
-        if (flat_mesh.adjacency_graph.get_nodes().empty()) {
-            continue;
-        }
-
-        // Try to fit multiple copies - returns a vector of MappingResult, one per copy
-        auto many_results = solve_for_many_groupings_to_psd(flat_mesh, physical_graph, physical_system_descriptor);
-
-        // Extract ASIC IDs from each result
-        for (const auto& result : many_results) {
-            if (result.success) {
-                std::unordered_set<tt::tt_metal::AsicID> asic_set;
-                for (const auto& [target_node, asic_id] : result.target_to_global) {
-                    asic_set.insert(asic_id);
+        for (const auto& [grouping_ptr, mapping_results] : heterogeneous_results) {
+            (void)grouping_ptr;
+            for (const auto& result : mapping_results) {
+                if (result.success) {
+                    std::unordered_set<tt::tt_metal::AsicID> asic_set;
+                    for (const auto& [target_node, asic_id] : result.target_to_global) {
+                        asic_set.insert(asic_id);
+                    }
+                    all_asic_id_sets.push_back(std::move(asic_set));
                 }
-                all_asic_id_sets.push_back(std::move(asic_set));
             }
         }
     }
@@ -981,29 +1057,11 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     // If no mappings found, populate errors
     if (all_asic_id_sets.empty()) {
         if (flat_meshes.empty()) {
-            // No flattened meshes were produced - grouping cannot be mapped to this PSD
             errors_out.push_back("No valid groupings found for PSD");
         } else {
-            // Check if there's an actual internal error (all meshes have empty graphs)
-            bool all_empty = true;
-            const GroupingInfo* last_non_empty_mesh = nullptr;
-            for (const auto& flat_mesh : flat_meshes) {
-                if (!flat_mesh.adjacency_graph.get_nodes().empty()) {
-                    all_empty = false;
-                    last_non_empty_mesh = &flat_mesh;
-                }
-            }
-
-            if (all_empty) {
-                errors_out.push_back("Internal error: grouping produced empty graph");
-            } else {
-                // Try to get error message from last attempted mesh with non-empty graph
-                // Use the last non-empty mesh if available, otherwise fall back to last mesh
-                const GroupingInfo& mesh_to_use =
-                    (last_non_empty_mesh != nullptr) ? *last_non_empty_mesh : flat_meshes.back();
-                auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
-                errors_out.push_back(build_pgd_mapping_failure_message(grouping.name, mesh_to_use, result));
-            }
+            const GroupingInfo& mesh_to_use = flat_meshes.back();
+            auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
+            errors_out.push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
         }
     }
 

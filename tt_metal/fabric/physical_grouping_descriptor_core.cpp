@@ -107,9 +107,6 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
 
     TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse PhysicalGroupingDescriptor textproto");
 
-    // Uniquify duplicate names before validation
-    uniquify_duplicate_names(temp_proto);
-
     // Validate the proto
     std::vector<std::string> all_errors = static_validate(temp_proto);
 
@@ -163,13 +160,11 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
     auto name_it = resolved_groupings_cache_.find(grouping_name);
     if (name_it != resolved_groupings_cache_.end()) {
         std::vector<GroupingInfo> result;
-        // Collect all groupings with this name (across all types)
         for (const auto& [type, groupings] : name_it->second) {
             result.insert(result.end(), groupings.begin(), groupings.end());
         }
         return result;
     }
-    // Fallback: return empty vector if not found in cache
     return {};
 }
 
@@ -232,61 +227,6 @@ std::string PhysicalGroupingDescriptor::get_validation_report(const std::vector<
     return report.str();
 }
 
-// Uniquify duplicate names in the proto by adding unique IDs
-void PhysicalGroupingDescriptor::uniquify_duplicate_names(proto::PhysicalGroupings& proto) {
-    std::unordered_map<std::string, uint32_t> name_counters;
-    std::unordered_set<std::string> used_names;
-
-    for (int i = 0; i < proto.groupings_size(); ++i) {
-        auto* grouping = proto.mutable_groupings(i);
-        std::string current_name = PhysicalGroupingDescriptor::get_grouping_name(*grouping);
-
-        if (current_name.empty()) {
-            continue;  // Skip if name is empty (will be caught by other validation)
-        }
-
-        // If this name is already used, uniquify it
-        if (used_names.contains(current_name)) {
-            // Generate unique name with ID suffix
-            uint32_t& counter = name_counters[current_name];
-            std::string unique_name;
-            do {
-                counter++;
-                unique_name = fmt::format("{}_{}", current_name, counter);
-            } while (used_names.contains(unique_name));
-
-            // Update the proto with the unique name
-            grouping->set_name(unique_name);
-            used_names.insert(unique_name);
-        } else {
-            // First occurrence, keep as is
-            used_names.insert(current_name);
-            name_counters[current_name] = 0;  // Initialize counter
-        }
-    }
-}
-
-// Validate that all grouping names are unique (should be true after uniquification)
-void PhysicalGroupingDescriptor::validate_unique_names(
-    const proto::PhysicalGroupings& proto, std::vector<std::string>& errors) {
-    std::unordered_set<std::string> names;
-
-    for (int i = 0; i < proto.groupings_size(); ++i) {
-        const auto& grouping = proto.groupings(i);
-        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
-
-        if (name.empty()) {
-            continue;  // Empty names are caught by other validation
-        }
-
-        if (names.contains(name)) {
-            errors.push_back(fmt::format(
-                "Grouping name '{}' appears multiple times (internal error: uniquification failed).", name));
-        }
-        names.insert(name);
-    }
-}
-
 std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto::PhysicalGroupings& proto) {
     std::vector<std::string> all_errors;
 
@@ -302,7 +242,6 @@ std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto
         validate_grouping_references(proto, all_errors);
         validate_counts(proto, all_errors);
         validate_grouping_structure(proto, all_errors);
-        validate_unique_names(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
