@@ -376,8 +376,10 @@ class Model:
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
-        # Skip TP all-gather when sampling is active — TTSampling handles its own all-gather
-        skip_gather = sampling_on_device or self._prefill_sampling_active
+        # Always skip TP all-gather here — all_gather_async writes to device,
+        # which is forbidden during trace capture.  The gather is done on the
+        # host in process_output_prefill / process_output_decode instead.
+        skip_gather = True
         self._prefill_sampling_active = False
         config = self.mesh_config.get_config(mode)
         if config.tp > 1 and not skip_gather:
@@ -481,18 +483,6 @@ class Model:
             batch_size=batch_size,
         )
 
-        return logits
-
-    def allgather_prefill_logits(self, logits):
-        """All-gather TP-sharded prefill logits outside of trace capture.
-
-        Called by the generator when the prefill trace was captured without
-        the TP all-gather (which is a device write, forbidden during trace)
-        and on-device sampling is not active for this call.
-        """
-        config = self.mesh_config.get_config("prefill")
-        if config.tp > 1:
-            logits = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1)
         return logits
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
@@ -736,13 +726,28 @@ class Model:
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Process decode output and convert to torch tensors"""
-        concat_out = self.concat_device_output(tt_out)
         if is_tokens or is_log_probs:
+            concat_out = self.concat_device_output(tt_out)
             # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
             return concat_out.reshape(-1)[:B]
 
-        torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
-        # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong
+        # Logits: host-side TP gather (all_gather_async is not used in forward
+        # because it writes to device, which is forbidden during trace capture).
+        config = self.mesh_config.get_config("decode")
+        if config.tp > 1:
+            device_tensors = ttnn.get_device_tensors(tt_out)
+            tp = config.tp
+            num_rows = len(device_tensors) // tp
+            # TP gather per row, then DP gather across rows
+            rows = []
+            for r in range(num_rows):
+                row_tensors = device_tensors[r * tp : (r + 1) * tp]
+                row_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
+                rows.append(row_out)
+            torch_out = torch.cat(rows, dim=-2) if num_rows > 1 else rows[0]
+        else:
+            torch_out = self.concat_device_output(tt_out)
+        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, vocab_size]
         return torch_out.view(B, S, -1)
 
     def concat_device_output(self, tt_out):
@@ -756,9 +761,19 @@ class Model:
             return ttnn.to_torch(tt_output_tensor)
 
     def process_output_prefill(self, tt_out, last_token_idx):
-        """Process prefill output and extract last token logits"""
-        tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        torch_output = ttnn.to_torch(tt_output_tensor)
+        """Process prefill output and extract last token logits.
+
+        TP all-gather is done here on the host rather than on-device so that
+        the prefill forward pass contains no all_gather_async calls (which
+        write to device and are forbidden during trace capture).
+        """
+        config = self.mesh_config.get_config("prefill")
+        if config.tp > 1:
+            device_tensors = ttnn.get_device_tensors(tt_out)
+            tp = config.tp
+            torch_output = torch.cat([ttnn.to_torch(device_tensors[i]) for i in range(tp)], dim=-1)
+        else:
+            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
 
