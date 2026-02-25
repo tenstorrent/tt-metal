@@ -7,7 +7,7 @@
 # Automatically resets the device after hangs, ensuring the next runner
 # always gets a clean device.
 #
-# Usage: .claude/scripts/tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]
+# Usage: tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Adds no-poll watcher (NoC sanitizer, waypoints without polling
@@ -28,7 +28,7 @@
 
 set -o pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH_TIMEOUT=5
 SAFETY_NET_TIMEOUT=300
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
@@ -66,7 +66,7 @@ TRIAGE_LOG="/tmp/tt-test-triage-dev${DEVICE_ID}.log"
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "TT_TEST_ERROR: No test path provided" >&2
-    echo "Usage: .claude/scripts/tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: tt-test.sh [--dev] [--device N] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 

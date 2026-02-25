@@ -96,7 +96,7 @@ Phase 5: Report        — summary markdown
 pytest tests/ttnn/unit_tests/operations/row_centralize/test_row_centralize.py -v
 
 # Run a specific stage test (with hang detection)
-.claude/scripts/tt-test.sh --dev tests/ttnn/unit_tests/operations/row_centralize/test_stage_data_pipeline.py
+./tt-test.sh --dev tests/ttnn/unit_tests/operations/row_centralize/test_stage_data_pipeline.py
 
 # Check TDD pipeline status
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path ttnn/ttnn/operations/row_centralize
