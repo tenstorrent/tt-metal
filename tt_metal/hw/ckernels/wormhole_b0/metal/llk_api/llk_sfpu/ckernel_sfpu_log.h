@@ -13,9 +13,6 @@ namespace sfpu {
 
 template <ckernel::ApproximationMode APPROX_MODE, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
-    static_assert(
-        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
-        "Only fast and precise approximation modes are supported");
     ///////////////////////////////////
     // "normalize to calculation range"
     ///////////////////////////////////

@@ -13,9 +13,6 @@ namespace sfpu {
 
 template <ckernel::ApproximationMode APPROX_MODE, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
-    static_assert(
-        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
-        "Only fast and precise approximation modes are supported");
     ///////////////////////////////////
     // "normalize to calculation range"
     ///////////////////////////////////
@@ -179,9 +176,6 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
 
 template <ckernel::ApproximationMode APPROX_MODE, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
-    static_assert(
-        APPROX_MODE == ApproximationMode::FastApproximate || APPROX_MODE == ApproximationMode::Precise,
-        "Only fast and precise approximation modes are supported");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
