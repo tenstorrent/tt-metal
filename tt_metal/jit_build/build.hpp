@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <stdint.h>
+#include <cstdint>
 #include <bitset>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
@@ -15,10 +15,16 @@
 
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
-#include "jit_device_config.hpp"
 #include <umd/device/types/arch.hpp>
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
 namespace tt::tt_metal {
+
+struct JitDeviceConfig;
+class Hal;
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
