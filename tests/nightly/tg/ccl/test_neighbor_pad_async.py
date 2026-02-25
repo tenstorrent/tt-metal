@@ -6,7 +6,7 @@
 import pytest
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_1d_impl
+from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_impl
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -114,7 +114,7 @@ def test_neighbor_pad_async_nightly(
         if skip_for_ci_env:
             pytest.skip("Skipping certain shapes in CI to reduce pipeline time")
 
-    run_neighbor_pad_1d_impl(
+    run_neighbor_pad_impl(
         mesh_device,
         input_shape=input_shape,
         halo_shard_dim=halo_shard_dim,
