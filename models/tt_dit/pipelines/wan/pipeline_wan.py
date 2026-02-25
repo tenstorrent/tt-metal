@@ -251,18 +251,19 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
-        self._prepare_text_encoder()
-        self._prepare_transformer1()
-        self._prepare_vae()
         if self.dynamic_load:
-            # setup models that cannot be loaded together with the corresponding models
+            # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
             self.transformer.set_unload_set(self.transformer_2)
             self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
-        else:
-            self._prepare_transformer2()
+
+        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
+        # Cache warmup: Load in reverse order of use to ensure the first models stay loaded before call.
+        self._prepare_transformer2()
+        self._prepare_transformer1()
+        self._prepare_text_encoder()
+        self._prepare_vae()
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
