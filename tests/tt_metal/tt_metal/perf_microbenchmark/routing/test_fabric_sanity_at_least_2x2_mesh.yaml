@@ -98,7 +98,7 @@ Tests:
       - type: full_ring
 
   - name: "FullRingUnicastDeadlockQuick"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -134,7 +134,7 @@ Tests:
       - type: half_ring
 
   - name: "MeshMulticast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -151,7 +151,7 @@ Tests:
       - type: all_to_all
 
   - name: "PacketSizesMeshMulticast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
       # more links caused rt args exceed 256
@@ -169,7 +169,7 @@ Tests:
       - type: all_to_all
 
   - name: "SingleSenderMeshUnicastAllDevices"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -186,7 +186,7 @@ Tests:
       - type: one_to_all
 
   - name: "PacketSizesMeshAllToOneRandomUnicast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -204,7 +204,7 @@ Tests:
 
 
   - name: "PacketSizesMeshAllToOneUnicast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
@@ -254,7 +254,7 @@ Tests:
       - type: full_ring
 
   - name: "FabricMuxFullRingMulticastDeadlockCheckQuick"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -274,7 +274,7 @@ Tests:
       - type: full_ring
 
   - name: "FabricMuxMeshMulticast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
       fabric_tensix_config: Mux
@@ -292,7 +292,7 @@ Tests:
       - type: all_to_all
 
   - name: "FlowControlAllToAllUnicastMesh"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     sync: true
     enable_flow_control: true
     fabric_setup:

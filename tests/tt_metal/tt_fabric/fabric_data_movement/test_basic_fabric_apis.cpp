@@ -1710,6 +1710,7 @@ TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDi
 
 // 2D Dynamic Routing Unicast Tests
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
+    // Code size gets bloated when run with watcher
     SKIP_FOR_WATCHER();
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DFixture::SetUp(

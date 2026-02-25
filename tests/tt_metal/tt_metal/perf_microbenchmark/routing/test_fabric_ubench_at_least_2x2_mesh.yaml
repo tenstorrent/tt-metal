@@ -126,7 +126,7 @@ Tests:
   ### RING BANDWIDTH TESTS ###
   # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
   - name: "FullRingMulticast"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -146,7 +146,7 @@ Tests:
         iterations: 3
 
   - name: "FullRingUnicast"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -166,7 +166,7 @@ Tests:
         iterations: 3
 
   - name: "HalfRingMulticast"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -187,7 +187,7 @@ Tests:
 
   ### RING LATENCY TESTS ###
   - name: "LatencyRingUnicast"
-    skip: [watcher]
+    skip: [watcher] # Watcher waits mess up ethernet communication
     latency_test_mode: true
     fabric_setup:
       topology: Ring
@@ -206,7 +206,7 @@ Tests:
 
   ### MESH BANDWIDTH TESTS ###
   - name: "MeshMulticast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -226,7 +226,7 @@ Tests:
         iterations: 3
 
   - name: "SingleSenderMeshUnicastAllDevices"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -247,7 +247,7 @@ Tests:
 
   ### MESH LATENCY TESTS ###
   - name: "LatencyMeshUnicast"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     latency_test_mode: true
     fabric_setup:
       topology: Mesh
@@ -372,7 +372,7 @@ Tests:
 
   ### CUSTOM MAX PACKET SIZE MESH BANDWIDTH TESTS ###
   - name: "CustomMaxPacketSizeMesh3K"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -393,7 +393,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh5K"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -414,7 +414,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh7K"
-    skip: [watcher]
+    skip: [watcher] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -435,7 +435,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh8K"
-    skip: [watcher, wormhole_b0]
+    skip: [watcher, wormhole_b0] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -456,7 +456,7 @@ Tests:
         iterations: 3
 
   - name: "CustomMaxPacketSizeMesh15K"
-    skip: [watcher, wormhole_b0]
+    skip: [watcher, wormhole_b0] # Code size gets bloated when run with watcher
     benchmark_mode: true
     sync: true
     fabric_setup:
