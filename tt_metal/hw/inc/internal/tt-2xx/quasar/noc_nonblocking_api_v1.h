@@ -11,26 +11,13 @@
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
 
-#if defined(COMPILE_FOR_BRISC)
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
-#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
-#elif defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_DM)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(COMPILE_FOR_DM);
 #elif defined(COMPILE_FOR_TRISC)
 // TRISC is not a data movement processor. This is just so it compiles
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
-#else
-// Lite Fabric compile
-constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.

@@ -14,23 +14,12 @@
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
 // #include "internal/tt-2xx/quasar/overlay/meta/registers/tt_rocc_accel_reg.h"
 
-#if defined(COMPILE_FOR_BRISC)
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
-#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
-#elif defined(COMPILE_FOR_DM)
+#if !defined(COMPILE_FOR_DM)
+#error "NOC API V2 requires COMPILE_FOR_DM (uses RoCC custom instructions)"
+#endif
+
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(COMPILE_FOR_DM);
-#else
-// Lite Fabric compile
-constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
-    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
-#endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
 #define NOC_0_X(noc_index, noc_size_x, x) x
