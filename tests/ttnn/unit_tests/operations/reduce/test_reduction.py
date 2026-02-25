@@ -660,3 +660,145 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("dim", [-1])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_argmax(device, batch_size, h, w, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.argmax(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.argmax(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor.to(torch_output_tensor.dtype))
+
+
+@pytest.mark.parametrize("shape", [[2, 3, 64]])
+@pytest.mark.parametrize("dim", [0, -1])
+def test_cumsum(device, shape, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randint(-2, 3, size=shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.cumsum(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("shape", [[2, 3, 64]])
+@pytest.mark.parametrize("dim", [0, -1])
+def test_cumprod(device, shape, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.cumprod(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.cumprod(input_tensor, dim=dim)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+def test_ema(device):
+    torch.manual_seed(0)
+
+    T, B, C = 128, 2, 64
+    alpha = 0.25
+
+    torch_input_tensor = torch.rand((1, B, C, T), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.ema(input_tensor, alpha=alpha)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden = torch.empty_like(torch_input_tensor)
+    prev = torch.zeros_like(torch_input_tensor[0, :, :, 0])
+    for t in range(T):
+        golden[0, :, :, t] = prev * alpha + (1 - alpha) * torch_input_tensor[0, :, :, t]
+        prev = golden[0, :, :, t]
+
+    assert_with_pcc(golden, output_tensor, pcc=0.999)
+
+
+def test_moe(device):
+    N, C, H, W = 1, 1, 32, 64
+    k = 32
+    E, e = 8, 2
+
+    torch_input = torch.randn([N, C, H, W], dtype=torch.bfloat16)
+    torch_input[:, :, :, E:] = 0
+
+    expert_mask = torch.zeros([N, C, 1, W], dtype=torch.bfloat16)
+    expert_mask[:, :, :, E:] = float("-inf")
+    torch_input = torch_input + expert_mask
+
+    topE_mask = torch.zeros([N, C, 1, k], dtype=torch.bfloat16)
+    topE_mask[:, :, :, e:] = float("-inf")
+
+    pyt_topk_values, pyt_topk_indices = torch.topk(torch_input, k, dim=-1)
+    torch_result = torch.sum(
+        (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
+        dim=-1,
+        keepdim=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_expert_mask = ttnn.from_torch(expert_mask, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_topE_mask = ttnn.from_torch(topE_mask, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
+    output_tensor = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_result, output_tensor, pcc=0.95)
+
+
+def test_sampling(device):
+    torch.manual_seed(42)
+
+    shape = (1, 1, 32, 64)
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    input_values = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_indices = ttnn.from_torch(
+        torch.arange(0, 64, dtype=torch.int32).expand(shape),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    k_tensor = ttnn.from_torch(torch.tensor([10] * 32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(
+        torch.tensor([0.9] * 32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    temp_tensor = ttnn.ones([32], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_1 = ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, seed=42)
+    output_2 = ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, seed=42)
+
+    out_1 = ttnn.to_torch(output_1)
+    out_2 = ttnn.to_torch(output_2)
+
+    assert torch.allclose(out_1.float(), out_2.float()), "Sampling should be deterministic with the same seed"
+
+
+def test_manual_seed(device):
+    ttnn.manual_seed(seeds=42, device=device)
+    ttnn.manual_seed(seeds=42, device=device, user_ids=7)
