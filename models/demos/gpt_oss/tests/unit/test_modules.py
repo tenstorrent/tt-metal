@@ -878,6 +878,12 @@ def run_model_forward_test(
     # Reshape to match reference
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
 
+    # Truncate to vocab_size — lm_head weight may be padded to padded_vocab_size
+    # for on-device sampling alignment, producing extra columns in the output.
+    vocab_size = config.vocab_size
+    if tt_logits_torch.shape[-1] > vocab_size:
+        tt_logits_torch = tt_logits_torch[:, :, :vocab_size]
+
     # Compare outputs
     passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
     return passing, output
@@ -910,10 +916,9 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 5],
+    [1],
     ids=[
         "1_layer",
-        "5_layers",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):

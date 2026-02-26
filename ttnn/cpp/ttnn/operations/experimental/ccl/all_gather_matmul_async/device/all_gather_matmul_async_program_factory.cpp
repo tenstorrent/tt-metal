@@ -9,7 +9,6 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include <unordered_map>
 #include <tt_stl/overloaded.hpp>
 

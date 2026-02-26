@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor, float_to_uint32
 
 
 class PreSDPA:
@@ -142,6 +142,20 @@ class PreSDPA:
         return full_q, new_kv, output
 
     @staticmethod
+    def get_num_semaphores(skip_ccl=False):
+        return 10 if skip_ccl else 13
+
+    @staticmethod
+    def create_semaphores(mesh_device, skip_ccl=False):
+        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+        return semaphores
+
+    @staticmethod
     def op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
@@ -180,11 +194,11 @@ class PreSDPA:
         Args:
             input_tensor_mesh: Input mesh tensor (must be sharded on single core per device)
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
-            gamma_tensor: Gamma/weight tensor (must be sharded, same shape as input)
-            matmul_weights_tensor: Matmul weights tensor (must be width sharded)
-            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
-            matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
-            matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
+            gamma_tensor: OverlappedTensor for attn_norm gamma (shares fused o_proj/gate/gamma buffer)
+            matmul_weights_tensor: OverlappedTensor for packed q_a_proj weights (shares fused buffer)
+            rmsnorm2_gamma_tensor: OverlappedTensor for q_norm gamma (shares fused o_proj/gate/gamma buffer)
+            matmul2_weights_tensor: OverlappedTensor for shuffled q_b_proj weights (shares fused buffer)
+            matmul3_weights_tensor: OverlappedTensor for kv_b1_proj weights (shares fused kv_b12 buffer)
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
@@ -215,11 +229,9 @@ class PreSDPA:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
-        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
-        matmul_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor)
-        rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
-        matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
-        matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
+        gamma_fused_tensors_per_device = ttnn.get_device_tensors(gamma_tensor.fused_tensor)
+        fused_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor.fused_tensor)
+        kv_b12_fused_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor.fused_tensor)
         qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
         qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
@@ -227,20 +239,24 @@ class PreSDPA:
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
         position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        dkv_matmul_weights_tensors_per_device = ttnn.get_device_tensors(dkv_matmul_weights_tensor)
-        dkv_rmsnorm_gamma_tensors_per_device = ttnn.get_device_tensors(dkv_rmsnorm_gamma_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+
+        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl)
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
         secondary_sync_sem_addr = 0
-        if not skip_ccl and semaphores is not None:
-            out_ready_semaphore = semaphores[0]
-            barrier_semaphore = semaphores[1]
-            secondary_sync_semaphore = semaphores[2]
+        semaphore_index = 0
+        if not skip_ccl:
+            out_ready_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            barrier_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            secondary_sync_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
@@ -293,14 +309,10 @@ class PreSDPA:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
 
-        # Matmul1 grid from weight shard spec (single packed weight tensor)
-        matmul_weights_sample = matmul_weights_tensors_per_device[0]
-        matmul_weights_memory_config = matmul_weights_sample.memory_config()
-        matmul_weights_core_grid = matmul_weights_memory_config.shard_spec.grid
+        # Matmul1 grid from OverlappedTensor metadata (single packed weight tensor)
+        matmul_weights_core_grid = matmul_weights_tensor.core_range_set
         if len(list(matmul_weights_core_grid.ranges())) != 1:
             raise ValueError("matmul weights core grid must be a single rectangular range for packed K-split")
-        if matmul_weights_memory_config.shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-            raise ValueError("matmul weights shard orientation must be ROW_MAJOR for packed K-split")
         matmul_bbox = matmul_weights_core_grid.bounding_box()
         matmul_grid_size = matmul_bbox.grid_size()
         matmul_num_cores = matmul_grid_size.x * matmul_grid_size.y
@@ -312,25 +324,19 @@ class PreSDPA:
             raise ValueError(f"matmul core grid must have 96 cores for this K-split path, got {matmul_num_cores}")
         matmul_half_num_cores = matmul_num_cores // 2
 
-        # Calculate per-core width in tiles for matmul1 (from shard spec)
-        matmul_weights_tile = matmul_weights_sample.get_tile()
-        matmul_weights_shard_shape = matmul_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for matmul1 (from OverlappedTensor)
+        matmul_weights_shard_shape = matmul_weights_tensor.shard_shape
         matmul_weights_shard_width = matmul_weights_shard_shape[1]  # Width dimension
-        matmul_out_w = matmul_weights_shard_width // matmul_weights_tile.tile_shape[1]  # Per-core width in tiles
+        matmul_out_w = matmul_weights_shard_width // matmul_weights_tensor.tile_shape[1]  # Per-core width in tiles
 
-        # Calculate per-core width in tiles for matmul2 (from shard spec)
-        matmul2_weights_sample = matmul2_weights_tensors_per_device[0]
-        matmul2_weights_memory_config = matmul2_weights_sample.memory_config()
-        matmul2_weights_core_grid = matmul2_weights_memory_config.shard_spec.grid
-        matmul2_weights_tile = matmul2_weights_sample.get_tile()
-        matmul2_weights_shard_shape = matmul2_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for matmul2 (from OverlappedTensor)
+        matmul2_weights_core_grid = matmul2_weights_tensor.core_range_set
+        matmul2_weights_shard_shape = matmul2_weights_tensor.shard_shape
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
-        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tile.tile_shape[1]  # Per-core width in tiles
+        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tensor.tile_shape[1]  # Per-core width in tiles
 
         # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
-        matmul3_weights_sample = matmul3_weights_tensors_per_device[0]
-        matmul3_weights_memory_config = matmul3_weights_sample.memory_config()
-        matmul3_weights_core_grid = matmul3_weights_memory_config.shard_spec.grid
+        matmul3_weights_core_grid = matmul3_weights_tensor.core_range_set
 
         # ========================================================================
         # Qnope/Qrope grid configuration (for interleaved Q head layout)
@@ -378,14 +384,7 @@ class PreSDPA:
             ]
         )
 
-        dkv_rmsnorm_grid = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 8),
-                    ttnn.CoreCoord(0, 8),
-                )
-            ]
-        )
+        dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor.core_range_set
 
         # Krope grid: columns 8-9, rows 8-9 (2 cores total)
         krope_grid = ttnn.CoreRangeSet(
@@ -437,17 +436,13 @@ class PreSDPA:
 
         # KV Cache Branch grid configuration
         # DKV Matmul (9x2)
-        dkv_matmul_weights_sample = dkv_matmul_weights_tensors_per_device[0]
-        dkv_matmul_weights_memory_config = dkv_matmul_weights_sample.memory_config()
-        dkv_matmul_weights_core_grid = dkv_matmul_weights_memory_config.shard_spec.grid
+        dkv_matmul_weights_core_grid = dkv_matmul_weights_tensor.core_range_set
 
-        # Calculate per-core width in tiles for matmul (from shard spec)
-        # Get shard width directly from shard_spec and divide by tile width from tensor
-        dkv_matmul_weights_tile = dkv_matmul_weights_sample.get_tile()
-        dkv_matmul_weights_shard_shape = dkv_matmul_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for dkv matmul (from overlapped tensor shard spec)
+        dkv_matmul_weights_shard_shape = dkv_matmul_weights_tensor.shard_shape
         dkv_matmul_weights_shard_width = dkv_matmul_weights_shard_shape[1]  # Width dimension
         dkv_matmul_out_w = (
-            dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
+            dkv_matmul_weights_shard_width // dkv_matmul_weights_tensor.tile_shape[1]
         )  # Per-core width in tiles
 
         # ========================================================================
@@ -476,32 +471,41 @@ class PreSDPA:
         mcast_is_part_of_receiver_grid = main_grid.contains(rmsnorm_core_grid)
 
         # Semaphore IDs for mcast synchronization
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
+        mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mcast_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
+        gather_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        gather_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
         # Gather-reduce for matmul path reuses gather semaphore IDs
-        gather_reduce_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
-        gather_reduce_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
+        gather_reduce_noc0_receiver_semaphore_addr = gather_noc0_receiver_semaphore_addr
+        gather_reduce_noc1_receiver_semaphore_addr = gather_noc1_receiver_semaphore_addr
 
         # CreateQHeads 3-phase semaphore IDs (reuse existing IDs, safe since prior ops have completed)
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
-        nope_phase1_semaphore_id = gather_noc0_receiver_semaphore_id  # ID 2
-        nope_phase2_semaphore_id = gather_noc1_receiver_semaphore_id  # ID 3
-        rope_semaphore_id = mcast_data_sender_semaphore_id  # ID 0 (mcast completed before CreateQHeads)
+        nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
+        nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
+        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
 
         # Semaphore IDs for MLA
-        mla_reducer_semaphore_id = 4
-        mla_output_semaphore_id = 5
-        mla_mcast_semaphore_id = 6
-        mla_ncrisc_brisc_sync_semaphore_id = 7
-        mla_receiver_ready_semaphore_id = 8
-        mla_q_input_mcast_semaphore_id = 9
-        mla_kv_cache_cur_pos_ready_semaphore_id = 10
+        mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_ncrisc_brisc_sync_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_receiver_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_q_input_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_kv_cache_cur_pos_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -621,8 +625,8 @@ class PreSDPA:
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
             ("mcast_num_cores", mcast_num_cores),
-            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
             ("mcast_src_cb", rmsnorm_output_cb),
             ("mcast_dst_cb", matmul_input_cb),
@@ -632,7 +636,7 @@ class PreSDPA:
 
         # Mcast receiver compile-time args (named args for NCRISC)
         mcast_receiver_named_compile_time_args = [
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
         ]
@@ -702,11 +706,9 @@ class PreSDPA:
         # Output: [1, 512] = 16 tiles of 1x32 per core
         # ========================================================================
         matmul3_num_tiles_k = 4  # 128 / 32 = 4 tiles (input width)
-        matmul3_weights_memory_config = matmul3_weights_sample.memory_config()
-        matmul3_weights_tile = matmul3_weights_sample.get_tile()
-        matmul3_weights_shard_shape = matmul3_weights_memory_config.shard_spec.shape
+        matmul3_weights_shard_shape = matmul3_weights_tensor.shard_shape
         matmul3_weights_shard_width = matmul3_weights_shard_shape[1]  # Width dimension (512)
-        matmul3_out_w = matmul3_weights_shard_width // matmul3_weights_tile.tile_shape[1]  # 512/32 = 16 tiles
+        matmul3_out_w = matmul3_weights_shard_width // matmul3_weights_tensor.tile_shape[1]  # 512/32 = 16 tiles
 
         # Matmul3 compile-time args (only on Qnope cores)
         # NCRISC: in1, num_tiles
@@ -810,9 +812,9 @@ class PreSDPA:
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
             # 3 semaphores for race-free synchronization
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
             ("cqh_qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
             ("cqh_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
@@ -825,9 +827,9 @@ class PreSDPA:
         # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
         # Prefixed with "cqh_" to avoid name collisions with other BRISC args
         create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
@@ -900,7 +902,7 @@ class PreSDPA:
             ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
             ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
             ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
-            ("gather_reduce_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
+            ("gather_reduce_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("gather_reduce_grid_start_x", matmul_bbox.start.x),
@@ -919,8 +921,8 @@ class PreSDPA:
         gather_reduce_receiver_named_compile_time_args = [
             ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
             ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
-            ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
-            ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
+            ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
             ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
@@ -975,8 +977,7 @@ class PreSDPA:
         # KV Cache Branch: Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
         # ========================================================================
-        dkv_rmsnorm_gamma_sample = dkv_rmsnorm_gamma_tensors_per_device[0]
-        dkv_gather_receiver_core = dkv_rmsnorm_gamma_sample.memory_config().shard_spec.grid.ranges()[0].start
+        dkv_gather_receiver_core = dkv_rmsnorm_gamma_tensor.core_range_set.ranges()[0].start
         dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_grid)
 
         # Get NOC coordinates for gather destination (receiver core)
@@ -1008,7 +1009,7 @@ class PreSDPA:
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
             ("dkv_gather_dest_noc_y", dkv_gather_dest_noc_core.y),
             ("dkv_gather_data_size_bytes", dkv_gather_data_size_bytes),
-            ("dkv_gather_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
+            ("dkv_gather_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_src_cb", dkv_matmul_output_cb),  # Source CB for gather (dkv matmul output)
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", dkv_gather_sender_grid_start_x),
@@ -1026,8 +1027,8 @@ class PreSDPA:
         dkv_gather_receiver_named_compile_time_args = [
             ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
             ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
-            ("dkv_gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
-            ("dkv_gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
+            ("dkv_gather_noc0_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
+            ("dkv_gather_noc1_receiver_semaphore_addr", gather_noc1_receiver_semaphore_addr),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
             ("dkv_gather_dst_num_pages", dkv_gather_src_num_pages),
         ]
@@ -1074,7 +1075,7 @@ class PreSDPA:
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
-            ("kv_cache_cur_pos_ready_semaphore_id", mla_kv_cache_cur_pos_ready_semaphore_id),
+            ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1195,19 +1196,19 @@ class PreSDPA:
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
-            ("mla_reducer_semaphore_id", mla_reducer_semaphore_id),
+            ("mla_reducer_semaphore_addr", mla_reducer_semaphore_addr),
             ("k_chunk_size", k_chunk_size),
             ("q_tile_height", Q_TILE_HEIGHT),
             ("DHt", DHt),
             ("num_mcast_dests", num_mcast_dests),
-            ("mla_mcast_semaphore_id", mla_mcast_semaphore_id),
-            ("mla_q_input_mcast_semaphore_id", mla_q_input_mcast_semaphore_id),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
+            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
             ("k_num_pages", k_num_pages),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
-            ("mla_receiver_ready_semaphore_id", mla_receiver_ready_semaphore_id),
-            ("mla_ncrisc_brisc_sync_semaphore_id", mla_ncrisc_brisc_sync_semaphore_id),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_k_in_cb", mla_k_in_cb),
             ("mla_out_in_cb", mla_out_in_cb),
             ("mla_ms_in_cb", mla_ms_in_cb),
@@ -1221,7 +1222,7 @@ class PreSDPA:
             ("num_cores_per_head", num_cores_per_head),
             ("k_chunk_size", k_chunk_size),
             ("num_mcast_dests", num_mcast_dests),
-            ("mla_mcast_semaphore_id", mla_mcast_semaphore_id),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
             ("q_chunk_size_bytes", q_chunk_size_bytes),
@@ -1230,10 +1231,10 @@ class PreSDPA:
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
-            ("mla_q_input_mcast_semaphore_id", mla_q_input_mcast_semaphore_id),
-            ("mla_ncrisc_brisc_sync_semaphore_id", mla_ncrisc_brisc_sync_semaphore_id),
-            ("mla_receiver_ready_semaphore_id", mla_receiver_ready_semaphore_id),
-            ("mla_kv_cache_cur_pos_ready_semaphore_id", mla_kv_cache_cur_pos_ready_semaphore_id),
+            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
             ("mla_q_in_cb", mla_q_in_cb),
             ("mla_compute_in_cb", mla_compute_in_cb),
@@ -1299,17 +1300,13 @@ class PreSDPA:
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
-                gamma_tensor_device = gamma_tensors_per_device[device_idx]
-                matmul_weights_tensor_device = matmul_weights_tensors_per_device[device_idx]
-                rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
-                matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
-                matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
+                gamma_fused_tensor_device = gamma_fused_tensors_per_device[device_idx]
+                fused_weights_tensor_device = fused_weights_tensors_per_device[device_idx]
+                kv_b12_fused_tensor_device = kv_b12_fused_tensors_per_device[device_idx]
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 trans_mat_tensor_device = trans_mat_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                dkv_matmul_weights_tensor_device = dkv_matmul_weights_tensors_per_device[device_idx]
-                dkv_rmsnorm_gamma_tensor_device = dkv_rmsnorm_gamma_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
                 position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
@@ -1390,17 +1387,17 @@ class PreSDPA:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: Gamma (created from sharded tensor)
-                gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
-                # Update the tile descriptor in the format descriptor
+                # CB: Gamma (backed by fused overlapped tensor)
+                gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    gamma_cb, gamma_tensor, gamma_fused_tensor_device
+                )
                 gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: RMSNorm2 Gamma (created from sharded tensor, 3 tiles of 16x32)
-                rmsnorm2_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor_device
+                # CB: RMSNorm2 Gamma (backed by fused overlapped tensor)
+                rmsnorm2_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor, gamma_fused_tensor_device
                 )
-                # Update the tile descriptor in the format descriptor to match rmsnorm2 tile shape
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
@@ -1427,9 +1424,9 @@ class PreSDPA:
                     )
                 ]
 
-                # CB: Matmul weights (created from sharded tensor)
-                matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul_weights_cb, matmul_weights_tensor_device
+                # CB: Matmul weights (backed by fused overlapped tensor)
+                matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul_weights_cb, matmul_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
@@ -1558,9 +1555,9 @@ class PreSDPA:
                 ]
                 sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
 
-                # CB: Matmul2 weights (created from sharded tensor, 4 tiles per core)
-                matmul2_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul2_weights_cb, matmul2_weights_tensor_device
+                # CB: Matmul2 weights (backed by fused overlapped tensor)
+                matmul2_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul2_weights_cb, matmul2_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB 12: Matmul2 output buffer — overlap with sdpa_out_interm L1 buffer
@@ -1582,9 +1579,9 @@ class PreSDPA:
                 ]
                 sdpa_out_interm_running_offset += matmul2_output_cb_descriptor.total_size  # +256 B
 
-                # CB 13: Matmul3 weights (created from sharded tensor on Qnope grid)
-                matmul3_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul3_weights_cb, matmul3_weights_tensor_device
+                # CB 13: Matmul3 weights (backed by fused kv_b12 overlapped tensor)
+                matmul3_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul3_weights_cb, matmul3_weights_tensor, kv_b12_fused_tensor_device
                 )
 
                 # CB 14: Matmul3 output buffer — overlap with sdpa_out_interm L1 buffer
@@ -1761,9 +1758,9 @@ class PreSDPA:
                     ],
                 )
 
-                # CB: DKV Matmul weights buffer
-                dkv_matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor_device
+                # CB: DKV Matmul weights buffer (backed by fused overlapped tensor)
+                dkv_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
@@ -1806,9 +1803,9 @@ class PreSDPA:
                 ]
                 sdpa_out_interm_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
 
-                # CB: KV RMSNorm gamma buffer
-                kv_rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor_device
+                # CB: KV RMSNorm gamma buffer (backed by fused overlapped tensor)
+                kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor, gamma_fused_tensor_device
                 )
                 kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
                 kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
@@ -2019,76 +2016,6 @@ class PreSDPA:
                     ("mcast2_dst_num_pages", mcast2_dst_num_pages),
                 ]
 
-                # ========================================================================
-                # Semaphore descriptors
-                # ========================================================================
-
-                # Mcast semaphores (ID 0 and 1)
-                mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_sender_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                # Gather semaphores (ID 2 and 3 - two semaphores for NOC0 and NOC1, but only NOC0 is used)
-                gather_noc0_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc0_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                gather_noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc1_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_reducer_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_reducer_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_output_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_output_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
-                mla_mcast_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_mcast_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                mla_ncrisc_brisc_sync_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_ncrisc_brisc_sync_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                mla_receiver_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_receiver_ready_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                # Dedicated for sdpa input cores to sync on q heads arrival
-                mla_q_input_mcast_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_q_input_mcast_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-                # Dedicated for sdpa input cores to sync on KV cache cur pos arrival
-                mla_kv_cache_cur_pos_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mla_kv_cache_cur_pos_ready_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
-
                 k_addr = kv_cache_tensor_device.buffer_address()
 
                 # Setup MLA per core runtime args
@@ -2199,7 +2126,7 @@ class PreSDPA:
                 # ================================================================
                 if skip_ccl:
                     # Single-device mode: empty broadcast args
-                    ncrisc_bcast_common_args = [0] * 14
+                    ncrisc_bcast_common_args = [0] * 13
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -2242,7 +2169,6 @@ class PreSDPA:
                         ring_index,
                         int(secondary_sync_sem_addr),
                         num_connections,
-                        len(mla_brisc_per_core_args),
                     ]
 
                 # RoPE DRAM address args (per-device)
@@ -2494,19 +2420,7 @@ class PreSDPA:
                 program = ttnn.ProgramDescriptor(
                     kernels=unified_kernel.get_kernel_descriptors().kernels,
                     cbs=cbs_list,
-                    semaphores=[
-                        mcast_sender_semaphore_descriptor,  # ID 0
-                        mcast_receiver_semaphore_descriptor,  # ID 1
-                        gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by create_q_heads)
-                        gather_noc1_receiver_semaphore_descriptor,  # ID 3
-                        mla_reducer_semaphore_descriptor,  # ID 4
-                        mla_output_semaphore_descriptor,  # ID 5
-                        mla_mcast_semaphore_descriptor,  # ID 6
-                        mla_ncrisc_brisc_sync_semaphore_descriptor,  # ID 7
-                        mla_receiver_ready_semaphore_descriptor,  # ID 8
-                        mla_q_input_mcast_semaphore_descriptor,  # ID 9
-                        mla_kv_cache_cur_pos_ready_semaphore_descriptor,  # ID 10
-                    ],
+                    semaphores=[],
                 )
 
                 # Append fabric connection args to BRISC kernel if needed (CCL mode only)
@@ -2534,19 +2448,15 @@ class PreSDPA:
             [
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
-                gamma_tensor,
-                matmul_weights_tensor,
-                rmsnorm2_gamma_tensor,
-                matmul2_weights_tensor,
-                matmul3_weights_tensor,
+                gamma_tensor.fused_tensor,
+                matmul_weights_tensor.fused_tensor,
+                matmul3_weights_tensor.fused_tensor,
                 trans_mat_tensor,
                 qrope_cos_tensor,
                 qrope_sin_tensor,
                 krope_cos_tensor,
                 krope_sin_tensor,
                 position_ids_tensor,
-                dkv_matmul_weights_tensor,
-                dkv_rmsnorm_gamma_tensor,
                 kv_cache_tensor,
                 sdpa_kv_cache_buffer,
                 sdpa_out_interm_buffer,
