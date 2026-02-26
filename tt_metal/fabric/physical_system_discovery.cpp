@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/fabric/physical_system_discovery.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 #include <unistd.h>
 #include <limits.h>
@@ -499,11 +500,11 @@ PhysicalSystemDescriptor run_local_discovery(
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
 
-    // When hostnames aren't unique, use modified hostname (hostname_rank) as key
-    // to ensure each rank gets its own entry in asic_connectivity_graph
-    // This ensures get_all_hostnames() returns one entry per rank
-    // We'll check uniqueness later and adjust if needed
-    auto hostname_key = hostname;  // Will be updated after uniqueness check if needed
+    // When multiple ranks exist, use hostname_rank as key to ensure each rank gets its own
+    // entry during merge (avoids overwriting when all ranks share the same hostname, e.g. mock).
+    // This ensures get_all_hostnames() returns one entry per rank and host_connectivity_graph
+    // is populated with the correct keys.
+    auto hostname_key = (*(distributed_context->size()) > 1) ? (hostname + "_" + std::to_string(my_rank)) : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
     psd.get_host_mobo_name_map()[hostname_key] = get_mobo_name();
@@ -517,10 +518,10 @@ PhysicalSystemDescriptor run_local_discovery(
             cluster,
             src_chip_id,
             target_device_type != TargetDevice::Silicon,
-            psd.get_pcie_devices_per_tray()[hostname],
-            psd.get_pcie_id_to_asic_location()[hostname]);
+            psd.get_pcie_devices_per_tray()[hostname_key],
+            psd.get_pcie_id_to_asic_location()[hostname_key]);
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
-            TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname};
+            TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname_key};
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
@@ -575,13 +576,12 @@ PhysicalSystemDescriptor run_local_discovery(
         }
     }
 
-    psd.get_system_graph().host_connectivity_graph[hostname] = {};
+    psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
     psd.get_ethernet_firmware_version() = cluster.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 
-    // Set local_hostname_ and local_rank_ for my_host_name() (friend access)
-    psd.local_hostname_ = hostname;
-    psd.local_rank_ = my_rank;
+    // Set local_hostname_ and local_rank_ for my_host_name() using setter method
+    psd.set_discovery_data(hostname, my_rank, true);
 
     return psd;
 }
@@ -604,11 +604,9 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
-    psd.local_hostname_ = hostname;
-    psd.local_rank_ = my_rank;
-
-    // Set all_hostnames_unique_ via friend access
-    psd.all_hostnames_unique_ = resolve_hostname_uniqueness(psd, distributed_context);
+    // Set all discovery data including hostname uniqueness
+    bool all_hostnames_unique = resolve_hostname_uniqueness(psd, distributed_context);
+    psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
@@ -621,37 +619,9 @@ PhysicalSystemDescriptor run_physical_system_discovery(
             generate_cross_host_connections(psd);
             validate_graphs(psd);
 
-            // If hostnames aren't unique, rename hostname keys to hostname_rank
-            // to ensure each rank has its own entry in asic_connectivity_graph
-            // This ensures get_all_hostnames() returns one entry per rank
-            if (!psd.all_hostnames_unique_) {
-                // Create a new graph with modified hostname keys
-                using AsicTopology = std::unordered_map<AsicID, std::vector<AsicConnectionEdge>>;
-                std::unordered_map<std::string, AsicTopology> new_asic_graph;
-                std::unordered_map<std::string, std::vector<ExitNodeConnection>> new_exit_nodes;
-
-                for (const auto& [host, rank] : psd.get_host_to_rank_map()) {
-                    auto modified_hostname = host + "_" + std::to_string(rank);
-                    if (psd.get_system_graph().asic_connectivity_graph.contains(host)) {
-                        new_asic_graph[modified_hostname] =
-                            std::move(psd.get_system_graph().asic_connectivity_graph[host]);
-                    }
-                    if (psd.get_exit_node_connection_table().contains(host)) {
-                        new_exit_nodes[modified_hostname] = std::move(psd.get_exit_node_connection_table()[host]);
-                    }
-                }
-
-                psd.get_system_graph().asic_connectivity_graph = std::move(new_asic_graph);
-                psd.get_exit_node_connection_table() = std::move(new_exit_nodes);
-
-                // Update ASIC descriptors to use modified hostnames
-                for (auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-                    auto rank_it = psd.get_host_to_rank_map().find(desc.host_name);
-                    if (rank_it != psd.get_host_to_rank_map().end()) {
-                        desc.host_name = desc.host_name + "_" + std::to_string(rank_it->second);
-                    }
-                }
-            }
+            // With multi-rank (size > 1), run_local_discovery uses hostname_rank keys from the start,
+            // so asic_connectivity_graph, exit_node_connection_table, and host_connectivity_graph
+            // already have the correct keys. No rename needed.
         }
         exchange_metadata(psd, distributed_context, false);
     }

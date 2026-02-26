@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>

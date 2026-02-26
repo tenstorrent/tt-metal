@@ -7,7 +7,7 @@
 #include <set>
 #include <fstream>
 
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <unistd.h>
 #include <limits.h>
@@ -62,6 +62,13 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto
 
 PhysicalSystemDescriptor::~PhysicalSystemDescriptor() = default;
 
+void PhysicalSystemDescriptor::set_discovery_data(
+    const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique) {
+    local_hostname_ = local_hostname;
+    local_rank_ = local_rank;
+    all_hostnames_unique_ = all_hostnames_unique;
+}
+
 void PhysicalSystemDescriptor::clear() {
     // Erase all contents in all data structures
     system_graph_.asic_connectivity_graph.clear();
@@ -102,6 +109,14 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     }
     for (auto& [host_name, pcie_map] : other.get_pcie_id_to_asic_location()) {
         pcie_id_to_asic_location_[host_name] = std::move(pcie_map);
+    }
+
+    // Preserve discovery identity (local_hostname_, local_rank_, all_hostnames_unique_) from source
+    // so my_host_name() returns the correct hostname_rank after clear()+merge() re-discovery flow
+    if (!other.local_hostname_.empty()) {
+        local_hostname_ = std::move(other.local_hostname_);
+        local_rank_ = other.local_rank_;
+        all_hostnames_unique_ = other.all_hostnames_unique_;
     }
 
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported

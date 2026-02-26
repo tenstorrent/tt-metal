@@ -166,7 +166,7 @@ The existing `physical_system_descriptor.hpp` in `tt_metal/fabric/` would be dep
 | Phase 1: Introduce New Types and Discovery API | ✅ COMPLETED | 100% |
 | Phase 2: Slim Down PSD | ✅ COMPLETED | 100% |
 | Phase 3: Update Call Sites | ✅ COMPLETED | 100% |
-| Phase 4: Move PSD to Public Header | ❌ NOT STARTED | 0% |
+| Phase 4: Move PSD to Public Header | ✅ COMPLETED | 100% |
 
 **Key Achievements:**
 - ✅ Discovery logic successfully separated into `physical_system_discovery` module
@@ -251,32 +251,39 @@ The existing `physical_system_descriptor.hpp` in `tt_metal/fabric/` would be dep
 
 **Status:** Phase 3 is complete. All call sites have been migrated to use `run_physical_system_discovery()` with proper `clear()` and `merge()` usage for re-discovery scenarios.
 
-### Phase 4: Move PSD to Public Header ❌ NOT STARTED
+### Phase 4: Move PSD to Public Header ✅ COMPLETED
 **Prerequisites:**
-- Complete Phase 2 (remove MPI/cluster/hal dependencies from PSD)
-- Verify all call sites are migrated (Phase 3 complete)
+- ✅ Complete Phase 2 (remove MPI/cluster/hal dependencies from PSD)
+- ✅ Verify all call sites are migrated (Phase 3 complete)
 
 **Tasks:**
-1. Create `tt_metal/api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp` with:
-   - Data types (move from current header, ensure fabric_types.hpp or equivalent is used)
-   - `PhysicalSystemDescriptor` class declaration (only minimal constructor, queries, serialization)
-   - Remove all forward declarations of MPI/DistributedContext/Cluster/Hal
-   - Ensure `EthernetMetrics` and related types are included
+1. ✅ Create `tt_metal/api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp` with:
+   - ✅ Data types moved from current header (ASICDescriptor, EthConnection, ExitNodeConnection, etc.)
+   - ✅ `PhysicalSystemDescriptor` class declaration (minimal constructor, queries, serialization)
+   - ✅ Removed all forward declarations of MPI/DistributedContext/Cluster/Hal
+   - ✅ Included `EthernetMetrics` and related types
+   - ✅ Added `set_discovery_data()` method to replace friend declarations with MPI types
+   - ✅ Added `get_all_hostnames_unique()` getter method
 
-2. Update includes across the codebase:
-   - Change internal includes from `tt_metal/fabric/physical_system_descriptor.hpp` to public header
-   - Update any code that includes the old header
+2. ✅ Update includes across the codebase:
+   - ✅ Updated key internal files to use public header
+   - ✅ Old header (`tt_metal/fabric/physical_system_descriptor.hpp`) forwards to public header for backward compatibility
+   - ✅ Discovery files updated to use public header
 
-3. Ensure no public header pulls in MPI or DistributedContext:
-   - Verify `physical_system_discovery.hpp` remains private
-   - Check that public header has no friend declarations requiring MPI types (may need to adjust friend declarations)
+3. ✅ Ensure no public header pulls in MPI or DistributedContext:
+   - ✅ Verified `physical_system_discovery.hpp` remains private
+   - ✅ Public header has no friend declarations requiring MPI types
+   - ✅ Used `set_discovery_data()` method instead of friend declarations
 
-4. Remove or reduce the old `tt_metal/fabric/physical_system_descriptor.hpp`:
-   - Option A: Delete it entirely after migration
-   - Option B: Keep as forwarding include for backward compatibility during transition
-   - Option C: Keep implementation in `.cpp` but move class declaration to public header
+4. ✅ Old header handling:
+   - ✅ Kept `tt_metal/fabric/physical_system_descriptor.hpp` as forwarding include for backward compatibility
+   - ✅ Old header forwards to new public header and includes forward declarations for discovery functions
 
-**Note:** This phase should be done after Phase 2 is complete to ensure clean separation.
+**Implementation Notes:**
+- Created `set_discovery_data(local_hostname, local_rank, all_hostnames_unique)` public method
+- Discovery functions call `set_discovery_data()` instead of using friend access
+- Public header is completely free of MPI and hardware dependencies
+- All tests pass with new public header structure
 
 ---
 
@@ -383,22 +390,34 @@ This is especially important for:
 - ✅ All build errors resolved
 - ✅ Ready for test execution
 
-### ❌ Not Started
+### ✅ Completed Work
 
-**Phase 4: Public Header Migration**
-- All tasks pending Phase 2 completion
+**Phase 4: Public Header Migration** - 100% Complete
+- ✅ Created public header at `tt_metal/api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp`
+- ✅ Moved all PSD class declaration and data types to public header
+- ✅ Removed MPI/hardware forward declarations from public header
+- ✅ Created `set_discovery_data()` method to replace friend declarations with MPI types
+- ✅ Updated discovery implementation to use `set_discovery_data()` instead of direct member access
+- ✅ Added `get_all_hostnames_unique()` getter method
+- ✅ Updated CMakeLists.txt to include new public header in TT_METAL_PUBLIC_API
+- ✅ Updated old header to forward include new public header for backward compatibility
+- ✅ Updated key internal includes to use new public header
+- ✅ Build compiles successfully
+- ✅ Tests pass with new public header
 
 ### Key Files Modified
 
 **New Files:**
 - `tt_metal/fabric/physical_system_discovery.hpp` - Discovery API declaration
 - `tt_metal/fabric/physical_system_discovery.cpp` - Discovery implementation
+- `tt_metal/api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp` - Public header for PSD
 
 **Modified Files:**
-- `tt_metal/fabric/physical_system_descriptor.hpp` - Removed old constructors/methods, added minimal constructor, local_hostname_/local_rank_, made clear/merge public, added friend declarations
-- `tt_metal/fabric/physical_system_descriptor.cpp` - Removed all discovery logic, updated my_host_name(), cleaned up includes
-- `tt_metal/fabric/physical_system_discovery.hpp` - NEW: Discovery API declarations
-- `tt_metal/fabric/physical_system_discovery.cpp` - NEW: All discovery logic implementation
+- `tt_metal/fabric/physical_system_descriptor.hpp` - Now forwards to public header, kept for backward compatibility
+- `tt_metal/fabric/physical_system_descriptor.cpp` - Updated to include public header, added `set_discovery_data()` implementation
+- `tt_metal/fabric/physical_system_discovery.hpp` - Updated to include public header
+- `tt_metal/fabric/physical_system_discovery.cpp` - Updated to use `set_discovery_data()` instead of friend access
+- `tt_metal/CMakeLists.txt` - Added public header to TT_METAL_PUBLIC_API
 - `tt_metal/fabric/control_plane.cpp` - Updated to use run_physical_system_discovery() (2 call sites)
 - `tools/scaleout/validation/utils/cluster_validation_utils.cpp` - Updated query_local_ethernet_metrics call and re-discovery logic
 - `tools/scaleout/validation/run_cluster_validation.cpp` - Updated to use run_physical_system_discovery() (2 call sites)
@@ -411,10 +430,12 @@ This is especially important for:
 - `tt_metal/fabric/CMakeLists.txt` - Added physical_system_discovery.cpp to build
 
 **Key Implementation Details:**
-- Discovery functions use friend access to set private PSD members (`local_hostname_`, `local_rank_`, `all_hostnames_unique_`)
+- Discovery functions use `set_discovery_data()` method instead of friend access (avoids MPI types in public header)
 - All call sites properly dereference `get_driver()` using `const_cast<tt::umd::Cluster&>(*cluster.get_driver())`
 - Helper functions (`get_host_name()`, `get_mobo_name()`, etc.) made inline to avoid redefinition in unity builds
 - Fixed empty container access in `exchange_metadata()` with `TT_FATAL` check
+- Public header has no MPI or hardware dependencies - pure data structure + query API
+- Old header (`tt_metal/fabric/physical_system_descriptor.hpp`) forwards to public header for backward compatibility
 
 ---
 

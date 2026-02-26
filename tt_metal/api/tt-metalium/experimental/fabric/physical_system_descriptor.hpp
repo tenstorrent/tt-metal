@@ -8,13 +8,13 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/utils/semver.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -22,42 +22,16 @@ namespace YAML {
 class Node;
 }
 
-namespace tt::umd {
-class Cluster;
-}
-
 namespace tt {
-enum class TargetDevice: std::uint8_t;
-}
-
-namespace tt::tt_metal::distributed::multihost {
-class DistributedContext;
+enum class TargetDevice : std::uint8_t;
 }
 
 namespace tt::tt_metal {
 
-class Hal;
-
-// Forward declaration of PhysicalSystemDescriptor class
-class PhysicalSystemDescriptor;
-
-// Forward declarations for discovery functions
-PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::Cluster& cluster,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
-    const Hal* hal,
-    tt::TargetDevice target_device_type,
-    bool run_global_discovery = true,
-    bool run_live_discovery = false);
-
+// Forward declaration for discovery setter interface
 namespace discovery_impl {
-PhysicalSystemDescriptor run_local_discovery(
-    tt::umd::Cluster& cluster,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
-    const Hal* hal,
-    tt::TargetDevice target_device_type,
-    bool run_live_discovery);
-}  // namespace discovery_impl
+class DiscoverySetter;
+}
 
 // Live Ethernet Link Metrics
 struct EthernetMetrics {
@@ -160,12 +134,6 @@ struct PhysicalConnectivityGraph {
 };
 
 // Top-Level Global System Descriptor Data-Structure.
-
-// Forward declaration for friend access
-namespace discovery_impl {
-class DiscoveryImpl;
-}
-
 class PhysicalSystemDescriptor {
 public:
     // Minimal constructor - takes only target device type
@@ -188,6 +156,11 @@ public:
     // Public methods for re-discovery scenarios
     void clear();
     void merge(PhysicalSystemDescriptor&& other);
+
+    // Discovery setter interface - allows discovery functions to set internal state
+    // without requiring friend declarations with MPI types in public header
+    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique);
+
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
@@ -197,6 +170,7 @@ public:
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
+
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
     std::vector<ExitNodeConnection> get_connecting_exit_nodes(
@@ -230,6 +204,7 @@ public:
     }
 
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
+    bool get_all_hostnames_unique() const { return all_hostnames_unique_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -251,22 +226,6 @@ public:
     void emit_to_text_proto(const std::optional<std::string>& file_path = std::nullopt) const;
 
 private:
-    // Friend declarations for discovery functions to set private members
-    friend PhysicalSystemDescriptor run_physical_system_discovery(
-        tt::umd::Cluster& cluster,
-        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
-        const Hal* hal,
-        tt::TargetDevice target_device_type,
-        bool run_global_discovery,
-        bool run_live_discovery);
-
-    friend PhysicalSystemDescriptor discovery_impl::run_local_discovery(
-        tt::umd::Cluster& cluster,
-        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
-        const Hal* hal,
-        tt::TargetDevice target_device_type,
-        bool run_live_discovery);
-
     tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;

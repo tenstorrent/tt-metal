@@ -24,7 +24,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include "physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
 #include <set>
