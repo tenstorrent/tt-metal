@@ -350,11 +350,6 @@ void MetalContext::teardown() {
     control_plane_.reset();
 
     noc_debug_state_.reset();
-
-    // Clear mock mode configuration if it was enabled
-    if (experimental::is_mock_mode_registered()) {
-        experimental::disable_mock_mode();
-    }
 }
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
@@ -403,44 +398,6 @@ void MetalContext::destroy_instance(bool check_device_count) {
     // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
     // return the old instance.
     g_instance.store(nullptr, std::memory_order_release);
-}
-
-// Switch from mock mode to real hardware (requires all devices to be closed).
-//
-// This function is needed because MetalContext is a singleton with process lifetime, but mock mode
-// configuration can be changed at runtime. The sequence of events is:
-// 1. User calls API to enable mock device
-// 2. MetalContext initialized in mock mode
-// 3. User runs in mock mode
-// 4. User calls API to disable mock device
-// 5. Without this function, MetalContext would remain stuck in mock mode because the cluster/HAL
-//    objects were already initialized with mock configuration.
-//
-// This function won't be needed when MetalContext has explicit lifetime management.
-void MetalContext::reinitialize_for_real_hardware() {
-    std::lock_guard<std::mutex> lock(reinitialization_mutex_);
-
-    // Check if device_manager_ is initialized (MetalContext must be fully constructed)
-    TT_FATAL(device_manager_ != nullptr, "Cannot reinitialize MetalContext before it is fully initialized");
-
-    // Check if any devices are actually active (not just if MetalContext was initialized)
-    auto active_devices = device_manager_->get_all_active_devices();
-    TT_FATAL(
-        active_devices.empty(),
-        "Cannot switch to real hardware while {} device(s) are active. Close all devices first by calling "
-        "MeshDevice::close() or letting the device go out of scope.",
-        active_devices.size());
-
-    log_info(tt::LogMetal, "Reinitializing MetalContext for real hardware (switching from mock mode)");
-
-    rtoptions().clear_mock_cluster_desc();
-    teardown_base_objects();
-    initialize_base_objects();
-
-    teardown_dispatch_state();
-    initialized_ = false;
-
-    log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
 }
 
 void MetalContext::teardown_base_objects() {

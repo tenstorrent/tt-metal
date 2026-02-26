@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "llrt/get_platform_architecture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -25,6 +26,7 @@ static std::optional<MockDeviceConfig> g_registered_mock_config = std::nullopt;
 void configure_mock_mode(tt::ARCH arch, uint32_t num_chips) {
     g_registered_mock_config = MockDeviceConfig{arch, num_chips};
     log_info(tt::LogMetal, "Mock mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
+    tt::tt_metal::detail::ReleaseOwnership();
 }
 
 void configure_mock_mode_from_hw() {
@@ -39,18 +41,7 @@ void disable_mock_mode() {
     }
 
     g_registered_mock_config = std::nullopt;
-
-    // Only attempt to reinitialize MetalContext if it has been fully initialized
-    // This keeps disable_mock_mode() safe to call early (e.g., from constructors)
-    // where configure_mock_mode() is also allowed
-    auto& context = tt::tt_metal::MetalContext::instance();
-    if (context.is_device_manager_initialized()) {
-        context.reinitialize_for_real_hardware();
-        log_info(tt::LogMetal, "Mock mode disabled and switched to real hardware");
-    } else {
-        log_info(
-            tt::LogMetal, "Mock mode disabled; MetalContext not yet initialized, skipping hardware reinitialization");
-    }
+    tt::tt_metal::detail::ReleaseOwnership();
 }
 
 bool is_mock_mode_registered() {

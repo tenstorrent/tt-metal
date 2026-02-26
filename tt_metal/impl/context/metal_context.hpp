@@ -105,9 +105,6 @@ public:
         bool minimal = false);
     void teardown();
 
-    // Switch from mock mode to real hardware (requires all devices to be closed)
-    void reinitialize_for_real_hardware();
-
     // Set fast dispatch mode and automatically reinitialize dispatch managers
     // This ensures dispatch/compute core allocations stay in sync with the mode
     void set_fast_dispatch_mode(bool enable);
@@ -208,9 +205,6 @@ private:
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
-
-    // Mutex to protect reinitialization operations (switching between mock and real hardware)
-    std::mutex reinitialization_mutex_;
 
     std::shared_ptr<MetalliumObjectDescriptor> query_descriptor_;
     tt::tt_metal::MetalliumObject query_;

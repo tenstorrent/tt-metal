@@ -18,7 +18,6 @@ MetalliumObject::~MetalliumObject() { this->destroy(); }
 
 void MetalliumObject::initialize(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) {
     TT_FATAL(!initialized_, "MetalliumObject already initialized");
-    log_info(tt::LogMetal, "================== Initializing MetalliumObject ==================");
     this->verify_fw_initialize_base_objects(descriptor);
     initialized_ = true;
 }
