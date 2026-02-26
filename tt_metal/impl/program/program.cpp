@@ -1702,42 +1702,8 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return;
     }
 
-    // Create proper function objects that capture 'this'
-    detail::KernelsGetter kernels_getter =
-        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
-        return this->get_kernels(index);
-    };
-
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
-
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
-
-    detail::DataflowBuffersGetter dataflow_buffers_getter =
-        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
-        return this->dataflow_buffers_;
-    };
-
-    // Create a span with just this program
-    std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
-
-    (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
-
-    set_finalized();
-}
-
-// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
-// program data structures in L1. Will be used when assembling dispatch commands for this program
-uint32_t detail::ProgramImpl::finalize_program_offsets(
-    IDevice* device,
-    const KernelsGetter& kernels_getter,
-    const KernelGroupsGetter& kernel_groups_getter,
-    const SemaphoresGetter& semaphores_getter,
-    const DataflowBuffersGetter& dataflow_buffers_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
+    // program data structures in L1. Will be used when assembling dispatch commands for this program
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance().hal();
@@ -1745,24 +1711,28 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
+            this->get_kernels(index),
+            this->get_kernel_groups(index),
+            state.config_base_offset,
+            index,
+            state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset =
-            program_dispatch::finalize_sems(index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
+            program_dispatch::finalize_sems(index, state.offset, this->semaphores(), state.sem_offset, state.sem_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_cbs(
-            index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+            index, this->get_kernel_groups(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index,
-            kernel_groups_getter(index),
-            dataflow_buffers_getter(),
+            this->get_kernel_groups(index),
+            this->dataflow_buffers_,
             state.offset,
             state.dfb_offset,
             state.dfb_size);
@@ -1772,8 +1742,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = program_dispatch::finalize_kernel_bins(
             device,
             index,
-            kernels_getter(index),
-            kernel_groups_getter(index),
+            this->get_kernels(index),
+            this->get_kernel_groups(index),
             state.offset,
             state.kernel_text_offset,
             state.kernel_text_size);
@@ -1789,23 +1759,15 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             max_size,
             enchantum::to_string(programmable_core_type));
 
-        for (auto& program : programs) {
-            program->set_program_offsets_and_sizes(index, state);
-        }
+        this->set_program_offsets_and_sizes(index, state);
     }
 
     // The sem offsets cross programmable_core_types so must be set after the loop above
-    for (auto& program : programs) {
-        program->set_program_attrs_across_core_types(device);
-    }
+    this->set_program_attrs_across_core_types(device);
 
-    // determine max program size across all programs
-    uint32_t max_program_sizeB = 0;
-    for (auto& program : programs) {
-        program->kernel_bins_sizeB = state.kernel_text_size;
-        max_program_sizeB = std::max(max_program_sizeB, state.kernel_text_size);
-    }
-    return max_program_sizeB;
+    this->kernel_bins_sizeB = state.kernel_text_size;
+
+    set_finalized();
 }
 
 std::unordered_map<uint64_t, ProgramCommandSequence>&
