@@ -1036,7 +1036,7 @@ def _get_t5_prompt_embeds(
             device=mesh_device,
             mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
-        tt_hidden_states = text_encoder(prompt=tt_tokens, device=mesh_device)
+        tt_hidden_states = text_encoder(prompt=tt_tokens)
         tt_prompt_embeds = tt_hidden_states[-1]
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
