@@ -218,40 +218,8 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t mm_block_wt,
-<<<<<<< HEAD
     const uint32_t slice_Ht_per_core,
     const bool fuse_mm_op) {
-    // Strided reader compile args - include MM blocking parameters
-    // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
-    return {
-        ring_index,                         // [0]  my_chip_id
-        ring_size,                          // [1]  ring_size
-        input_cb_index,                     // [2]  cb_input_id
-        intermediate_cb_index,              // [3]  cb_intermediate_id
-        reader_output_cb_index,             // [4]  cb_reader_output_id
-        tile_granularity,                   // [5]  tile_granularity
-        page_size,                          // [6]  page_size
-        input_batch_num_pages,              // [7]  input_batch_num_pages
-        input_channel_num_pages,            // [8]  input_channel_num_pages
-        input_tensor_B,                     // [9]  input_tensor_B
-        input_tensor_Wt,                    // [10] input_tensor_Wt
-        slice_C,                            // [11] slice_C
-        slice_Wt,                           // [12] slice_Wt
-        normalized_dim,                     // [13] dim normalized to 4D
-        mm_M_unit_blocks_per_core,          // [14] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,         // [15] mm_N_full_blocks_per_slice
-        mm_block_ht,                        // [16] mm_block_ht
-        mm_cores_y,                         // [17] mm_cores_y
-        N_full_block_wt,                    // [18] N_full_block_wt
-        chunk_width_in_tiles,               // [19] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,         // [20] chunks_per_mm_N_full_block
-        chunk_width_in_mm_blocks,           // [21] chunk_width_in_mm_blocks (used by FUSE_MM_OP_SIGNALER)
-        mm_block_wt,                        // [22] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
-        slice_Ht_per_core,                  // [23] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        static_cast<uint32_t>(fuse_mm_op),  // [24] fuse_mm_op: 1 if fused with matmul, 0 otherwise
-=======
-    const bool fuse_mm_op,
-    const uint32_t slice_Ht_per_core) {
     // Strided reader compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     return {
@@ -279,7 +247,6 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         mm_block_wt,                 // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
         slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
         static_cast<uint32_t>(fuse_mm_op),  // [23] fuse_mm_op: 1 if fused with matmul, 0 otherwise
->>>>>>> f3b2ed2bdd (implementing any M)
     };
 }
 
@@ -311,31 +278,6 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
     return {
-<<<<<<< HEAD
-        ring_index,                         // [0]  my_chip_id
-        ring_size,                          // [1]  ring_size
-        compute_output_cb_index,            // [2]  cb_compute_output_id
-        reader_output_cb_index,             // [3]  cb_reader_output_id
-        tile_granularity,                   // [4]  packet_size_in_pages
-        page_size,                          // [5]  page_size
-        num_tiles_to_write_per_packet,      // [6]  num_tiles_to_write_per_packet
-        output_batch_num_pages,             // [7]  output_batch_num_pages
-        input_channel_num_pages,            // [8]  input_channel_num_pages
-        output_channel_num_pages,           // [9]  output_channel_num_pages
-        input_tensor_B,                     // [10] input_tensor_B
-        input_tensor_Wt,                    // [11] input_tensor_Wt
-        slice_C,                            // [12] slice_C
-        slice_Wt,                           // [13] slice_Wt
-        normalized_dim,                     // [14] dim normalized to 4D
-        mm_M_unit_blocks_per_core,          // [15] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,         // [16] mm_N_full_blocks_per_slice
-        mm_block_ht,                        // [17] mm_block_ht
-        mm_cores_y,                         // [18] mm_cores_y
-        N_full_block_wt,                    // [19] N_full_block_wt
-        chunk_width_in_tiles,               // [20] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,         // [21] chunks_per_mm_N_full_block
-        slice_Ht_per_core,                  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-=======
         ring_index,                     // [0]  my_chip_id
         ring_size,                      // [1]  ring_size
         compute_output_cb_index,        // [2]  cb_compute_output_id
@@ -360,7 +302,6 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         chunks_per_mm_N_full_block,     // [21] chunks_per_mm_N_full_block
         slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
         // [23+] fabric_mux CT args appended after (num_ct_args = 28 in writer kernel)
->>>>>>> f3b2ed2bdd (implementing any M)
     };
 }
 
@@ -731,13 +672,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
             mm_block_wt_val,
-<<<<<<< HEAD
             slice_Ht_per_core,
             fuse_mm_op);
-=======
-            fuse_mm_op,
-            slice_Ht_per_core);
->>>>>>> f3b2ed2bdd (implementing any M)
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);

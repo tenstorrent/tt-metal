@@ -38,11 +38,9 @@ constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
 constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(18);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
 constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
-constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(21);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(22);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(23);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(24); 
-// [25]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
+constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
+// [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -59,7 +57,7 @@ void kernel_main() {
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        25;  // [21]=chunk_width_in_mm_blocks, [22]=mm_block_wt, [23]=slice_Ht_per_core, [24]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+        24;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
