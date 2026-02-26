@@ -265,7 +265,7 @@ enum class DataFormat : std::uint8_t {
                       // (not supported in Trinity)
     Int8_2x =
         26,  // store INT8 in Src Regs as 2x-Packed INT8;   this is supported in Trinity only (not supported in Quasar)
-    Uint8_2x =
+    UInt8_2x =
         28,  // store UINT8 in Src Regs as 2x Packed UINT8; this is supported in Trinity only (not supported in Quasar)
 
     automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
