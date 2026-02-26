@@ -202,6 +202,7 @@ from ttnn.types import (
     uint32,
     bfloat8_b,
     bfloat4_b,
+    bfloat2_b,
     bfloat16,
     float32,
     MathFidelity,

@@ -123,9 +123,10 @@ auto create_nanobind_from_buffer_overload() {
                 }
                 case DataType::BFLOAT8_B:
                 case DataType::BFLOAT4_B:
+                case DataType::BFLOAT2_B:
                 case DataType::INVALID: {
-                    // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
-                    // Both are empty structs, so let's not allow users to use them for this particular operation
+                    // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b, bfloat4_b, bfloat2_b
+                    // They are empty structs, so let's not allow users to use them for this particular operation
                     TT_THROW("Unreachable");
                 }
             }

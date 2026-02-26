@@ -45,5 +45,15 @@ struct dtype_traits<tt::tt_metal::tensor_impl::bfloat4_b> {
     static constexpr auto name = const_name("bfloat4_b");
 };
 
+template <>
+struct dtype_traits<tt::tt_metal::tensor_impl::bfloat2_b> {
+    static constexpr dlpack::dtype value{
+        static_cast<std::uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
+        2,                                                                // size in bits
+        1                                                                 // lanes (simd), usually set to 1
+    };
+    static constexpr auto name = const_name("bfloat2_b");
+};
+
 NAMESPACE_END(detail)
 NAMESPACE_END(NB_NAMESPACE)

@@ -56,6 +56,7 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt32: return tt::tt_metal::DataType::UINT32;
         case flatbuffer::DataType::BFloat8B: return tt::tt_metal::DataType::BFLOAT8_B;
         case flatbuffer::DataType::BFloat4B: return tt::tt_metal::DataType::BFLOAT4_B;
+        case flatbuffer::DataType::BFloat2B: return tt::tt_metal::DataType::BFLOAT2_B;
         case flatbuffer::DataType::UInt8: return tt::tt_metal::DataType::UINT8;
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
@@ -92,6 +93,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT32: return flatbuffer::DataType::UInt32;
         case tt::tt_metal::DataType::BFLOAT8_B: return flatbuffer::DataType::BFloat8B;
         case tt::tt_metal::DataType::BFLOAT4_B: return flatbuffer::DataType::BFloat4B;
+        case tt::tt_metal::DataType::BFLOAT2_B: return flatbuffer::DataType::BFloat2B;
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;

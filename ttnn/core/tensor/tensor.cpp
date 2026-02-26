@@ -24,6 +24,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 
@@ -182,7 +183,8 @@ Tensor Tensor::from_vector(
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B ||
+        spec.data_type() == DataType::BFLOAT2_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
     }
 
@@ -225,13 +227,16 @@ std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId>
             return tensor_impl::decode_tensor_data(buffer, cpu_tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: {
             const auto& tile = cpu_tensor.tensor_spec().tile();
             auto buffer = host_buffer::get_as<const uint32_t>(cpu_tensor);
             std::vector<float> unpacked_data =
                 cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                : cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT4_B
+                    ? unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                    : unpack_bfp2_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
             return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
@@ -420,7 +425,8 @@ uint32_t Tensor::element_size() const {
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }
 }

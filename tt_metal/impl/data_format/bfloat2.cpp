@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
-#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <functional>
@@ -22,43 +22,43 @@
 #include "tt_backend_api_types.hpp"
 
 template <typename T>
-std::vector<uint32_t> pack_as_bfp4_tiles(
+std::vector<uint32_t> pack_as_bfp2_tiles(
     tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(data, row_major_input, is_exp_a, tile);
+    return pack_as_bfp_tiles<tt::DataFormat::Bfp2_b>(data, row_major_input, is_exp_a, tile);
 }
 
-template std::vector<uint32_t> pack_as_bfp4_tiles<bfloat16>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<bfloat16>(
     tt::stl::Span<const bfloat16> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
-template std::vector<uint32_t> pack_as_bfp4_tiles<float>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<float>(
     tt::stl::Span<const float> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
-template std::vector<uint32_t> pack_as_bfp4_tiles<int32_t>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<int32_t>(
     tt::stl::Span<const int32_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
-template std::vector<uint32_t> pack_as_bfp4_tiles<uint32_t>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<uint32_t>(
     tt::stl::Span<const uint32_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
-template std::vector<uint32_t> pack_as_bfp4_tiles<uint8_t>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<uint8_t>(
     tt::stl::Span<const uint8_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
-template std::vector<uint32_t> pack_as_bfp4_tiles<uint16_t>(
+template std::vector<uint32_t> pack_as_bfp2_tiles<uint16_t>(
     tt::stl::Span<const uint16_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 
-std::vector<float> unpack_bfp4_tiles_into_float_vec(
+std::vector<float> unpack_bfp2_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
@@ -79,7 +79,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    int num_elements_in_dword = 8;
+    int num_elements_in_dword = 16;
     int data_dwords_per_exp = face_W / num_elements_in_dword;
     int num_exps_in_dword = 4;
     int data_dwords_per_exp_dword_log2 = bfp_log2(data_dwords_per_exp * num_exps_in_dword);
@@ -97,25 +97,40 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
     uint32_t single_bfp_tile_size =
-        tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp4_b) : tile_size(tt::DataFormat::Bfp4_b);
+        tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp2_b) : tile_size(tt::DataFormat::Bfp2_b);
     TT_ASSERT(size_bytes % single_bfp_tile_size == 0);
     uint32_t num_tiles = size_bytes / single_bfp_tile_size;
 
     int data_index;
     int subtile_r;
     int subtile_c;
-    const std::vector<uint32_t> mask_vec0 = {0xf, 0xf0, 0xf00, 0xf000};
-    const std::vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
-    const std::vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
-    const std::vector<uint32_t> shift_vec1 = {16, 20, 24, 28};
+
+    // Masks for extracting 2-bit values from a uint32_t (16 elements per dword)
+    // Group 0: bits 0-7 (elements 0-3)
+    const std::vector<uint32_t> mask_vec0 = {0x3, 0xc, 0x30, 0xc0};
+    const std::vector<uint32_t> shift_vec0 = {0, 2, 4, 6};
+    // Group 1: bits 8-15 (elements 4-7)
+    const std::vector<uint32_t> mask_vec1 = {0x300, 0xc00, 0x3000, 0xc000};
+    const std::vector<uint32_t> shift_vec1 = {8, 10, 12, 14};
+    // Group 2: bits 16-23 (elements 8-11)
+    const std::vector<uint32_t> mask_vec2 = {0x30000, 0xc0000, 0x300000, 0xc00000};
+    const std::vector<uint32_t> shift_vec2 = {16, 18, 20, 22};
+    // Group 3: bits 24-31 (elements 12-15)
+    const std::vector<uint32_t> mask_vec3 = {0x3000000, 0xc000000, 0x30000000, 0xc0000000};
+    const std::vector<uint32_t> shift_vec3 = {24, 26, 28, 30};
+
     const simde__m128i mask0 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec0.data()));
     const simde__m128i mask1 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec1.data()));
-    const simde__m128i shift0 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec0.data()));
-    const simde__m128i shift1 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec1.data()));
+    const simde__m128i mask2 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec2.data()));
+    const simde__m128i mask3 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec3.data()));
+    const simde__m128i sft0 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec0.data()));
+    const simde__m128i sft1 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec1.data()));
+    const simde__m128i sft2 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec2.data()));
+    const simde__m128i sft3 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec3.data()));
+
     simde__m256i rebias_offset = simde_mm256_setzero_si256();
     if (is_exp_a) {
-        rebias_offset =
-            simde_mm256_set1_epi32(-112);  // This rebias offset must be added if we are working with BFP8 format.
+        rebias_offset = simde_mm256_set1_epi32(-112);
     }
     uint32_t exp_word, sub_word_index;
 
@@ -134,76 +149,55 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
                     subtile_r = tr * subtile_rows + i;
-                    for (int j = 0; j < subtile_cols; j += 2 * num_elements_in_dword) {
+                    for (int j = 0; j < subtile_cols; j += num_elements_in_dword) {
                         simde__m256i mask_denormal0 = simde_mm256_setzero_si256();
                         simde__m256i mask_denormal1 = simde_mm256_setzero_si256();
                         subtile_c = tc * subtile_cols + j;
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / num_elements_in_dword) +
                              tc * (face_HW / num_elements_in_dword) + i * num_dwords_per_row +
-                             j / num_elements_in_dword);  // Each uint32_t contains 8 BFP4 values. Divide data index by
-                                                          // 8
+                             j / num_elements_in_dword);
                         int tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
 
                         int exponent_index =
                             (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
-                        // Extract the uint32_t value that stores the shared exponent for this set
-                        // of data. Each 32 bit word is shared amongst 64 datums
                         exp_word = bfp_tiles[exponent_index];
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) &
-                                         exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
-                                                        // byte is shared amongst 16 datums.
-                        simde__m256i exp_vector0 = simde_mm256_set1_epi32(
-                            get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
+                                         exp_bit_mask;
+                        simde__m256i exp_vector0 = simde_mm256_set1_epi32(get_byte(exp_word, sub_word_index));
                         simde__m256i exp_vector1 = exp_vector0;
 
-                        // Take 2 uint32_t values. These are 16 BFP4 values
-                        // Replicate each uint32 value 8 times - one for each bfp4 value
-                        uint32_t first_val = bfp_tiles[num_exp_words + tile_and_data_index];
-                        simde__m128i first0 = simde_mm_set1_epi32(first_val);
-                        simde__m128i first1 = simde_mm_set1_epi32(first_val);
-                        uint32_t second_val = bfp_tiles[num_exp_words + tile_and_data_index + 1];
-                        simde__m128i second0 = simde_mm_set1_epi32(second_val);
-                        simde__m128i second1 = simde_mm_set1_epi32(second_val);
+                        // Take 1 uint32_t value containing 16 BFP2 values
+                        uint32_t val = bfp_tiles[num_exp_words + tile_and_data_index];
+                        simde__m128i v0 = simde_mm_set1_epi32(val);
+                        simde__m128i v1 = simde_mm_set1_epi32(val);
+                        simde__m128i v2 = simde_mm_set1_epi32(val);
+                        simde__m128i v3 = simde_mm_set1_epi32(val);
 
-                        first0 = simde_mm_srlv_epi32(
-                            simde_mm_and_si128(first0, mask0), shift0);  // Extract each BFP4 from the first0 uint32_t
-                        first1 = simde_mm_srlv_epi32(
-                            simde_mm_and_si128(first1, mask1), shift1);  // Extract each BFP4 from the first1 uint32_t
-                        second0 = simde_mm_srlv_epi32(
-                            simde_mm_and_si128(second0, mask0), shift0);  // Extract each BFP4 from the first0 uint32_t
-                        second1 = simde_mm_srlv_epi32(
-                            simde_mm_and_si128(second1, mask1), shift1);  // Extract each BFP4 from the first1 uint32_t
-                        simde__m256i combined0 =
-                            simde_mm256_set_m128i(first1, first0);  // Concatenate 2 128 vectors to 1 256
-                        simde__m256i combined1 =
-                            simde_mm256_set_m128i(second1, second0);  // Concatenate 2 128 vectors to 1 256
+                        v0 = simde_mm_srlv_epi32(simde_mm_and_si128(v0, mask0), sft0);
+                        v1 = simde_mm_srlv_epi32(simde_mm_and_si128(v1, mask1), sft1);
+                        v2 = simde_mm_srlv_epi32(simde_mm_and_si128(v2, mask2), sft2);
+                        v3 = simde_mm_srlv_epi32(simde_mm_and_si128(v3, mask3), sft3);
 
-                        // Extract sign and mantissa (expo extracted above)
-                        simde__m256i sign0 = simde_mm256_srl_epi32(combined0, simde_mm_set_epi64x(0, 3));
-                        simde__m256i man0 = simde_mm256_and_si256(combined0, simde_mm256_set1_epi32(0x7));
-                        simde__m256i sign1 = simde_mm256_srl_epi32(combined1, simde_mm_set_epi64x(0, 3));
-                        simde__m256i man1 = simde_mm256_and_si256(combined1, simde_mm256_set1_epi32(0x7));
+                        simde__m256i combined0 = simde_mm256_set_m128i(v1, v0);  // elements 0-7
+                        simde__m256i combined1 = simde_mm256_set_m128i(v3, v2);  // elements 8-15
 
-                        for (int i = 0; i < 2; i++) {
-                            simde__m256i shift_cnt = simde_mm256_setzero_si256();  // Initialize shift amount per datum
-                                                                                   // to 0. This is incremented below.
-                            simde__m256i man_shifted = i == 0 ? man0 : man1;       // Initialize updated mantissa
-                            simde__m256i select_mask = simde_mm256_cmpeq_epi32(
-                                man_shifted,
-                                shift_cnt);  // This mask is used to set mantissa values to 0, if they start at 0.
-                            for (int shift_val = 0; shift_val < 3; shift_val++) {
-                                // Shift each mantissa and update the corresponding shift_cnt until the 3rd bit of the 8
-                                // bit data is set.
+                        // Extract sign and mantissa (2-bit: bit 1 = sign, bit 0 = mantissa)
+                        simde__m256i sign0 = simde_mm256_srl_epi32(combined0, simde_mm_set_epi64x(0, 1));
+                        simde__m256i man0 = simde_mm256_and_si256(combined0, simde_mm256_set1_epi32(0x1));
+                        simde__m256i sign1 = simde_mm256_srl_epi32(combined1, simde_mm_set_epi64x(0, 1));
+                        simde__m256i man1 = simde_mm256_and_si256(combined1, simde_mm256_set1_epi32(0x1));
+
+                        for (int ii = 0; ii < 2; ii++) {
+                            simde__m256i shift_cnt = simde_mm256_setzero_si256();
+                            simde__m256i man_shifted = ii == 0 ? man0 : man1;
+                            simde__m256i select_mask = simde_mm256_cmpeq_epi32(man_shifted, shift_cnt);
+                            for (int shift_val = 0; shift_val < 1; shift_val++) {
                                 simde__m256i shift_mask = simde_mm256_or_si256(
-                                    simde_mm256_cmpgt_epi32(man_shifted, simde_mm256_set1_epi32(0x4)),
-                                    simde_mm256_cmpeq_epi32(
-                                        man_shifted,
-                                        simde_mm256_set1_epi32(
-                                            0x4)));  // If the 6th bit is set, propagate the current
-                                                     // mantissa value. Else take the left shifted value
+                                    simde_mm256_cmpgt_epi32(man_shifted, simde_mm256_set1_epi32(0x1)),
+                                    simde_mm256_cmpeq_epi32(man_shifted, simde_mm256_set1_epi32(0x1)));
                                 man_shifted = simde_mm256_blendv_epi8(
                                     simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)),
                                     man_shifted,
@@ -213,30 +207,19 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                             }
                             man_shifted = simde_mm256_and_si256(
                                 simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)),
-                                simde_mm256_set1_epi32(
-                                    0x7));  // One more shift to clear 3rd bit; Mask with 3bits for mantissa
-                            if (i == 0) {
-                                man0 = simde_mm256_blendv_epi8(
-                                    man_shifted, man0, select_mask);  // Choose new mantissa or keep old mantissa based
-                                                                      // on 0 initial condition.
-                                // Flush denormals to zero
-                                // Check if shift > exp and mantissa is not zero
+                                simde_mm256_set1_epi32(0x1));
+                            if (ii == 0) {
+                                man0 = simde_mm256_blendv_epi8(man_shifted, man0, select_mask);
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector0);
                                 simde__m256i mask_nonzero_mantissa =
                                     simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal0 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
-
                                 exp_vector0 = simde_mm256_blendv_epi8(
                                     simde_mm256_sub_epi32(exp_vector0, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
-                                    select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                    select_mask);
                             } else {
-                                man1 = simde_mm256_blendv_epi8(
-                                    man_shifted, man1, select_mask);  // Choose new mantissa or keep old mantissa based
-                                                                      // on 0 initial condition.
-                                // Flush denormals to zero
-                                // Check if shift > exp and mantissa is not zero
+                                man1 = simde_mm256_blendv_epi8(man_shifted, man1, select_mask);
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector1);
                                 simde__m256i mask_nonzero_mantissa =
                                     simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
@@ -244,8 +227,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 exp_vector1 = simde_mm256_blendv_epi8(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
-                                    select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                    select_mask);
                             }
                         }
 
@@ -253,16 +235,10 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                         sign1 = simde_mm256_sll_epi32(sign1, simde_mm_set_epi64x(0, 31));              // Shift sign
                         exp_vector0 = simde_mm256_sll_epi32(exp_vector0, simde_mm_set_epi64x(0, 23));  // Shift exp
                         exp_vector1 = simde_mm256_sll_epi32(exp_vector1, simde_mm_set_epi64x(0, 23));  // Shift exp
-                        man0 = simde_mm256_sll_epi32(man0, simde_mm_set_epi64x(0, 20));                // Shift mantissa
-                        man0 = simde_mm256_or_si256(
-                            sign0,
-                            simde_mm256_or_si256(
-                                exp_vector0, man0));  // Store final value in mantissa register and save
-                        man1 = simde_mm256_sll_epi32(man1, simde_mm_set_epi64x(0, 20));  // Shift mantissa
-                        man1 = simde_mm256_or_si256(
-                            sign1,
-                            simde_mm256_or_si256(
-                                exp_vector1, man1));  // Store final value in mantissa register and save
+                        man0 = simde_mm256_sll_epi32(man0, simde_mm_set_epi64x(0, 22));                // Shift mantissa
+                        man0 = simde_mm256_or_si256(sign0, simde_mm256_or_si256(exp_vector0, man0));
+                        man1 = simde_mm256_sll_epi32(man1, simde_mm_set_epi64x(0, 22));  // Shift mantissa
+                        man1 = simde_mm256_or_si256(sign1, simde_mm256_or_si256(exp_vector1, man1));
 
                         // Zero out lanes where mask_denormal is true
                         man0 = simde_mm256_blendv_epi8(man0, simde_mm256_setzero_si256(), mask_denormal0);
@@ -272,11 +248,10 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {
                             float_data_index = fp32_element_index;
-                            fp32_element_index += 2 * num_elements_in_dword;
+                            fp32_element_index += num_elements_in_dword;
                         }
                         simde_mm256_storeu_ps(&float_vec[float_data_index], simde_mm256_castsi256_ps(man0));
-                        simde_mm256_storeu_ps(
-                            &float_vec[float_data_index + num_elements_in_dword], simde_mm256_castsi256_ps(man1));
+                        simde_mm256_storeu_ps(&float_vec[float_data_index + 8], simde_mm256_castsi256_ps(man1));
                     }
                 }
             }

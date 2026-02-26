@@ -113,8 +113,10 @@ Tensor full_impl(
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
-        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
-                                                                                          : ttnn::ROW_MAJOR_LAYOUT;
+        return (dtype_value == DataType::BFLOAT2_B || dtype_value == DataType::BFLOAT4_B ||
+                dtype_value == DataType::BFLOAT8_B)
+                   ? ttnn::TILE_LAYOUT
+                   : ttnn::ROW_MAJOR_LAYOUT;
     };
 
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
@@ -136,6 +138,7 @@ Tensor full_impl(
         case DataType::INT32: return concrete_full.template operator()<int32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B: {
             TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
@@ -262,7 +265,9 @@ struct FromBuffer {
         const std::optional<Layout>& layout = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+        TT_ASSERT(
+            dtype != DataType::BFLOAT2_B && dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B,
+            "Unsupported DataType!");
         TensorSpec spec(
             shape,
             TensorLayout(
@@ -279,7 +284,9 @@ struct FromBuffer {
         const std::optional<Layout>& layout = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+        TT_ASSERT(
+            dtype != DataType::BFLOAT2_B && dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B,
+            "Unsupported DataType!");
         TensorSpec spec(
             shape,
             TensorLayout(

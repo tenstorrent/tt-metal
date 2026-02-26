@@ -222,6 +222,14 @@ struct ttnn_datatype_traits<DataType::BFLOAT4_B> {
     static constexpr auto name = nbd::const_name("BFLOAT4_B");
 };
 
+template <>
+struct ttnn_datatype_traits<DataType::BFLOAT2_B> {
+    using underlying_type = float;
+    static constexpr nbdlp::dtype value{
+        .code = static_cast<std::uint8_t>(nbdlp::dtype_code::Float), .bits = 32, .lanes = 1};
+    static constexpr auto name = nbd::const_name("BFLOAT2_B");
+};
+
 // use this if we get proper 3rd party support for bfloat8/4_b
 // template <>
 // struct ttnn_datatype_traits<DataType::BFLOAT8_B> {
@@ -271,6 +279,7 @@ constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
         case DataType::UINT32: return ttnn_datatype_traits<DataType::UINT32>::value;
         case DataType::BFLOAT8_B: return ttnn_datatype_traits<DataType::BFLOAT8_B>::value;
         case DataType::BFLOAT4_B: return ttnn_datatype_traits<DataType::BFLOAT4_B>::value;
+        case DataType::BFLOAT2_B: return ttnn_datatype_traits<DataType::BFLOAT2_B>::value;
         case DataType::UINT8: return ttnn_datatype_traits<DataType::UINT8>::value;
         case DataType::UINT16: return ttnn_datatype_traits<DataType::UINT16>::value;
         case DataType::INT32: return ttnn_datatype_traits<DataType::INT32>::value;

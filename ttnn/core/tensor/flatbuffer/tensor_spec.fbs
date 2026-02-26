@@ -80,7 +80,8 @@ enum DataType : ubyte {
     UInt8 = 5,
     UInt16 = 6,
     Int32 = 7,
-    Invalid = 8
+    BFloat2B = 8,
+    Invalid = 9
 }
 
 table RowMajorPageConfig {}

@@ -24,6 +24,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 
@@ -43,6 +44,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         case DataType::BFLOAT4_B: os << "bfloat4_b"; break;
+        case DataType::BFLOAT2_B: os << "bfloat2_b"; break;
         case DataType::BFLOAT16: os << "bfloat16"; break;
         case DataType::FLOAT32: os << "float32"; break;
         case DataType::UINT8: os << "uint8"; break;
@@ -232,6 +234,88 @@ Tensor unpad_bfloat4_b(
             float_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 DataType::BFLOAT4_B,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                float_tensor.logical_shape(),
+                float_tensor.padded_shape())));
+}
+
+Tensor pad_bfloat2_b(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    auto tile = tensor.tensor_spec().tile();
+    // TODO(arakhmati): do not convert to FLOAT32
+
+    // Convert to FLOAT32 tensor and pad
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_float_data =
+        unpack_bfp2_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto input_float_buffer = HostBuffer(std::move(input_float_data));
+    auto float_tensor = Tensor(
+                            std::move(input_float_buffer),
+                            TensorSpec(
+                                tensor.logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.logical_shape(),
+                                    tensor.logical_shape())))
+                            .pad(output_padded_shape, input_tensor_start, pad_value);
+
+    // Convert back to BFLOAT2_B
+    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_packed_data =
+        pack_as_bfp2_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
+    TensorSpec output_spec(
+        float_tensor.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            DataType::BFLOAT2_B,
+            tensor.tensor_spec().page_config(),
+            MemoryConfig{},
+            float_tensor.logical_shape(),
+            float_tensor.padded_shape()));
+    return Tensor(std::move(output_uint32_buffer), output_spec);
+}
+
+Tensor unpad_bfloat2_b(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end) {
+    auto tile = tensor.tensor_spec().tile();
+    // TODO(arakhmati): do not convert to FLOAT32
+
+    // Convert to FLOAT32 tensor and unpad
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_float_data =
+        unpack_bfp2_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto input_float_buffer = HostBuffer(std::move(input_float_data));
+    auto float_tensor = Tensor(
+                            std::move(input_float_buffer),
+                            TensorSpec(
+                                tensor.logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.logical_shape(),
+                                    tensor.padded_shape())))
+                            .unpad(output_tensor_start, output_tensor_end);
+
+    // Convert back to BFLOAT2_B
+    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_packed_data =
+        pack_as_bfp2_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
+    return Tensor(
+        std::move(output_uint32_buffer),
+        TensorSpec(
+            float_tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT2_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
                 float_tensor.logical_shape(),
@@ -442,7 +526,8 @@ std::string to_string_impl(const Tensor& tensor) {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         }
-        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B ||
+            tensor.dtype() == DataType::BFLOAT2_B) {
             return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         }
         return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
@@ -510,6 +595,11 @@ std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
+template <>
+std::string to_string_impl<bfloat2_b>(const Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
 std::string to_string(const Tensor& tensor) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
@@ -526,6 +616,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
@@ -1085,12 +1176,13 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
 
 template <typename T>
 Tensor to_layout_bfloat_impl(const Tensor& tensor, Layout target_layout) {
-    static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
+    static_assert(
+        std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat2_b>, "Invalid type T");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
         log_warning(
             tt::LogAlways,
-            "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Conversion from {} to {} was not executed!",
+            "Tensor layout must be Layout::TILE for block float types! Conversion from {} to {} was not executed!",
             tensor.layout(),
             target_layout);
     }
@@ -1105,6 +1197,11 @@ Tensor to_layout_impl<bfloat8_b>(const Tensor& tensor, Layout target_layout) {
 template <>
 Tensor to_layout_impl<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
     return to_layout_bfloat_impl<bfloat4_b>(tensor, target_layout);
+}
+
+template <>
+Tensor to_layout_impl<bfloat2_b>(const Tensor& tensor, Layout target_layout) {
+    return to_layout_bfloat_impl<bfloat2_b>(tensor, target_layout);
 }
 
 Tensor to_layout(const Tensor& tensor, Layout target_layout) {
@@ -1225,6 +1322,15 @@ Tensor pad_impl<bfloat4_b>(
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
+template <>
+Tensor pad_impl<bfloat2_b>(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    return pad_bfloat2_b(tensor, output_padded_shape, input_tensor_start, pad_value);
+}
+
 Tensor pad(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -1308,6 +1414,14 @@ Tensor unpad_impl<bfloat4_b>(
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
 }
 
+template <>
+Tensor unpad_impl<bfloat2_b>(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end) {
+    return unpad_bfloat2_b(tensor, output_tensor_start, output_tensor_end);
+}
+
 Tensor unpad(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
@@ -1347,6 +1461,11 @@ Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
+template <>
+Tensor extract_shard_impl<bfloat2_b>(const Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard_impl<uint32_t>(tensor, core_id);
+}
+
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
@@ -1357,6 +1476,7 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
 
 namespace detail {
 
+struct bfloat2_tag {};
 struct bfloat4_tag {};
 struct bfloat8_tag {};
 
@@ -1380,6 +1500,13 @@ tt::tt_metal::HostStorage preprocess_storage(
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
+    if (input_dtype == DataType::BFLOAT2_B) {
+        return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
+            tt::stl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
+            auto float_unpacked_data = unpack_bfp2_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
+        });
+    }
     return input_storage;
 }
 
@@ -1388,7 +1515,9 @@ tt::tt_metal::HostStorage transform_storage(
     const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::HostStorage& input_storage) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_storage;
-    } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
+    } else if constexpr (
+        std::is_same_v<DstType, bfloat2_tag> || std::is_same_v<DstType, bfloat4_tag> ||
+        std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
@@ -1405,6 +1534,8 @@ tt::tt_metal::HostStorage transform_storage(
                     return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
                     return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                } else if constexpr (std::is_same_v<DstType, bfloat2_tag>) {
+                    return pack_as_bfp2_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -1446,6 +1577,7 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
             switch (dst_type) {
+                case DataType::BFLOAT2_B: return with_src_and_dst.operator()<SrcType, detail::bfloat2_tag>();
                 case DataType::BFLOAT4_B: return with_src_and_dst.operator()<SrcType, detail::bfloat4_tag>();
                 case DataType::BFLOAT8_B: return with_src_and_dst.operator()<SrcType, detail::bfloat8_tag>();
                 case DataType::FLOAT32: return with_src_and_dst.operator()<SrcType, float>();
@@ -1460,6 +1592,7 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
         };
 
         switch (src_type) {
+            case DataType::BFLOAT2_B:
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
             case DataType::FLOAT32: return with_src.operator()<float>();
@@ -1473,8 +1606,9 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
         TT_THROW("Unreachable");
     }();
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+    const auto layout = (dtype == DataType::BFLOAT2_B || dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B)
+                            ? Layout::TILE
+                            : input_tensor.layout();
 
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),

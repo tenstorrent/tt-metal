@@ -17,7 +17,7 @@ void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::BFLOAT8_B or
-                tensor.dtype() == DataType::BFLOAT4_B,
+                tensor.dtype() == DataType::BFLOAT4_B or tensor.dtype() == DataType::BFLOAT2_B,
             "Incorrect data type {}",
             tensor.dtype());
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {

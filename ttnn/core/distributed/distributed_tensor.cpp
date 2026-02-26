@@ -132,6 +132,7 @@ public:
         switch (tensor.tensor_spec().data_type()) {
             case tt::tt_metal::DataType::BFLOAT8_B:
             case tt::tt_metal::DataType::BFLOAT4_B:
+            case tt::tt_metal::DataType::BFLOAT2_B:
             case tt::tt_metal::DataType::FLOAT32: return extract_logical_data.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return extract_logical_data.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return extract_logical_data.template operator()<uint32_t>(tensor);
@@ -398,6 +399,7 @@ public:
         switch (tensor.dtype()) {
             case tt::tt_metal::DataType::BFLOAT8_B:
             case tt::tt_metal::DataType::BFLOAT4_B:
+            case tt::tt_metal::DataType::BFLOAT2_B:
             case tt::tt_metal::DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tensor);
             case tt::tt_metal::DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tensor);
             case tt::tt_metal::DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tensor);

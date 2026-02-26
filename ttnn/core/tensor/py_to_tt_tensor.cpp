@@ -33,6 +33,7 @@ bool can_exec_ops_on_device(DataType type) {
             // Tilize doesn't support uint16.
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
             // https://github.com/tenstorrent/tt-metal/issues/35048
@@ -135,7 +136,8 @@ Tensor create_tt_tensor_from_host_data(
 
     switch (src_dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
@@ -173,7 +175,9 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
     };
 
     const DataType mapped_dst_type =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
+        (dst_dtype == DataType::BFLOAT2_B or dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)
+            ? DataType::FLOAT32
+            : dst_dtype;
 
     if (!is_torch_dtype_matches_ttnn(src_dtype)) {
         return mapped_dst_type;
@@ -210,8 +214,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool col_tilize) {
     ZoneScoped;
 
-    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
-        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
+    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT2_B) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b, bfloat4_b, or bfloat2_b!");
     }
 
     GraphTracker::instance().track_function_start(
@@ -236,8 +240,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         auto rank = tensor_shape.rank();
         TT_FATAL(rank >= 2, "col_tilize requires tensor rank >= 2, got {}", rank);
         TT_FATAL(
-            dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B,
-            "col_tilize requires BFP dtype (BFLOAT8_B or BFLOAT4_B)");
+            dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT2_B,
+            "col_tilize requires BFP dtype (BFLOAT8_B, BFLOAT4_B, or BFLOAT2_B)");
 
         const auto K = tensor_shape[-2];
         const auto N = tensor_shape[-1];
