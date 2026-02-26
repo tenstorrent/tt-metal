@@ -363,6 +363,7 @@ void kernel_main() {
                     // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
                     // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
                     if constexpr (!use_q_subblock_push) {
+                        DeviceZoneScopedN("Q");
                         read_chunk_with_padding<q_tile_bytes>(
                             q_reader,
                             cb_q_in,
@@ -447,6 +448,7 @@ void kernel_main() {
                                     cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
                                         k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
                                 } else {
+                                    DeviceZoneScopedN("K");
                                     read_chunk_with_padding<k_tile_bytes>(
                                         k_reader,
                                         cb_k_in,
@@ -544,6 +546,7 @@ void kernel_main() {
                         if constexpr (use_q_subblock_push) {
                             if (k_chunk == 0) {
                                 for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                    DeviceZoneScopedN("Qsubblock");
                                     read_q_subblock<q_tile_bytes>(
                                         q_reader,
                                         cb_q_in,
@@ -601,6 +604,7 @@ void kernel_main() {
                                         vDHt,
                                         skip_src_cols);
                                 } else {
+                                    DeviceZoneScopedN("V");
                                     read_chunk_with_padding<v_tile_bytes>(
                                         v_reader,
                                         cb_v_in,
