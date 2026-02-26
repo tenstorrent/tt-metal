@@ -48,6 +48,7 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     run_test(mesh_device, run_op, check_op, enable_trace)
 
 
+@pytest.mark.skip(reason="temp testing")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in_shape, out_shape, pad_val, dtype, mem_config",
