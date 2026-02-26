@@ -968,7 +968,7 @@ std::string_view QuasarComputeKernel::get_compiler_opt_level() const {
 std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 std::string QuasarComputeKernel::config_hash() const {
-    // QuasarComputeCore values must be sorted to ensure consistent ordering for hash generation
+    // QuasarComputeProcessor values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->compute_processors_.begin(), this->compute_processors_.end()));
     return fmt::format("{}", fmt::join(this->compute_processors_, "_"));
 }
