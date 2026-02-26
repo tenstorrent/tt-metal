@@ -20,4 +20,52 @@ ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, const bool
                          : ttnn::operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
 }
 
+ttnn::SmallVector<int> generate_reduce_dim(
+    const ttnn::Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, int64_t, ttnn::SmallVector<int>>>& dim_arg) {
+    const auto& input_shape = input_tensor_arg.logical_shape();
+    auto rank = input_shape.rank();
+    ttnn::SmallVector<int> dim{};
+    if (dim_arg.has_value()) {
+        if (std::holds_alternative<int>(dim_arg.value())) {
+            auto dim_as_int = std::get<int>(dim_arg.value());
+            dim = ttnn::SmallVector<int>({dim_as_int});
+        } else if (std::holds_alternative<int64_t>(dim_arg.value())) {
+            auto dim_as_int64 = std::get<int64_t>(dim_arg.value());
+            TT_FATAL(
+                dim_as_int64 <= std::numeric_limits<int>::max(),
+                "Dimension cannot be greater than {}",
+                std::numeric_limits<int>::max());
+            auto dim_as_int = static_cast<int>(dim_as_int64);
+            dim = ttnn::SmallVector<int>({static_cast<int>(dim_as_int)});
+        } else {
+            dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
+        }
+    }
+    if (dim.empty()) {
+        dim = ttnn::SmallVector<int>(rank);
+        for (int i = 0; i < rank; i++) {
+            dim[i] = i;
+        }
+        // It's already sorted and all are non-negative.
+        return dim;
+    }
+
+    for (int i = 0; i < dim.size(); i++) {
+        if (dim[i] < 0) {
+            dim[i] += rank;
+        }
+        int dim_i = dim[i];
+        TT_FATAL(
+            dim_i >= 0 && dim_i < rank,
+            "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}",
+            dim_i,
+            i,
+            rank);
+    }
+
+    std::sort(dim.begin(), dim.end());
+    return dim;
+}
+
 }  // namespace reduction_common
