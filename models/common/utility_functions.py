@@ -1042,6 +1042,13 @@ def is_watcher_enabled():
     return (watcher is not None and watcher != "") or lightweight_asserts == "1"
 
 
+def is_llk_assert_enabled():
+    llk_assert = os.environ.get("TT_METAL_LLK_ASSERTS")
+    watcher = os.environ.get("TT_METAL_WATCHER")
+    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
+    return ((watcher is not None and watcher != "") or lightweight_asserts == "1") and llk_assert == "1"
+
+
 def is_n300():
     return os.environ.get("MESH_DEVICE", "N150") == "N300"
 
@@ -1064,6 +1071,10 @@ def skip_for_wormhole_b0(reason_str="not a wormhole test"):
 
 def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
     return ti_skip(is_watcher_enabled(), reason=reason_str)
+
+
+def skip_with_llk_assert(reason_str="Test is not passing with LLK asserts enabled"):
+    return ti_skip(is_llk_assert_enabled(), reason=reason_str)
 
 
 def run_for_blackhole(reason_str="only runs for Blackhole"):

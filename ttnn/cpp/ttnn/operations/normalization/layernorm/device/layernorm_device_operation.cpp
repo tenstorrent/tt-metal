@@ -146,6 +146,18 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
+        const auto shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        uint32_t bbox_num_cores =
+            (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded layernorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox.end_coord.x - bbox.start_coord.x + 1,
+            bbox.end_coord.y - bbox.start_coord.y + 1);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {

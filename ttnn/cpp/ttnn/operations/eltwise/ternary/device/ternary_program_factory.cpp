@@ -1185,8 +1185,11 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         .compile_args = compute_kernel_args,
         .defines = kernel_defines};
 
-    auto compute_kernel_id =
-        tt_metal::CreateKernel(program, get_kernel_file_path(compute_kernel, is_fpu), all_device_cores, compute_config);
+    std::string compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                       operation_attributes.dtype == DataType::INT32)
+                                          ? override_addcmul_compute_kernel(compute_kernel)
+                                          : get_kernel_file_path(compute_kernel, is_fpu);
+    auto compute_kernel_id = tt_metal::CreateKernel(program, compute_kernel_path, all_device_cores, compute_config);
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

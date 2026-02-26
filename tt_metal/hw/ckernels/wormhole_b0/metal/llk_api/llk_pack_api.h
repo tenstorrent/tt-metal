@@ -222,11 +222,7 @@ inline void llk_pack_untilize(
             "");
 
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr,
-            pack_dst_format[output_id],
-            face_r_dim,
-            num_faces,
-            block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
