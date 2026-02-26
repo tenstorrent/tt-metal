@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
@@ -229,6 +229,8 @@ void physical_system_descriptor_to_proto(
     }
 }
 
+}  // namespace
+
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
@@ -333,8 +335,6 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
 
     return descriptor;
 }
-
-}  // namespace
 
 void emit_physical_system_descriptor_to_text_proto(
     const PhysicalSystemDescriptor& descriptor, const std::optional<std::string>& file_path) {

@@ -15,7 +15,7 @@
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 
 namespace tt::tt_metal {
@@ -162,6 +162,20 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto
     pcie_devices_per_tray_ = std::move(proto_desc.get_pcie_devices_per_tray());
     pcie_id_to_asic_location_ = std::move(proto_desc.get_pcie_id_to_asic_location());
     // all_hostnames_unique_ initialized in member initializer list
+}
+
+PhysicalSystemDescriptor::PhysicalSystemDescriptor(const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) :
+    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), target_device_type_(TargetDevice::Silicon) {
+    auto descriptor = proto_to_physical_system_descriptor(proto_desc);
+    target_device_type_ = descriptor->get_target_device_type();
+    system_graph_ = std::move(descriptor->get_system_graph());
+    asic_descriptors_ = std::move(descriptor->get_asic_descriptors());
+    host_to_mobo_name_ = std::move(descriptor->get_host_mobo_name_map());
+    host_to_rank_ = std::move(descriptor->get_host_to_rank_map());
+    exit_node_connection_table_ = std::move(descriptor->get_exit_node_connection_table());
+    ethernet_firmware_version_ = descriptor->get_ethernet_firmware_version();
+    pcie_devices_per_tray_ = std::move(descriptor->get_pcie_devices_per_tray());
+    pcie_id_to_asic_location_ = std::move(descriptor->get_pcie_id_to_asic_location());
 }
 
 PhysicalSystemDescriptor::~PhysicalSystemDescriptor() = default;
