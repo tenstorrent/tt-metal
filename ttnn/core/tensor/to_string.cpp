@@ -14,12 +14,17 @@ namespace ttnn {
 
 std::string to_string(const tt::tt_metal::Tensor& tensor) {
     tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
-    if (!tensor.is_allocated()) {
-        return fmt::format("{}(<deallocated>)", "ttnn.Tensor");
-    }
 
     const auto& shape = tensor.logical_shape();
-    return fmt::format("{}(shape={}, dtype={}, layout={})", "ttnn.Tensor", shape, tensor.dtype(), tensor.layout());
+
+    if (!tensor.is_allocated()) {
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            "ttnn.Tensor",
+            shape,
+            tensor.dtype(),
+            tensor.layout());
+    }
 
     if (is_device_tensor(tensor)) {
         const auto& storage = tensor.device_storage();

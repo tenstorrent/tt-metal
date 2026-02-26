@@ -436,11 +436,17 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout);
 
 template <typename T>
 std::string to_string_impl(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+
     if (!tensor.is_allocated()) {
-        return fmt::format("{}(<deallocated>)", detail::TENSOR_TYPE_STRING);
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            detail::TENSOR_TYPE_STRING,
+            shape,
+            tensor.dtype(),
+            tensor.layout());
     }
 
-    const auto& shape = tensor.logical_shape();
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
@@ -539,6 +545,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 }
 
 HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking) {
+    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.get_storage();
     const auto& mesh_buffer = storage.mesh_buffer;
     distributed::MeshDevice* device = mesh_buffer->device();
@@ -647,6 +654,8 @@ MeshTensor to_device(
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
+
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
@@ -709,6 +718,8 @@ void copy_to_host(
 }
 
 void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
+
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
