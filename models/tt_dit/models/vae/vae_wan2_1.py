@@ -19,6 +19,7 @@ from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tensor import typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

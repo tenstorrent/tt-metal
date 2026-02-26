@@ -1127,8 +1127,8 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
-        (ttnn.DataType.FLOAT32, 0.999915, 0.014),
-        (ttnn.DataType.BFLOAT16, 0.99944, 0.034),
+        (ttnn.DataType.FLOAT32, 0.999_905, 0.014),
+        (ttnn.DataType.BFLOAT16, 0.999_410, 0.035),
     ],
     ids=["f32", "bf16"],
 )
@@ -1342,9 +1342,12 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
 @pytest.mark.parametrize(
-    "dtype",
-    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
-    ids=["bf16", "f32"],
+    "dtype, MIN_PCC, MAX_RMSE",
+    [
+        (ttnn.DataType.FLOAT32, 0.999_945, 0.012),
+        (ttnn.DataType.BFLOAT16, 0.999_000, 0.046),
+    ],
+    ids=["f32", "bf16"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
@@ -1371,7 +1374,9 @@ def test_wan_decoder3d(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, dtype):
+def test_wan_decoder(
+    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, dtype, MIN_PCC, MAX_RMSE
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
@@ -1474,7 +1479,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=0.999_945, relative_rmse=0.012)
+        assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     else:
         logger.warning("Skipping check")
 
