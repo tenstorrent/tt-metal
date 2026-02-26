@@ -312,8 +312,7 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
-# Upgrade uv to latest version (to match release image)
-RUN umask 000 && uv pip install --python "$PYTHON_ENV_DIR/bin/python" --upgrade uv
+RUN find /opt/venv -name EXTERNALLY-MANAGED -print -delete || true
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
