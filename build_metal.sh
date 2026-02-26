@@ -308,7 +308,7 @@ if [ "$compiler" != "" ]; then
             if [ -n "${FLAG_TOOLCHAIN[$compiler]:-}" ]; then
                 toolchain_path="$(toolchain_file "${FLAG_TOOLCHAIN[$compiler]}")"
             else
-                echo "ERROR: Unknown compiler '$compiler'. Allowed: clang, gcc, ${!FLAG_TOOLCHAIN[*]}."
+                echo "ERROR: Unknown compiler '$compiler'. Allowed: clang, gcc, clang-20, clang-20-libcpp, gcc-12, gcc-14."
                 show_help
                 exit 1
             fi;;
