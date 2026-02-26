@@ -211,6 +211,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking

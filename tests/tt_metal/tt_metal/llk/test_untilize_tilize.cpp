@@ -265,6 +265,7 @@ void run_single_core_tilize_program(
     tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

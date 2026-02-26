@@ -324,6 +324,7 @@ void run_single_core_unary_broadcast(
     distributed::WriteShard(cq, src_dram_buffer_1, packed_tilized_input_1, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data_0;
     distributed::ReadShard(cq, dest_buffer_data_0, dst_dram_buffer_0, zero_coord);
