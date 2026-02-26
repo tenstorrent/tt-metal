@@ -2676,5 +2676,203 @@ class TestGlobalCircularBufferPassThrough:
         assert global_cb in merged
 
 
+class TestCBInfoPoolKey:
+    """Tests for CBInfo.pool_key property."""
+
+    def test_pool_key_property(self):
+        """CBInfo.pool_key should return a correct CBPoolKey."""
+        CBInfo = _mock_cb_allocator.CBInfo
+        CBPoolKey = _mock_cb_allocator.CBPoolKey
+
+        info = CBInfo(
+            original_index=3,
+            total_size=4096,
+            data_format=7,
+            page_size=2048,
+            core_ranges="mock",
+            has_buffer=True,
+            unpack_to_dest_mode="Default",
+        )
+
+        key = info.pool_key
+        assert isinstance(key, CBPoolKey)
+        assert key.data_format == 7
+        assert key.page_size == 2048
+        assert key.has_buffer is True
+        assert key.unpack_to_dest_mode == "Default"
+
+    def test_pool_key_equality(self):
+        """Two CBInfos with same config should produce equal pool_keys."""
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        info_a = CBInfo(0, 4096, 7, 2048, "r", has_buffer=False, unpack_to_dest_mode="Default")
+        info_b = CBInfo(5, 8192, 7, 2048, "r", has_buffer=False, unpack_to_dest_mode="Default")
+
+        assert info_a.pool_key == info_b.pool_key
+
+    def test_pool_key_inequality(self):
+        """CBInfos with different config should produce different pool_keys."""
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        info_a = CBInfo(0, 4096, 7, 2048, "r", has_buffer=False, unpack_to_dest_mode="Default")
+        info_b = CBInfo(0, 4096, 7, 4096, "r", has_buffer=False, unpack_to_dest_mode="Default")
+
+        assert info_a.pool_key != info_b.pool_key
+
+
+class TestAliasGroupPermutedOrder:
+    """Tests for permutation-based alias group matching."""
+
+    def test_alias_group_reuse_permuted_order(self):
+        """Phase 1 aliased CBs in reversed order vs phase 0 should still reuse slots."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: alias group with [F16, F32] at orig indices 4,5
+        fmt_a = MagicMock()
+        fmt_a.buffer_index = 4
+        fmt_b = MagicMock()
+        fmt_b.buffer_index = 5
+        cb_a = MagicMock()
+        cb_b = MagicMock()
+
+        cb_info_0 = {
+            4: CBInfo(4, 2048, "F16", 1024, "r", alias_group=0, source_fmt=fmt_a, source_cb=cb_a),
+            5: CBInfo(5, 4096, "F32", 2048, "r", alias_group=0, source_fmt=fmt_b, source_cb=cb_b),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+        remap0 = pool.get_remap(0)
+
+        # Phase 1: same alias group but keys in REVERSED order: [F32, F16]
+        fmt_c = MagicMock()
+        fmt_c.buffer_index = 4
+        fmt_d = MagicMock()
+        fmt_d.buffer_index = 5
+        cb_c = MagicMock()
+        cb_d = MagicMock()
+
+        cb_info_1 = {
+            4: CBInfo(4, 2048, "F32", 2048, "r", alias_group=0, source_fmt=fmt_c, source_cb=cb_c),
+            5: CBInfo(5, 4096, "F16", 1024, "r", alias_group=0, source_fmt=fmt_d, source_cb=cb_d),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+        remap1 = pool.get_remap(1)
+
+        # Both phases should use the same set of slot indices (reused group)
+        slots_0 = {remap0[4], remap0[5]}
+        slots_1 = {remap1[4], remap1[5]}
+        assert slots_0 == slots_1, f"Expected reuse of alias group slots {slots_0}, got {slots_1}"
+        # And specifically: F16 key should map to the F16 slot, F32 to F32
+        # Phase 0: idx 4 → F16 slot, idx 5 → F32 slot
+        # Phase 1: idx 4 → F32 slot (same as phase 0's idx 5), idx 5 → F16 slot (same as phase 0's idx 4)
+        assert remap1[4] == remap0[5]  # F32 in phase 1 → same slot as F32 in phase 0
+        assert remap1[5] == remap0[4]  # F16 in phase 1 → same slot as F16 in phase 0
+
+    def test_alias_group_no_reuse_different_keys(self):
+        """Alias group with completely different keys should NOT reuse slots."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        fmt_a = MagicMock()
+        fmt_a.buffer_index = 4
+        fmt_b = MagicMock()
+        fmt_b.buffer_index = 5
+        cb_mock = MagicMock()
+
+        cb_info_0 = {
+            4: CBInfo(4, 2048, "F16", 1024, "r", alias_group=0, source_fmt=fmt_a, source_cb=cb_mock),
+            5: CBInfo(5, 4096, "F32", 2048, "r", alias_group=0, source_fmt=fmt_b, source_cb=cb_mock),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+        remap0 = pool.get_remap(0)
+
+        # Phase 1: completely different data formats
+        fmt_c = MagicMock()
+        fmt_c.buffer_index = 4
+        fmt_d = MagicMock()
+        fmt_d.buffer_index = 5
+
+        cb_info_1 = {
+            4: CBInfo(4, 2048, "INT8", 512, "r", alias_group=0, source_fmt=fmt_c, source_cb=cb_mock),
+            5: CBInfo(5, 4096, "BFP4", 256, "r", alias_group=0, source_fmt=fmt_d, source_cb=cb_mock),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+        remap1 = pool.get_remap(1)
+
+        # Should get fresh slots (no overlap with phase 0)
+        slots_0 = {remap0[4], remap0[5]}
+        slots_1 = {remap1[4], remap1[5]}
+        assert slots_0.isdisjoint(slots_1), f"Expected disjoint slots but got overlap: {slots_0} & {slots_1}"
+
+
+class TestUniqueAliasGroupsCache:
+    """Tests for _unique_alias_groups cache maintenance."""
+
+    def test_unique_alias_groups_maintained(self):
+        """pool._unique_alias_groups should track all created alias groups."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+        assert len(pool._unique_alias_groups) == 0
+
+        # Phase 0: one alias group with 2 members
+        fmt_a = MagicMock()
+        fmt_a.buffer_index = 0
+        fmt_b = MagicMock()
+        fmt_b.buffer_index = 1
+        cb_mock = MagicMock()
+
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, "r", alias_group=0, source_fmt=fmt_a, source_cb=cb_mock),
+            1: CBInfo(1, 4096, "F32", 2048, "r", alias_group=0, source_fmt=fmt_b, source_cb=cb_mock),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        assert len(pool._unique_alias_groups) == 1
+        group = next(iter(pool._unique_alias_groups))
+        assert len(group) == 2
+
+    def test_unique_alias_groups_reuse_no_growth(self):
+        """Reusing an alias group should not add a new entry to _unique_alias_groups."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        fmt_a = MagicMock()
+        fmt_a.buffer_index = 0
+        fmt_b = MagicMock()
+        fmt_b.buffer_index = 1
+        cb_mock = MagicMock()
+
+        # Phase 0: create alias group
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, "r", alias_group=0, source_fmt=fmt_a, source_cb=cb_mock),
+            1: CBInfo(1, 4096, "F32", 2048, "r", alias_group=0, source_fmt=fmt_b, source_cb=cb_mock),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+        assert len(pool._unique_alias_groups) == 1
+
+        # Phase 1: reuse same alias group (same keys, same order)
+        fmt_c = MagicMock()
+        fmt_c.buffer_index = 0
+        fmt_d = MagicMock()
+        fmt_d.buffer_index = 1
+
+        cb_info_1 = {
+            0: CBInfo(0, 2048, "F16", 1024, "r", alias_group=0, source_fmt=fmt_c, source_cb=cb_mock),
+            1: CBInfo(1, 4096, "F32", 2048, "r", alias_group=0, source_fmt=fmt_d, source_cb=cb_mock),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Should still be 1 — reuse doesn't create new groups
+        assert len(pool._unique_alias_groups) == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
