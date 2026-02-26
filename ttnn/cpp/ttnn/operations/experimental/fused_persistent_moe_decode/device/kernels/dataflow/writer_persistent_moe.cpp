@@ -23,12 +23,8 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, 1);
         uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
         
-        // Clear L1 buffer to zeros before writing to DRAM
-        // This ensures the MoE output is mathematically 0
-        volatile uint32_t* ptr = (volatile uint32_t*)l1_read_addr_out0;
-        for (uint32_t j = 0; j < out0_tile_bytes / 4; j++) {
-            ptr[j] = 0;
-        }
+        // The compute kernel packed a valid tile (copying in0). We just write it to DRAM.
+        // DO NOT manually zero it out, as that destroys the 16-byte tile header!
 
         noc_async_write_tile(i, s0, l1_read_addr_out0);
         noc_async_write_barrier();

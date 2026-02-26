@@ -33,17 +33,35 @@ void MAIN {
         cb_reserve_back(cb_id_out, 1);
         
         for (uint32_t j = 0; j < k; j++) {
-            // Wait for the full expert blocks
-            cb_wait_front(cb_id_w1, w1_expert_tiles);
-            cb_wait_front(cb_id_w3, w3_expert_tiles);
-            cb_wait_front(cb_id_w2, w2_expert_tiles);
-            
-            // Dummy math for now: we just acquire and release the tiles to simulate processing
-            // A fully blocked matmul will replace this in the accuracy step
-            
-            cb_pop_front(cb_id_w1, w1_expert_tiles);
-            cb_pop_front(cb_id_w3, w3_expert_tiles);
-            cb_pop_front(cb_id_w2, w2_expert_tiles);
+            // W1 chunks
+            uint32_t w1_rem = w1_expert_tiles;
+            while (w1_rem > 0) {
+                uint32_t chunk = w1_rem > 256 ? 256 : w1_rem;
+                cb_wait_front(cb_id_w1, chunk);
+                // Math goes here
+                cb_pop_front(cb_id_w1, chunk);
+                w1_rem -= chunk;
+            }
+
+            // W3 chunks
+            uint32_t w3_rem = w3_expert_tiles;
+            while (w3_rem > 0) {
+                uint32_t chunk = w3_rem > 256 ? 256 : w3_rem;
+                cb_wait_front(cb_id_w3, chunk);
+                // Math goes here
+                cb_pop_front(cb_id_w3, chunk);
+                w3_rem -= chunk;
+            }
+
+            // W2 chunks
+            uint32_t w2_rem = w2_expert_tiles;
+            while (w2_rem > 0) {
+                uint32_t chunk = w2_rem > 256 ? 256 : w2_rem;
+                cb_wait_front(cb_id_w2, chunk);
+                // Math goes here
+                cb_pop_front(cb_id_w2, chunk);
+                w2_rem -= chunk;
+            }
         }
 
         // Just output zeros to bypass math for the boundary test

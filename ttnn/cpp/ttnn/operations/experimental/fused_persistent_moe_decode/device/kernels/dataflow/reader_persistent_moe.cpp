@@ -16,6 +16,7 @@ void kernel_main() {
     uint32_t w1_expert_tiles = get_arg_val<uint32_t>(8);
     uint32_t w3_expert_tiles = get_arg_val<uint32_t>(9);
     uint32_t w2_expert_tiles = get_arg_val<uint32_t>(10);
+    uint32_t idx_num_tiles   = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     constexpr uint32_t cb_id_w1 = tt::CB::c_in1;
@@ -46,52 +47,74 @@ void kernel_main() {
         
         // Read topk
         cb_reserve_back(cb_id_idx, 1);
-        noc_async_read_tile(i, s_idx, get_write_ptr(cb_id_idx));
+        noc_async_read_tile(i % idx_num_tiles, s_idx, get_write_ptr(cb_id_idx));
 
         cb_reserve_back(cb_id_wt, 1);
-        noc_async_read_tile(i, s_wt, get_write_ptr(cb_id_wt));
+        noc_async_read_tile(i % idx_num_tiles, s_wt, get_write_ptr(cb_id_wt));
 
         noc_async_read_barrier();
         
+        // Save the pointer to the indices before we push and advance the write pointer!
+        volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_idx));
+
         // Push these immediately so compute can start if it wants
         cb_push_back(cb_id_in0, 1);
         cb_push_back(cb_id_idx, 1);
         cb_push_back(cb_id_wt, 1);
 
-        volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_idx));
-
         for (uint32_t j = 0; j < k; j++) {
-            uint16_t expert_idx = idx_ptr[j];
+            uint16_t expert_idx = idx_ptr[8 + j]; // +8 to skip the 16-byte TileHeader
 
             // W1
-            cb_reserve_back(cb_id_w1, w1_expert_tiles);
-            uint32_t w1_l1 = get_write_ptr(cb_id_w1);
-            for (uint32_t t = 0; t < w1_expert_tiles; t++) {
-                noc_async_read_tile(expert_idx * w1_expert_tiles + t, s_w1, w1_l1);
-                w1_l1 += w1_tile_bytes;
+            uint32_t w1_rem = w1_expert_tiles;
+            uint32_t w1_off = 0;
+            while (w1_rem > 0) {
+                uint32_t chunk = w1_rem > 256 ? 256 : w1_rem;
+                cb_reserve_back(cb_id_w1, chunk);
+                uint32_t l1 = get_write_ptr(cb_id_w1);
+                for (uint32_t t = 0; t < chunk; t++) {
+                    noc_async_read_tile(expert_idx * w1_expert_tiles + w1_off + t, s_w1, l1);
+                    l1 += w1_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_id_w1, chunk);
+                w1_rem -= chunk;
+                w1_off += chunk;
             }
 
             // W3
-            cb_reserve_back(cb_id_w3, w3_expert_tiles);
-            uint32_t w3_l1 = get_write_ptr(cb_id_w3);
-            for (uint32_t t = 0; t < w3_expert_tiles; t++) {
-                noc_async_read_tile(expert_idx * w3_expert_tiles + t, s_w3, w3_l1);
-                w3_l1 += w3_tile_bytes;
+            uint32_t w3_rem = w3_expert_tiles;
+            uint32_t w3_off = 0;
+            while (w3_rem > 0) {
+                uint32_t chunk = w3_rem > 256 ? 256 : w3_rem;
+                cb_reserve_back(cb_id_w3, chunk);
+                uint32_t l1 = get_write_ptr(cb_id_w3);
+                for (uint32_t t = 0; t < chunk; t++) {
+                    noc_async_read_tile(expert_idx * w3_expert_tiles + w3_off + t, s_w3, l1);
+                    l1 += w3_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_id_w3, chunk);
+                w3_rem -= chunk;
+                w3_off += chunk;
             }
 
             // W2
-            cb_reserve_back(cb_id_w2, w2_expert_tiles);
-            uint32_t w2_l1 = get_write_ptr(cb_id_w2);
-            for (uint32_t t = 0; t < w2_expert_tiles; t++) {
-                noc_async_read_tile(expert_idx * w2_expert_tiles + t, s_w2, w2_l1);
-                w2_l1 += w2_tile_bytes;
+            uint32_t w2_rem = w2_expert_tiles;
+            uint32_t w2_off = 0;
+            while (w2_rem > 0) {
+                uint32_t chunk = w2_rem > 256 ? 256 : w2_rem;
+                cb_reserve_back(cb_id_w2, chunk);
+                uint32_t l1 = get_write_ptr(cb_id_w2);
+                for (uint32_t t = 0; t < chunk; t++) {
+                    noc_async_read_tile(expert_idx * w2_expert_tiles + w2_off + t, s_w2, l1);
+                    l1 += w2_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_id_w2, chunk);
+                w2_rem -= chunk;
+                w2_off += chunk;
             }
-
-            noc_async_read_barrier();
-
-            cb_push_back(cb_id_w1, w1_expert_tiles);
-            cb_push_back(cb_id_w3, w3_expert_tiles);
-            cb_push_back(cb_id_w2, w2_expert_tiles);
         }
     }
 }
