@@ -275,10 +275,8 @@ class PostSDPA:
         if sdpa_enabled:
             # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
             sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-            sdpa_input_ms_sample = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
 
             sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
-            num_sdpa_workers = 8
 
             # SDPA forwarder cores: (6,9), (7,9) - provided by caller or default
             # Both must be on row 9 with x > 3 to be outside matmul2 grid (same compile-time args)
@@ -1657,11 +1655,6 @@ class PostSDPA:
                     program.kernels[
                         sdpa_forwarder_group.ncrisc_kernel_index
                     ].runtime_args = sdpa_forwarder_ncrisc_rt_args
-                    # Set for ALL kernel groups that have is_sdpa_forwarder_core=1
-                    # for group in kernel_result.groups:
-                    #    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                    #        program.kernels[group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    #        program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_forwarder_ncrisc_rt_args
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
