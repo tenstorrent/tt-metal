@@ -30,8 +30,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "tt_metal/fabric/topology_solver_internal.hpp"
-
 namespace tt::tt_fabric {
 
 // AdjacencyGraph template method implementations
