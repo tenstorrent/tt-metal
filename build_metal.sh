@@ -110,7 +110,7 @@ show_help() {
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
-    echo "  --compiler compiler_name         Select compiler: clang (best available), gcc (best available), clang-20, clang-20-libcpp, gcc-12, gcc-14."
+    echo "  --compiler compiler_name         Select compiler (best available version if unversioned): ${COMPILER_FLAGS[*]}."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
