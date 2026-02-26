@@ -475,7 +475,7 @@ def main():
             # Text Transformer is auto-regressive. This means that the last token has access to all the information in the sequence.
             # We can thus extract text features from the end-of-text (EOT) token position
             # Note: Using PyTorch for argmax since TT-NN doesn't support advanced indexing yet
-            torch_tokens = ttnn.to_torch(tokens)
+            torch_tokens = ttnn.to_torch(tokens).to(torch.int64)
             torch_x = ttnn.to_torch(x)
 
             eot_indices = torch_tokens.argmax(dim=-1)  # [batch_size]
