@@ -128,6 +128,60 @@ class InferenceOutputs:
     mask_logits: torch.Tensor
 
 
+def _infer_platform_device_label(tt) -> Optional[str]:
+    """Best-effort device label for reporting (e.g., wormhole_n150 / wormhole_n300).
+
+    Note: this does not select hardware; it is only used for perf metadata/README clarity.
+    """
+
+    try:
+        if hasattr(tt, "cluster") and hasattr(tt.cluster, "get_cluster_type") and hasattr(tt.cluster, "ClusterType"):
+            cluster_type = tt.cluster.get_cluster_type()
+            if cluster_type == tt.cluster.ClusterType.N300:
+                return "wormhole_n300"
+            if cluster_type == tt.cluster.ClusterType.N150:
+                return "wormhole_n150"
+    except Exception:
+        pass
+    return None
+
+
+def _collect_platform_metadata(tt, device: object, *, device_label_arg: str, opened_device_id: int) -> Dict[str, object]:
+    meta: Dict[str, object] = {"device_label_arg": device_label_arg, "opened_device_id": int(opened_device_id)}
+
+    try:
+        if hasattr(tt, "_ttnn") and hasattr(tt._ttnn, "device") and hasattr(tt._ttnn.device, "get_arch_name"):
+            meta["arch_name"] = str(tt._ttnn.device.get_arch_name())
+    except Exception:
+        pass
+
+    try:
+        if hasattr(tt, "cluster") and hasattr(tt.cluster, "get_cluster_type"):
+            meta["cluster_type"] = str(tt.cluster.get_cluster_type())
+    except Exception:
+        pass
+
+    try:
+        if hasattr(tt, "distributed") and hasattr(tt.distributed, "get_device_ids"):
+            meta["available_device_ids"] = [int(x) for x in tt.distributed.get_device_ids()]
+    except Exception:
+        pass
+
+    try:
+        if hasattr(device, "get_device_ids"):
+            meta["mesh_device_ids"] = [int(x) for x in device.get_device_ids()]
+    except Exception:
+        pass
+
+    try:
+        if hasattr(device, "get_num_devices"):
+            meta["mesh_num_devices"] = int(device.get_num_devices())
+    except Exception:
+        pass
+
+    return meta
+
+
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MaskFormer Swin-B TTNN demo")
     parser.add_argument("--image", type=Path, required=True, help="Path to input image.")
@@ -137,7 +191,12 @@ def build_argparser() -> argparse.ArgumentParser:
         default="facebook/maskformer-swin-base-coco",
         help="Hugging Face model id or local checkpoint directory.",
     )
-    parser.add_argument("--device", type=str, default="wormhole_n300", help="Target Tenstorrent device label.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="wormhole_n300",
+        help="Device label for reporting only (hardware selection is currently device_id=0).",
+    )
     parser.add_argument("--height", type=int, default=None, help="Resize height (e.g. 320).")
     parser.add_argument("--width", type=int, default=None, help="Resize width (e.g. 320).")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
@@ -170,6 +229,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     opt_env = _configure_optimization_stage(args.optimization_stage)
 
     processor, image, pixel_values = _prepare_inputs(args)
+    device_label_arg = str(args.device)
 
     print(f"[maskformer] Resolving weights for '{args.weights}' ...")
     weight_cfg = WeightConversionConfig(pretrained_model_name=args.weights)
@@ -186,6 +246,16 @@ def main(argv: Optional[list[str]] = None) -> None:
         except TypeError:
             device = tt.open_device(device_id=0)
         _maybe_disable_program_cache(device)
+        detected_label = _infer_platform_device_label(tt) or device_label_arg
+        if detected_label != device_label_arg:
+            print(
+                f"[maskformer] Warning: --device='{device_label_arg}' is a reporting label only; "
+                f"detected platform='{detected_label}'. Perf metadata will use detected label.",
+                flush=True,
+            )
+        platform_meta = _collect_platform_metadata(
+            tt, device, device_label_arg=device_label_arg, opened_device_id=int(open_kwargs.get("device_id", 0))
+        )
         runner = _build_runner(ref_weights.config, tt_state_dict, device=device)
 
         outputs, perf = _timed_inference(
@@ -193,10 +263,11 @@ def main(argv: Optional[list[str]] = None) -> None:
             pixel_values=pixel_values,
             repeats=max(int(args.tt_repeats), 1),
             device=device,
-            perf_device_label=str(args.device),
+            perf_device_label=detected_label,
             image_hw=_resolve_image_hw(args, pixel_values),
             optimization_stage=args.optimization_stage,
             optimization_env=opt_env,
+            platform_meta=platform_meta,
         )
         _print_prediction_summary(outputs.class_logits, id2label)
 
@@ -246,7 +317,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                 processor=processor,
                 forward_fn=lambda pv: runner.forward(pv, device=device),
                 sync_fn=(lambda: tt.synchronize_device(device)) if hasattr(tt, "synchronize_device") else None,
-                device_label=str(args.device),
+                device_label=detected_label,
             )
     finally:
         if device is not None:
@@ -455,6 +526,7 @@ def _timed_inference(
     image_hw: list[int],
     optimization_stage: str,
     optimization_env: Dict[str, str],
+    platform_meta: Dict[str, object],
 ) -> Tuple[InferenceOutputs, Dict[str, object]]:
     tt = require_ttnn("sync device")
 
@@ -495,6 +567,9 @@ def _timed_inference(
         "optimization_stage": optimization_stage,
         "optimization_env": dict(optimization_env),
     }
+    # Include self-describing platform metadata to avoid mislabeling perf runs
+    # (e.g., running the README command on N150 but passing --device wormhole_n300).
+    perf_payload.update(dict(platform_meta))
     return outputs, perf_payload
 
 
@@ -503,6 +578,13 @@ def _emit_perf_header(path: Path, perf: Dict[str, object]) -> None:
         "model": "maskformer-swin-base-coco",
         "mode": perf.get("mode", "unknown"),
         "device": perf.get("device", "unknown"),
+        "device_label_arg": perf.get("device_label_arg", None),
+        "arch_name": perf.get("arch_name", None),
+        "cluster_type": perf.get("cluster_type", None),
+        "mesh_num_devices": perf.get("mesh_num_devices", None),
+        "mesh_device_ids": perf.get("mesh_device_ids", None),
+        "available_device_ids": perf.get("available_device_ids", None),
+        "opened_device_id": perf.get("opened_device_id", None),
         "dtype": perf.get("dtype", "auto"),
         "image_h": perf.get("image_size_hw", [None, None])[0],
         "image_w": perf.get("image_size_hw", [None, None])[1],

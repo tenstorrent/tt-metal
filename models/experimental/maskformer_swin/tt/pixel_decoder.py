@@ -71,6 +71,9 @@ class MaskFormerPixelDecoder:
         # Native group_norm preparation depends on sharded memory config + core grid selected for a given (H, W, C).
         # Cache per-site prepared params to amortize host work.
         self._native_gn_params_cache: Dict[Tuple[str, int, int, int, str], Dict[str, Any]] = {}
+        # Some (site, H, W, C, dtype) shapes are not supported by native group_norm (e.g. NHW not tile-aligned).
+        # Keep a per-shape blacklist so one failure doesn't disable native GN globally.
+        self._native_gn_blacklist: set[Tuple[str, int, int, int, str]] = set()
         self._native_gn_torch_params: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
 
     def forward(
@@ -446,36 +449,62 @@ class MaskFormerPixelDecoder:
                 pass
             self._debug_seen_conv2d_sites.add(site)
 
-        out, [out_h, out_w], [prepared_weight, prepared_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=weight,
-            bias_tensor=bias,
-            in_channels=int(x.shape[-1]),
-            out_channels=int(out_channels),
-            batch_size=int(x.shape[0]),
-            input_height=int(x.shape[1]),
-            input_width=int(x.shape[2]),
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=(1, 1),
-            groups=1,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        weights_ready = _is_device_tensor_nonnull(weight) and (bias is None or _is_device_tensor_nonnull(bias))
+        if weights_ready:
+            [out, [out_h, out_w]] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=bias,
+                in_channels=int(x.shape[-1]),
+                out_channels=int(out_channels),
+                batch_size=int(x.shape[0]),
+                input_height=int(x.shape[1]),
+                input_width=int(x.shape[2]),
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+            prepared_weight = weight
+            prepared_bias = bias
+        else:
+            out, [out_h, out_w], [prepared_weight, prepared_bias] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=bias,
+                in_channels=int(x.shape[-1]),
+                out_channels=int(out_channels),
+                batch_size=int(x.shape[0]),
+                input_height=int(x.shape[1]),
+                input_width=int(x.shape[2]),
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
 
-        # Defensive: conv2d should return device tensors, but avoid TT_FATALs downstream if a host tensor slips through.
-        if hasattr(out, "storage_type") and hasattr(ttnn, "StorageType"):
-            if out.storage_type() != ttnn.StorageType.DEVICE:
-                out = ttnn.to_device(out, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if hasattr(prepared_weight, "storage_type") and hasattr(ttnn, "StorageType"):
-            if prepared_weight.storage_type() != ttnn.StorageType.DEVICE:
-                prepared_weight = ttnn.to_device(prepared_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if prepared_bias is not None and hasattr(prepared_bias, "storage_type") and hasattr(ttnn, "StorageType"):
-            if prepared_bias.storage_type() != ttnn.StorageType.DEVICE:
-                prepared_bias = ttnn.to_device(prepared_bias, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Defensive: conv2d should return device tensors, but avoid TT_FATALs downstream if a host tensor slips through.
+            if hasattr(out, "storage_type") and hasattr(ttnn, "StorageType"):
+                if out.storage_type() != ttnn.StorageType.DEVICE:
+                    out = ttnn.to_device(out, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if hasattr(prepared_weight, "storage_type") and hasattr(ttnn, "StorageType"):
+                if prepared_weight.storage_type() != ttnn.StorageType.DEVICE:
+                    prepared_weight = ttnn.to_device(
+                        prepared_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+            if prepared_bias is not None and hasattr(prepared_bias, "storage_type") and hasattr(ttnn, "StorageType"):
+                if prepared_bias.storage_type() != ttnn.StorageType.DEVICE:
+                    prepared_bias = ttnn.to_device(prepared_bias, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         log_exit = log_enter or (
             self._debug_conv2d
@@ -495,12 +524,20 @@ class MaskFormerPixelDecoder:
             except Exception:
                 pass
 
-        if self._cache_conv2d_weights:
+        if self._cache_conv2d_weights and not weights_ready:
             if weight_key is not None:
                 self._tt_weights[weight_key] = prepared_weight
             if bias_key is not None:
                 self._tt_weights[bias_key] = prepared_bias
-        return ttnn.reshape(out, (int(x.shape[0]), out_h, out_w, int(out_channels)))
+        # Conv2D returns a flattened tensor (typically B x 1 x (H*W) x C) in TILE layout.
+        # Convert to ROW_MAJOR and use `view` to reinterpret as NHWC without invoking a tiled reshape.
+        out_rm = out
+        if getattr(out_rm, "get_layout", None) is not None and out_rm.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            out_rm = ttnn.to_layout(out_rm, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if not hasattr(ttnn, "view"):
+            # Fallback for older runtimes; note this may be slower and less trace-friendly.
+            return ttnn.reshape(out_rm, (int(x.shape[0]), out_h, out_w, int(out_channels)))
+        return ttnn.view(out_rm, (int(x.shape[0]), out_h, out_w, int(out_channels)))
 
     def _group_norm(
         self,
@@ -575,13 +612,19 @@ class MaskFormerPixelDecoder:
 
         skip_moreh = name is not None and name.endswith("_block_gn")
         input_nhw = int(B) * int(H) * int(W)
-        # Native group_norm requires NHW to be divisible by the tile size (32). Some MaskFormer FPN levels
-        # (e.g., 10x10 -> 100) don't satisfy this, so keep them on the manual/moreh paths.
-        if self._prefer_native_group_norm and site in self._native_gn_torch_params and (input_nhw % 32 == 0):
+        # Native group_norm currently requires NHW to be tile-aligned (divisible by 32).
+        # For 320x320 MaskFormer pixel decoder, the 10x10 and 20x20 sites are not tile-aligned.
+        if (
+            self._prefer_native_group_norm
+            and site in self._native_gn_torch_params
+            and (input_nhw % 32 == 0)
+        ):
             try:
                 dtype = self.dtype or get_default_dtype()
                 dtype_key = str(dtype)
                 cache_key = (site, int(H), int(W), int(C), dtype_key)
+                if cache_key in self._native_gn_blacklist:
+                    raise RuntimeError("Native group_norm is blacklisted for this (site, H, W, C, dtype).")
                 cached = self._native_gn_params_cache.get(cache_key)
                 if cached is None:
                     if not hasattr(ttnn, "determine_expected_group_norm_sharded_config_and_grid_size"):
@@ -604,11 +647,16 @@ class MaskFormerPixelDecoder:
 
                     num_cores_across_channel = 1
                     try:
+                        # `create_group_norm_weight_bias_rm()` expects num_channels % num_cores_across_channel == 0.
+                        # For the sharding config returned by
+                        # `determine_expected_group_norm_sharded_config_and_grid_size(..., is_row_major=True)`,
+                        # channels are sharded across `core_grid.x` (see
+                        # `ttnn/ttnn/operations/normalization.py::create_group_norm_sharded_memory_config_and_grid_size`).
                         if (
                             hasattr(ttnn, "TensorMemoryLayout")
                             and mem_cfg.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
                         ):
-                            num_cores_across_channel = int(core_grid.y)
+                            num_cores_across_channel = int(core_grid.x)
                         elif (
                             hasattr(ttnn, "TensorMemoryLayout")
                             and mem_cfg.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -618,6 +666,12 @@ class MaskFormerPixelDecoder:
                             num_cores_across_channel = int(core_grid.x) * int(core_grid.y)
                     except Exception:
                         num_cores_across_channel = 1
+
+                    if int(C) % int(num_cores_across_channel) != 0:
+                        raise RuntimeError(
+                            f"Native group_norm expects channels divisible by cores_across_channel "
+                            f"(C={int(C)} cores_across_channel={int(num_cores_across_channel)})."
+                        )
 
                     w_torch, b_torch = self._native_gn_torch_params[site]
                     w_rm = ttnn.create_group_norm_weight_bias_rm(w_torch, int(C), num_cores_across_channel)
@@ -677,7 +731,11 @@ class MaskFormerPixelDecoder:
                         pass
                 return x_out
             except Exception:
-                self._prefer_native_group_norm = False
+                # Cache the failure for this shape so later group_norm sites can still use native.
+                try:
+                    self._native_gn_blacklist.add(cache_key)  # type: ignore[name-defined]
+                except Exception:
+                    pass
 
         if self._prefer_moreh_group_norm and not skip_moreh and moreh_weight is not None and moreh_bias is not None:
             try:
@@ -762,11 +820,33 @@ class MaskFormerPixelDecoder:
         b = manual_bias if manual_bias is not None else bias
         # Fallback path for runtimes where fused group_norm is unavailable/unstable.
         xg = ttnn.reshape(x, (int(B), int(H) * int(W), groups, channels_per_group))
-        mean = ttnn.mean(xg, dim=[1, 3], keepdim=True)
+        # Keep manual GN intermediates in DRAM/ROW_MAJOR where possible to reduce mixed-layout
+        # elementwise ops (ROW_MAJOR x TILE) which have been observed to cause trace replay hangs
+        # for the full MaskFormer graph on some builds.
+        mean_tile = ttnn.mean(xg, dim=[1, 3], keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mean = mean_tile
+        if getattr(mean_tile, "get_layout", None) is not None and mean_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            mean = ttnn.to_layout(mean_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if hasattr(ttnn, "deallocate"):
+                try:
+                    ttnn.deallocate(mean_tile)
+                except Exception:
+                    pass
         # Avoid ttnn.var here: it has shown instability across repeated invocations on N300.
         # Compute variance via E[x^2] - (E[x])^2.
         xg_sq = xg * xg
-        mean_sq = ttnn.mean(xg_sq, dim=[1, 3], keepdim=True)
+        mean_sq_tile = ttnn.mean(xg_sq, dim=[1, 3], keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mean_sq = mean_sq_tile
+        if (
+            getattr(mean_sq_tile, "get_layout", None) is not None
+            and mean_sq_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT
+        ):
+            mean_sq = ttnn.to_layout(mean_sq_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if hasattr(ttnn, "deallocate"):
+                try:
+                    ttnn.deallocate(mean_sq_tile)
+                except Exception:
+                    pass
         if hasattr(ttnn, "deallocate"):
             try:
                 ttnn.deallocate(xg_sq)
@@ -778,7 +858,7 @@ class MaskFormerPixelDecoder:
                 ttnn.deallocate(mean_sq)
             except Exception:
                 pass
-        denom = ttnn.sqrt(var + float(self.config.group_norm_epsilon))
+        denom = ttnn.sqrt(var + float(self.config.group_norm_epsilon), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if hasattr(ttnn, "deallocate"):
             try:
                 ttnn.deallocate(var)

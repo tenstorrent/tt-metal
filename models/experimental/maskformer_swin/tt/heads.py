@@ -106,6 +106,150 @@ class MaskFormerHeads:
             packer_l1_acc=False,
         )
 
+    def forward_tt(
+        self,
+        decoder_outputs: Any,
+        pixel_embeddings: Any,
+    ) -> Tuple[Any, Any]:
+        """Compute class and mask logits on-device and return TTNN tensors.
+
+        This path intentionally avoids TT->torch conversions so it can be used with tracing.
+        """
+
+        if self.device is None or ttnn is None or self._tt_class_weight is None:
+            raise RuntimeError("MaskFormer heads TT execution requires device + loaded TT weights.")
+
+        debug = os.environ.get("MASKFORMER_TT_DEBUG_HEADS", "0").strip() == "1"
+        if debug:
+            heads_ts = time.perf_counter()
+
+            def _dbg(msg: str) -> None:
+                elapsed = time.perf_counter() - heads_ts
+                print(f"[maskformer][heads] {msg} t={elapsed:.2f}s", flush=True)
+
+            _dbg(f"forward_tt begin dec_type={type(decoder_outputs)!r} pix_type={type(pixel_embeddings)!r}")
+        else:
+
+            def _dbg(msg: str) -> None:
+                return
+
+        _dbg("build program configs")
+        heads_cfg = build_heads_program_configs(
+            num_queries=int(decoder_outputs.shape[1]), hidden_dim=self.config.hidden_dim
+        )
+        act_mem = heads_cfg.activation_memory or ttnn.DRAM_MEMORY_CONFIG
+
+        # decoder_outputs: [B, Q, D]
+        # pixel_embeddings: TT path uses NHWC ([B, H, W, Cmask]); torch reference uses NCHW.
+        # Convert inputs to TT tensors if needed.
+        if isinstance(decoder_outputs, torch.Tensor):
+            _dbg("decoder_outputs torch->tt")
+            dec_tt = ttnn.from_torch(
+                decoder_outputs.detach().contiguous(),
+                dtype=self.dtype or DEFAULT_TT_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=act_mem,
+            )
+        else:
+            dec_tt = decoder_outputs
+            if dec_tt.get_layout() != ttnn.TILE_LAYOUT:
+                _dbg("decoder_outputs to TILE_LAYOUT")
+                dec_tt = ttnn.to_layout(dec_tt, ttnn.TILE_LAYOUT)
+
+        if isinstance(pixel_embeddings, torch.Tensor):
+            _dbg("pixel_embeddings torch->tt")
+            if pixel_embeddings.ndim != 4:
+                raise ValueError(
+                    f"Expected pixel_embeddings to be 4D, got shape={getattr(pixel_embeddings, 'shape', None)}"
+                )
+            pix_nhwc = pixel_embeddings.detach().contiguous().permute(0, 2, 3, 1)
+            pix_tt = ttnn.from_torch(
+                pix_nhwc,
+                dtype=self.dtype or DEFAULT_TT_DTYPE,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=act_mem,
+            )
+        else:
+            pix_tt = pixel_embeddings
+            if pix_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                _dbg("pixel_embeddings to ROW_MAJOR_LAYOUT")
+                pix_tt = ttnn.to_layout(pix_tt, ttnn.ROW_MAJOR_LAYOUT)
+
+        matmul_cfg = self._make_compute_kernel_config()
+        linear_kwargs: Dict[str, Any] = {}
+        matmul_kwargs: Dict[str, Any] = {}
+        if heads_cfg.core_grid is not None:
+            linear_kwargs["core_grid"] = heads_cfg.core_grid
+            matmul_kwargs["core_grid"] = heads_cfg.core_grid
+        if heads_cfg.matmul is not None:
+            linear_kwargs["program_config"] = heads_cfg.matmul
+            matmul_kwargs["program_config"] = heads_cfg.matmul
+
+        def _linear(x, w, b=None, activation=None):
+            if hasattr(ttnn, "linear"):
+                try:
+                    return ttnn.linear(
+                        x,
+                        w,
+                        bias=b,
+                        transpose_b=True,
+                        activation=activation,
+                        compute_kernel_config=matmul_cfg,
+                        dtype=self.dtype or DEFAULT_TT_DTYPE,
+                        **linear_kwargs,
+                    )
+                except Exception:
+                    pass
+            y = ttnn.matmul(x, w, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs)
+            if b is not None:
+                y = ttnn.add(y, b)
+            if activation is not None:
+                y = ttnn.relu(y)
+            return y
+
+        # Class logits: [B, Q, D] x [NumCls+1, D]^T -> [B, Q, NumCls+1]
+        _dbg("class predictor linear")
+        class_logits_tt = _linear(dec_tt, self._tt_class_weight, self._tt_class_bias)
+
+        # Mask embedder MLP: three linears with ReLU
+        _dbg("mask embedder mlp linear1")
+        x = _linear(dec_tt, self._tt_mlp_w1, self._tt_mlp_b1, activation="relu")
+        _dbg("mask embedder mlp linear2")
+        x = _linear(x, self._tt_mlp_w2, self._tt_mlp_b2, activation="relu")
+        _dbg("mask embedder mlp linear3")
+        mask_embeddings_tt = _linear(x, self._tt_mlp_w3, self._tt_mlp_b3, activation=None)
+
+        # Compute mask logits via batched matmul: [B,Q,Cm] x [B,Cm,H*W] -> [B,Q,H*W] -> [B,Q,H,W]
+        B = int(pix_tt.shape[0])
+        H = int(pix_tt.shape[1])
+        W = int(pix_tt.shape[2])
+        C = int(pix_tt.shape[3])
+        _dbg("pixel embeddings reshape to seq")
+        pix_seq = ttnn.reshape(pix_tt, (B, H * W, C))
+        _dbg("pixel embeddings to TILE_LAYOUT")
+        pix_seq_t = ttnn.to_layout(pix_seq, ttnn.TILE_LAYOUT)
+        _dbg("mask logits matmul")
+        logits_seq = ttnn.matmul(
+            mask_embeddings_tt, pix_seq_t, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs
+        )
+        _dbg("mask logits to ROW_MAJOR_LAYOUT")
+        logits_rm = ttnn.to_layout(logits_seq, ttnn.ROW_MAJOR_LAYOUT)
+        _dbg("mask logits reshape to BQHW")
+        logits_hw = ttnn.reshape(logits_rm, (B, int(logits_rm.shape[1]), H, W))
+
+        # Normalize output layout/memory config for downstream consumers.
+        _dbg("class logits to ROW_MAJOR_LAYOUT")
+        class_logits_rm = class_logits_tt
+        if class_logits_rm.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            class_logits_rm = ttnn.to_layout(class_logits_rm, ttnn.ROW_MAJOR_LAYOUT)
+        _dbg("outputs to DRAM")
+        class_logits_rm = ttnn.to_memory_config(class_logits_rm, ttnn.DRAM_MEMORY_CONFIG)
+        logits_hw = ttnn.to_memory_config(logits_hw, ttnn.DRAM_MEMORY_CONFIG)
+        _dbg("forward_tt end")
+        return class_logits_rm, logits_hw
+
     def forward(
         self,
         decoder_outputs: torch.Tensor,
@@ -118,135 +262,9 @@ class MaskFormerHeads:
 
         # TTNN execution path
         if self.device is not None and ttnn is not None and self._tt_class_weight is not None:
-            debug = os.environ.get("MASKFORMER_TT_DEBUG_HEADS", "0").strip() == "1"
-            if debug:
-                heads_ts = time.perf_counter()
-
-                def _dbg(msg: str) -> None:
-                    elapsed = time.perf_counter() - heads_ts
-                    print(f"[maskformer][heads] {msg} t={elapsed:.2f}s", flush=True)
-
-                _dbg(f"forward begin dec_type={type(decoder_outputs)!r} pix_type={type(pixel_embeddings)!r}")
-            else:
-
-                def _dbg(msg: str) -> None:
-                    return
-
-            _dbg("build program configs")
-            heads_cfg = build_heads_program_configs(
-                num_queries=int(decoder_outputs.shape[1]), hidden_dim=self.config.hidden_dim
-            )
-            act_mem = heads_cfg.activation_memory or ttnn.DRAM_MEMORY_CONFIG
-
-            # decoder_outputs: [B, Q, D]
-            # pixel_embeddings: [B, Cmask, H, W]
-            # Convert inputs to TT tensors if needed
-            if isinstance(decoder_outputs, torch.Tensor):
-                _dbg("decoder_outputs torch->tt")
-                dec_tt = ttnn.from_torch(
-                    decoder_outputs.detach().contiguous(),
-                    dtype=self.dtype or DEFAULT_TT_DTYPE,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=act_mem,
-                )
-            else:
-                dec_tt = decoder_outputs
-                if dec_tt.get_layout() != ttnn.TILE_LAYOUT:
-                    _dbg("decoder_outputs to TILE_LAYOUT")
-                    dec_tt = ttnn.to_layout(dec_tt, ttnn.TILE_LAYOUT)
-            if isinstance(pixel_embeddings, torch.Tensor):
-                _dbg("pixel_embeddings torch->tt")
-                pix_nhwc = pixel_embeddings.detach().contiguous().permute(0, 2, 3, 1)
-                pix_tt = ttnn.from_torch(
-                    pix_nhwc,
-                    dtype=self.dtype or DEFAULT_TT_DTYPE,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.device,
-                    memory_config=act_mem,
-                )
-            else:
-                pix_tt = pixel_embeddings
-                if pix_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                    _dbg("pixel_embeddings to ROW_MAJOR_LAYOUT")
-                    pix_tt = ttnn.to_layout(pix_tt, ttnn.ROW_MAJOR_LAYOUT)
-
-            matmul_cfg = self._make_compute_kernel_config()
-            linear_kwargs = {}
-            matmul_kwargs = {}
-            if heads_cfg.core_grid is not None:
-                linear_kwargs["core_grid"] = heads_cfg.core_grid
-                matmul_kwargs["core_grid"] = heads_cfg.core_grid
-            if heads_cfg.matmul is not None:
-                linear_kwargs["program_config"] = heads_cfg.matmul
-                matmul_kwargs["program_config"] = heads_cfg.matmul
-
-            def _linear(x, w, b=None, activation=None):
-                if hasattr(ttnn, "linear"):
-                    try:
-                        return ttnn.linear(
-                            x,
-                            w,
-                            bias=b,
-                            transpose_b=True,
-                            activation=activation,
-                            compute_kernel_config=matmul_cfg,
-                            dtype=self.dtype or DEFAULT_TT_DTYPE,
-                            **linear_kwargs,
-                        )
-                    except Exception:
-                        pass
-                y = ttnn.matmul(x, w, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs)
-                if b is not None:
-                    y = ttnn.add(y, b)
-                if activation is not None:
-                    y = ttnn.relu(y)
-                return y
-
-            # Class logits: [B, Q, D] x [NumCls+1, D]^T -> [B, Q, NumCls+1]
-            _dbg("class predictor linear")
-            class_logits_tt = _linear(dec_tt, self._tt_class_weight, self._tt_class_bias)
-
-            # Mask embedder MLP: three linears with ReLU
-            _dbg("mask embedder mlp linear1")
-            x = _linear(dec_tt, self._tt_mlp_w1, self._tt_mlp_b1, activation="relu")
-            _dbg("mask embedder mlp linear2")
-            x = _linear(x, self._tt_mlp_w2, self._tt_mlp_b2, activation="relu")
-            _dbg("mask embedder mlp linear3")
-            mask_embeddings_tt = _linear(x, self._tt_mlp_w3, self._tt_mlp_b3, activation=None)
-
-            # Compute mask logits via batched matmul: [B,Q,Cm] x [B,Cm,H*W] -> [B,Q,H*W] -> [B,Q,H,W]
-            B = int(pix_tt.shape[0])
-            H = int(pix_tt.shape[1])
-            W = int(pix_tt.shape[2])
-            C = int(pix_tt.shape[3])
-            _dbg("pixel embeddings reshape to seq")
-            pix_seq = ttnn.reshape(pix_tt, (B, H * W, C))
-            _dbg("pixel embeddings to TILE_LAYOUT")
-            pix_seq_t = ttnn.to_layout(pix_seq, ttnn.TILE_LAYOUT)
-            _dbg("mask logits matmul")
-            logits_seq = ttnn.matmul(
-                mask_embeddings_tt, pix_seq_t, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs
-            )
-            _dbg("mask logits to ROW_MAJOR_LAYOUT")
-            logits_rm = ttnn.to_layout(logits_seq, ttnn.ROW_MAJOR_LAYOUT)
-            _dbg("mask logits reshape to BQHW")
-            logits_hw = ttnn.reshape(logits_rm, (B, int(logits_rm.shape[1]), H, W))
-
-            # Return torch tensors for downstream post-processing
-            _dbg("class logits to ROW_MAJOR_LAYOUT")
-            class_logits_rm = class_logits_tt
-            if class_logits_rm.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                class_logits_rm = ttnn.to_layout(class_logits_rm, ttnn.ROW_MAJOR_LAYOUT)
-            _dbg("class logits to DRAM")
-            class_logits_rm = ttnn.to_memory_config(class_logits_rm, ttnn.DRAM_MEMORY_CONFIG)
-            _dbg("convert class logits to torch")
-            class_logits = self._ensure_torch_tensor(logits_to_torch(class_logits_rm))
-            _dbg("mask logits to DRAM")
-            logits_hw = ttnn.to_memory_config(logits_hw, ttnn.DRAM_MEMORY_CONFIG)
-            _dbg("convert mask logits to torch")
-            mask_logits = self._ensure_torch_tensor(logits_to_torch(logits_hw))
-            _dbg("forward end")
+            class_logits_tt, mask_logits_tt = self.forward_tt(decoder_outputs, pixel_embeddings)
+            class_logits = self._ensure_torch_tensor(logits_to_torch(class_logits_tt))
+            mask_logits = self._ensure_torch_tensor(logits_to_torch(mask_logits_tt))
             return class_logits, mask_logits
 
         # Fallback path (HF/torch)
