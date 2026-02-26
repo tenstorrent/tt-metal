@@ -10,6 +10,11 @@
  *************************************************************************/
 
 // TODO NC: Remove as the part of tt-metal#34499
+
+// WARNING: Experimental API for SDPA optimizations only.
+// This header has no corresponding tests in the llk-test infrastructure.
+// Do not use outside of SDPA optimization workflows.
+
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_mop_config_custom(const uint32_t output, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(output);
