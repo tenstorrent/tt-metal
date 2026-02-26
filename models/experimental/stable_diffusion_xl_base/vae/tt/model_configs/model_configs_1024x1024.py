@@ -4,10 +4,10 @@
 
 import ttnn
 
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 
 
-class VAEModelOptimisations(ModelOptimisations):
+class VAEModelOptimisations1024x1024(ModelOptimisations1024x1024):
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
