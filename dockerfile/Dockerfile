@@ -276,6 +276,9 @@ ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN umask 000 && uv pip install $WHEEL_FILENAME
 
+# Install uv into the venv for runtime use
+RUN umask 000 && "$PYTHON_ENV_DIR/bin/python" -m pip install uv
+
 #############################################################
 
 FROM base AS release-models
