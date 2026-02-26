@@ -136,14 +136,18 @@ void CompareKernelVsReference(
 static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
     using namespace ttml;
 
-    // Generate random input data using parallel_generate (following RMSNorm pattern)
+    // Generate random input data using parallel_generate.
+    // Use non-zero-mean distribution [0, 1] so that outputs have meaningful magnitude;
+    // zero-mean inputs (e.g. [-1, 1]) often yield near-zero outputs, making precision
+    // checks less discriminating (see code review discussion on test faithfulness).
     auto& rng = autograd::ctx().get_generator();
 
-    const float bound = 1.0f;
+    const float low = 0.0f;
+    const float high = 1.0f;
 
     xt::xarray<float> input_data = xt::empty<float>(input_shape);
     core::parallel_generate<float>(
-        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+        input_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, /* seed */ rng());
 
     // Create weight tensors: w1, w3 [1, 1, C, H], w2 [1, 1, H, C]
     const uint32_t input_dim = input_shape.back();
@@ -152,14 +156,14 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
 
     xt::xarray<float> w1_data = xt::empty<float>(w1_w3_shape);
     core::parallel_generate<float>(
-        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+        w1_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, /* seed */ rng());
 
     xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
     core::parallel_generate<float>(
-        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+        w2_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, /* seed */ rng());
     xt::xarray<float> w3_data = xt::empty<float>(w1_w3_shape);
     core::parallel_generate<float>(
-        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
+        w3_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, /* seed */ rng());
 
     CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
 }
@@ -220,24 +224,25 @@ TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
     const uint32_t hidden_dim = 128U;
 
     auto& rng = autograd::ctx().get_generator();
-    const float bound = 1.0f;
+    const float low = 0.0f;
+    const float high = 1.0f;
 
     xt::xarray<float> input_data = xt::empty<float>(input_shape);
     core::parallel_generate<float>(
-        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+        input_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, rng());
 
     std::vector<uint32_t> w_shape = {1, 1, input_shape.back(), hidden_dim};
     std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_shape.back()};
 
     xt::xarray<float> w1_data = xt::empty<float>(w_shape);
     core::parallel_generate<float>(
-        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+        w1_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, rng());
     xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
     core::parallel_generate<float>(
-        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+        w2_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, rng());
     xt::xarray<float> w3_data = xt::empty<float>(w_shape);
     core::parallel_generate<float>(
-        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+        w3_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, rng());
 
     auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, &device));
     auto w1_tensor = autograd::create_tensor(core::from_xtensor(w1_data, &device));
