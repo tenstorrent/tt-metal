@@ -372,7 +372,9 @@ class PostSDPA:
             sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
             sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
             sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-            sdpa_fwd_slot_size = 256 + sdpa_l_chunk_size_bytes  # Header + max payload
+            sdpa_fwd_slot_size = (
+                ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_l_chunk_size_bytes
+            )  # Header + max payload
             sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
 
             # SDPA semaphore ID for scatter arrival (new semaphore)
@@ -460,7 +462,7 @@ class PostSDPA:
         ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
         ccl_num_pages = gather2_dst_num_pages  # 224 pages of 1x32
         ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
-        ccl_packet_header_size_bytes = 32
+        ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         l1_alignment = 16
 
         has_residual = 1 if residual_tensor_mesh is not None else 0
@@ -1097,13 +1099,14 @@ class PostSDPA:
                     cb_list.append(sdpa_ms_out_cb_descriptor)
 
                     # CB 24: SDPA packet slot (for fabric packet headers)
+                    sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
                     sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_packet_slot,
                         data_format=ttnn.uint32,
-                        page_size=256,  # Packet header size
+                        page_size=sdpa_packet_header_cb_size,
                     )
                     sdpa_packet_slot_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=256,
+                        total_size=sdpa_packet_header_cb_size,
                         core_ranges=sdpa_worker_grid,
                         format_descriptors=[sdpa_packet_slot_cb_format],
                     )
