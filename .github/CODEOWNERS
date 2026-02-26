@@ -404,6 +404,7 @@ models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/
 models/vllm_test_utils/ @skhorasganiTT @viktorpusTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 
 # tracy
 tools/tracy/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
