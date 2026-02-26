@@ -283,3 +283,54 @@ jobs:
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  quick-bh-glx-quick:
+    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
+    runs-on:
+      - topology-6u
+      - arch-blackhole
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        TT_METAL_ENABLE_ERISC_IRAM: 1
+        TT_METAL_SLOW_DISPATCH_MODE: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run DeepSeek V3 B1 MoE/MLP reduce tests
+        timeout-minutes: 20
+        run: |
+          pytest --timeout 600 models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py::test_mlp_with_reduce models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py::test_moe_fused_with_reduce
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: UJ45FEC7M # Allan Liu
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
