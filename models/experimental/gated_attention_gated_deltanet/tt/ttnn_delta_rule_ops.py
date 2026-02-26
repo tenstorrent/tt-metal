@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 TTNN implementations of the gated delta rule.
 Contains both the recurrent (token-by-token) and chunked (parallel prefill)
