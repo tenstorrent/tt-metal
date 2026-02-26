@@ -1,0 +1,28 @@
+{
+    "prompts": [
+        {
+            "id": "dog_description",
+            "image": "../dog.jpg",
+            "prompt": "Describe this image in detail.",
+            "expected_keywords": ["dog", "animal", "pet"]
+        },
+        {
+            "id": "dog_breed",
+            "image": "../dog.jpg",
+            "prompt": "What breed of dog is this?",
+            "expected_keywords": ["breed", "dog"]
+        },
+        {
+            "id": "dog_activity",
+            "image": "../dog.jpg",
+            "prompt": "What is the dog doing in this image?",
+            "expected_keywords": ["dog", "doing", "action"]
+        },
+        {
+            "id": "dog_haiku",
+            "image": "../dog.jpg",
+            "prompt": "Write a short haiku about this dog.",
+            "expected_keywords": ["haiku", "poem"]
+        }
+    ]
+}
