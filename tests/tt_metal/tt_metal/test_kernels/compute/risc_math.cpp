@@ -3,16 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/debug/dprint.h"
-#include "internal/hw_thread.h"
+#include "api/compute/common.h"
+#include "dev_mem_map.h"
+#include "ckernel.h"
 
 void kernel_main() {
-    [[maybe_unused]] int thread_idx = internal_::get_hw_thread_idx();
+    const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+    const uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+    [[maybe_unused]] const uint32_t thread_idx = NUM_TRISC_CORES * neo_id + trisc_id;
+    const uint32_t l1_address = get_arg_val<uint32_t>(0);
 #ifdef TRISC_PACK
     int32_t A = 1;
     int32_t B = 2;
 
     DPRINT << "TEST packer" << ENDL();
-    DPRINT << A + B + thread_idx << ENDL();
+    const uint32_t value = A + B;
+    DPRINT << A + B << ENDL();
+    *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
 #ifdef TRISC_UNPACK
@@ -20,7 +27,9 @@ void kernel_main() {
     int32_t B = 2;
 
     DPRINT << "TEST unpacker" << ENDL();
-    DPRINT << A + B + thread_idx << ENDL();
+    const uint32_t value = A + B;
+    DPRINT << A + B << ENDL();
+    *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
 #ifdef TRISC_MATH
@@ -28,6 +37,8 @@ void kernel_main() {
     int32_t B = 2;
 
     DPRINT << "TEST math" << ENDL();
-    DPRINT << A + B + thread_idx << ENDL();
+    const uint32_t value = A + B;
+    DPRINT << A + B << ENDL();
+    *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 }
