@@ -595,6 +595,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -612,9 +613,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
@@ -961,6 +962,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -978,9 +980,9 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
