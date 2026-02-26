@@ -4,19 +4,18 @@
 
 #include "hal_1xx_common.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::hal_1xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& l1_cache_enable_processors =
-        rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
-    auto processor_index = MetalContext::instance().hal().get_processor_index(
-        params.core_type, params.processor_class, params.processor_id);
+        params.rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
+    auto processor_index = hal_.get_processor_index(params.core_type, params.processor_class, params.processor_id);
     defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
-    if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
+    if (params.rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
         l1_cache_enable_processors.contains(params.core_type, processor_index)) {
         defines.push_back("ENABLE_L1_DATA_CACHE");
     }
@@ -64,15 +63,18 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("RISC_B0_HW");
             break;
         }
-        default: TT_ASSERT(false, "Unsupported programmable core type {} to query defines", params.core_type); break;
+        default:
+            TT_ASSERT(
+                false,
+                "Unsupported programmable core type {} to query defines",
+                enchantum::to_string(params.core_type));
+            break;
     }
 
     // Defines for the shared subordinate eth fw source
     if (params.core_type == HalProgrammableCoreType::IDLE_ETH || params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
         defines.push_back(fmt::format(
-            "PROGRAMMABLE_CORE_TYPE={} ",
-            static_cast<int>(
-                tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(params.core_type))));
+            "PROGRAMMABLE_CORE_TYPE={} ", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
     }
 
     return defines;
@@ -134,7 +136,10 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                 default: TT_THROW("Invalid processor id {}", params.processor_id);
             }
             break;
-        default: TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", params.core_type); break;
+        default:
+            TT_ASSERT(
+                false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
+            break;
     }
     return srcs;
 }
