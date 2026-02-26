@@ -70,6 +70,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
     }
     const bool is_causal = operation_attributes.is_causal;
+
+    // Hardcode for testing purposes.
+    // operation_attributes.chunk_start_idx = 0;
+    // TODO: Check chunk_start_idx.
+
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     auto program_config = operation_attributes.program_config;
@@ -286,7 +291,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
 
     // log all values
@@ -505,8 +510,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+
+    // Causal SDPA problem: For uneven splits, this is the problem. Sometimes we cannot ballance.
+    // Idea: Q chunks should be grouped **before** work division.
     uint32_t balanced_q_parallel =
         (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+    TT_ASSERT(!is_causal || balanced_q_parallel, "Causal SDPA not balanced");
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }

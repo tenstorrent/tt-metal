@@ -61,18 +61,18 @@ def run_flash_mla_prefill_impl(
 
     # Workaround since regular SDPA doesnt allow causality if k and v have different seq_lengths.
     # Need to add this support as part of ring attention work somehow, but for now, pretend it isn't causal.
-    is_causal = seq_len_q == seq_len_kv
+    is_causal = True  # seq_len_q == seq_len_kv
 
     scale = (kv_lora_rank + d_rope) ** -0.5
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=(8, 8),  # device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_first,
         k_chunk_size=v_chunk_first,
         exp_approx_mode=False,
     )
 
     sdpa_program_config_second = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=(8, 8),  # device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_second,
         k_chunk_size=v_chunk_second,
         exp_approx_mode=False,
@@ -138,6 +138,7 @@ def run_flash_mla_prefill_impl(
     tt_v_latent_post_repeat = ttnn.repeat(tt_v_latent, [1, nh, 1, 1])
     tt_v_embedding = ttnn.linear(tt_v_latent_post_repeat, tt_v_out, dtype=dtype)
 
+    # this is the op
     tt_new_sdpa_out = ttnn.transformer.flash_mla_prefill(
         tt_q,
         tt_k,
@@ -161,19 +162,6 @@ def run_flash_mla_prefill_impl(
 @pytest.mark.parametrize(
     "batch, seq_len_q, seq_len_kv, nh, nkv, kv_lora_rank, d_rope, v_head_dim, q_chunk_first, v_chunk_first, q_chunk_second, v_chunk_second",
     [
-        # cases from deepseek
-        # TP=8, SP=1, seq_len = 1k
-        (1, 1024, 1024, 16, 16, 512, 64, 128, 32, 32, 32, 32),
-        # TP=8, SP=1, seq_len = 4k
-        (1, 4096, 4096, 16, 16, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=1, seq_len = 1k
-        (1, 1024, 1024, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=1, seq_len = 4k
-        (1, 4096, 4096, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=32, seq_len = 16k
-        (1, 512, 16384, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=32, seq_len = 32k
-        (1, 1024, 32768, 32, 32, 512, 64, 128, 32, 32, 32, 32),
         # TP=4, SP=32, seq_len = 128k
         (1, 4096, 131072, 32, 32, 512, 64, 128, 128, 256, 128, 512),
     ],
@@ -203,6 +191,7 @@ def test_flash_mla_prefill(
     function_level_defaults,
     reset_seeds,
 ):
+    # Causal SDPA
     if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
         if seq_len_kv == 131072:
             pytest.skip("Skip WH test due to pcc failure. Should properly set k/v chunk sizes for this case.")

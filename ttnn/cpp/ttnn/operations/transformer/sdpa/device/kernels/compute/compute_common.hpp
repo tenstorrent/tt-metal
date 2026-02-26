@@ -1488,6 +1488,14 @@ void sdpa_inner_loop(
 #else
             q_chunk = local_q_start + q_iter;
 #endif
+
+            // HACK: for profiling
+            const uint32_t q_second_half_threshold = 16;  // 32 chunks in 4
+            if (q_chunk >= q_second_half_threshold) {
+                q_chunk += 1024 - 16;  // chunk 0-15 -> 0-15, 16-31 -> 1008-1023
+                // assert(q_chunk < 1024);  // sanity check that we don't go out of bounds
+            }
+
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;

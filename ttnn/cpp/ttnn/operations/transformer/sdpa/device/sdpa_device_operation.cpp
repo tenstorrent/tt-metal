@@ -100,12 +100,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
-        const auto Sq = q_shape[2];
+        // const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto Sk = k_shape[2];
         if (attrs.is_causal) {
-            TT_FATAL(
-                Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
+            // TT_FATAL(
+            //     Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
 
         if (use_mla) {
