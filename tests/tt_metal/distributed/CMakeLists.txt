@@ -52,8 +52,7 @@ target_sources(
     PRIVATE
         benchmark_thread_pool.cpp
         benchmark_distributed_host_buffer.cpp
-        benchmark_hd_sockets.cpp
-        hd_socket_test_utils.cpp
+        benchmark_d2h_socket_gbench.cpp
 )
 
 target_link_libraries(
