@@ -27,7 +27,7 @@ class Cluster;
 }
 
 namespace tt {
-enum class TargetDevice: std::uint8_t;
+enum class TargetDevice : std::uint8_t;
 }
 
 namespace tt::llrt {
@@ -36,6 +36,10 @@ class RunTimeOptions;
 
 namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
+}
+
+namespace tt::fabric::proto {
+class PhysicalSystemDescriptor;
 }
 
 namespace tt::tt_metal {
@@ -162,6 +166,7 @@ public:
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
     PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
+    PhysicalSystemDescriptor(const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc);
 
     ~PhysicalSystemDescriptor();
 

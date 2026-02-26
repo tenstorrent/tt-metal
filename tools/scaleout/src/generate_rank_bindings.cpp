@@ -21,7 +21,7 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
