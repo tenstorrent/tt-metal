@@ -4,12 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
 // #include "api/debug/dprint.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     // UNPACK(( DPRINT << "Block count=" << uint32_t(per_core_block_cnt) << " tile count=" << per_core_block_tile_cnt <<
@@ -27,4 +26,3 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
     }
 }
-}  // namespace NAMESPACE

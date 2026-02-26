@@ -258,8 +258,7 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
 .. code-block:: cpp
 
     // tt_metal/programming_examples/matmul_single_core/kernels/compute/mm.cpp
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         const uint32_t Mt = get_compile_time_arg_val(0);
         const uint32_t Kt = get_compile_time_arg_val(1);
         const uint32_t Nt = get_compile_time_arg_val(2);
@@ -296,7 +295,6 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
                 tile_regs_release();
             }
         }
-    }
     }
 
 The writer kernel

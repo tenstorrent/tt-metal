@@ -10,6 +10,13 @@ from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
+
 
 class TtResNet(LightweightModule):
     """
@@ -122,6 +129,7 @@ class TtResNet(LightweightModule):
 
         Returns dictionary with feature maps from res2, res3, res4, res5.
         """
+        signpost("RESNET_BACKBONE_FORWARD_START")
         logger.debug(f"TtResNet forward - input: {x.shape}")
 
         # Stem processing
@@ -140,7 +148,10 @@ class TtResNet(LightweightModule):
         # Process residual layers and collect outputs
         outputs = {}
         for layer_name, layer in [("res2", self.res2), ("res3", self.res3), ("res4", self.res4), ("res5", self.res5)]:
+            signpost(f"RESNET_LAYER_{layer_name.upper()}_START")
             x = self._forward_res_layer(x, layer)
+            signpost(f"RESNET_LAYER_{layer_name.upper()}_END")
+
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
             # Reshape if flattened [1, 1, NHW, C] -> [1, H, W, C]
@@ -162,7 +173,7 @@ class TtResNet(LightweightModule):
             # with deallocate_activation=False to preserve backbone features
             outputs[layer_name] = x
             logger.debug(f"{layer_name} complete - output: {outputs[layer_name].shape}")
-
+        signpost("RESNET_BACKBONE_FORWARD_END")
         return outputs
 
     def _forward_res_layer(self, x: ttnn.Tensor, layer: list[TtBottleneck]) -> ttnn.Tensor:

@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -23,6 +22,9 @@
 #include <memory>
 #include <vector>
 
+namespace tt {
+class Cluster;
+}  // namespace tt
 namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
 class PhysicalSystemDescriptor;
@@ -61,7 +63,9 @@ struct RouterEdge {
 struct hash_pair {
     template <class T1, class T2>
     size_t operator()(const std::pair<T1, T2>& p) const {
-        return tt::stl::hash::hash_objects(std::hash<T1>{}(p.first), std::hash<T2>{}(p.second));
+        size_t seed = std::hash<T1>{}(p.first);
+        seed ^= std::hash<T2>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
     }
 };
 
@@ -101,7 +105,14 @@ using RequestedIntermeshPorts =
 class MeshGraph {
 public:
     explicit MeshGraph(
-        const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
+        tt::tt_metal::ClusterType cluster_type,
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt);
+
+    explicit MeshGraph(
+        const tt::Cluster& cluster,
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt);
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -155,7 +166,11 @@ public:
 
     // Generate a mesh graph of a specific shape (used by topology mapper)
     static MeshGraph generate_mesh_graph_of_shape(
-        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
+        MeshShape mesh_shape,
+        tt::tt_fabric::FabricType fabric_type,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode,
+        tt::ARCH arch,
+        std::uint32_t num_connections_per_direction);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
@@ -174,6 +189,10 @@ public:
 
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
+    // Check if the graph topology policy (for inter-mesh connections) is relaxed
+    // Returns false (STRICT) if MeshGraphDescriptor is not available or if graph topology policy is STRICT
+    bool is_inter_mesh_policy_relaxed() const;
+
     // Get the MeshGraphDescriptor instance (if available)
     // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
     const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
@@ -186,7 +205,6 @@ public:
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:
-    // Private constructor for static factory functions
     MeshGraph() = default;
 
     void validate_mesh_id(MeshId mesh_id) const;
@@ -194,7 +212,8 @@ private:
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
-    void initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config);
+    void initialize_from_mgd(
+        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
 
     void add_to_connectivity(
         MeshId src_mesh_id,
@@ -224,6 +243,7 @@ private:
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;

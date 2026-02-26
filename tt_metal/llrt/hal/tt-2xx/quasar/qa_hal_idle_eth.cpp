@@ -12,7 +12,6 @@ using namespace tt::tt_metal::quasar::idle_eth;
 
 #include <cstdint>
 
-#include <tt_stl/assert.hpp>
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
@@ -128,6 +127,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         false /*supports_cbs*/,
+        false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         idle_eth_dev_msgs::create_factory(),
         idle_eth_fabric_telemetry::create_factory()};

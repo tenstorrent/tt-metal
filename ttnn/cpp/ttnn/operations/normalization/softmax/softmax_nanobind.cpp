@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "softmax.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
@@ -82,7 +82,16 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
         .def_rw("compute_with_storage_grid_size", &SoftmaxShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
         .def_rw("subblock_w", &SoftmaxShardedMultiCoreProgramConfig::subblock_w)
         .def_rw("block_h", &SoftmaxShardedMultiCoreProgramConfig::block_h)
-        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
+        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w)
+        .def("__repr__", [](const SoftmaxShardedMultiCoreProgramConfig& config) {
+            return fmt::format(
+                "SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={}, subblock_w={}, block_h={}, "
+                "block_w={})",
+                config.compute_with_storage_grid_size,
+                config.subblock_w,
+                config.block_h,
+                config.block_w);
+        });
 }
 
 // Softmax operation base
@@ -130,27 +139,22 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
                 * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
     )doc";
 
-    using OperationType = decltype(ttnn::softmax);
-
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"softmax">(
         mod,
-        ttnn::softmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                int,
+                const std::optional<ttnn::MemoryConfig>&,
+                std::optional<const DeviceComputeKernelConfig>,
+                bool>(&ttnn::softmax),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none(),
-            nb::arg("numeric_stable").noconvert() = true});
+            nb::arg("numeric_stable").noconvert() = true));
 }
 
 // Softmax with scale and mask
@@ -206,24 +210,19 @@ void bind_normalization_softmax_scale_mask_operation(nb::module_& mod) {
                 * All tensors must be on-device.
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
     )doc";
-    using OperationType = decltype(ttnn::scale_mask_softmax);
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"scale_mask_softmax">(
         mod,
-        ttnn::scale_mask_softmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const bool is_causal_mask,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(
-                    input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                std::optional<float>,
+                const std::optional<const Tensor>&,
+                const std::optional<ttnn::MemoryConfig>&,
+                bool,
+                std::optional<const DeviceComputeKernelConfig>,
+                bool>(&ttnn::scale_mask_softmax),
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
@@ -231,7 +230,7 @@ void bind_normalization_softmax_scale_mask_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("is_causal_mask") = false,
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("numeric_stable") = true});
+            nb::arg("numeric_stable") = true));
 }
 
 // Softmax in-place operation
@@ -276,27 +275,22 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
                 * Supports both default and sharded multi-core program configurations.
     )doc";
 
-    using OperationType = decltype(ttnn::softmax_in_place);
-
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"softmax_in_place">(
         mod,
-        ttnn::softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const SoftmaxProgramConfig& program_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, dim, program_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                int,
+                const SoftmaxProgramConfig&,
+                std::optional<const DeviceComputeKernelConfig>,
+                bool>(&ttnn::softmax_in_place),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
             nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("numeric_stable") = true});
+            nb::arg("numeric_stable") = true));
 }
 
 // Softmax with scale and mask in-place operation
@@ -357,24 +351,18 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
                 * Internal block size constraints may restrict in-place operation for very large width tensors.
     )doc";
 
-    using OperationType = decltype(ttnn::scale_mask_softmax_in_place);
-
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"scale_mask_softmax_in_place">(
         mod,
-        ttnn::scale_mask_softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const SoftmaxProgramConfig& program_config,
-               const bool is_causal_mask,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(
-                    input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                std::optional<float>,
+                const std::optional<const Tensor>&,
+                const SoftmaxProgramConfig&,
+                bool,
+                std::optional<const DeviceComputeKernelConfig>,
+                bool>(&ttnn::scale_mask_softmax_in_place),
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale") = nb::none(),
             nb::arg("mask") = nb::none(),
@@ -384,7 +372,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
             // See issue #28531
-            nb::arg("numeric_stable") = false});
+            nb::arg("numeric_stable") = false));
 }
 
 // Softmax with scale and causal mask in-place operation
@@ -445,22 +433,17 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
                 * Scale parameter is typically provided for attention scaling
     )doc";
 
-    using OperationType = decltype(ttnn::scale_causal_mask_hw_dims_softmax_in_place);
-
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"scale_causal_mask_hw_dims_softmax_in_place">(
         mod,
-        ttnn::scale_causal_mask_hw_dims_softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const SoftmaxProgramConfig& program_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                std::optional<float>,
+                const std::optional<const Tensor>&,
+                const SoftmaxProgramConfig&,
+                std::optional<const DeviceComputeKernelConfig>,
+                bool>(&ttnn::scale_causal_mask_hw_dims_softmax_in_place),
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
@@ -469,7 +452,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
             // See issue #28531
-            nb::arg("numeric_stable") = false});
+            nb::arg("numeric_stable") = false));
 }
 
 void bind_normalization_softmax(nb::module_& mod) {

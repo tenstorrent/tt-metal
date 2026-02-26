@@ -13,13 +13,16 @@
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-template <bool read, bool write, bool init_wr_tile_ptr>
+// shift_mask: When true (default), shifts mask by start_cb_index before processing
+// Set shift_mask to false when mask bits are already aligned (pre-shifted for upper CBs)
+template <bool read, bool write, bool init_wr_tile_ptr, bool shift_mask = true>
 FORCE_INLINE void setup_local_cb_read_write_interfaces(
     uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint32_t local_cb_mask) {
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr =
         cb_l1_base + start_cb_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-
-    local_cb_mask >>= start_cb_index;
+    if constexpr (shift_mask) {
+        local_cb_mask >>= start_cb_index;
+    }
     uint32_t cb_id = start_cb_index;
     LocalCBInterface* local_interface_ptr = &get_local_cb_interface(cb_id);
 
@@ -63,6 +66,14 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
             if (init_wr_tile_ptr) {
                 local_interface.fifo_wr_tile_ptr = 0;
             }
+#ifdef ARCH_QUASAR
+            if (read) {
+                local_interface.fifo_rd_tile_idx = 0;
+            }
+            if (write) {
+                local_interface.fifo_wr_tile_idx = 0;
+            }
+#endif
             cb_id++;
         } else {
             circular_buffer_config_addr += UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
@@ -95,7 +106,14 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
         ".if %[init_wr_tile_ptr]\n\t"
         "    sw zero, %[off_fifo_tile_wr_ptr](%[liptr])\n\t"  // local_interface.fifo_wr_tile_ptr = 0;
         ".endif\n\t"
-
+#ifdef ARCH_QUASAR
+        ".if %[read]\n\t"
+        "    sw zero, %[off_fifo_rd_tile_idx](%[liptr])\n\t"  // local_interface.fifo_rd_tile_idx = 0;
+        ".endif\n\t"
+        ".if %[write]\n\t"
+        "    sw zero, %[off_fifo_wr_tile_idx](%[liptr])\n\t"  // local_interface.fifo_wr_tile_idx = 0;
+        ".endif\n\t"
+#endif
         // Advance to next cb config.
         "    addi %[cbconfig], %[cbconfig], %[circular_buffer_byte_size]\n\t"
 
@@ -153,6 +171,10 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
           [off_fifo_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_ptr)),
           [off_tiles_acked] "i"(offsetof(LocalCBInterface, tiles_acked_received_init)),
           [off_fifo_tile_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_tile_ptr)),
+#ifdef ARCH_QUASAR
+          [off_fifo_rd_tile_idx] "i"(offsetof(LocalCBInterface, fifo_rd_tile_idx)),
+          [off_fifo_wr_tile_idx] "i"(offsetof(LocalCBInterface, fifo_wr_tile_idx)),
+#endif
           [local_cb_interface_size] "i"(sizeof(CBInterface)),
           [circular_buffer_byte_size] "i"(UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t)),
           [read] "i"(read ? 1 : 0),
@@ -173,6 +195,11 @@ inline void setup_remote_cb_interfaces(
     for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
         uint32_t config_addr = circular_buffer_config_addr[0];
         uint32_t page_size = circular_buffer_config_addr[1];
+        circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+        // Skip unconfigured remote CBs - config_addr will be 0 if no remote CB was configured at this index
+        if (config_addr == 0) {
+            continue;
+        }
         volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
         const bool is_sender = l1_remote_cb_config_addr[0];
@@ -206,7 +233,6 @@ inline void setup_remote_cb_interfaces(
             // Using posted semaphore inc
             resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         }
-        circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
     }
 }
 

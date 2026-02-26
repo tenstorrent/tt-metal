@@ -19,7 +19,6 @@ from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_CACHE_DIR_PATTERN = "{home}/.cache/{hostname}_rank{rank}"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
@@ -27,6 +26,51 @@ PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
 ORIGINAL_CWD = Path.cwd().resolve()
+
+
+def get_local_network_interfaces() -> List[str]:
+    """Get list of network interface names on the local host.
+
+    Returns:
+        List of interface names (e.g., ['lo', 'eth0', 'cnx1'])
+    """
+    try:
+        # /sys/class/net contains symlinks to all network interfaces
+        net_path = Path("/sys/class/net")
+        if net_path.exists():
+            return [p.name for p in net_path.iterdir()]
+    except (OSError, PermissionError) as exc:
+        # Best-effort enumeration: on non-Linux or restricted environments, fall back to empty list
+        logger.debug(f"{TT_RUN_PREFIX} Failed to enumerate network interfaces: {exc}")
+    return []
+
+
+def validate_network_interface(interface: str, verbose: bool = False) -> None:
+    """Warn if the specified network interface doesn't exist on the local host.
+
+    This is a best-effort check - we can only validate the local host, not remote
+    MPI hosts. The warning helps catch typos and misconfiguration early.
+
+    Args:
+        interface: Network interface name to validate (e.g., 'eth0', 'cnx1')
+        verbose: If True, log additional diagnostic information
+    """
+    local_interfaces = get_local_network_interfaces()
+
+    if not local_interfaces:
+        # Can't determine interfaces (non-Linux or permission issue), skip check
+        if verbose:
+            logger.debug(f"{TT_RUN_PREFIX} Unable to enumerate network interfaces, skipping validation")
+        return
+
+    if interface not in local_interfaces:
+        logger.warning(
+            f"{TT_RUN_PREFIX} Network interface '{interface}' not found on local host. "
+            f"Available interfaces: {', '.join(sorted(local_interfaces))}. "
+            f"Note: This check only validates the local host; the interface may exist on remote MPI hosts."
+        )
+    elif verbose:
+        logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
 class RankBinding(BaseModel):
@@ -43,10 +87,12 @@ class TTRunConfig(BaseModel):
 
     rank_bindings: List[RankBinding] = Field(..., min_length=1, description="Rank to fabric bindings")
     global_env: Dict[str, str] = Field(default_factory=dict, description="Global environment variables for all ranks")
-    mesh_graph_desc_path: str = Field(..., description="Path to mesh graph descriptor")
+    mesh_graph_desc_path: Path = Field(..., description="Path to mesh graph descriptor")
     mock_cluster_rank_binding: Dict[int, Path] = Field(
-        default_factory=dict, description="Mock cluster rank binding configuration"
+        default_factory=dict, description="Mock cluster rank binding configuration (rank -> resolved path)"
     )
+
+    model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("rank_bindings")
     def validate_ranks(cls, bindings: List[RankBinding]) -> List[RankBinding]:
@@ -62,14 +108,13 @@ class TTRunConfig(BaseModel):
 
         return bindings
 
-    @field_validator("mesh_graph_desc_path")
-    def validate_mesh_graph_exists(cls, path: str) -> str:
+    @field_validator("mesh_graph_desc_path", mode="before")
+    def validate_mesh_graph_exists(cls, path: Union[str, Path]) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
         """
-        resolved = resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
-        return str(resolved)
+        return resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
 
 
 def get_search_paths() -> List[Optional[Path]]:
@@ -130,13 +175,27 @@ def resolve_path(
     search_paths = get_search_paths()
     check_fn = Path.is_file if must_be_file else Path.exists
 
+    # Track TT_METAL_HOME for fallback warning
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_checked = False
+
     for base_path in search_paths:
         if base_path is None:
             continue
         candidate = (base_path / expanded_path).resolve()
         if check_fn(candidate):
-            logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
+            # Warn if TT_METAL_HOME was set but we found the file elsewhere (fallback occurred)
+            if tt_metal_home and tt_metal_home_checked and str(base_path) != tt_metal_home:
+                logger.debug(
+                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home}), "
+                    f"using fallback location: {candidate}"
+                )
+            else:
+                logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
             return candidate
+        # Track if we checked TT_METAL_HOME
+        if tt_metal_home and str(base_path) == str(Path(tt_metal_home).expanduser()):
+            tt_metal_home_checked = True
 
     # Path not found
     if must_exist:
@@ -180,7 +239,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
             mock_data = yaml.safe_load(f)
 
         # Validate and resolve mock cluster rank binding configuration paths
-        resolved_mock_bindings = {}
+        resolved_mock_bindings: Dict[int, Path] = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
             resolved_path = resolve_path(
                 path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
@@ -198,6 +257,36 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+    "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
+    "MESH_",  # Mesh config (e.g., MESH_DEVICE)
+)
+
+# Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.
+# These are either:
+# 1. Explicitly managed by tt-run and derived from rank bindings (not parent environment)
+# 2. Should only be set via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
+#
+# TT_VISIBLE_DEVICES: Controls which PCIe devices are visible to a process. This must be set
+# per-rank via env_overrides in rank bindings to ensure each MPI process sees only its assigned
+# devices. Passing through from the parent environment would override per-rank device assignments
+# configured by cluster descriptors and rank bindings, causing incorrect device visibility.
+# See: tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md Section 5.2
+#      scripts/scaleout/README_generate_cluster_descriptors.md
+#
+# Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE are NOT blocklisted because
+# they are read from the parent environment (with fallbacks) and should be passed through to
+# support NFS-based distributed workloads where all MPI ranks share the same python_venv.
+ENV_BLOCKLIST = frozenset(
+    {
+        # Managed by tt-run - values derived from rank bindings, not parent environment
+        "TT_MESH_ID",  # Mesh identifier from rank binding
+        "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
+        "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
+        "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
+        "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
+        # Should only come from rank binding env_overrides
+        "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
+    }
 )
 
 
@@ -211,45 +300,45 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     Returns:
         Dictionary of environment variables for this rank
     """
-    # Handle TT_METAL_CACHE with rank-specific suffix to prevent cache conflicts/collisions between ranks (multi-process safety).
-    hostname = os.uname().nodename
-
-    if "TT_METAL_CACHE" in os.environ:
-        user_cache_path = os.environ["TT_METAL_CACHE"]
-        base_path = user_cache_path
-        logger.warning(
-            f"{TT_RUN_PREFIX} User-provided TT_METAL_CACHE '{user_cache_path}' "
-            f"will be modified with rank suffix for multi-process safety"
-        )
-    else:
-        # Use launch directory for cache when TT_METAL_CACHE is not set.
-        # This ensures the cache is on the shared filesystem (NFS) visible to all nodes.
-        base_path = f"{ORIGINAL_CWD}/.cache"
-
-    # Apply consistent rank suffix pattern to both user-provided and default paths
-    cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
-
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
+    # Variables in ENV_BLOCKLIST are excluded even if they match prefixes
     env = {}
+    passthrough_vars = []
+    blocked_vars = []
     for key, value in os.environ.items():
         if key.startswith(ENV_PASSTHROUGH_PREFIXES):
-            env[key] = value
+            if key in ENV_BLOCKLIST:
+                blocked_vars.append(key)
+            else:
+                env[key] = value
+                passthrough_vars.append(key)
+
+    if passthrough_vars:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Auto-propagating {len(passthrough_vars)} environment variables "
+            f"with prefixes {ENV_PASSTHROUGH_PREFIXES}: {', '.join(sorted(passthrough_vars))}"
+        )
+
+    if blocked_vars:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Blocked {len(blocked_vars)} environment variables from pass-through "
+            f"(managed by tt-run or rank bindings): {', '.join(sorted(blocked_vars))}"
+        )
 
     # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
     # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
     default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
 
     # Set/override core tt-run managed variables
+    # Note: Path objects are converted to str here at the env var boundary
     env.update(
         {
-            "TT_METAL_CACHE": cache_path,
             "TT_MESH_ID": str(binding.mesh_id),
-            "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+            "TT_MESH_GRAPH_DESC_PATH": str(config.mesh_graph_desc_path),
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
             "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
-            "PYTHONHOME": os.environ.get("PYTHONHOME", str(ORIGINAL_CWD)),
             # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
             "LD_LIBRARY_PATH": os.environ.get(
                 "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))
@@ -259,12 +348,28 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         }
     )
 
+    # Pass critical shell/user environment variables.
+    # HOME and USER are required by OpenMPI for process management and state files.
+    # PATH enables finding executables (e.g., pytest in venv).
+    # VIRTUAL_ENV enables venv-aware execution on remote hosts.
+    for var in ("HOME", "USER", "PATH", "VIRTUAL_ENV"):
+        if os.environ.get(var):
+            env[var] = os.environ[var]
+
+    # PYTHONHOME: Only pass through if explicitly set. Do NOT default to ORIGINAL_CWD.
+    # Setting PYTHONHOME incorrectly causes Python to look for its standard library
+    # in the wrong location, resulting in "ModuleNotFoundError: No module named 'encodings'".
+    # When using a virtualenv, PYTHONHOME should not be set - Python determines the
+    # correct paths from the executable location.
+    if os.environ.get("PYTHONHOME"):
+        env["PYTHONHOME"] = os.environ["PYTHONHOME"]
+
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
         env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
 
     if config.mock_cluster_rank_binding:
-        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = config.mock_cluster_rank_binding[binding.rank]
+        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -323,11 +428,11 @@ def build_mpi_command(
     if not bind_to_already_specified:
         cmd.extend(["--bind-to", "none"])
 
+    # Always enable tagged output for easier debugging (prefixes output with rank info)
+    cmd.extend(["--tag-output"])
+
     if mpi_args:
         cmd.extend(mpi_args)
-
-    if debug_gdbserver:
-        cmd.extend(["--tag-output"])
 
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
@@ -385,7 +490,12 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
-@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show path resolution diagnostics, environment propagation, and MPI command details",
+)
 @click.option(
     "--mpi-args",
     callback=lambda ctx, param, value: shlex.split(value) if value else None,
@@ -402,15 +512,15 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
 @click.option(
-    "--multihost",
+    "--bare",
     is_flag=True,
-    help="Enable recommended MPI settings for multi-host clusters (TCP transport, tagged output, etc.)",
+    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
 )
 @click.option(
     "--tcp-interface",
     type=str,
     default=None,
-    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Implies --multihost.",
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
 )
 @click.pass_context
 def main(
@@ -422,7 +532,7 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
-    multihost: bool,
+    bare: bool,
     tcp_interface: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
@@ -487,8 +597,8 @@ def main(
         # Single host, multiple processes
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # Multi-host with recommended MPI settings
-        tt-run --rank-binding binding.yaml --multihost --mpi-args "--rankfile hosts.txt" ./my_app
+        # Multi-host with rankfile (multihost MPI settings are default)
+        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
         # Multi-host with specific network interface (e.g., ConnectX NIC)
         tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
@@ -504,19 +614,21 @@ def main(
         The following variables are automatically set for each rank:
         - TT_MESH_ID: Mesh identifier
         - TT_MESH_HOST_RANK: Host rank within the mesh
-        - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
-        - PYTHONHOME: Python installation directory
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+        - HOME: Passed through (required by OpenMPI for process management)
+        - USER: Passed through (required by OpenMPI for process identity)
+        - PATH: Passed through from caller (enables venv tools like pytest on remote hosts)
+        - VIRTUAL_ENV: Passed through from caller (enables venv-aware execution)
+        - PYTHONHOME: Passed through only if explicitly set (do not set when using virtualenvs)
 
         Default values for the following environment variables will be used if not set when calling tt-run:
         - TT_METAL_HOME: Launch directory (where tt-run was invoked)
         - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
         - PYTHONPATH: Launch directory
-        - PYTHONHOME: Launch directory
         - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
 
         This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
@@ -528,6 +640,17 @@ def main(
         - ARCH_*: Architecture variables (e.g., ARCH_NAME)
         - WH_*: Wormhole-specific variables (e.g., WH_ARCH_YAML)
         - TTNN_*: TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+
+        Exception: The following TT_* variables are BLOCKED from automatic pass-through because
+        they are managed by tt-run or should only be set via rank binding env_overrides:
+        - TT_VISIBLE_DEVICES: Must be set per-rank via env_overrides in rank bindings to ensure
+          correct device visibility. Cluster descriptors and rank bindings configure this per-rank.
+        - TT_MESH_ID, TT_MESH_HOST_RANK, TT_MESH_GRAPH_DESC_PATH: Derived from rank bindings/config
+        - TT_RUN_ORIGINAL_CWD, TT_METAL_MOCK_CLUSTER_DESC_PATH: Set by tt-run internally
+
+        Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE ARE passed through from
+        the parent environment to support NFS-based distributed workloads where all MPI ranks
+        share the same python_venv from the launch directory.
 
         You can also specify additional environment variables in the rank binding YAML using
         the `global_env` field (for all ranks) or `env_overrides` field (per-rank).
@@ -554,30 +677,29 @@ def main(
         Use --verbose to see path resolution diagnostics.
 
     \b
-    Multi-Host Mode (--multihost):
-        The --multihost flag enables recommended MPI settings for multi-host cluster environments.
-        This adds the following MPI arguments:
+    Tagged Output:
+        tt-run always enables --tag-output, which prefixes each output line with rank
+        information (e.g., [1,0]<stdout>:). This makes it easier to identify which rank
+        produced each line of output when debugging distributed applications.
+
+    \b
+    Multi-Host MPI Settings (default):
+        tt-run applies recommended MPI settings for multi-host clusters by default:
 
         - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
-        - --mca btl_tcp_if_exclude lo: Exclude loopback interface (can't route inter-node traffic)
-        - --tag-output: Prefix output lines with rank information for easier debugging
+        - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
-        instead of btl_tcp_if_exclude to explicitly select the network interface.
+        instead to explicitly select the network interface.
+
+        Use --bare to disable these settings (e.g., single-host or special setups).
 
         These settings help avoid common MPI issues in multi-host environments:
         - Stale process connections from other nodes
-        - Network interface selection problems
-        - Output interleaving from multiple ranks
-
-        Note: Only loopback (lo) is excluded by default. Loopback must be excluded because it
-        can only communicate with the local machine, making it useless for inter-node MPI traffic.
-        Other interfaces like docker0 are not excluded to remain compatible with Docker containers
-        and other virtualized environments where network interface naming varies. For explicit
-        interface control, use --tcp-interface.
+        - Network interface selection problems (docker0, lo can't route inter-node traffic)
 
         Example:
-            tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
+            tt-run --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
             tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
     \b
@@ -667,29 +789,28 @@ def main(
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")
 
-    # Build multihost MPI args if requested
-    # --tcp-interface implies --multihost
-    if tcp_interface:
-        multihost = True
+    # Apply default multihost MPI args unless --bare
+    if tcp_interface and not bare:
+        # Validate the interface exists on the local host (best-effort check)
+        validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
-    if multihost:
+    if not bare:
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
-        # - Exclude loopback (can't route inter-node traffic)
-        # - Tag output with rank info for easier debugging
-        # Note: Only exclude 'lo' to remain compatible with Docker containers
-        # and other virtualized environments. Users needing specific interface
-        # control should use --tcp-interface.
+        # - Exclude loopback and docker0 (can't route inter-node traffic)
+        # Note: Exclude both 'lo' (loopback) and 'docker0' (Docker bridge) by default.
+        # These interfaces cannot route traffic between hosts and can cause MPI
+        # process discovery issues if selected. For specific interface control,
+        # use --tcp-interface.
         multihost_args = [
             "--mca",
             "btl",
             "self,tcp",
             "--mca",
             "btl_tcp_if_exclude",
-            "lo",
-            "--tag-output",
+            "docker0,lo",
         ]
 
         if tcp_interface:
@@ -701,14 +822,13 @@ def main(
                 "--mca",
                 "btl_tcp_if_include",
                 tcp_interface,
-                "--tag-output",
             ]
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args
 
         if verbose:
-            logger.info(f"{TT_RUN_PREFIX} Multihost mode enabled with args: {' '.join(multihost_args)}")
+            logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(

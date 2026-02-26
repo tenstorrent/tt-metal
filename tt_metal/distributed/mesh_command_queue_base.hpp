@@ -20,12 +20,14 @@ protected:
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
 
     // Helper functions for reading and writing individual shards
-    virtual void write_shard_to_device(
+    // Returns true if pinned memory was used for the transfer
+    virtual bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,

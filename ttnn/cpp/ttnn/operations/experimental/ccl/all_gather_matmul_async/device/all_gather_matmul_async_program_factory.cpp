@@ -9,13 +9,10 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include <unordered_map>
 #include <tt_stl/overloaded.hpp>
 
 namespace ttnn::experimental::prim {
-
-using Tensors = std::vector<Tensor>;
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions

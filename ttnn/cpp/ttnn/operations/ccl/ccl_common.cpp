@@ -566,44 +566,6 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
-    Program& program,
-    const ccl::EriscDatamoverBuilder& edm_builder,
-    const std::string& kernel_path,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id,
-    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
-    edm_builder.dump_to_log();
-
-    const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
-    // Ethernet Kernels
-    const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
-    log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
-    log_trace(tt::LogOp, "CT ARGS:");
-    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
-        log_trace(tt::LogOp, "\t{}", s);
-    }
-
-    auto kernel_config =
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
-    if (opt_level.has_value()) {
-        kernel_config.opt_level = opt_level.value();
-    }
-    auto eth_sender_kernel = tt::tt_metal::CreateKernel(program, kernel_path, eth_core, kernel_config);
-
-    tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
-
-    std::stringstream ss;
-    ss << "EDM ARGS:\n";
-    for (const auto& s : edm_kernel_rt_args) {
-        ss << "\t" << s << "\n";
-    }
-    log_trace(tt::LogOp, "{}", ss.str());
-
-    return eth_sender_kernel;
-}
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* /*device*/,
@@ -611,13 +573,18 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
-    return generate_edm_kernel_impl(
-        program,
-        edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id);
+    edm_builder.dump_to_log();
+    return tt::tt_fabric::generate_erisc_datamover_kernel(tt::tt_fabric::FabricEriscDatamoverKernelConfig{
+        .program = program,
+        .kernel_path = "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        .eth_core = eth_core,
+        .risc_id = risc_id,
+        .noc_id = noc_id,
+        .compile_time_args = edm_builder.get_compile_time_args((uint32_t)risc_id),
+        .named_compile_time_args = {},
+        .runtime_args = edm_builder.get_runtime_args(),
+        .opt_level = std::nullopt,
+    });
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
@@ -1856,6 +1823,58 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
         TT_THROW("Unsupported fabric config");
     }
     return std::make_tuple(forward_args, backward_args);
+}
+
+void fabric_mux_connection_ct_args(
+    const uint32_t num_workers_per_direction,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args) {
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel 0
+    worker_ct_args.push_back(
+        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes 1
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address 2
+    worker_ct_args.push_back(
+        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address 3
+    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4
+}
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
+        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
 }  // namespace ttnn::ccl

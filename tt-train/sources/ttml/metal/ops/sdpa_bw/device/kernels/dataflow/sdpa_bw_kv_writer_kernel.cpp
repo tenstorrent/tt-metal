@@ -24,6 +24,12 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // heads per group
 
+#ifdef CAUSAL_MASK
+    // Generate causal mask tile ONCE - will be reused for every diagonal
+    constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
+    generate_causal_mask_tile(cb_attn_mask);
+#endif
+
     const uint32_t tile_bytes = get_tile_size(cb_grad_key);
 
     // TensorAccessor definitions with chained offsets

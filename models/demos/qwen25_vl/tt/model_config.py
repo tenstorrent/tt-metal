@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -102,6 +103,7 @@ class VisionModelArgs(ModelArgs):
 
     def reference_vision_model(self, depth=None):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
         from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
             Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
         )
@@ -109,8 +111,61 @@ class VisionModelArgs(ModelArgs):
         print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
-        return model.visual
+        vision_model = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
+
+        if self.dummy_weights:
+            return vision_model
+
+        # Load only vision weights to reduce host memory usage.
+        key_prefixes = ("visual.", "model.visual.")
+        vision_state_dict = load_hf_state_dict_filtered(self.CKPT_DIR, key_prefixes)
+        if not vision_state_dict:
+            logger.warning(
+                "No vision weights found in {} for prefixes {}. Vision model will use default init.",
+                self.CKPT_DIR,
+                key_prefixes,
+            )
+            return vision_model
+
+        prefix_stripped_state_dict = {}
+        for key, value in vision_state_dict.items():
+            if key.startswith("model.visual."):
+                key = key[len("model.visual.") :]
+            elif key.startswith("visual."):
+                key = key[len("visual.") :]
+            prefix_stripped_state_dict[key] = value
+
+        model_keys = set(vision_model.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in prefix_stripped_state_dict.items() if k in model_keys}
+
+        logger.info(
+            "Filtered vision weights: checkpoint_keys={}, prefix_stripped_keys={}, matched_model_keys={}, model_keys={}",
+            len(vision_state_dict),
+            len(prefix_stripped_state_dict),
+            len(filtered_state_dict),
+            len(model_keys),
+        )
+        if not filtered_state_dict:
+            logger.warning(
+                "No matching vision weights found after filtering for {}. Check prefixes or checkpoint contents.",
+                key_prefixes,
+            )
+            return vision_model
+
+        load_result = vision_model.load_state_dict(filtered_state_dict, strict=False)
+        if load_result.missing_keys:
+            logger.warning(
+                "Vision model missing {} of {} weights after filtered load.",
+                len(load_result.missing_keys),
+                len(model_keys),
+            )
+        if load_result.unexpected_keys:
+            logger.warning(
+                "Vision model received {} unexpected keys after filtered load.",
+                len(load_result.unexpected_keys),
+            )
+
+        return vision_model
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]

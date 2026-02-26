@@ -6,22 +6,9 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "gelu_backward_program_factory.hpp"
 
-#include "tt-metalium/host_api.hpp"
-
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-GeluBackwardDeviceOperation::program_factory_t GeluBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return GeluBackwardProgramFactory{};
-}
-
-void GeluBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
@@ -118,11 +105,8 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& grad_output = tensor_args.grad_output;
     const auto& input_shape = input_tensor.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<GeluBackwardDeviceOperation>(
         args,
-        program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
         grad_output.dtype(),

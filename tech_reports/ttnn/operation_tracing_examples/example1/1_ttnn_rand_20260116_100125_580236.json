@@ -1,0 +1,68 @@
+{
+  "operation_id": 1,
+  "operation_name": "ttnn.rand",
+  "args": [],
+  "kwargs": {
+    "shape": [
+      4,
+      5
+    ],
+    "dtype": {
+      "type": "DataType",
+      "repr": "DataType.BFLOAT16"
+    },
+    "layout": {
+      "type": "Layout",
+      "repr": "Layout.TILE"
+    },
+    "device": {
+      "type": "MeshDevice",
+      "value": "MeshDevice(1x1 grid, 1 devices)"
+    }
+  },
+  "return_value": {
+    "type": "ttnn.Tensor",
+    "shape": [
+      4,
+      5
+    ],
+    "dtype": "float32",
+    "values": [
+      [
+        0.90625,
+        0.953125,
+        0.62890625,
+        0.81640625,
+        0.515625
+      ],
+      [
+        0.87890625,
+        0.439453125,
+        0.51171875,
+        0.75390625,
+        0.045654296875
+      ],
+      [
+        0.75,
+        0.375,
+        0.99609375,
+        0.498046875,
+        0.9921875
+      ],
+      [
+        0.052490234375,
+        0.0262451171875,
+        0.2099609375,
+        0.10498046875,
+        0.83984375
+      ]
+    ],
+    "original_shape": [
+      4,
+      5
+    ],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.DEVICE"
+  }
+}
