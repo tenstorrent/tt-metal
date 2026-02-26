@@ -102,9 +102,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     return {tray_id, asic_location};
 }
 
-bool resolve_hostname_uniqueness(
-    PhysicalSystemDescriptor& /* psd */,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) {
+bool resolve_hostname_uniqueness(std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context->rank());
@@ -580,9 +578,6 @@ PhysicalSystemDescriptor run_local_discovery(
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
     psd.get_ethernet_firmware_version() = cluster.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 
-    // Set local_hostname_ and local_rank_ for my_host_name() using setter method
-    psd.set_discovery_data(hostname, my_rank, true);
-
     return psd;
 }
 
@@ -604,8 +599,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     auto hostname = get_host_name();
-    // Set all discovery data including hostname uniqueness
-    bool all_hostnames_unique = resolve_hostname_uniqueness(psd, distributed_context);
+    // Set all discovery data including hostname uniqueness (local_hostname_, local_rank_, all_hostnames_unique_)
+    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
     psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {

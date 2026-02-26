@@ -111,13 +111,16 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         pcie_id_to_asic_location_[host_name] = std::move(pcie_map);
     }
 
-    // Preserve discovery identity (local_hostname_, local_rank_, all_hostnames_unique_) from source
-    // so my_host_name() returns the correct hostname_rank after clear()+merge() re-discovery flow
+    // Preserve discovery identity and firmware version from source. Required for clear()+merge()
+    // re-discovery flow: caller clears destination PSD, then merges a newly discovered PSD.
+    // Without this, my_host_name() would fall back incorrectly and ethernet_firmware_version_
+    // would remain at cleared default (0.0.0).
     if (!other.local_hostname_.empty()) {
         local_hostname_ = std::move(other.local_hostname_);
         local_rank_ = other.local_rank_;
         all_hostnames_unique_ = other.all_hostnames_unique_;
     }
+    ethernet_firmware_version_ = other.ethernet_firmware_version_;
 
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
     TT_FATAL(
