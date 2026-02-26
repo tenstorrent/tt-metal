@@ -159,9 +159,15 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            source /opt/venv/bin/activate
-            uv pip install --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
-            uv pip install 'numpy>=1.24.4,<2' pytest
+            export VIRTUAL_ENV=/opt/venv
+            export PATH=/opt/venv/bin:$PATH
+            if [ -f /opt/venv/bin/uv ]; then
+              /opt/venv/bin/uv pip install --python /opt/venv/bin/python --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
+              /opt/venv/bin/uv pip install --python /opt/venv/bin/python 'numpy>=1.24.4,<2' pytest
+            else
+              uv pip install --python /opt/venv/bin/python --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
+              uv pip install --python /opt/venv/bin/python 'numpy>=1.24.4,<2' pytest
+            fi
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
