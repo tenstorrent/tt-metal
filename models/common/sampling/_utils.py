@@ -28,3 +28,13 @@ def split_list(lst, n):
     """Split list into n equal parts."""
     chunk_size = len(lst) // n
     return [list(lst[i * chunk_size : (i + 1) * chunk_size]) for i in range(n)]
+
+
+def is_power_of_2(n):
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def upper_power_of_2(n: int) -> int:
+    if n <= 1:
+        return 1
+    return 1 << (n - 1).bit_length()
