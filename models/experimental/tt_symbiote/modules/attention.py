@@ -20,11 +20,15 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
+    TTNNLinearIColShardedWRowSharded,  # noqa: F401
+    TTNNLinearIReplicatedWColSharded,  # noqa: F401
 )
 from models.experimental.tt_symbiote.modules.rope import (
     TTNNRotaryPositionEmbedding,
+    TTNNDistributedRotaryPositionEmbedding,  # noqa: F401
 )
 from models.experimental.tt_symbiote.modules.normalization import (
+    TTNNDistributedRMSNorm,  # noqa: F401
     TTNNRMSNorm,
 )
 
