@@ -21,14 +21,12 @@ from loguru import logger
     [
         # 1024x1024 image resolution
         ((1024, 1024), (1, 3, 1024, 1024), 0.97),
+        # 512x512 image resolution
+        ((512, 512), (1, 3, 512, 512), 0.98),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_decoder(device, image_resolution, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
+def test_vae_encoder(device, image_resolution, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,

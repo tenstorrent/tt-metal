@@ -310,9 +310,6 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512) and vae_on_device:
-        pytest.skip("512x512 image resolution is not yet supported for VAE on device.")
-
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,

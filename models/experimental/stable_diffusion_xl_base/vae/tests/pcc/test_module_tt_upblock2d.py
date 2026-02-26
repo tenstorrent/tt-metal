@@ -21,14 +21,15 @@ from models.common.utility_functions import torch_random
         ((1024, 1024), (1, 512, 256, 256), 1, 0.995),
         ((1024, 1024), (1, 512, 512, 512), 2, 0.998),
         ((1024, 1024), (1, 256, 1024, 1024), 3, 0.999),
+        # 512x512 image resolution
+        ((512, 512), (1, 512, 64, 64), 0, 0.999),
+        ((512, 512), (1, 512, 128, 128), 1, 0.995),
+        ((512, 512), (1, 512, 256, 256), 2, 0.998),
+        ((512, 512), (1, 256, 512, 512), 3, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_upblock(device, image_resolution, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
