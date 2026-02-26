@@ -147,7 +147,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     auto* mesh_device = input_tensor[0].device();
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
@@ -190,7 +191,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sub_device_id,
         core_grid_offset,
         std::nullopt,
-        ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
+        core_allocation_strategy);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;

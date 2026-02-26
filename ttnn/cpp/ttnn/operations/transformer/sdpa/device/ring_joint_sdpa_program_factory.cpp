@@ -877,7 +877,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.semaphore,
         args.all_gather_operation_attributes.sub_device_id,
         all_gather_fused_op_signaler,
-        args.ccl_core_grid_offset);
+        args.ccl_core_grid_offset,
+        args.all_gather_operation_attributes.core_allocation_strategy);
 
     return cached_program_t{
         std::move(program),
