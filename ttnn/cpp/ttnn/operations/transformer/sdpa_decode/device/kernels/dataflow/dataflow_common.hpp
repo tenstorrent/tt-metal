@@ -586,7 +586,6 @@ uint64_t read_k(
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
     const KMcastParams& mcast_params = {}) {
-    // Size of one row of K (one column of K^T) = DHt tiles
     constexpr uint32_t row_tile_bytes = DHt * k_tile_bytes;
 
     cb_reserve_back(cb_k_in, k_chunk_tiles);

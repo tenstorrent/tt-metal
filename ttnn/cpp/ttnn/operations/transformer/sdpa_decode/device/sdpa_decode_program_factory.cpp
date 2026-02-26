@@ -82,11 +82,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
     uint32_t q_heads_parallel_factor = 1;
+    uint32_t original_block_size = 0;
 
     // Handle paged attention sequence length
     if (is_paged_attention) {
-        page_block_size_t = k_shape[2] / TILE_HEIGHT;
-        S = page_table_tensor.value().padded_shape()[-1] * k_shape[2];
+        uint32_t block_size = k_shape[2];
+        original_block_size = input_tensor_k.logical_shape()[2];
+        page_block_size_t = block_size / TILE_HEIGHT;
+        S = page_table_tensor.value().padded_shape()[-1] * S;
     }
     // ========== Q Sharding & MLA Parallelization ==========
     if (is_q_sharded && use_mla) {
@@ -596,7 +599,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         .append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args_common);
-
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
@@ -668,7 +670,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
-        (uint32_t)use_mla,  // reuse_k: if MLA, V = K
+        reuse_k,  // reuse_k: if V not provided or q_heads_parallel_factor > 1
     };
 
     // ========== Compute Defines ==========
@@ -678,7 +680,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
     if (Sk_chunk_t > 0) {
-        // Static chunk size: set granularities for softmax loops
         auto add_granularity = [&](const char* name, uint32_t value) {
             uint32_t log2_val = std::log2(value);
             TT_FATAL(value == (1u << log2_val), "{} ({}) must be power of 2", name, value);
@@ -1009,8 +1010,8 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        // Core role identification - must match create() exactly
         uint32_t cur_batch, cur_head, core_num_in_reduce, core_num_in_output;
+
         if (use_col_major_group_indexing) {
             uint32_t num_groups_per_row = grid_size.x / num_cores_per_head;
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
@@ -1021,14 +1022,12 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
             core_num_in_reduce = i % num_cores_per_head;          // position within the reduction group
             core_num_in_output = core_num_in_reduce;              // same as reduce for single head
         } else {
-            // Must match create() exactly
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
             cur_batch = i / num_cores_per_batch;
             core_num_in_reduce = i % num_cores_per_head;
             core_num_in_output = i % num_cores_per_batch;
         }
 
-        // Must match create() exactly
         uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? UINT32_MAX : core_num_in_reduce - 1;
         uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
         bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
@@ -1049,6 +1048,8 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         uint32_t cur_pos =
             (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
         uint32_t reduction_group_base_idx;
+
+        TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
         if (use_col_major_group_indexing) {
             // For column-major indexing: the group starts at (i / num_cores_per_head) * num_cores_per_head
             reduction_group_base_idx = (i / num_cores_per_head) * num_cores_per_head;
@@ -1095,12 +1096,16 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         writer_args[arg_idx++] = core_num_in_reduce;
         writer_args[arg_idx++] = core_num_in_output;
         writer_args[arg_idx++] = cur_pos;
-        arg_idx++;  // is_tree_root
-        arg_idx++;  // parent_core_in_group
-        arg_idx++;  // send_at_round
-        arg_idx++;  // num_children
-        arg_idx++;  // my_active_rounds
+        writer_args[arg_idx++] = tree_params.is_root ? 1u : 0u;
+        writer_args[arg_idx++] = tree_params.parent_core_in_group;
+        writer_args[arg_idx++] = tree_params.send_at_round;
+        writer_args[arg_idx++] = tree_params.num_children;
+        writer_args[arg_idx++] = tree_params.my_active_rounds;
         writer_args[arg_idx++] = reduction_group_base_idx;
+        // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
+        for (unsigned int children : tree_params.children_per_round) {
+            writer_args[arg_idx++] = children;
+        }
 
         // compute runtime args
         arg_idx = 0;
@@ -1111,6 +1116,16 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         compute_args[arg_idx++] = core_num_in_reduce;
         compute_args[arg_idx++] = core_num_in_output;
         compute_args[arg_idx++] = cur_pos;
+        // Tree reduction parameters for compute
+        compute_args[arg_idx++] = tree_params.is_root ? 1u : 0u;
+        compute_args[arg_idx++] = tree_params.parent_core_in_group;
+        compute_args[arg_idx++] = tree_params.send_at_round;
+        compute_args[arg_idx++] = tree_params.num_children;
+        compute_args[arg_idx++] = tree_params.my_active_rounds;
+        // Add children_per_round array for compute
+        for (unsigned int children : tree_params.children_per_round) {
+            compute_args[arg_idx++] = children;
+        }
     }
     if (q_locally_available) {
         UpdateDynamicCircularBufferAddress(program, cb_q_in_id, *q_buffer);

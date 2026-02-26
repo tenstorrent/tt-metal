@@ -239,7 +239,6 @@ void kernel_main() {
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t out_num_blocks_dynamic = 1;
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
-    const uint32_t k_chunk_tiles_dynamic = Sk_chunk_t_dynamic * DHt;
 #else
     constexpr uint32_t qk_subblock_h_dynamic = qk_subblock_h;
     constexpr uint32_t qk_subblock_w_dynamic = qk_subblock_w;
