@@ -76,7 +76,7 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_6;  // Same as cb_lse_in - reuses CB slot
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 

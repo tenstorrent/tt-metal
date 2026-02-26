@@ -106,7 +106,7 @@ void kernel_main() {
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_6;  // Same as cb_lse_in - reuses CB slot
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_in);

@@ -526,10 +526,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    // lse input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+    // cb_lse - single CB for both LSE input and output (saves a CB slot)
+    // This is safe because LSE input is fully consumed before LSE output is produced
+    auto c_lse_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in6_config);
+    CreateCircularBuffer(program, core_grid, c_lse_config);
 
     // previous block output as input
     auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
@@ -585,11 +586,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_out0_config);
-
-    // lse output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
-                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
