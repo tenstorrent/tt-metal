@@ -4,6 +4,7 @@
 
 import math
 import torch
+import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -105,7 +106,19 @@ def to_paged_cache(
     paged_cache = cache.reshape(batch_size, nh, -1, block_size, dim)
     paged_cache = paged_cache.transpose(1, 2)
     paged_cache = paged_cache.reshape(max_num_blocks, nh, block_size, dim)
+    """
+    Get the reverse mapping to reorder the paged cache,
+    so that paged cache + mapping = original cache
+    and paged_cache = original_cache + inverse mapping
 
+    For example:
+        cache = [0, 1, 2, 3]
+        mapping = [1, 3, 0, 2]
+        inverse_mapping (argsort) = [2, 0, 3, 1]
+    Then,
+        paged_cache = cache[inverse_mapping] = [2, 0, 3, 1]
+        paged_cache[mapping] = cache = [0, 1, 2, 3]
+    """
     inverse_mapping = torch.argsort(mapping.view(-1))
     paged_cache = paged_cache[inverse_mapping]
 
@@ -140,7 +153,6 @@ def from_paged_cache(
     cache = cache.reshape(batch, num_blocks_per_batch, nh, block_size, dim)
     cache = cache.transpose(1, 2)
     cache = cache.reshape(batch, nh, -1, dim)
-
     return cache
 
 
@@ -187,6 +199,7 @@ def run_flash_mla_decode_impl(
     logger.debug(f"Query Data Type: {q_dtype}")
     logger.debug(f"Key-Value Data Type: {dtype}")
 
+    # Paged attention configuration
     paged_attention_cfg = None
     if use_paged_attention:
         assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
@@ -204,6 +217,8 @@ def run_flash_mla_decode_impl(
     k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()
     v = k[..., :kv_lora_rank]
 
+    # When Q memory config is provided, it is expected that Q is sharded such that
+    # each worker core has its own local Q shard
     if q_mem_config is not None:
         num_cores_per_head = 4
         q_heads_parallel_factor = math.ceil(nh / ttnn.TILE_SIZE)
@@ -242,12 +257,12 @@ def run_flash_mla_decode_impl(
         )
 
     q_chunk_size = 0
-    k_chunk_size = 32
+    k_chunk_size = 128
 
     scale = (kv_lora_rank + d_rope) ** -0.5
 
     max_start_idx = seq_len // 2
-    start_indices = [max_start_idx] * batch
+    start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
     q_locally_available = q_mem_config is not None and q_mem_config != ttnn.DRAM_MEMORY_CONFIG
@@ -268,6 +283,7 @@ def run_flash_mla_decode_impl(
         packer_l1_acc=False,
     )
 
+    # Set up input tensors
     if q_num_cores < 1:
         q_mem_config = ttnn.DRAM_MEMORY_CONFIG
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
@@ -283,7 +299,7 @@ def run_flash_mla_decode_impl(
         else:
             q_num_cores = min(batch, q_num_cores)
 
-        block_height = ttnn.TILE_SIZE
+        block_height = nearest_y(np.prod(q.shape[:-1]) // q_num_cores, ttnn.TILE_SIZE)
 
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
@@ -304,6 +320,7 @@ def run_flash_mla_decode_impl(
         else:
             out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -437,6 +454,7 @@ def run_flash_mla_prefill_impl(
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
 ):
+    # Log the test parameters
     logger.debug(f"Running FlashMLA Prefill with parameters: ")
     logger.debug(f"Batch: {batch}")
     logger.debug(f"Sequence Length: {seq_len}")
@@ -447,6 +465,7 @@ def run_flash_mla_prefill_impl(
     logger.debug(f"Query Data Type: {q_dtype}")
     logger.debug(f"Key-Value Data Type: {dtype}")
 
+    # Paged attention configuration
     paged_attention_cfg = None
     if use_paged_attention:
         assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
@@ -457,10 +476,18 @@ def run_flash_mla_prefill_impl(
             max_num_blocks=max_num_blocks,
         )
 
+    ######################
+    ### Torch Setup
+    ######################
     q = torch.randn(batch, nh, seq_len, kv_lora_rank + d_rope).float()
     k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()
     v = k[..., :kv_lora_rank]
 
+    ######################
+    ### TT Setup
+    #######################
+
+    # Page-related setup
     tt_k_torch = k
     tt_page_table = None
     if paged_attention_cfg:
@@ -511,6 +538,9 @@ def run_flash_mla_prefill_impl(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    ##########################
+    ### FlashMLA Prefill
+    ##########################
     if tt_page_table:
         tt_out = ttnn.transformer.chunked_flash_mla_prefill(
             tt_q,
@@ -538,6 +568,9 @@ def run_flash_mla_prefill_impl(
     tt_back = ttnn.to_torch(tt_out)
     tt_out_torch = tt_back[:, :nh, :seq_len, :]
 
+    ########################
+    ### Validation
+    ########################
     out_t = scaled_dot_product_attention_reference_prefill(
         q,
         k,
