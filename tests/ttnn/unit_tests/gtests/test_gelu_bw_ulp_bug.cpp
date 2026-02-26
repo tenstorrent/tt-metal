@@ -785,9 +785,9 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
     // Exp-based region tests (-13.375, -5] - fused x*exp(t) with Mills ratio correction
     // After Session 34: extended from (-13.375, -9) to (-13.375, -5], Max ULP = 1
     std::vector<std::pair<float, int32_t>> exp_tests = {
-        {-6.0f, 2},   // Exp-based region (was FL1 polynomial)
-        {-7.0f, 2},   // Exp-based region (was FL1/FL2 boundary)
-        {-8.0f, 2},   // Exp-based region (was FL2 polynomial)
+        {-6.0f, 2},   // Exp-based region
+        {-7.0f, 2},   // Exp-based region
+        {-8.0f, 2},   // Exp-based region
         {-10.0f, 2},  // Exp-based region - excellent accuracy
         {-11.0f, 2},
         {-12.0f, 2},
@@ -1495,6 +1495,41 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
     std::cout << "\nNote: GELU'(x) exceeds 1.0 for x in [" << first_gt1_x << ", " << last_gt1_x << "]\n";
     std::cout << "      Polynomial must reproduce this 'hump' accurately.\n";
     std::cout << "============================================================\n";
+}
+
+// Test special IEEE values: +inf, -inf, NaN
+// Ref: nmauriceTT review on PR #36366, tt-llk#675
+// Ref: tech_reports/Handling_Special_Value/special_values.md
+//
+// Per TT hardware docs: "operations not listed [multiply/add/subtract with Inf]
+// will treat NaN/Inf numbers just as any other ordinary number". This means
+// v_if comparisons treat NaN/Inf as ordinary floats by bit pattern:
+//   +inf (0x7F80): large positive → x >= 3.1719 is true → saturates to 1.0
+//   -inf (0xFF80): large negative → all >= comparisons fail → default 0.0
+//   NaN  (0x7FFF): large positive → x >= 3.1719 is true → saturates to 1.0
+TEST_F(GeluBwPolyTest, SpecialValues) {
+    float pos_inf = std::numeric_limits<float>::infinity();
+    float neg_inf = -std::numeric_limits<float>::infinity();
+    float nan_val = std::numeric_limits<float>::quiet_NaN();
+
+    // +inf: treated as large positive, saturates to 1.0
+    // (also the correct mathematical limit: lim x->+inf GELU'(x) = 1)
+    float result_pos_inf = run_gelu_bw_single(*device_, pos_inf);
+    std::cout << "GELU_BW(+inf) = " << result_pos_inf << "\n";
+    EXPECT_EQ(result_pos_inf, 1.0f) << "+inf should saturate to 1.0";
+
+    // -inf: treated as large negative, falls through to default 0.0
+    // (also the correct mathematical limit: lim x->-inf GELU'(x) = 0)
+    float result_neg_inf = run_gelu_bw_single(*device_, neg_inf);
+    std::cout << "GELU_BW(-inf) = " << result_neg_inf << "\n";
+    EXPECT_EQ(result_neg_inf, 0.0f) << "-inf should saturate to 0.0";
+
+    // NaN: bit pattern 0x7FFF treated as large positive, saturates to 1.0
+    // Ideally should return NaN, but TT hardware treats NaN as ordinary number
+    // in comparisons (see special_values.md). This is acceptable per tt-llk#675.
+    float result_nan = run_gelu_bw_single(*device_, nan_val);
+    std::cout << "GELU_BW(NaN) = " << result_nan << "\n";
+    EXPECT_EQ(result_nan, 1.0f) << "NaN treated as large positive by SFPU, saturates to 1.0";
 }
 
 }  // namespace ttnn::test
