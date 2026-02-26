@@ -24,6 +24,8 @@
 #include "../helper_funcs.h"
 #include "../image_utils.h"
 #include <iomanip>
+#include <ttnn/operations/trace.hpp>
+#include <ttnn/api/ttnn/events.hpp>
 
 namespace {
 
@@ -119,7 +121,9 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     TtDeiTForImageClassification tt_model(config, state_dict, base_address, device);
 
     // Convert input to TT tensor
-    auto tt_input = helper_funcs::torch_to_tt_tensor_tile(pixel_values, device);
+    // Permute to NHWC for Conv2d input (required by TtDeiTPatchEmbeddings)
+    auto pixel_values_nhwc = pixel_values.permute({0, 2, 3, 1}).contiguous();
+    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR).to_device(device.get());
 
     // Run TT model inference
     std::optional<ttnn::Tensor> head_mask = std::nullopt;
@@ -167,26 +171,73 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     // Profiling
     helper_funcs::Profiler profiler;
     int batch_size = 1;
-    for (int i = 0; i < 10; i++) {
-        profiler.start("inference_time");
-        auto [tt_logits_prof, attention_weights_prof, hidden_states_prof] = tt_model.forward(
+
+    // Enable program cache for performance
+    device->enable_program_cache();
+
+    // Prepare inputs for Trace/2CQ
+    auto tt_input_host = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
+
+    // Warmup run
+    {
+         tt_model.forward(
             tt_input,
             head_mask.has_value() ? &head_mask.value() : nullptr,
             output_attentions,
             output_hidden_states,
             return_dict
         );
-        profiler.stop("inference_time");
-        auto tt_logits_host_prof = ttnn::from_device(tt_logits_prof);
     }
 
-    auto inference_time = profiler.get("inference_time");
-    double inference_time_avg = inference_time / 10.0;
+    // Trace Capture
+    auto tid = ttnn::operations::trace::begin_trace_capture(device.get(), ttnn::QueueId(0));
+    auto [tt_logits_trace, attention_weights_trace, hidden_states_trace] = tt_model.forward(
+        tt_input,
+        head_mask.has_value() ? &head_mask.value() : nullptr,
+        output_attentions,
+        output_hidden_states,
+        return_dict
+    );
+    ttnn::operations::trace::end_trace_capture(device.get(), tid, ttnn::QueueId(0));
+
+    // Events for 2CQ
+    auto op_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(0));
+    auto write_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(1));
+
+    for (int i = 0; i < 10; i++) {
+        profiler.start("inference_time");
+        
+        // CQ1: Update Input (Async Copy)
+        ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
+        tt::tt_metal::copy_to_device(tt_input_host, tt_input, ttnn::QueueId(1));
+        write_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(1));
+
+        // CQ0: Execute Trace
+        ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
+        op_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(0));
+        ttnn::operations::trace::execute_trace(device.get(), tid, ttnn::QueueId(0), false);
+        
+        profiler.stop("inference_time");
+
+        profiler.start("sync_output");
+        auto tt_logits_host_prof = ttnn::from_device(tt_logits_trace);
+        profiler.stop("sync_output");
+    }
+
+    ttnn::operations::trace::release_trace(device.get(), tid);
+    device->disable_and_clear_program_cache();
+
+    double inference_time_total = profiler.get("inference_time");
+    double sync_time_total = profiler.get("sync_output");
+    double inference_time_avg = (inference_time_total + sync_time_total) / 10.0;
     double fps = batch_size / inference_time_avg;
+
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "DeiT_For_Image_Classification_batch_size_" << batch_size 
+    std::cout << "ttnn_deit_for_image_classification_batch_size_" << batch_size 
               << ". One inference iteration time (sec): " << inference_time_avg 
-              << ", FPS: " << std::setprecision(2) << fps << std::endl;
+              << ", FPS: " << std::setprecision(2) << fps
+              << ", inference time (sec): " << std::setprecision(6) << (inference_time_total / 10.0)
+              << ", sync output time(sec): " << (sync_time_total / 10.0) << std::endl;
 
     // Clean up device resources
     device->close();

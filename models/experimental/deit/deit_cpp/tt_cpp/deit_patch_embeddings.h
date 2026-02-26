@@ -11,6 +11,11 @@
 #include <torch/torch.h>
 #include "deit_config.h"
 
+#include "ttnn/types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/core/core.hpp"
+
 class TtDeiTPatchEmbeddings {
 public:
     /**
@@ -18,20 +23,22 @@ public:
      * @param config DeiT configuration
      * @param state_dict Model state dictionary containing weights and biases
      * @param base_address Base address for parameter lookup in state_dict
+     * @param device TTNN MeshDevice
      */
     TtDeiTPatchEmbeddings(
         const DeiTConfig& config,
         std::unordered_map<std::string, torch::Tensor>& state_dict,
-        const std::string& base_address
+        const std::string& base_address,
+        std::shared_ptr<ttnn::MeshDevice> device
     );
 
     /**
      * Forward pass for patch embeddings
      * Converts input pixel values to patch embeddings using 2D convolution
-     * @param pixel_values Input tensor with shape [batch_size, num_channels, height, width]
+     * @param pixel_values Input tensor with shape [batch_size, height, width, num_channels] (NHWC)
      * @return Patch embeddings tensor with shape [batch_size, num_patches, hidden_size]
      */
-    torch::Tensor forward(const torch::Tensor& pixel_values);
+    ttnn::Tensor forward(const ttnn::Tensor& pixel_values);
 
     // Getters
     int get_num_patches() const { return num_patches_; }
@@ -47,8 +54,10 @@ private:
     int num_patches_;
     int hidden_size_;
 
-    // Model parameters - using libtorch Conv2d
-    torch::nn::Conv2d projection_;
-
-
+    // Model parameters
+    std::shared_ptr<ttnn::MeshDevice> device_;
+    ttnn::Tensor weight_;
+    ttnn::Tensor bias_;
+    ttnn::Conv2dConfig conv_config_;
+    ttnn::DeviceComputeKernelConfig compute_config_;
 };

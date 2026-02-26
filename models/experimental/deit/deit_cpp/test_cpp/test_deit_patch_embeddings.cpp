@@ -9,6 +9,7 @@
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <optional>
 
 #include <torch/torch.h>
 
@@ -63,13 +64,26 @@ void test_deit_patch_embeddings_inference(double pcc_threshold = 0.99) {
     // Get PyTorch reference output
     auto torch_output = torch_conv->forward(pixel_values).flatten(2).transpose(1, 2);
 
+    // Initialize device
+    int device_id = 0;
+    auto device = ttnn::MeshDevice::create(ttnn::MeshDeviceConfig(ttnn::MeshShape(1, 1), std::nullopt, {device_id}));
+
     std::cout << "Setting up TT model..." << std::endl;
 
     // Setup TT model (now pure libtorch)
-    TtDeiTPatchEmbeddings tt_patch_embeddings(config, state_dict, base_address);
+    TtDeiTPatchEmbeddings tt_patch_embeddings(config, state_dict, base_address, device);
 
     // Run TT model inference (now using torch tensors directly)
-    auto tt_output = tt_patch_embeddings.forward(pixel_values);
+    // Convert input to ttnn tensor (NHWC)
+    auto permuted_pixel_values = pixel_values.permute({0, 2, 3, 1}); // NCHW -> NHWC
+    auto ttnn_pixel_values = helper_funcs::from_torch(permuted_pixel_values, std::nullopt, ttnn::Layout::ROW_MAJOR);
+    ttnn_pixel_values = ttnn::to_device(ttnn_pixel_values, device.get(), ttnn::DRAM_MEMORY_CONFIG);
+    
+    auto tt_output_tensor = tt_patch_embeddings.forward(ttnn_pixel_values);
+    
+    // Convert output back to torch for comparison
+    auto tt_output_host = ttnn::from_device(tt_output_tensor);
+    auto tt_output = helper_funcs::to_torch(tt_output_host);
 
     // Compute PCC between PyTorch and TT outputs (matching Python version logic)
     double pcc = helper_funcs::compute_pcc(torch_output, tt_output);
