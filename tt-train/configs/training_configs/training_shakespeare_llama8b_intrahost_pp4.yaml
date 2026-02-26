@@ -1,5 +1,5 @@
 training_config:
-  project_name: "tt_train_nano_gpt"
+  project_name: "llama_8b"
   model_type: "llama"
   seed: 5489
   model_save_interval: 500
@@ -14,7 +14,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
-  model_config: "model_configs/true_llama8b_pp.yaml"
+  model_config: "model_configs/llama8b.yaml"
   multihost_config: multihost_configs/4worker_32block_pp_fabric.yaml
 
 eval_config:

@@ -1,2 +1,2 @@
-bh-glx-b04u02 slots=1
-bh-glx-b04u08 slots=1
+metal-wh-01.closetbox.tenstorrent.com slots=1
+metal-wh-04.closetbox.tenstorrent.com slots=1

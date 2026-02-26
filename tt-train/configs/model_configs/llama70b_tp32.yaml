@@ -1,7 +1,7 @@
 transformer_config:
   model_type: "llama"
   num_heads: 64
-  num_groups: 8
+  num_groups: 32 # original value was 8
   embedding_dim: 8192
   dropout_prob: 0.0
   num_blocks: 80

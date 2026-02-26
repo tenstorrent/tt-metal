@@ -229,9 +229,7 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
 
     if (is_last_rank()) {
         out = (*ln_fc)(out);
-        fmt::println("Last rank gives out of size: {}", out->get_shape());
         out = (*fc)(out);
-        fmt::println("Last rank gives final out of size: {}", out->get_shape());
     } else {
         auto distributed_ctx = autograd::ctx().get_distributed_context();
         int rank = *distributed_ctx->rank();

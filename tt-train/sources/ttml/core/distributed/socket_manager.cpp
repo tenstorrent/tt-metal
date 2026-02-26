@@ -21,10 +21,6 @@ std::vector<tt::tt_metal::distributed::SocketConnection> _make_socket_connection
     auto mesh_rows = mesh_device->num_rows();
     auto mesh_cols = mesh_device->num_cols();
     std::vector<tt::tt_metal::distributed::SocketConnection> socket_connection_config;
-    // tt::tt_metal::distributed::MeshCoreCoord mesh_core_coord{
-    //     tt::tt_metal::distributed::MeshCoordinate{0, 0}, ttnn::CoreCoord{0, 0}};
-    // socket_connection_config.emplace_back(mesh_core_coord, mesh_core_coord);
-    // return socket_connection_config;
     socket_connection_config.reserve(mesh_rows * mesh_cols);
     // TODO(rfurko): remove hardcoded values
     for (size_t row = 0; row < mesh_rows; ++row) {

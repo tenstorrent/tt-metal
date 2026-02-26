@@ -1,5 +1,5 @@
 ChipSpec: {
-  arch: blackhole,
+  arch: wormhole_b0,
   ethernet_ports: {
     N: 2,
     E: 2,
@@ -9,23 +9,23 @@ ChipSpec: {
 }
 
 Board: [
-  { name: galaxy,
+  { name: lbox,
     type: Mesh,
-    topology: [1, 32]}
+    topology: [1, 8]}
 ]
 
 Mesh: [
   {
     id: 0,
-    board: galaxy,
-    device_topology: [1, 32],
+    board: lbox,
+    device_topology: [1, 8],
     host_topology: [1, 1],
 
   },
   {
     id: 1,
-    board: galaxy,
-    device_topology: [1, 32],
+    board: lbox,
+    device_topology: [1, 8],
     host_topology: [1, 1],
   }
 ]

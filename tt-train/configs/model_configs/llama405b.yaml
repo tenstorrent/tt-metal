@@ -5,7 +5,7 @@ transformer_config:
   embedding_dim: 16384
   dropout_prob: 0.0
   num_blocks: 126
-  vocab_size: 32000
+  vocab_size: 32000 # Should be 128,000 according to paper, we use reduced version
   max_sequence_length: 1024
   runner_type: memory_efficient
-  theta: 10000.0
+  theta: 10000.0 # Should be 500,000 to match paper, we use reduced version

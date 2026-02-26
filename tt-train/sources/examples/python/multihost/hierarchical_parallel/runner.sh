@@ -1,30 +1,78 @@
-#!/bin/bash
+# Default profile
+PROFILE="loudboxes"
+USER=""
+CONFIG_FILE=""
+HOST_FILE=""
+RANK_BINDINGS_FILE=""
+MPI_EXTRA_ARGS=""
 
-#SBATCH --partition=bh_pod_4x32_2
-#SBATCH --nodes=4
-#SBATCH --nodelist=bh-glx-b08u02,bh-glx-b08u08,bh-glx-b09u08,bh-glx-b09u02
-#SBATCH --job-name=hierarchical_parallel_training
-#SBATCH --output=hierarchical_parallel_training_%j.out
-#SBATCH --error=hierarchical_parallel_training_%j.err
-# Set environmental variables
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --profile)
+            shift
+            PROFILE="$1"
+            ;;
+        --hostfile)
+            shift
+            HOST_FILE="$1"
+            ;;
+        --user)
+            shift
+            USER="$1"
+            ;;
+        --rank-bindings)
+            shift
+            RANK_BINDINGS_FILE="$1"
+            ;;
+        --config)
+            shift
+            CONFIG_FILE="$1"
+            ;;
+        --mpi-extra-args)
+            shift
+            MPI_EXTRA_ARGS="$1"
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [--profile loudboxes|galaxies] [--user USER] [--hostfile PATH] [--rank-bindings PATH] [--config CONFIG_FILE] [--mpi-extra-args ARGS]"
+            exit 1
+            ;;
+    esac
+    shift
+done
 
-export TT_METAL_HOME="/data/${USER}/pr_review/tt-metal"
-export PYTHONPATH="${TT_METAL_HOME}"
-source ${TT_METAL_HOME}/python_env/bin/activate
-export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-export HIERARCHICAL_ROOT="/data/${USER}/pr_review/tt-metal/tt-train/sources/examples/python/multihost/hierarchical_parallel"
-export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
+# Set defaults based on profile if not explicitly provided
+if [[ "$PROFILE" == "loudboxes" ]]; then
+    USER="${USER:-ttuser}"
+    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml}"
+    HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5loudboxes/hosts.txt}"
+    RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5loudboxes/rank_bindings.yaml}"
+elif [[ "$PROFILE" == "galaxies" ]]; then
+    USER="${USER:-local-rfurko}"
+    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_nanogpt_3tier_fabric_5galaxies_2tier.yaml}"
+    HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5galaxies/hosts.txt}"
+    RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5galaxies/rank_bindings.yaml}"
+    MPI_EXTRA_ARGS="${MPI_EXTRA_ARGS:---allow-run-as-root}"
+    TCP_INTERFACE="ens5f0np0"
+else
+    echo "Error: Unknown profile '$PROFILE'. Use 'loudboxes' or 'galaxies'."
+    exit 1
+fi
 
-HOSTFILE="/tmp/hostfile_${SLURM_JOB_ID}"
-scontrol show hostnames $SLURM_JOB_NODELIST | while read host; do
-    echo "${host} slots=1"
-done > ${HOSTFILE}
+# copy all files to all machines (pass user and hostfile)
+${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
-CONFIG_FILE="training_configs/training_shakespeare_tinyllama_3tier_fabric.yaml"
-HOST_CONFIG="4galaxies"
+# install requirements
+mpirun-ulfm --hostfile ${HOST_FILE} --tag-output uv pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/requirements.txt
 
-RANKFILE="/data/jmalone/rankfile.txt"
+CMD="python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE}"
 
-tt-run --mpi-args "--hostfile ${HOSTFILE} --mca btl_tcp_if_exclude docker0,lo  --mca btl self,tcp --tag-output --map-by rankfile:file=${RANKFILE}" \
-    --rank-binding ${HIERARCHICAL_ROOT}/configurations/${HOST_CONFIG}/rank_bindings.yaml \
-    python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE}
+# Build tt-run arguments: use --tcp-interface if set (multihost MPI settings are default)
+TTRUN_NETWORK_ARGS=""
+if [[ -n "${TCP_INTERFACE:-}" ]]; then
+    TTRUN_NETWORK_ARGS="--tcp-interface ${TCP_INTERFACE}"
+fi
+
+# use tt-run to run the training script across all machines
+${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py ${TTRUN_NETWORK_ARGS} --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS}" ${CMD}

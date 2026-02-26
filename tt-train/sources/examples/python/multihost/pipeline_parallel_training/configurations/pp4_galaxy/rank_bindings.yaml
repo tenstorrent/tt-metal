@@ -20,27 +20,23 @@ rank_bindings:
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_sender_0"
-      TT_METAL_LOGGER_LEVEL: "DEBUG"
 
   - rank: 1
     mesh_id: 1
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_1"
-      TT_METAL_LOGGER_LEVEL: "DEBUG"
 
   - rank: 2
     mesh_id: 2
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_2"
-      TT_METAL_LOGGER_LEVEL: "DEBUG"
 
   - rank: 3
     mesh_id: 3
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_3"
-      TT_METAL_LOGGER_LEVEL: "DEBUG"
 
-mesh_graph_desc_path: "configurations/4galaxies/mgd.textproto"
+mesh_graph_desc_path: "configurations/pp4_galaxy/mgd.textproto"
