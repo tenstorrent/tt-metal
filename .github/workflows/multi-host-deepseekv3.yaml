@@ -1,4 +1,5 @@
 name: DeepSeek V3 Multi-Host Tests
+
 on:
   workflow_dispatch:
     inputs:
@@ -61,7 +62,29 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+  schedule:
+    # 03:00 UTC daily = 22:00 America/Toronto (EST) or 23:00 (EDT), previous local day
+    - cron: "0 3 * * *"
+
+env:
+  DS_SETUP: ${{ github.event_name == 'schedule' && 'both' || (github.event.inputs.setup || 'both') }}
+
+  DS_UNIT:   ${{ github.event_name == 'schedule' && 'true'  || (github.event.inputs.deepseekv3_unit_tests || 'false') }}
+  DS_MODULE: ${{ github.event_name == 'schedule' && 'true'  || (github.event.inputs.deepseekv3_module_tests || 'false') }}
+  DS_TF:     ${{ github.event_name == 'schedule' && 'true'  || (github.event.inputs.teacher_forced || 'false') }}
+  DS_DEMO:   ${{ github.event_name == 'schedule' && 'true'  || (github.event.inputs.demo || 'false') }}
+
+  # Stress tests disabled for nightly
+  DS_STRESS: ${{ github.event_name == 'schedule' && 'false' || (github.event.inputs.demo_stress || 'false') }}
+
+  DS_PLATFORM:   ${{ github.event_name == 'schedule' && 'Ubuntu 22.04' || (github.event.inputs.platform || 'Ubuntu 22.04') }}
+
+  DS_BUILD_TYPE: ${{ github.event_name == 'schedule' && 'Release' || (github.event.inputs['build-type'] || 'Release') }}
+  DS_ENABLE_LTO: ${{ github.event_name == 'schedule' && 'false'   || (github.event.inputs['enable-lto'] || 'false') }}
+
+run-name: >-
+  DeepSeek V3 – ${{ env.DS_SETUP }}
+  [${{ fromJSON(env.DS_UNIT) && 'unit ' || '' }}${{ fromJSON(env.DS_MODULE) && 'module ' || '' }}${{ fromJSON(env.DS_TF) && 'tf ' || '' }}${{ fromJSON(env.DS_DEMO) && 'demo ' || '' }}${{ fromJSON(env.DS_STRESS) && 'stress' || '' }}]
 
 jobs:
   build-artifact:
@@ -70,13 +93,13 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
+      build-type: ${{ env.DS_BUILD_TYPE }}
+      platform: ${{ env.DS_PLATFORM }}
+      enable-lto: ${{ fromJSON(env.DS_ENABLE_LTO) }}
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: ${{ fromJSON(env.DS_UNIT) || fromJSON(env.DS_MODULE) || fromJSON(env.DS_TF) || fromJSON(env.DS_DEMO) || fromJSON(env.DS_STRESS) }}
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
@@ -88,25 +111,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - name: ⬇️ Download Build
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
+
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_UNIT) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -130,7 +157,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
 
       - name: Run quad DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_UNIT) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -155,7 +182,7 @@ jobs:
 
       # ── DeepSeek V3 module tests ────────────────────────────────────────
       - name: Run dual DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_MODULE) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -179,7 +206,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_MODULE) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -204,7 +231,7 @@ jobs:
 
       # ── Teacher forced accuracy tests ───────────────────────────────────
       - name: Run dual teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_TF) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -228,7 +255,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
 
       - name: Upload dual teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_TF) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-teacher-forced-accuracy-${{ github.run_id }}
@@ -238,7 +265,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_TF) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -262,7 +289,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_TF) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
@@ -273,7 +300,7 @@ jobs:
 
       # ── Demo tests ──────────────────────────────────────────────────────
       - name: Run dual demo test (256 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_DEMO) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 40
         with:
@@ -297,7 +324,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
 
       - name: Upload dual demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_DEMO) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-output-${{ github.run_id }}
@@ -307,7 +334,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_DEMO) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -331,7 +358,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_DEMO) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-output-${{ github.run_id }}
@@ -342,7 +369,7 @@ jobs:
 
       # ── Demo stress tests ───────────────────────────────────────────────
       - name: Run dual demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_STRESS) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 90
         with:
@@ -366,7 +393,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
 
       - name: Upload dual demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_STRESS) && (env.DS_SETUP == 'dual' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-stress-output-${{ github.run_id }}
@@ -376,7 +403,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ fromJSON(env.DS_STRESS) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 90
         with:
@@ -400,7 +427,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
 
       - name: Upload quad demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && fromJSON(env.DS_STRESS) && (env.DS_SETUP == 'quad' || env.DS_SETUP == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-stress-output-${{ github.run_id }}
