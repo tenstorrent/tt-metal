@@ -138,6 +138,7 @@ double interpolate_latency_nd(
     auto target_values = NumericFields::extract(key);
 
     std::vector<std::string> field_names;
+    field_names.reserve(target_values.size());
     for (const auto& [name, _] : target_values) {
         field_names.push_back(name);
     }
@@ -187,10 +188,10 @@ bool has_matching_data(const GroupKey& key, const std::map<GroupKey, LatencyData
     return false;
 }
 
-// Only allow relaxation of same_axis, stateful, and loopback parameters
+// Only allow relaxation of noc_index, same_axis, stateful, and loopback parameters
 // Other parameters (memory, mechanism, pattern, arch) must match exactly
-static const char* RELAX_PARAM_NAMES[] = {"same_axis", "stateful", "loopback"};
-static constexpr std::size_t RELAX_PARAM_COUNT = 3;
+static const char* RELAX_PARAM_NAMES[] = {"noc_index", "same_axis", "stateful", "loopback"};
+static constexpr std::size_t RELAX_PARAM_COUNT = 4;
 
 // Check if two keys match, ignoring parameters where mask bit is set
 // All other parameters must match exactly
@@ -201,13 +202,16 @@ static bool matches_with_mask(const GroupKey& a, const GroupKey& b, uint32_t ign
     }
 
     // Check relaxable parameters
-    if (!(ignore_mask & (1 << 0)) && a.same_axis != b.same_axis) {
+    if (!(ignore_mask & (1 << 0)) && a.noc_index != b.noc_index) {
         return false;
     }
-    if (!(ignore_mask & (1 << 1)) && a.stateful != b.stateful) {
+    if (!(ignore_mask & (1 << 1)) && a.same_axis != b.same_axis) {
         return false;
     }
-    if (!(ignore_mask & (1 << 2)) && a.loopback != b.loopback) {
+    if (!(ignore_mask & (1 << 2)) && a.stateful != b.stateful) {
+        return false;
+    }
+    if (!(ignore_mask & (1 << 3)) && a.loopback != b.loopback) {
         return false;
     }
     return true;

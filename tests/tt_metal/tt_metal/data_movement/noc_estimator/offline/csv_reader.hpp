@@ -23,6 +23,7 @@ struct DataPoint {
     bool same_axis = false;
     bool stateful = false;
     bool loopback = false;
+    uint32_t noc_index = 0;
     double latency_cycles = 0.0;
 };
 
@@ -50,6 +51,7 @@ private:
     static constexpr const char* COL_SAME_AXIS = "Same axis";
     static constexpr const char* COL_STATEFUL = "Stateful";
     static constexpr const char* COL_LOOPBACK = "Loopback";
+    static constexpr const char* COL_NOC_INDEX = "NOC index";
     static constexpr const char* COL_LATENCY = "Latency (cycles)";
 
     bool parse_header(const std::string& line);

@@ -53,7 +53,8 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
         .num_subordinates = params.num_subordinates,
         .same_axis = params.same_axis,
         .stateful = params.stateful,
-        .loopback = params.loopback};
+        .loopback = params.loopback,
+        .noc_index = params.noc_index};
 
     double num_transactions_d = static_cast<double>(params.num_transactions);
 

@@ -27,6 +27,7 @@ struct NocEstimatorParams {
     bool same_axis = false;
     bool stateful = false;
     bool loopback = false;
+    uint32_t noc_index = 0;
 };
 
 // Estimation result

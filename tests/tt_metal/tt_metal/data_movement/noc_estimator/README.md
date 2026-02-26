@@ -30,7 +30,7 @@ double bandwidth = result.bandwidth_bytes_per_cycle;
 |-----------|------|---------|-------------|
 | mechanism | NocMechanism | UNICAST | UNICAST or MULTICAST |
 | pattern | NocPattern | ONE_TO_ONE | Communication pattern (see below) |
-| memory | MemoryType | L1 | L1 or DRAM |
+| memory | MemoryType | L1 | L1, DRAM_INTERLEAVED, or DRAM_SHARDED |
 | arch | Architecture | WORMHOLE_B0 | WORMHOLE_B0 or BLACKHOLE |
 | num_transactions | uint32_t | 64 | Total number of transactions |
 | num_transactions_per_barrier | uint32_t | 1 | Number of transactions issued between sync barriers |
@@ -39,6 +39,7 @@ double bandwidth = result.bandwidth_bytes_per_cycle;
 | same_axis | bool | false | Whether src and dst have one shared axis |
 | stateful | bool | false | Whether the transfer uses stateful mode |
 | loopback | bool | false | Whether loopback is enabled |
+| noc_index | uint32_t | 0 | Which NOC to use (0 or 1) |
 
 ### Patterns
 
@@ -85,11 +86,11 @@ NocEstimatorParams params{
 NocEstimate result = estimate_noc_performance(params);
 ```
 
-### DRAM read on Blackhole
+### DRAM interleaved read on Blackhole
 ```cpp
 NocEstimatorParams params{
     .pattern = NocPattern::ONE_FROM_ONE,
-    .memory = MemoryType::DRAM,
+    .memory = MemoryType::DRAM_INTERLEAVED,
     .arch = Architecture::BLACKHOLE,
     .num_transactions = 64,
     .transaction_size_bytes = 8192
