@@ -602,7 +602,7 @@ For more information about Watcher, refer to the Additional Information section 
 
 
 Exercise 1: Debugging Multicast Issues Using Watcher
-====================================================
+****************************************************
 
 In this exercise, you will intentionally introduce errors into the multicast sender and receiver kernels
 and use the Watcher and DPRINT to help diagnose the problem.
