@@ -77,6 +77,9 @@ class VisionAttention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        assert (
+            self.n_local_heads == self.n_local_kv_heads
+        ), "Heads-as-batch window attention requires n_heads == n_kv_heads"
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
 
         self.dtype = dtype
@@ -497,33 +500,53 @@ class VisionAttention(LightweightModule):
             assert seq_len % W == 0, f"seq_len ({seq_len}) must be divisible by window_size ({W})"
             total_windows = seq_len // W
 
-            # Reshape: [1, NQH, seq_len, DH] -> [total_windows, NQH, W, DH]
-            q_batched = ttnn.reshape(q_heads_1QSD_8b, [total_windows, self.n_local_heads, W, self.padded_head_dim])
-            k_batched = ttnn.reshape(k_heads_1KSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
-            v_batched = ttnn.reshape(v_heads_1VSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
+            padding_mask = window_info.get("attn_mask", None)
 
-            ttnn.deallocate(q_heads_1QSD_8b)
-            ttnn.deallocate(k_heads_1KSD_8b)
-            ttnn.deallocate(v_heads_1VSD_8b)
+            if total_windows == 1:
+                # Full-attention layer (W == seq_len): skip reshape entirely
+                attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+                    q_heads_1QSD_8b,
+                    k_heads_1KSD_8b,
+                    v_heads_1VSD_8b,
+                    attn_mask=padding_mask,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.model_config["SDPA_PROGCFG"](W),
+                )
+                ttnn.deallocate(q_heads_1QSD_8b)
+                ttnn.deallocate(k_heads_1KSD_8b)
+                ttnn.deallocate(v_heads_1VSD_8b)
+            else:
+                # Heads-as-batch view: [1, NQH, seq_len, DH] -> [NQH, total_windows, W, DH]
+                # Zero-cost metadata-only ttnn.view (no device ops). SDPA treats dim 0
+                # as batch and dim 1 as heads; since attention is computed independently
+                # per (batch, head) pair, the result is mathematically identical.
+                # IMPORTANT: views share the device buffer with the original tensor,
+                # so originals must NOT be deallocated until SDPA finishes reading.
+                q_batched = ttnn.view(q_heads_1QSD_8b, [self.n_local_heads, total_windows, W, self.padded_head_dim])
+                k_batched = ttnn.view(k_heads_1KSD_8b, [self.n_local_kv_heads, total_windows, W, self.padded_head_dim])
+                v_batched = ttnn.view(v_heads_1VSD_8b, [self.n_local_kv_heads, total_windows, W, self.padded_head_dim])
 
-            # Regular SDPA (no mask, is_causal=False) — each window is independent
-            attn_output_batched = ttnn.transformer.scaled_dot_product_attention(
-                q_batched,
-                k_batched,
-                v_batched,
-                is_causal=False,
-                scale=self.scale,
-                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](W),
-            )
+                attn_output_batched = ttnn.transformer.scaled_dot_product_attention(
+                    q_batched,
+                    k_batched,
+                    v_batched,
+                    attn_mask=padding_mask,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.model_config["SDPA_PROGCFG"](W),
+                )
 
-            ttnn.deallocate(q_batched)
-            ttnn.deallocate(k_batched)
-            ttnn.deallocate(v_batched)
+                ttnn.deallocate(q_heads_1QSD_8b)
+                ttnn.deallocate(k_heads_1KSD_8b)
+                ttnn.deallocate(v_heads_1VSD_8b)
 
-            # Reshape back: [total_windows, NQH, W, DH] -> [1, NQH, seq_len, DH]
-            attn_output_84SD = ttnn.reshape(attn_output_batched, [1, self.n_local_heads, seq_len, self.padded_head_dim])
-            ttnn.deallocate(attn_output_batched)
+                # View back shares buffer with attn_output_batched — do not deallocate source
+                attn_output_84SD = ttnn.view(
+                    attn_output_batched, [1, self.n_local_heads, seq_len, self.padded_head_dim]
+                )
         else:
             attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
