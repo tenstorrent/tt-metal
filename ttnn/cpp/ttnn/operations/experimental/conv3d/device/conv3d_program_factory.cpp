@@ -192,7 +192,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
     // If the shard would exceed L1_PREFETCH_MAX_BYTES, fall back to the direct reader (no L1 prefetch).
-    constexpr uint32_t L1_PREFETCH_MAX_BYTES = 48 * 1024;
+    constexpr uint32_t L1_PREFETCH_MAX_BYTES = 128 * 1024;
 
     const uint32_t kT = operation_attributes.kernel_size[0];
     const uint32_t kH = operation_attributes.kernel_size[1];
