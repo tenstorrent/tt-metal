@@ -35,10 +35,17 @@ FILL_SHAPE_VALUES = [
     "fill_value",
     [3, -1],
 )
-def test_full_int(device, input_shape, fill_value):
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+def test_full_int(device, input_shape, fill_value, layout):
     torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
-    tt_output = ttnn.full(input_shape, fill_value, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.full(input_shape, fill_value, layout=layout, device=device)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 
@@ -64,11 +71,18 @@ def test_full_int(device, input_shape, fill_value):
         ttnn.float32,
     ],
 )
-def test_full_float(device, input_shape, fill_value, tt_dtype):
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+def test_full_float(device, input_shape, fill_value, tt_dtype, layout):
     torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
     torch_output = torch.full(input_shape, fill_value, dtype=torch_dtype)
 
-    tt_output = ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=layout, device=device)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 

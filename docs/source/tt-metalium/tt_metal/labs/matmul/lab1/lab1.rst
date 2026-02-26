@@ -1,6 +1,9 @@
 Lab 1: Single Core Matrix Multiplication
 ########################################
 
+.. contents:: Table of Contents
+   :depth: 2
+
 Introduction
 ************
 
@@ -865,7 +868,7 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 
 
 Exercise 4: Using DPRINT to Debug a Kernel
-------------------------------------------
+==========================================
 
 Add DPRINT statements to the writer kernel in our example program to print:
 
@@ -923,7 +926,7 @@ if you open a new terminal later.
 
 
 Exercise 5: Using tt-triage to Debug a Hang
--------------------------------------------
+===========================================
 
 To illustrate how ``tt-triage`` can be used to debug a hang, we will use the ``lab_eltwise_binary`` example program.
 You can introduce a very simple artificial hang by commenting out the calls to ``cb_pop_front``
@@ -972,7 +975,7 @@ Note that the log file uses names BRISC and NCRISC for the two RISC-V processors
 (RISC-V 0 and RISC-V 4 in Figure 5), and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 5).
 
 Exercise 6: Using Device Profiling to Profile Kernels
------------------------------------------------------
+=====================================================
 
 #. **Make sure code is built with Release option**
 

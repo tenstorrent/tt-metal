@@ -4,6 +4,9 @@
 
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
+#include <algorithm>
+
+#include "jit_build/jit_build_options.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -405,6 +408,16 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 CoreCoord logical_core(x, y);
                 per_core_num_dfbs_[logical_core]++;
             }
+        }
+
+        // There is one DataflowBufferAllocator per unique core range, create one if it does not already exist for
+        // current core range
+        auto val = std::find_if(
+            dfb_allocators_.begin(), dfb_allocators_.end(), [&core_range](const CircularBufferAllocator& dfb_allocator) {
+                return dfb_allocator.core_range == core_range;
+            });
+        if (val == dfb_allocators_.end()) {
+            this->dfb_allocators_.emplace_back(core_range);
         }
     }
 
@@ -858,6 +871,10 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
     }
 }
 
+const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& ProgramImpl::dataflow_buffers() const {
+    return dataflow_buffers_;
+}
+
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
 ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
@@ -867,6 +884,50 @@ ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
         }
     }
     return dfbs_on_core;
+}
+
+std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> ProgramImpl::dataflow_buffers_on_corerange(const CoreRange& cr) const {
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
+    for (const auto& dfb : dataflow_buffers_) {
+        if (dfb->core_ranges.intersects(cr)) {
+            dfbs_on_core.push_back(dfb);
+        }
+    }
+    return dfbs_on_core;
+}
+
+void ProgramImpl::set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+    // ZoneScoped;
+    for (const auto& logical_cr : crs) {
+        const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
+        for (const auto& dfb : dfbs_on_core) {
+            build_options.set_cb_dataformat_all_cores(static_cast<CBIndex>(dfb->id), dfb->config.data_format);
+        }
+    }
+}
+
+void ProgramImpl::set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+    // ZoneScoped;
+    for (const auto& logical_cr : crs) {
+        const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
+        for (const auto& dfb : dfbs_on_core) {
+            auto tile = dfb->config.tile;
+            if (tile.has_value()) {
+                build_options.set_cb_tile_dims_all_cores(
+                    static_cast<CBIndex>(dfb->id),
+                    tile->get_num_faces(),
+                    tile->get_partial_face(),
+                    tile->get_face_shape()[0],
+                    tile->get_narrow_tile(),
+                    tile->get_tile_shape()[0],
+                    tile->get_tile_shape()[1]);
+                build_options.set_cb_tile_size_all_cores(static_cast<CBIndex>(dfb->id), tile->get_tile_size(dfb->config.data_format));
+            } else {
+                Tile t;
+                build_options.set_cb_tile_size_all_cores(static_cast<CBIndex>(dfb->id), t.get_tile_size(dfb->config.data_format));
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal::detail
