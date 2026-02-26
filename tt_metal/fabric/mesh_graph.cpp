@@ -253,8 +253,10 @@ void MeshGraph::initialize_from_mgd(
     if (arch_it == proto_arch_to_arch.end()) {
         TT_THROW(
             "MeshGraph: unsupported architecture enum {} in mesh graph descriptor. "
-            "Expected one of: WORMHOLE_B0, BLACKHOLE.",
-            static_cast<int>(mgd.get_arch()));
+            "Expected one of: WORMHOLE_B0 {}, BLACKHOLE {}.",
+            static_cast<int>(mgd.get_arch()),
+            static_cast<int>(proto::Architecture::WORMHOLE_B0),
+            static_cast<int>(proto::Architecture::BLACKHOLE));
     }
 
     chip_spec_ = ChipSpec{
