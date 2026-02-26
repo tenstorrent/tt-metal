@@ -63,7 +63,11 @@ uint32_t _start() {
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
-    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    if constexpr (DST_ACCUM_MODE == true) {
+        memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
+    } else {
+        memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    }
 #endif
 #if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS

@@ -11,6 +11,7 @@
 #include "api/compute/pack_untilize.h"
 
 void kernel_main() {
+    DPRINT << "Starting" << ENDL();
     // X = output width
     // Y = output height
     // input shape = (..., H, W)
@@ -68,4 +69,5 @@ void kernel_main() {
 
         cb_pop_front(cb_tilize, 1);
     }
+    DPRINT << "Done" << ENDL();
 }
