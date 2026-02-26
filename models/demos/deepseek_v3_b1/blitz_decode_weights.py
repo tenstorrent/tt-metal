@@ -398,15 +398,26 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
     # --- weight shuffles ------------------------------------------------------
 
     def shuffle_kv_b2(self, weights: torch.Tensor) -> torch.Tensor:
-        """Reshape (512, 8192) into (8192, 512) for HEIGHT_SHARDED placement.
+        """Tile-level rearrange (512, 8192) into (8192, 512) for HEIGHT_SHARDED.
 
-        Each (128, 512) shard in the result corresponds to one (512, 128)
-        column slice of the input.
+        Each core's (512, 128) column slice is a 16×4 grid of 32×32 tiles.
+        These 64 tiles are laid out contiguously into a (128, 512) shard
+        (4×16 tile grid), preserving per-tile element data so that
+        ``from_torch`` with TILE_LAYOUT produces byte-identical BFP8 tiles.
         """
         kv_dim, n_heads = self.kv_b2_proj_shape
         n_cores = self.kv_b2_core_range_set.num_cores()
         head_dim = n_heads // n_cores
-        return weights.reshape(kv_dim, n_cores, head_dim).permute(1, 2, 0).reshape(-1, kv_dim).contiguous()
+        t = self.tile_h
+
+        k_tiles = kv_dim // t
+        n_tiles = head_dim // t
+
+        per_core = weights.reshape(kv_dim, n_cores, head_dim).permute(1, 0, 2).contiguous()
+        tiles = per_core.reshape(n_cores, k_tiles, t, n_tiles, t)
+        tiles = tiles.permute(0, 1, 3, 2, 4).reshape(n_cores, k_tiles * n_tiles, t, t)
+        tiles = tiles.reshape(n_cores, head_dim // t, kv_dim // t, t, t)
+        return tiles.permute(0, 1, 3, 2, 4).reshape(n_cores * head_dim, kv_dim).contiguous()
 
 
 KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = KVB12_PROJ_SingleDeviceOverlapSpec()
@@ -603,6 +614,7 @@ class OverlappedTensor:
     dtype: ttnn.DataType
     tile_shape: tuple[int, int]
     byte_offset: int = 0
+    total_size: int = 0
 
 
 class BlitzDecodeWeights:
@@ -784,6 +796,7 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=ts,
                 byte_offset=0,
+                total_size=cfg.q_a_tiles_per_shard * tile_bytes,
             ),
             OverlappedTensor(
                 fused_tensor=fused,
@@ -793,6 +806,7 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=ts,
                 byte_offset=cfg.q_a_tiles_per_shard * tile_bytes,
+                total_size=cfg.q_b_tiles_per_shard * tile_bytes,
             ),
             OverlappedTensor(
                 fused_tensor=fused,
@@ -802,6 +816,7 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=ts,
                 byte_offset=0,
+                total_size=cfg.kv_tiles_per_shard * tile_bytes,
             ),
         ]
 
@@ -963,7 +978,7 @@ class BlitzDecodeWeights:
         tile_32x32 = (cfg.tile_h, cfg.tile_w)
         tile_1x32 = (cfg.gamma_tile_h, cfg.gamma_tile_w)
 
-        result: list[OverlappedTensor] = [
+        return [
             OverlappedTensor(
                 fused_tensor=fused,
                 tensor_shape=cfg.o_proj_shape,
@@ -972,9 +987,8 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=tile_32x32,
                 byte_offset=0,
+                total_size=cfg.o_proj_shard_bytes,
             ),
-        ]
-        result.append(
             OverlappedTensor(
                 fused_tensor=fused,
                 tensor_shape=cfg.gate_mm_shape,
@@ -983,49 +997,49 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat16,
                 tile_shape=tile_32x32,
                 byte_offset=0,
-            )
-        )
-        result.extend(
-            [
-                OverlappedTensor(
-                    fused_tensor=fused,
-                    tensor_shape=cfg.attn_norm_shape,
-                    shard_shape=cfg.attn_norm_shape,
-                    core_range_set=cfg.gamma_core_range_set,
-                    dtype=ttnn.bfloat16,
-                    tile_shape=tile_1x32,
-                    byte_offset=cfg.attn_norm_byte_offset,
-                ),
-                OverlappedTensor(
-                    fused_tensor=fused,
-                    tensor_shape=cfg.q_norm_shape,
-                    shard_shape=cfg.q_norm_shape,
-                    core_range_set=cfg.gamma_core_range_set,
-                    dtype=ttnn.bfloat16,
-                    tile_shape=tile_1x32,
-                    byte_offset=cfg.q_norm_byte_offset,
-                ),
-                OverlappedTensor(
-                    fused_tensor=fused,
-                    tensor_shape=cfg.kv_norm_shape,
-                    shard_shape=cfg.kv_norm_shape,
-                    core_range_set=cfg.kv_norm_core_range_set,
-                    dtype=ttnn.bfloat16,
-                    tile_shape=tile_1x32,
-                    byte_offset=cfg.kv_norm_byte_offset,
-                ),
-                OverlappedTensor(
-                    fused_tensor=fused,
-                    tensor_shape=cfg.ffn_norm_shape,
-                    shard_shape=cfg.ffn_norm_shape,
-                    core_range_set=cfg.gamma_core_range_set,
-                    dtype=ttnn.bfloat16,
-                    tile_shape=tile_1x32,
-                    byte_offset=cfg.ffn_norm_byte_offset,
-                ),
-            ]
-        )
-        return result
+                total_size=cfg.gate_mm_shard_bytes,
+            ),
+            OverlappedTensor(
+                fused_tensor=fused,
+                tensor_shape=cfg.attn_norm_shape,
+                shard_shape=cfg.attn_norm_shape,
+                core_range_set=cfg.gamma_core_range_set,
+                dtype=ttnn.bfloat16,
+                tile_shape=tile_1x32,
+                byte_offset=cfg.attn_norm_byte_offset,
+                total_size=cfg.attn_norm_bytes,
+            ),
+            OverlappedTensor(
+                fused_tensor=fused,
+                tensor_shape=cfg.q_norm_shape,
+                shard_shape=cfg.q_norm_shape,
+                core_range_set=cfg.gamma_core_range_set,
+                dtype=ttnn.bfloat16,
+                tile_shape=tile_1x32,
+                byte_offset=cfg.q_norm_byte_offset,
+                total_size=cfg.q_norm_bytes,
+            ),
+            OverlappedTensor(
+                fused_tensor=fused,
+                tensor_shape=cfg.kv_norm_shape,
+                shard_shape=cfg.kv_norm_shape,
+                core_range_set=cfg.kv_norm_core_range_set,
+                dtype=ttnn.bfloat16,
+                tile_shape=tile_1x32,
+                byte_offset=cfg.kv_norm_byte_offset,
+                total_size=cfg.kv_norm_bytes,
+            ),
+            OverlappedTensor(
+                fused_tensor=fused,
+                tensor_shape=cfg.ffn_norm_shape,
+                shard_shape=cfg.ffn_norm_shape,
+                core_range_set=cfg.gamma_core_range_set,
+                dtype=ttnn.bfloat16,
+                tile_shape=tile_1x32,
+                byte_offset=cfg.ffn_norm_byte_offset,
+                total_size=cfg.ffn_norm_bytes,
+            ),
+        ]
 
     def get_tt_kv_b12_proj_weights(
         self,
@@ -1047,6 +1061,7 @@ class BlitzDecodeWeights:
 
             -- kv_b2 region: 64 remaining cores (5x8 + 12x2) --
             kv_b2_proj (512, 8192) as bfloat8_b, shard (512, 128)
+            tile-shuffled into (128, 512) shape
 
             combined: 128 cores, HEIGHT_SHARDED, shard (128, 512)
 
@@ -1131,6 +1146,7 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=tile_shape,
                 byte_offset=0,
+                total_size=cfg.shard_bytes,
             ),
             OverlappedTensor(
                 fused_tensor=fused,
@@ -1140,6 +1156,7 @@ class BlitzDecodeWeights:
                 dtype=ttnn.bfloat8_b,
                 tile_shape=tile_shape,
                 byte_offset=0,
+                total_size=cfg.shard_bytes,
             ),
         ]
 
@@ -1257,6 +1274,7 @@ class BlitzDecodeWeights:
             dtype=ttnn.bfloat4_b,
             tile_shape=ts,
             byte_offset=0,
+            total_size=cfg.shard_bytes,
         )
         up_ov = OverlappedTensor(
             fused_tensor=fused,
@@ -1266,6 +1284,7 @@ class BlitzDecodeWeights:
             dtype=ttnn.bfloat4_b,
             tile_shape=ts,
             byte_offset=0,
+            total_size=cfg.shard_bytes,
         )
 
         # ==================================================================
