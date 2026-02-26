@@ -440,31 +440,6 @@ def test_derive_gelu_derivative_polynomial_coefficients():
             result = result * x + c
         return result
 
-    def compute_poly_ulp(coeffs, x_min, x_max, poly_range=(-4, 4), clamp_min=-0.18, clamp_max=1.0):
-        """Compute max ULP error for polynomial with boundary handling."""
-        x_test = np.linspace(x_min, x_max, 10000)
-        y_exact = gelu_derivative_vec(x_test)
-
-        # Apply piecewise evaluation with boundary handling
-        y_poly = np.zeros_like(x_test)
-        for i, x in enumerate(x_test):
-            if x < poly_range[0]:
-                y_poly[i] = 0.0  # Asymptotic: GELU'(x) → 0
-            elif x > poly_range[1]:
-                y_poly[i] = 1.0  # Asymptotic: GELU'(x) → 1
-            else:
-                y_poly[i] = eval_poly_horner(coeffs, np.array([x]))[0]
-                y_poly[i] = np.clip(y_poly[i], clamp_min, clamp_max)
-
-        max_ulp = 0
-        worst_x = 0
-        for i in range(len(x_test)):
-            ulp = ulp_distance_bf16_daz(y_exact[i], y_poly[i])
-            if ulp > max_ulp:
-                max_ulp = ulp
-                worst_x = x_test[i]
-        return max_ulp, worst_x
-
     # Use numpy's chebyshev fitting which is numerically stable
     from numpy.polynomial import chebyshev as C
 
@@ -482,11 +457,6 @@ def test_derive_gelu_derivative_polynomial_coefficients():
         poly_coeffs = C.cheb2poly(cheb_coeffs)
 
         return poly_coeffs, cheb_coeffs, (x_min, x_max)
-
-    def eval_chebyshev(cheb_coeffs, x, x_min, x_max):
-        """Evaluate Chebyshev polynomial directly (more stable than converted coeffs)."""
-        # Scale x to [-1, 1] for Chebyshev evaluation
-        return C.chebval(x, cheb_coeffs)
 
     def compute_cheb_ulp(cheb_coeffs, x_min_test, x_max_test, poly_range):
         """Compute max ULP using Chebyshev polynomial with boundary handling."""

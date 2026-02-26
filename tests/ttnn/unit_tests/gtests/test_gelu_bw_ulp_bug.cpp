@@ -44,6 +44,7 @@
 #include <set>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
@@ -60,6 +61,13 @@ namespace ttnn::test {
 // =============================================================================
 
 namespace bf16_ulp_bw {
+
+// BFloat16 bit-field constants
+constexpr uint16_t BF16_EXP_MASK = 0x7F80;       // Exponent bits [14:7]
+constexpr uint16_t BF16_MANTISSA_MASK = 0x007F;  // Mantissa bits [6:0]
+constexpr uint16_t BF16_SIGN_MASK = 0x8000;      // Sign bit [15]
+constexpr uint16_t BF16_POS_INF = 0x7F80;        // +Infinity
+constexpr uint16_t BF16_NEG_INF = 0xFF80;        // -Infinity
 
 /**
  * Convert float to BFloat16 bit representation (truncation, no rounding).
@@ -85,7 +93,7 @@ inline float bf16_bits_to_float(uint16_t bits) {
  */
 inline bool is_bf16_denormal(uint16_t bits) {
     uint16_t exp = (bits >> 7) & 0xFF;
-    uint16_t mantissa = bits & 0x7F;
+    uint16_t mantissa = bits & BF16_MANTISSA_MASK;
     return (exp == 0) && (mantissa != 0);
 }
 
@@ -117,25 +125,25 @@ inline int32_t bf16_value_order_index_daz(uint16_t bits) {
     bits = bf16_daz_normalize(bits);
 
     uint16_t exp = (bits >> 7) & 0xFF;
-    uint16_t mantissa = bits & 0x7F;
+    uint16_t mantissa = bits & BF16_MANTISSA_MASK;
     if (exp == 0xFF && mantissa != 0) {
         return -1;  // NaN
     }
-    if (bits == 0x7F80) {
+    if (bits == BF16_POS_INF) {
         return 65281;  // +inf
     }
-    if (bits == 0xFF80) {
+    if (bits == BF16_NEG_INF) {
         return -1;  // -inf
     }
     if (bits == 0x0000) {
         return 32640;  // Zero
     }
 
-    if (bits & 0x8000) {
+    if (bits & BF16_SIGN_MASK) {
         uint16_t magnitude = bits & 0x7FFF;
         return 0x7F7F - magnitude;
     } else {
-        return 32640 + bits - 0x007F;
+        return 32640 + bits - BF16_MANTISSA_MASK;
     }
 }
 
@@ -181,6 +189,8 @@ inline int32_t ulp_distance_bf16_daz(float a, float b) {
  *
  * This avoids the erf() saturation issue at x ≈ -8.375.
  */
+// Uses double (fp64) intentionally: the golden reference must be higher precision
+// than BF16 to allow meaningful ULP distance measurement.
 inline double gelu_derivative_exact(double x) {
     constexpr double SQRT2 = 1.4142135623730950488;
     constexpr double INV_SQRT_2PI = 0.3989422804014327;
@@ -212,15 +222,10 @@ inline float gelu_derivative_expected_bf16_daz(float x) {
     return bf16_daz_normalize(result_f32);
 }
 
-/**
- * Full GELU backward with grad: grad * GELU'(x)
- */
-inline double gelu_bw_exact(double grad, double x) { return grad * gelu_derivative_exact(x); }
-
 inline float gelu_bw_expected_bf16_daz(float grad, float x) {
     float grad_daz = bf16_daz_normalize(grad);
     float x_daz = bf16_daz_normalize(x);
-    double result = gelu_bw_exact(grad_daz, x_daz);
+    double result = static_cast<double>(grad_daz) * gelu_derivative_exact(x_daz);
     float result_f32 = static_cast<float>(result);
     return bf16_daz_normalize(result_f32);
 }
@@ -238,8 +243,7 @@ class GeluBwUlpTest : public TTNNFixtureWithDevice {};
  * This tests the GELU derivative directly: GELU'(x)
  */
 float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float input_val, float grad_val = 1.0f) {
-    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-    ttnn::Shape shape(dims);
+    ttnn::Shape shape({1, 1, 32, 32});
 
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -365,11 +369,12 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
 
         // Skip NaN
-        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_bw::BF16_MANTISSA_MASK) != 0) {
             continue;
         }
         // Skip infinity
-        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+        if (bf16_bits == bf16_ulp_bw::BF16_POS_INF || bf16_bits == bf16_ulp_bw::BF16_NEG_INF) {
             continue;
         }
         // Skip denormals (will be treated as zero)
@@ -385,13 +390,13 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     std::cout << "\nCollected " << valid_count << " valid BF16 values\n";
 
     // Pad to tile boundary (multiple of 32*32 = 1024)
-    const size_t tile_size = 32 * 32;
+    const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
     input_values.resize(padded_size, 0.0f);
 
     // Create tensor shape
     uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     // Create input tensors from vectors
     std::vector<::bfloat16> bf16_inputs;
@@ -518,10 +523,11 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
 
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
-        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_bw::BF16_MANTISSA_MASK) != 0) {
             continue;
         }
-        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+        if (bf16_bits == bf16_ulp_bw::BF16_POS_INF || bf16_bits == bf16_ulp_bw::BF16_NEG_INF) {
             continue;
         }
         if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
@@ -532,12 +538,12 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     }
 
     const size_t valid_count = input_values.size();
-    const size_t tile_size = 32 * 32;
+    const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
     input_values.resize(padded_size, 0.0f);
 
     uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs, bf16_grads;
     for (float x : input_values) {
@@ -738,8 +744,7 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
  * Uses ttnn::experimental::gelu_bw with approximate="none" (default polynomial path)
  */
 float run_gelu_bw_poly_single(tt::tt_metal::distributed::MeshDevice& device, float input_val, float grad_val = 1.0f) {
-    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-    ttnn::Shape shape(dims);
+    ttnn::Shape shape({1, 1, 32, 32});
 
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -847,11 +852,12 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
 
         // Skip NaN
-        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_bw::BF16_MANTISSA_MASK) != 0) {
             continue;
         }
         // Skip infinity
-        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+        if (bf16_bits == bf16_ulp_bw::BF16_POS_INF || bf16_bits == bf16_ulp_bw::BF16_NEG_INF) {
             continue;
         }
         // Skip denormals
@@ -867,13 +873,13 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     std::cout << "\n[POLY] Collected " << valid_count << " valid BF16 values\n";
 
     // Pad to tile boundary
-    const size_t tile_size = 32 * 32;
+    const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
     input_values.resize(padded_size, 0.0f);
 
     // Create tensor shape
     uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     // Create input tensors from vectors
     std::vector<::bfloat16> bf16_inputs;
@@ -1034,10 +1040,11 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
 
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
-        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_bw::BF16_MANTISSA_MASK) != 0) {
             continue;  // NaN
         }
-        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+        if (bf16_bits == bf16_ulp_bw::BF16_POS_INF || bf16_bits == bf16_ulp_bw::BF16_NEG_INF) {
             continue;  // Inf
         }
         if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
@@ -1049,12 +1056,12 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     }
 
     const size_t valid_count = input_values.size();
-    const size_t tile_size = 32 * 32;
+    const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
     input_values.resize(padded_size, 0.0f);
 
     uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs, bf16_grads;
     bf16_inputs.reserve(padded_size);
@@ -1214,10 +1221,11 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
 
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
-        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_bw::BF16_MANTISSA_MASK) != 0) {
             continue;  // NaN
         }
-        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+        if (bf16_bits == bf16_ulp_bw::BF16_POS_INF || bf16_bits == bf16_ulp_bw::BF16_NEG_INF) {
             continue;  // Inf
         }
         if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
@@ -1239,13 +1247,13 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     std::cout << "================================================================================\n";
 
     // Pad for tensor
-    const size_t tile_size = 32 * 32;
+    const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((count + tile_size - 1) / tile_size) * tile_size;
     std::vector<float> padded_values = exp_region_values;
     padded_values.resize(padded_size, 0.0f);
 
     uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     std::vector<::bfloat16> bf16_inputs, bf16_grads;
     for (float x : padded_values) {
