@@ -30,6 +30,20 @@ from models.common.utility_functions import torch_random
         ((1024, 1024), (1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),
         ((1024, 1024), (1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999),
         ((1024, 1024), (1, 512, 128, 128), 3, 0, False, "down_blocks", 0.999),
+        # 512x512 image resolution
+        ((512, 512), (1, 512, 64, 64), 0, 0, False, "mid_block", 0.999),
+        ((512, 512), (1, 512, 64, 64), 0, 0, False, "up_blocks", 0.999),
+        ((512, 512), (1, 512, 128, 128), 1, 0, False, "up_blocks", 0.999),
+        ((512, 512), (1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
+        ((512, 512), (1, 256, 512, 512), 3, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 128, 512, 512), 3, 1, False, "up_blocks", 0.999),
+        ((512, 512), (1, 128, 512, 512), 0, 0, False, "down_blocks", 0.999),
+        ((512, 512), (1, 128, 256, 256), 1, 0, True, "down_blocks", 0.999),
+        ((512, 512), (1, 256, 256, 256), 1, 1, False, "down_blocks", 0.999),
+        ((512, 512), (1, 256, 128, 128), 2, 0, True, "down_blocks", 0.999),
+        ((512, 512), (1, 512, 128, 128), 2, 1, False, "down_blocks", 0.999),
+        ((512, 512), (1, 512, 64, 64), 3, 0, False, "down_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -46,10 +60,6 @@ def test_vae_resnetblock2d(
     is_ci_env,
     reset_seeds,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,

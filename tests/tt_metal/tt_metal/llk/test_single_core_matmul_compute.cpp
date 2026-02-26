@@ -307,6 +307,7 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -461,7 +462,7 @@ bool single_block_matmul(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
@@ -638,7 +639,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
