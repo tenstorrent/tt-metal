@@ -3994,8 +3994,10 @@ class MoeOp:
         reduce_root_coord=None,
         reconfig_moe_cbs=False,
         semaphores=None,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
+        self.noc_mode = noc_mode
         assert semaphores is not None, "semaphores must be provided (use MoeOp.create_semaphores())"
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
@@ -4314,6 +4316,7 @@ class MoeOp:
         reconfig_moe_cbs=False,
         # Global semaphores (created by MoeOp.create_semaphores)
         semaphores=None,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4376,6 +4379,7 @@ class MoeOp:
             reduce_root_coord=reduce_root_coord,
             reconfig_moe_cbs=reconfig_moe_cbs,
             semaphores=semaphores,
+            noc_mode=noc_mode,
         )
 
         # ==================================================================
@@ -4414,6 +4418,7 @@ class MoeOp:
                     per_core_compile_time_descriptors=moe.device_per_core_descs,
                     per_core_runtime_args_descriptor=moe.device_rt_args_desc,
                     defines=moe.kernel_defines,
+                    noc_mode=moe.noc_mode,
                 )
                 kernel_result = unified_kernel.get_kernel_descriptors()
 

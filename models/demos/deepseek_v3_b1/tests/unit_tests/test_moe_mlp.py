@@ -414,7 +414,8 @@ def extract_routed_expert_output(
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
-def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
     device_grid = device.compute_with_storage_grid_size()
@@ -500,6 +501,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
         num_iterations=num_iterations,
         reconfig_moe_cbs=reconfig_moe_cbs,
         semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
     logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -567,7 +569,8 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs):
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -732,6 +735,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -818,7 +822,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
-def test_mlp(device, reconfig_moe_cbs):
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+def test_mlp(device, reconfig_moe_cbs, noc_mode):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
 
     device_grid = device.compute_with_storage_grid_size()
@@ -898,6 +903,7 @@ def test_mlp(device, reconfig_moe_cbs):
         num_iterations=num_iterations,
         reconfig_moe_cbs=reconfig_moe_cbs,
         semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
     logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -944,7 +950,8 @@ def test_mlp(device, reconfig_moe_cbs):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
-def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
@@ -1101,6 +1108,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
