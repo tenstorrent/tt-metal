@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Sweep sequence length comparing torch (CPU) vs TTNN (device).
 Covers both Gated Attention and Gated DeltaNet (chunk mode).
