@@ -81,27 +81,27 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE, // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,         // Path to channel trimming profile YAML for import
-    TT_METAL_FORCE_REINIT,                  // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
-    RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,          // Disable use of SFPLOADMACRO instructions
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
+    TT_METAL_ENABLE_ERISC_IRAM,                // Enable ERISC IRAM (inverted logic)
+    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -148,6 +148,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,          // Disable write-only L1 sanitization
     TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
     TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
+    TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
 
     // ========================================
@@ -562,9 +563,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // construction uses the captured profile to disable unused sender/receiver channels.
         // Default: empty (no profile import)
         // Usage: export TT_METAL_FABRIC_TRIMMING_PROFILE=/path/to/channel_trimming_capture.yaml
-        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE:
-            this->fabric_trimming_profile_path = std::string(value);
-            break;
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE: this->fabric_trimming_profile_path = std::string(value); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
@@ -1053,6 +1052,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_disabled_features.insert(this->watcher_dispatch_str);
             break;
 
+        // TT_METAL_WATCHER_DISABLE_ETH
+        // Disables watcher on ethernet cores when set to any value.
+        // Default: enabled
+        // Usage: export TT_METAL_WATCHER_DISABLE_ETH=1
+        case EnvVarID::TT_METAL_WATCHER_DISABLE_ETH:
+            this->watcher_disabled_features.insert(this->watcher_eth_str);
+            break;
+
         // TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION
         // Enables NoC sanitization for linked transactions to catch more subtle errors.
         // Default: false (linked transaction sanitization disabled)
@@ -1345,6 +1352,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
         watcher_dispatch_str,
+        watcher_eth_str,
         watcher_eth_link_status_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
@@ -1706,6 +1714,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_ring_buffer_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_eth_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
