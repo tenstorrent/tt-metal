@@ -39,8 +39,14 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
+<<<<<<< HEAD
             const uint32_t current_mm_block_ht =
                 get_current_mm_block_ht(m_block_iter, mm_M_unit_blocks_per_core, mm_block_ht, slice_Ht_per_core);
+=======
+            const uint32_t current_mm_block_ht = (m_block_iter == mm_M_unit_blocks_per_core - 1)
+                                                     ? (slice_Ht_per_core - m_block_iter * mm_block_ht)
+                                                     : mm_block_ht;
+>>>>>>> f3b2ed2bdd (implementing any M)
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
