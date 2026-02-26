@@ -16,6 +16,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 
 #include "slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -138,4 +140,50 @@ void bind_slice(nb::module_& mod) {
 
     );
 }
+void bind_slice_descriptor(nb::module_& mod) {
+    nb::class_<ttnn::prim::SliceParams>(mod, "SliceParams")
+        .def(nb::init<>())
+        .def_rw("slice_start", &ttnn::prim::SliceParams::slice_start)
+        .def_rw("slice_end", &ttnn::prim::SliceParams::slice_end)
+        .def_rw("step", &ttnn::prim::SliceParams::step)
+        .def_rw("output_mem_config", &ttnn::prim::SliceParams::output_mem_config)
+        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids);
+
+    nb::class_<ttnn::prim::SliceInputs>(mod, "SliceInputs")
+        .def(
+            "__init__",
+            [](ttnn::prim::SliceInputs* t) {
+                new (t) ttnn::prim::SliceInputs{ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt};
+            })
+        .def_rw("input", &ttnn::prim::SliceInputs::input)
+        .def_rw("preallocated_output", &ttnn::prim::SliceInputs::preallocated_output);
+
+    nb::class_<ttnn::prim::SliceDeviceOperation>(mod, "SliceDeviceOperation")
+        .def_static(
+            "create_output_tensors",
+            &ttnn::prim::SliceDeviceOperation::create_output_tensors,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_output_specs",
+            &ttnn::prim::SliceDeviceOperation::compute_output_specs,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"));
+
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::SliceParams& operation_attributes,
+               const ttnn::prim::SliceInputs& tensor_args,
+               Tensor& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = nb::none());
+}
+
 }  // namespace ttnn::operations::data_movement::detail

@@ -497,6 +497,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util
