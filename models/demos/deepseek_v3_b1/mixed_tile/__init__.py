@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .assigner import MixedTileAssigner, MixedTileResult
-from .tile_utils import MIXED_TILE_FORMATS, MIXED_TILE_BYTES_PER_ELEM
+from .tile_utils import MIXED_TILE_FORMATS, MIXED_TILE_BYTES_PER_ELEM, ttnn_quantize_fn
 
 __all__ = [
     "MixedTileAssigner",
     "MixedTileResult",
     "MIXED_TILE_FORMATS",
     "MIXED_TILE_BYTES_PER_ELEM",
+    "ttnn_quantize_fn",
 ]
