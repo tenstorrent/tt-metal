@@ -22,36 +22,13 @@ constexpr uint32_t kTargetAsicLocation = 6;
 constexpr uint32_t kWarmupIters = 5;
 
 const std::vector<std::size_t> kTotalDataSizes = {
-    16 * 1024,            // 16KB
-    32 * 1024,            // 32KB
-    512 * 1024,           // 512KB
-    1024 * 1024,          // 1MB
-    16 * 1024 * 1024,     // 16MB
     512UL * 1024 * 1024,  // 512MB
     1024UL * 1024 * 1024  // 1GB
 };
 
-const std::vector<std::size_t> kPageSizes = {
-    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
+const std::vector<std::size_t> kPageSizes = {32768, 65536, 131072, 262144};
 
 const std::vector<std::size_t> kD2HThroughputFifoSizes = {
-    1024,
-    2048,
-    4096,
-    8192,
-    16384,
-    32768,
-    65536,
-    128 * 1024,
-    256 * 1024,
-    512 * 1024,
-    1024 * 1024,
-    2 * 1024 * 1024,
-    4 * 1024 * 1024,
-    8 * 1024 * 1024,
-    16 * 1024 * 1024,
-    32 * 1024 * 1024,
-    64 * 1024 * 1024,
     128 * 1024 * 1024,
     256 * 1024 * 1024,
     512 * 1024 * 1024,
@@ -61,7 +38,6 @@ const std::vector<std::size_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536,
 const std::vector<std::size_t> kH2DThroughputFifoSizes = {
     1024, 2048, 4096, 8192, 16384, 32768, 65536, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024};
 const std::vector<std::size_t> kH2DLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288};
-
 
 const char* h2d_mode_name(H2DMode mode) { return (mode == H2DMode::HOST_PUSH) ? "HOST_PUSH" : "DEVICE_PULL"; }
 
@@ -87,44 +63,24 @@ std::vector<ChipInfo> enumerate_mmio_chips(const std::shared_ptr<MeshDevice>& me
     return chips;
 }
 
-std::optional<MeshCoordinate> find_target_mmio_coord(
-    const std::shared_ptr<MeshDevice>& mesh_device,
-    uint32_t target_tray_id,
-    uint32_t target_asic_location) {
-    auto physical_system_descriptor = make_physical_system_descriptor();
-    const auto& control_plane = MetalContext::instance().get_control_plane();
-    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
-        if (!is_device_coord_mmio_mapped(mesh_device, coord)) {
-            continue;
-        }
-        auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
-        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
-        auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
-        if (*asic_desc.tray_id == target_tray_id && *asic_desc.asic_location == target_asic_location) {
-            return coord;
-        }
-    }
-
-    return std::nullopt;
-}
-
 // Returns the preferred high-bandwidth target chip (tray kTargetTrayId / ASIC kTargetAsicLocation).
-// Falls back to the first available MMIO-mapped chip so the benchmarks run on any system.
-// Returns nullopt only when no MMIO chip at all is available.
-MeshCoreCoord get_target_benchmark_worker_core(const std::shared_ptr<MeshDevice>& mesh_device) {
-    // Preferred: the high-bandwidth Gen 4 x8 chip (ASIC 6 per tray).
-    auto preferred = find_target_mmio_coord(mesh_device, kTargetTrayId, kTargetAsicLocation);
-    if (preferred.has_value()) {
-        return MeshCoreCoord{preferred.value(), CoreCoord(0, 0)};
-    }
-    // Fallback: first available MMIO chip on this system.
-    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
-        if (is_device_coord_mmio_mapped(mesh_device, coord)) {
-            return MeshCoreCoord{coord, CoreCoord(0, 0)};
+// Falls back to the first available MMIO-mapped chip so the benchmarks run on any system,
+// printing a warning to stderr so the caller knows the numbers reflect a lower-bandwidth link.
+ChipInfo get_target_benchmark_worker_core(const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto chips = enumerate_mmio_chips(mesh_device);
+    TT_FATAL(!chips.empty(), "No MMIO-mapped device found for benchmark");
+    for (const auto& chip : chips) {
+        if (chip.tray_id == kTargetTrayId && chip.asic_location == kTargetAsicLocation) {
+            return chip;
         }
     }
-    TT_FATAL(false, "No MMIO-mapped device found for benchmark");
-    __builtin_unreachable();
+    // Fallback: first available MMIO chip.
+    const auto& fallback = chips.front();
+    std::cerr << "WARNING: target tray=" << kTargetTrayId << " asic_location=" << kTargetAsicLocation
+              << " not found on this system. Falling back to tray=" << fallback.tray_id
+              << " asic_location=" << fallback.asic_location << " coord=" << fallback.coord
+              << ". Results reflect a lower-bandwidth PCIe link.\n";
+    return fallback;
 }
 
 struct LatencySummary {
@@ -284,10 +240,11 @@ TEST_F(HDSocketBenchFixture, D2HSocketThroughputBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    MeshCoreCoord sender_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord sender_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& sender_coord = sender_core.device_coord;
-    std::cout << "# sender target tray=" << kTargetTrayId << " asic_location=" << kTargetAsicLocation
-              << " mesh_coord=" << sender_coord << std::endl;
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << sender_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,total_data,data_size,pages_per_iter,"
               << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
@@ -304,8 +261,8 @@ TEST_F(HDSocketBenchFixture, D2HSocketThroughputBenchmark) {
                     continue;
                 }
 
-                auto [us, cycles] =
-                    benchmark_d2h_throughput(mesh_device_, fifo_size, page_size, page_size, num_iterations, sender_core);
+                auto [us, cycles] = benchmark_d2h_throughput(
+                    mesh_device_, fifo_size, page_size, page_size, num_iterations, sender_core);
 
                 emit_d2h_throughput_csv_row(
                     page_size,
@@ -332,7 +289,7 @@ TEST_F(HDSocketBenchFixture, D2HSocketMultiChipMaxThroughputBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    constexpr std::size_t kBenchPageSize = 65536;                   // 64KB – max throughput
+    constexpr std::size_t kBenchPageSize = 65536;                  // 64KB – max throughput
     constexpr std::size_t kBenchTotalData = 1024UL * 1024 * 1024;  // 1GB
     const std::vector<std::size_t> kBenchFifoSizes = {
         1UL * 1024 * 1024,    //   1MB
@@ -380,7 +337,7 @@ TEST_F(HDSocketBenchFixture, H2DSocketMultiChipMaxThroughputBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    constexpr std::size_t kBenchPageSize = 262144;                  // 256KB – max throughput for DEVICE_PULL
+    constexpr std::size_t kBenchPageSize = 262144;                 // 256KB – max throughput for DEVICE_PULL
     constexpr std::size_t kBenchTotalData = 1024UL * 1024 * 1024;  // 1GB
     const std::vector<std::size_t> kBenchFifoSizes = {
         256 * 1024,   // 256KB (depth 1)
@@ -408,7 +365,13 @@ TEST_F(HDSocketBenchFixture, H2DSocketMultiChipMaxThroughputBenchmark) {
 
         for (auto fifo_size : kBenchFifoSizes) {
             auto [us, cycles] = benchmark_h2d_throughput(
-                mesh_device_, fifo_size, kBenchPageSize, kBenchPageSize, num_iterations, H2DMode::DEVICE_PULL, recv_core);
+                mesh_device_,
+                fifo_size,
+                kBenchPageSize,
+                kBenchPageSize,
+                num_iterations,
+                H2DMode::DEVICE_PULL,
+                recv_core);
 
             const double throughput_gbps = static_cast<double>(kBenchPageSize) / (us * 1e3);
             std::cout << chip.tray_id << "," << chip.asic_location << "," << chip.coord << "," << fifo_size << ","
@@ -542,9 +505,12 @@ TEST_F(HDSocketBenchFixture, D2HSocketLatencyBenchmark) {
 
     uint32_t num_iterations = 100;
 
-    MeshCoreCoord sender_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord sender_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& sender_coord = sender_core.device_coord;
     const double cycles_per_us = get_cycles_per_us(*mesh_device_);
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << sender_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,num_iterations,"
               << "avg_us,min_us,max_us,p50_us,p99_us,"
@@ -570,14 +536,17 @@ TEST_F(HDSocketBenchFixture, H2DSocketThroughputBenchmark) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord recv_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& recv_coord = recv_core.device_coord;
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << recv_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,h2d_mode,total_data,data_size,pages_per_iter,"
               << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
               << "throughput_gbps,device_coord" << std::endl;
 
-    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+    for (auto h2d_mode : {H2DMode::DEVICE_PULL}) {
         for (auto fifo_size : kH2DThroughputFifoSizes) {
             for (auto page_size : kPageSizes) {
                 if (page_size > fifo_size) {
@@ -673,9 +642,12 @@ TEST_F(HDSocketBenchFixture, D2HSocketPingBenchmark) {
     std::vector<std::size_t> fifo_sizes = {4096};
     uint32_t num_iterations = 100;
 
-    MeshCoreCoord sender_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord sender_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& sender_coord = sender_core.device_coord;
     const double cycles_per_us = get_cycles_per_us(*mesh_device_);
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << sender_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,num_iterations,"
               << "avg_us,min_us,max_us,p50_us,p99_us,"
@@ -769,9 +741,12 @@ TEST_F(HDSocketBenchFixture, H2DSocketPingBenchmark) {
     std::size_t fifo_size = 4096;
     uint32_t num_iterations = 100;
 
-    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord recv_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& recv_coord = recv_core.device_coord;
     const double cycles_per_us = get_cycles_per_us(*mesh_device_);
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << recv_coord << std::endl;
 
     std::vector<H2DMode> modes = {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL};
 
@@ -929,9 +904,12 @@ TEST_F(HDSocketBenchFixture, H2DSocketLatencyBenchmark) {
 
     uint32_t num_iterations = 100;
 
-    MeshCoreCoord recv_core = get_target_benchmark_worker_core(mesh_device_);
+    auto target_chip = get_target_benchmark_worker_core(mesh_device_);
+    MeshCoreCoord recv_core = {target_chip.coord, CoreCoord(0, 0)};
     const auto& recv_coord = recv_core.device_coord;
     const double cycles_per_us = get_cycles_per_us(*mesh_device_);
+    std::cout << "# chip: tray=" << target_chip.tray_id << " asic_location=" << target_chip.asic_location
+              << " coord=" << recv_coord << std::endl;
 
     std::cout << "page_size,socket_fifo_size,h2d_mode,num_iterations,"
               << "avg_us,min_us,max_us,p50_us,p99_us,"
