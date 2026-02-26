@@ -79,9 +79,18 @@ foreach(exercise_dir ${exercise_dirs})
     string(REGEX MATCH "^e([0-9]+)_" _ ${exercise_dir})
     set(exercise_num ${CMAKE_MATCH_1})
 
-    # Build solution module if solution_cpp exists
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/solution_cpp")
-        file(GLOB_RECURSE solution_all_sources "${exercise_dir}/solution_cpp/*.cpp")
+    # Build solution module if solution_cpp exists (direct or in stage subdirs like Stage1/)
+    file(
+        GLOB _solution_cpp_dirs
+        "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/solution_cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/*/solution_cpp"
+    )
+    if(_solution_cpp_dirs)
+        file(
+            GLOB_RECURSE solution_all_sources
+            "${exercise_dir}/solution_cpp/*.cpp"
+            "${exercise_dir}/*/solution_cpp/*.cpp"
+        )
 
         # Separate nanobind source from other sources
         set(solution_sources)
@@ -103,9 +112,18 @@ foreach(exercise_dir ${exercise_dirs})
         endif()
     endif()
 
-    # Build exercise module if exercise_cpp exists
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/exercise_cpp")
-        file(GLOB_RECURSE exercise_all_sources "${exercise_dir}/exercise_cpp/*.cpp")
+    # Build exercise module if exercise_cpp exists (direct or in stage subdirs like Stage1/)
+    file(
+        GLOB _exercise_cpp_dirs
+        "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/exercise_cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${exercise_dir}/*/exercise_cpp"
+    )
+    if(_exercise_cpp_dirs)
+        file(
+            GLOB_RECURSE exercise_all_sources
+            "${exercise_dir}/exercise_cpp/*.cpp"
+            "${exercise_dir}/*/exercise_cpp/*.cpp"
+        )
 
         # Separate nanobind source from other sources
         set(exercise_sources)
@@ -132,7 +150,11 @@ endforeach()
 # Kernel installation for JIT compilation
 # ============================================================================
 
-file(GLOB_RECURSE onboarding_kernels "e[0-9][0-9]_*/*/device/kernels/*")
+file(
+    GLOB_RECURSE onboarding_kernels
+    "e[0-9][0-9]_*/*/device/kernels/*"
+    "e[0-9][0-9]_*/*/*/device/kernels/*"
+)
 
 if(onboarding_kernels)
     add_library(ttnn_onboarding_kernels OBJECT)
