@@ -2847,8 +2847,8 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         return;
     }
 
-    // Protect router_port_directions_to_physical_eth_chan_map_ during MPI merge operations
-    std::unique_lock<std::shared_mutex> lock(routing_tables_mutex_);
+    // router_port_directions_to_physical_eth_chan_map_ is protected by routing_tables_mutex_,
+    // which is already held exclusively by the caller (configure_routing_tables_for_fabric_ethernet_channels)
 
     // Create RouterPortDirectionsData from local data
     RouterPortDirectionsData local_data;
