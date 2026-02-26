@@ -13,7 +13,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
