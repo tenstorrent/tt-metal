@@ -117,9 +117,9 @@ void kernel_main() {
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
-    // L1 prefetch: enabled for kernels > 1x1x1 (spatial reuse > 1)
-    constexpr bool use_l1_prefetch =
-        (kT > 1 || kH > 1 || kW > 1) && (dilation_t == 1 && dilation_h == 1 && dilation_w == 1);
+    // L1 prefetch: enabled when the host allocated a shard buffer (T_shard_max > 0).
+    // The host decides based on kernel size, dilation, and L1 budget.
+    constexpr bool use_l1_prefetch = (T_shard_max > 0);
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
     // Reserve shard buffer once (used as scratch space, not streaming CB)

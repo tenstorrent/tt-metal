@@ -189,19 +189,26 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
 
-    // L1 pre-fetch buffer for kernels > 1x1x1.
+    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
+    // If the shard would exceed L1_PREFETCH_MAX_BYTES, fall back to the direct reader (no L1 prefetch).
+    constexpr uint32_t L1_PREFETCH_MAX_BYTES = 128 * 1024;
+
     const uint32_t kT = operation_attributes.kernel_size[0];
     const uint32_t kH = operation_attributes.kernel_size[1];
     const uint32_t kW = operation_attributes.kernel_size[2];
-    const bool use_l1_prefetch = (kT > 1 || kH > 1 || kW > 1);
 
     uint32_t cb_input_shard_id = 32;  // Invalid; set below if using L1 prefetch
     uint32_t T_shard_max = 0;
     uint32_t H_shard_max = 0;
     uint32_t W_shard_max = 0;
 
-    if (use_l1_prefetch) {
+    const bool has_spatial_reuse = (kT > 1 || kH > 1 || kW > 1);
+    const bool has_no_dilation =
+        (operation_attributes.dilation[0] == 1 && operation_attributes.dilation[1] == 1 &&
+         operation_attributes.dilation[2] == 1);
+
+    if (has_spatial_reuse && has_no_dilation) {
         // Shard covers the full receptive field span for one spatial block, including padding positions.
         // Do NOT cap at T_in/H_in/W_in — padding positions outside input bounds are stored in the shard
         // (zero-filled or clamped) so that Phase 2 can index without boundary checks.
@@ -209,21 +216,33 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         H_shard_max = (config.H_out_block - 1) * operation_attributes.stride[1] + kH;
         W_shard_max = (config.W_out_block - 1) * operation_attributes.stride[2] + kW;
         uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
+        uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
 
-        cb_input_shard_id = next_cb_index++;
-        tt::tt_metal::create_cb(
-            cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
+        if (shard_bytes <= L1_PREFETCH_MAX_BYTES) {
+            cb_input_shard_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
 
-        log_debug(
-            tt::LogOp,
-            "L1 prefetch: T_shard_max={}, H_shard_max={}, W_shard_max={}, shard_positions={}, "
-            "shard_bytes={}, cb_id={}",
-            T_shard_max,
-            H_shard_max,
-            W_shard_max,
-            shard_positions_max,
-            shard_positions_max * C_in_block_bytes,
-            cb_input_shard_id);
+            log_debug(
+                tt::LogOp,
+                "L1 prefetch: T_shard_max={}, H_shard_max={}, W_shard_max={}, shard_positions={}, "
+                "shard_bytes={}, cb_id={}",
+                T_shard_max,
+                H_shard_max,
+                W_shard_max,
+                shard_positions_max,
+                shard_bytes,
+                cb_input_shard_id);
+        } else {
+            log_debug(
+                tt::LogOp,
+                "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",
+                shard_bytes,
+                L1_PREFETCH_MAX_BYTES);
+            T_shard_max = 0;
+            H_shard_max = 0;
+            W_shard_max = 0;
+        }
     }
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
