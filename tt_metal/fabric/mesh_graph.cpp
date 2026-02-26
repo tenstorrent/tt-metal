@@ -35,23 +35,15 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
     return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
-// Hash specialization for proto::Architecture to enable use in unordered_map.
-// This is required because std::unordered_map needs a hash function for its key type,
-// and protobuf-generated enums don't automatically get std::hash specializations.
-// Without this, the map initializes correctly (insertion uses equality comparison),
-// but lookups fail because the hash function doesn't compute consistent bucket indices
-// for the same enum value. This caused the "unsupported architecture enum" error even
-// though WORMHOLE_B0 (value 1) was a valid, supported value in the map.
-namespace std {
-template <>
-struct hash<tt::tt_fabric::proto::Architecture> {
-    std::size_t operator()(const tt::tt_fabric::proto::Architecture& arch) const {
+namespace tt::tt_fabric {
+
+namespace {
+struct ProtoArchitectureHash {
+    std::size_t operator()(const proto::Architecture& arch) const {
         return static_cast<std::size_t>(static_cast<int>(arch));
     }
 };
-}  // namespace std
-
-namespace tt::tt_fabric {
+}  // namespace
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
@@ -244,7 +236,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
 
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
-    static const std::unordered_map<proto::Architecture, tt::ARCH> proto_arch_to_arch = {
+    static const std::unordered_map<proto::Architecture, tt::ARCH, ProtoArchitectureHash> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
     };
