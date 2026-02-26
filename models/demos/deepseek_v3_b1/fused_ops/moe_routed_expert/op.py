@@ -2024,8 +2024,8 @@ class MoeRoutedExpert:
                             break
 
                     # Build per-core BRISC args for reduce worker cores
-                    # Semaphore IDs start at 5 to avoid conflicts with existing semaphores (0-5)
-                    reduce_worker_fabric_sem_base = 5
+                    # Semaphore IDs start at 6 to avoid conflicts with expert semaphores (0-5)
+                    reduce_worker_fabric_sem_base = 6
                     reduce_brisc_per_core_args = []
                     for core in reduce_params["worker_cores_list"]:
                         fabric_core = reduce_params["column_to_fabric_core"][core.x]
@@ -2095,7 +2095,7 @@ class MoeRoutedExpert:
                 # Add worker→fabric semaphores if reduce is enabled
                 if enable_reduce_to_one:
                     fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
-                    reduce_worker_fabric_sem_base = 5
+                    reduce_worker_fabric_sem_base = 6
                     for worker_idx in range(reduce_params["num_workers_per_column"]):
                         sem_desc = ttnn.SemaphoreDescriptor(
                             id=reduce_worker_fabric_sem_base + worker_idx,
