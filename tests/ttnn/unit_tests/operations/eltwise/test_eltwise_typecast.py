@@ -526,10 +526,6 @@ def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
 
     torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
 
-    cpu_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    cpu_output = ttnn.typecast(cpu_input, dtype=ttnn.int32)
-    cpu_reference = ttnn.to_torch(cpu_output)
-
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
@@ -558,10 +554,6 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
-
-    cpu_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    cpu_output = ttnn.typecast(cpu_input, dtype=ttnn.int32)
-    cpu_reference = ttnn.to_torch(cpu_output)
 
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
