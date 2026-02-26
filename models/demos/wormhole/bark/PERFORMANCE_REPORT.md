@@ -17,7 +17,7 @@
 - **Math Fidelity**: `MathFidelity.LoFi`
 - **Memory Config**: L1/DRAM Interleaved
 - **KV Caching**: Enabled (Stages 1 & 2)
-- **Autoregressive Loop**: Mostly On-Device (Argmax on Host)
+- **Autoregressive Loop**: Mostly On-Device (ttnn.argmax on device, scalar EOS check on host)
 - **Operator Fusion**: Linear + GELU Fused
 
 ## Summary of Optimization Impact
