@@ -28,13 +28,15 @@ from models.tt_dit.utils import cache
 from models.tt_dit.utils.check import assert_quality
 
 
-def get_uninitialized_minimal_model() -> UMT5EncoderModel:
+def get_random_weights_model() -> UMT5EncoderModel:
     hf_config = HF_UMT5Config(
         d_model=4096,
         d_ff=10240,
         num_heads=64,
-        num_layers=2,
-        num_decoder_layers=2,
+        num_layers=24,
+        num_decoder_layers=0,
+        relative_attention_max_distance=128,
+        relative_attention_num_buckets=32,
         feed_forward_proj="gated-gelu",
         output_past=True,
     )
@@ -46,8 +48,8 @@ def get_uninitialized_minimal_model() -> UMT5EncoderModel:
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, num_links, topology",
-    [[(2, 4), 1, ttnn.Topology.Linear], [(4, 8), 4, ttnn.Topology.Ring], [(4, 8), 2, ttnn.Topology.Ring]],
+    "mesh_device, num_links",
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
     ids=["t3k", "wh_glx", "bh_glx"],
     indirect=["mesh_device"],
 )
@@ -59,7 +61,6 @@ def get_uninitialized_minimal_model() -> UMT5EncoderModel:
 def test_umt5_embeddings(
     *,
     mesh_device: ttnn.Device,
-    topology: ttnn.Topology,
     num_links: int,
     dit_unit_test: bool,
 ) -> None:
@@ -69,11 +70,11 @@ def test_umt5_embeddings(
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=topology,
+        topology=ttnn.Topology.Linear,
     )
 
     if dit_unit_test:
-        hf_model = get_uninitialized_minimal_model()
+        hf_model = get_random_weights_model()
     else:
         model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
         hf_model = UMT5EncoderModel.from_pretrained(
@@ -174,53 +175,38 @@ def test_umt5_embeddings(
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device,submesh_shape, num_links",
-    [[(2, 4), (1, 4), 1], [(4, 8), (1, 8), 4], [(4, 8), (1, 8), 2]],
+    "mesh_device, num_links",
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
     ids=["t3k", "wh_glx", "bh_glx"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params, topology",
-    [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
-    indirect=["device_params"],
+    "device_params",
+    [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_umt5_encoder(
     *,
     mesh_device: ttnn.Device,
-    submesh_shape: ttnn.MeshShape,
     num_links: int,
-    topology: ttnn.Topology,
     dit_unit_test: bool,
 ) -> None:
-    parent_mesh_shape = tuple(mesh_device.shape)
-    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
-        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
-    encoder_submesh = mesh_device  # mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
+    torch.manual_seed(0)
 
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
     )
+
     ccl_manager = CCLManager(
-        mesh_device=encoder_submesh,
+        mesh_device=mesh_device,
         num_links=num_links,
-        topology=topology,
+        topology=ttnn.Topology.Linear,
     )
 
     model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
     if dit_unit_test:
-        # Config for t5-xxl with minimal layers
-        hf_config = HF_UMT5Config(
-            d_model=4096,
-            d_ff=10240,
-            num_heads=64,
-            num_layers=2,
-            num_decoder_layers=2,
-            feed_forward_proj="gated-gelu",
-            output_past=True,
-        )
-        hf_model = UMT5EncoderModel(hf_config)
+        hf_model = get_random_weights_model()
     else:
         hf_model = UMT5EncoderModel.from_pretrained(
             model_name_checkpoint, subfolder="text_encoder", local_files_only=False
@@ -237,9 +223,10 @@ def test_umt5_encoder(
     logger.info(f"relative_attention_num_buckets: {hf_model.config.relative_attention_num_buckets}")
     logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
+    logger.info(f"num_decoder_layers all: {hf_model.config}")
 
     max_prompt_length = 512
-    torch.manual_seed(0)
+
     prompt = [
         "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
         "Negative prompt: A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
@@ -260,16 +247,16 @@ def test_umt5_encoder(
         text_input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
-        device=encoder_submesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     tt_mask = ttnn.from_torch(
         mask,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=encoder_submesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # === TT-DiT UMT5 ====
@@ -286,14 +273,14 @@ def test_umt5_encoder(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_encoder = TT_UMT5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
+    tt_encoder = TT_UMT5Encoder(config, mesh_device, ccl_manager, parallel_config)
     # tt_encoder.load_torch_state_dict(hf_model.state_dict())
     cache.load_model(
         tt_encoder,
         model_name=model_name_checkpoint,
         subfolder="text_encoder",
         parallel_config=parallel_config,
-        mesh_shape=tuple(encoder_submesh.shape),
+        mesh_shape=tuple(mesh_device.shape),
         get_torch_state_dict=lambda: hf_model.state_dict(),
     )
 
