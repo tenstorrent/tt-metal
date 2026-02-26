@@ -142,8 +142,6 @@ struct ProgramOffsetsState {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
 
 // Internal class for holding a group of programs for parallel compilation.
 class ProgramCompileGroup {
@@ -197,6 +195,8 @@ public:
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
+        const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -207,6 +207,7 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(
@@ -261,7 +262,6 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        const DataflowBuffersGetter& dataflow_buffers_getter,
         tt::stl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
@@ -407,7 +407,11 @@ private:
 
     void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
+    void set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
     void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
+    void set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
