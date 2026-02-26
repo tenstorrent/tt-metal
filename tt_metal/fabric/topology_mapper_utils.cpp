@@ -496,13 +496,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     log_info(
         tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
 
-    // TODO: Build mesh assignment from all_mesh_groupings and create asic_id_to_mesh_rank map
-    // For now, return an empty graph structure - this function needs full implementation
+    // Build hierarchical graph from mesh groupings
     // The all_mesh_groupings contains sets of ASIC IDs that represent each mesh grouping mapping
-    // We need to:
-    // 1. Assign mesh IDs to each grouping mapping
-    // 2. Build asic_id_to_mesh_rank map from the ASIC ID sets
-    // 3. Call build_hierarchical_from_flat_graph with the flat_adj and asic_id_to_mesh_rank
+    // Each element in the vector represents one mesh, with index becoming the MeshId
 
     PhysicalMultiMeshGraph result;
     if (all_mesh_groupings.empty()) {
@@ -510,20 +506,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         return result;
     }
 
-    // Build asic_id_to_mesh_rank map from the found groupings
-    // Each element in all_mesh_groupings represents one possible mesh assignment
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (size_t i = 0; i < all_mesh_groupings.size(); ++i) {
-        MeshId mesh_id{static_cast<uint32_t>(i)};
-        for (const auto& asic_id : all_mesh_groupings[i]) {
-            // Default to rank 0 for now - proper rank assignment would come from hostname_to_asics or other config
-            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
-        }
-    }
-
     // Convert flat adjacency map to graph and build hierarchical structure
+    // Pass mesh groupings directly - function will build asic_id_to_mesh_rank internally
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    result = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+    result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
 
     return result;
 }
@@ -534,14 +520,40 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // Build flat adjacency map from PhysicalSystemDescriptor
     PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
 
+    // Convert asic_id_to_mesh_rank to mesh_groupings format
+    // Find the maximum mesh ID to determine vector size
+    MeshId max_mesh_id{0};
+    for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
+        if (mesh_id.get() > max_mesh_id.get()) {
+            max_mesh_id = mesh_id;
+        }
+    }
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings(max_mesh_id.get() + 1);
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            mesh_groupings[mesh_id.get()].insert(asic_id);
+        }
+    }
+
     // Convert to AdjacencyGraph and use the common algorithm
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    return build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+    return build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings) {
+    // Build asic_id_to_mesh_rank map from mesh groupings
+    // Each element in mesh_groupings represents one mesh, with index becoming the MeshId
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < mesh_groupings.size(); ++i) {
+        MeshId mesh_id{static_cast<uint32_t>(i)};
+        for (const auto& asic_id : mesh_groupings[i]) {
+            // Default to rank 0 - proper rank assignment would come from hostname_to_asics or other config
+            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
+        }
+    }
+
     // Build a map from AsicID to MeshId for quick lookup
     std::unordered_map<tt::tt_metal::AsicID, MeshId> asic_id_to_mesh_id;
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
