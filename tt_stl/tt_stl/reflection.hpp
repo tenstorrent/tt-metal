@@ -23,6 +23,7 @@
 #include <filesystem>
 
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <nlohmann/json.hpp>
 #include <enchantum/scoped.hpp>
 #include <tt_stl/type_name.hpp>
@@ -933,6 +934,23 @@ struct get_first_object_of_type_t<T> {
 };
 
 }  // namespace reflection
+
+// operator<< for SmallVector lives in namespace ttsl (same as SmallVector)
+// so that ADL finds it from any call site.
+template <typename T, std::size_t PREALLOCATED_SIZE>
+std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
+    os << "SmallVector([";
+    for (std::size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        using ttsl::reflection::operator<<;
+        os << vec[i];
+    }
+    os << "])";
+    return os;
+}
+
 }  // namespace ttsl
 
 template <typename T>
@@ -1090,6 +1108,19 @@ struct fmt::formatter<T> {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
+        -> format_context::iterator {
+        using ttsl::reflection::operator<<;
+        std::stringstream ss;
+        ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1286,7 +1317,20 @@ void hash_combine(std::size_t& seed, const T& value) {
 }
 
 }  // namespace hash
+}  // namespace ttsl
 
+template <typename T, size_t PREALLOCATED_SIZE>
+struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
+        size_t hash = 0;
+        for (const auto& element : vec) {
+            hash = ttsl::hash::detail::hash_objects(hash, element);
+        }
+        return hash;
+    }
+};
+
+namespace ttsl {
 namespace json {
 
 template <typename T>
@@ -1608,6 +1652,28 @@ struct from_json_t<T> {
             },
             object);
         return object;
+    }
+};
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct to_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    nlohmann::json operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : vector) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct from_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    ttsl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
+        ttsl::SmallVector<T, PREALLOCATED_SIZE> vector;
+        for (const auto& element : json_object) {
+            vector.push_back(from_json<T>(element));
+        }
+        return vector;
     }
 };
 
