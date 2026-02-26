@@ -426,7 +426,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
 
     // Get valid groupings map from MGD and PGD
-    auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor);
+    auto valid_groupings_map =
+        physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
 
     // Get groupings for mesh level mappings
 
