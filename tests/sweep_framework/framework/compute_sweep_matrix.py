@@ -152,7 +152,7 @@ def compute_lead_models_matrix(modules, batch_size):
         # For single-chip runners, use the standard batch size
         is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
         if is_galaxy:
-            galaxy_jobs = 4
+            galaxy_jobs = 3
             galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
             runner_batches = chunk_modules(base_modules, galaxy_batch_size)
         else:
