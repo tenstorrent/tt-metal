@@ -189,7 +189,73 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     }
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+
+    // Each rank builds its local PCI device ID -> logical ID mapping.
+    // UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs.
+    // chips_with_mmio maps chip_id (logical) -> pci_device_id.
+    const auto& chips_with_mmio = cluster.get_cluster_desc()->get_chips_with_mmio();
+    uint32_t num_devices = static_cast<uint32_t>(chips_with_mmio.size());
+
+    std::vector<uint32_t> local_mapping(2 * num_devices);
+    {
+        size_t idx = 0;
+        for (const auto& [logical_id, pcie_id] : chips_with_mmio) {
+            local_mapping[2 * idx] = static_cast<uint32_t>(pcie_id);
+            local_mapping[2 * idx + 1] = static_cast<uint32_t>(logical_id);
+            idx++;
+        }
+    }
+
+    auto my_host = physical_system_desc.my_host_name();
+    uint32_t hostname_buf_len = static_cast<uint32_t>(my_host.size() + 1);
+
+    // All ranks must agree on buffer sizes for gather. Use all_reduce(MAX) to
+    // handle any variation across hosts (e.g. different device counts or hostname lengths).
+    uint32_t max_num_devices = 0;
+    uint32_t max_hostname_len = 0;
+    distributed_context->all_reduce(
+        tt::stl::Span<uint32_t>(&num_devices, 1), tt::stl::Span<uint32_t>(&max_num_devices, 1), ReduceOp::MAX);
+    distributed_context->all_reduce(
+        tt::stl::Span<uint32_t>(&hostname_buf_len, 1), tt::stl::Span<uint32_t>(&max_hostname_len, 1), ReduceOp::MAX);
+
+    // Pad local buffers to the agreed-upon sizes.
+    local_mapping.resize(2 * max_num_devices, UINT32_MAX);
+
+    std::vector<char> my_hostname_buf(max_hostname_len, '\0');
+    std::copy(my_host.begin(), my_host.end(), my_hostname_buf.begin());
+
+    int world_size = *distributed_context->size();
+
+    // Gather every rank's hostname and PCI-to-logical mapping at rank 0.
+    std::vector<char> all_hostnames_buf(world_size * max_hostname_len, '\0');
+    distributed_context->gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(my_hostname_buf.data()), my_hostname_buf.size()),
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(all_hostnames_buf.data()), all_hostnames_buf.size()),
+        Rank{0});
+
+    std::vector<uint32_t> all_mappings(world_size * 2 * max_num_devices, UINT32_MAX);
+    distributed_context->gather(
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(local_mapping.data()), local_mapping.size() * sizeof(uint32_t)),
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(all_mappings.data()), all_mappings.size() * sizeof(uint32_t)),
+        Rank{0});
+
     if (*distributed_context->rank() == 0) {
+        // Reconstruct per-host PCI-to-logical mapping from gathered data.
+        std::unordered_map<std::string, std::unordered_map<uint32_t, uint32_t>> host_pcie_to_logical;
+        for (int r = 0; r < world_size; r++) {
+            std::string hostname(&all_hostnames_buf[r * max_hostname_len]);
+            auto& mapping = host_pcie_to_logical[hostname];
+            for (uint32_t i = 0; i < max_num_devices; i++) {
+                uint32_t pcie_id = all_mappings[r * 2 * max_num_devices + 2 * i];
+                if (pcie_id == UINT32_MAX) {
+                    break;
+                }
+                mapping[pcie_id] = all_mappings[r * 2 * max_num_devices + 2 * i + 1];
+            }
+        }
+
         // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
         // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
         const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
@@ -220,7 +286,10 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
                         const auto& asic_location = pcie_id_to_asic_location.at(hostname).at(pcie_device);
                         if (std::find(asic_locations.begin(), asic_locations.end(), asic_location) !=
                             asic_locations.end()) {
-                            device_mapping[hostname][slice_id].push_back(pcie_device);
+                            auto it = host_pcie_to_logical[hostname].find(pcie_device);
+                            uint32_t logical_id =
+                                (it != host_pcie_to_logical[hostname].end()) ? it->second : pcie_device;
+                            device_mapping[hostname][slice_id].push_back(logical_id);
                         }
                     }
                 }
