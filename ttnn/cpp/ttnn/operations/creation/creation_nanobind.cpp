@@ -131,19 +131,18 @@ void bind_zeros(nb::module_& mod) {
     ttnn::bind_function<"zeros">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttsl::SmallVector<uint32_t>& shape,
-                const std::optional<DataType>& dtype,
-                const std::optional<Layout>& layout,
-                const std::optional<MeshDevice*> device,
-                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return ttnn::zeros(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
-            },
-            nb::arg("shape"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        +[](const ttsl::SmallVector<uint32_t>& shape,
+            const std::optional<DataType>& dtype,
+            const std::optional<Layout>& layout,
+            const std::optional<MeshDevice*> device,
+            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::zeros(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
+        },
+        nb::arg("shape"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 // Helper function to bind ones operation
@@ -169,19 +168,18 @@ void bind_ones(nb::module_& mod) {
     ttnn::bind_function<"ones">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttsl::SmallVector<uint32_t>& shape,
-                const std::optional<DataType>& dtype,
-                const std::optional<Layout>& layout,
-                const std::optional<MeshDevice*> device,
-                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return ttnn::ones(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
-            },
-            nb::arg("shape"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        +[](const ttsl::SmallVector<uint32_t>& shape,
+            const std::optional<DataType>& dtype,
+            const std::optional<Layout>& layout,
+            const std::optional<MeshDevice*> device,
+            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::ones(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
+        },
+        nb::arg("shape"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 // Helper function to bind full_like operation
@@ -272,21 +270,21 @@ void bind_zeros_like(nb::module_& mod) {
     ttnn::bind_function<"zeros_like">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttnn::Tensor& tensor,
-                const std::optional<DataType>& dtype,
-                const std::optional<Layout>& layout,
-                const std::optional<MeshDevice*> device,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return ttnn::zeros_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
-            },
-            nb::arg("tensor"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_tensor") = nb::none()));
+        +[](const ttnn::Tensor& tensor,
+            const std::optional<DataType>& dtype,
+            const std::optional<Layout>& layout,
+            const std::optional<MeshDevice*> device,
+            const std::optional<MemoryConfig>& memory_config,
+            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+            return ttnn::zeros_like(
+                tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+        },
+        nb::arg("tensor"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_tensor") = nb::none());
 }
 
 // Helper function to bind ones_like operation
@@ -309,21 +307,21 @@ void bind_ones_like(nb::module_& mod) {
     ttnn::bind_function<"ones_like">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttnn::Tensor& tensor,
-                const std::optional<DataType>& dtype,
-                const std::optional<Layout>& layout,
-                const std::optional<MeshDevice*> device,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return ttnn::ones_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
-            },
-            nb::arg("tensor"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_tensor") = nb::none()));
+        +[](const ttnn::Tensor& tensor,
+            const std::optional<DataType>& dtype,
+            const std::optional<Layout>& layout,
+            const std::optional<MeshDevice*> device,
+            const std::optional<MemoryConfig>& memory_config,
+            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+            return ttnn::ones_like(
+                tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+        },
+        nb::arg("tensor"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_tensor") = nb::none());
 }
 
 // Helper function to bind arange operation
@@ -411,19 +409,18 @@ void bind_empty(nb::module_& mod) {
     ttnn::bind_function<"empty">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttsl::SmallVector<uint32_t>& shape,
-                const DataType& dtype,
-                const Layout& layout,
-                MeshDevice* device,
-                const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config);
-            },
-            nb::arg("shape"),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::ROW_MAJOR,
-            nb::arg("device"),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG));
+        +[](const ttsl::SmallVector<uint32_t>& shape,
+            const DataType& dtype,
+            const Layout& layout,
+            MeshDevice* device,
+            const MemoryConfig& memory_config) -> ttnn::Tensor {
+            return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config);
+        },
+        nb::arg("shape"),
+        nb::arg("dtype") = DataType::BFLOAT16,
+        nb::arg("layout") = Layout::ROW_MAJOR,
+        nb::arg("device"),
+        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
 }
 
 // Helper function to bind empty_like operation
@@ -447,20 +444,19 @@ void bind_empty_like(nb::module_& mod) {
     ttnn::bind_function<"empty_like">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const ttnn::Tensor& tensor,
-                const std::optional<DataType>& dtype,
-                const std::optional<Layout>& layout,
-                const std::optional<MeshDevice*> device,
-                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return ttnn::empty_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config);
-            },
-            nb::arg("tensor"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::ROW_MAJOR,
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG));
+        +[](const ttnn::Tensor& tensor,
+            const std::optional<DataType>& dtype,
+            const std::optional<Layout>& layout,
+            const std::optional<MeshDevice*> device,
+            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::empty_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config);
+        },
+        nb::arg("tensor"),
+        nb::kw_only(),
+        nb::arg("dtype") = DataType::BFLOAT16,
+        nb::arg("layout") = Layout::ROW_MAJOR,
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
 }
 
 // Helper function to bind from_buffer operation
@@ -483,52 +479,51 @@ void bind_from_buffer(nb::module_& mod) {
     ttnn::bind_function<"from_buffer">(
         mod,
         doc,
-        ttnn::overload_t(
-            +[](const nb::object& buffer,
-                const Shape& shape,
-                const DataType dtype,
-                MeshDevice* device,
-                const std::optional<Layout>& layout,
-                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                switch (dtype) {
-                    case DataType::UINT8: {
-                        auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::UINT16: {
-                        auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::INT32: {
-                        auto cpp_buffer = nb::cast<std::vector<int32_t>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::UINT32: {
-                        auto cpp_buffer = nb::cast<std::vector<uint32_t>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::FLOAT32: {
-                        auto cpp_buffer = nb::cast<std::vector<float>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::BFLOAT16: {
-                        auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
-                        return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                    }
-                    case DataType::BFLOAT8_B:
-                    case DataType::BFLOAT4_B:
-                    case DataType::INVALID: {
-                        TT_THROW("Unreachable");
-                    }
+        +[](const nb::object& buffer,
+            const Shape& shape,
+            const DataType dtype,
+            MeshDevice* device,
+            const std::optional<Layout>& layout,
+            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            switch (dtype) {
+                case DataType::UINT8: {
+                    auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
                 }
-                TT_THROW("Unreachable");
-            },
-            nb::arg("buffer"),
-            nb::arg("shape"),
-            nb::arg("dtype"),
-            nb::arg("device"),
-            nb::arg("layout") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt));
+                case DataType::UINT16: {
+                    auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                }
+                case DataType::INT32: {
+                    auto cpp_buffer = nb::cast<std::vector<int32_t>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                }
+                case DataType::UINT32: {
+                    auto cpp_buffer = nb::cast<std::vector<uint32_t>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                }
+                case DataType::FLOAT32: {
+                    auto cpp_buffer = nb::cast<std::vector<float>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                }
+                case DataType::BFLOAT16: {
+                    auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                }
+                case DataType::BFLOAT8_B:
+                case DataType::BFLOAT4_B:
+                case DataType::INVALID: {
+                    TT_THROW("Unreachable");
+                }
+            }
+            TT_THROW("Unreachable");
+        },
+        nb::arg("buffer"),
+        nb::arg("shape"),
+        nb::arg("dtype"),
+        nb::arg("device"),
+        nb::arg("layout") = std::nullopt,
+        nb::arg("memory_config") = std::nullopt);
 }
 
 }  // namespace
