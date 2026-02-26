@@ -167,7 +167,6 @@ void kernel_main() {
 
         // fabric_connection.send_payload_flush_non_blocking_from_address(
         //     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-
         uint32_t src_addr = (uint32_t)payload_packet_header;
         uint64_t dest_addr = buffer_address;
         uint32_t len_bytes = sizeof(PACKET_HEADER_TYPE);
@@ -217,10 +216,9 @@ void kernel_main() {
         uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR |
                                  NOC_CMD_WR_INLINE | NOC_CMD_RESP_MARKED;
 
-        uint32_t be32 = 0xf;
         // If we're given a misaligned address, don't write to the bytes in the word below the address
         uint32_t be_shift = (noc_sem_addr & (NOC_WORD_BYTES - 1));
-        be32 = (be32 << be_shift);
+        uint32_t be32 = (0xf << be_shift);
 
         cmd_buf = write_at_cmd_buf;
         while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -246,6 +244,7 @@ void kernel_main() {
 
         auto iterations_payload = (payload_size_bytes + NOC_MAX_BURST_SIZE - 1) >> 14;
         auto iterations_header = (sizeof(PACKET_HEADER_TYPE) + NOC_MAX_BURST_SIZE - 1) >> 14;
+        // 1 for the above edm buffer idx update
         auto iterations_total = iterations_payload + iterations_header + 1;
         noc_nonposted_writes_num_issued[noc] += iterations_total;
         noc_nonposted_writes_acked[noc] += iterations_total;
@@ -285,6 +284,7 @@ void kernel_main() {
     *receive_buffer_ptr = 0;
 
     for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
+        auto start_timestamp = get_timestamp();
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
             // Write incrementing value to send buffer BEFORE sending
             *send_buffer_ptr = sample_idx + 1;
@@ -301,7 +301,6 @@ void kernel_main() {
                 send_payload_packet();
             }
         }
-        auto start_timestamp = get_timestamp();
 
         // Don't want to include noc command buffer response time in the total latency measurement
         noc_async_writes_flushed();

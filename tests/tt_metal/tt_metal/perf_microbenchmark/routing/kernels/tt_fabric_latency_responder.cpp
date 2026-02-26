@@ -146,9 +146,8 @@ void kernel_main() {
                                                       NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
                                                       NOC_CMD_RESP_MARKED;
 
-        uint32_t be32 = 0xf;
         uint32_t be_shift = (noc_sem_addr & (NOC_WORD_BYTES - 1));
-        be32 = (be32 << be_shift);
+        uint32_t be32 = (0xf << be_shift);
 
         constexpr auto edm_cmd_buf = write_at_cmd_buf;
         while (!noc_cmd_buf_ready(noc, edm_cmd_buf));
@@ -461,14 +460,18 @@ void kernel_main() {
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
                 }
 
-                // Inline send_payload_flush_non_blocking_from_address (header)
-                {
-                    uint32_t src_addr = (uint32_t)payload_packet_header;
-                    uint64_t dest_addr = buffer_address;
-                    constexpr uint32_t len_bytes = sizeof(PACKET_HEADER_TYPE);
-                    constexpr auto cmd_buf = write_cmd_buf;
+                // fabric_connection.send_payload_flush_non_blocking_from_address(
+                //     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+                uint32_t src_addr = (uint32_t)payload_packet_header;
+                uint64_t dest_addr = buffer_address;
+                uint32_t len_bytes = sizeof(PACKET_HEADER_TYPE);
 
-                    while (!noc_cmd_buf_ready(noc, cmd_buf));
+                const uint8_t noc = get_fabric_worker_noc();
+                auto cmd_buf = write_cmd_buf;
+
+                while (len_bytes > NOC_MAX_BURST_SIZE) {
+                    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
@@ -480,21 +483,25 @@ void kernel_main() {
                         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
                     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+                    src_addr += NOC_MAX_BURST_SIZE;
+                    dest_addr += NOC_MAX_BURST_SIZE;
+                    len_bytes -= NOC_MAX_BURST_SIZE;
                 }
-
-                // Bookkeeping and EDM signal AFTER all data writes
-                auto iterations_payload = (payload_size_bytes + NOC_MAX_BURST_SIZE - 1) >> 14;
-                noc_nonposted_writes_num_issued[noc] += iterations_payload + 1;  // +1 for header
-                noc_nonposted_writes_acked[noc] += iterations_payload + 1;
-
-                fabric_connection.buffer_slot_write_counter.counter++;
-                fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
-                    fabric_connection.buffer_slot_index.get(), fabric_connection.num_buffers_per_channel)};
-                fabric_connection.edm_buffer_addr =
-                    fabric_connection.edm_buffer_base_addr +
-                    (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
-
+                while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+                NOC_CMD_BUF_WRITE_REG(
+                    noc,
+                    cmd_buf,
+                    NOC_RET_ADDR_COORDINATE,
+                    (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
                 // Inline EDM credit signal write
+
                 auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
                 const uint64_t noc_sem_addr = get_noc_addr(
                     fabric_connection.edm_noc_x,
@@ -506,9 +513,8 @@ void kernel_main() {
                                                               NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
                                                               NOC_CMD_RESP_MARKED;
 
-                uint32_t be32 = 0xf;
                 uint32_t be_shift = (noc_sem_addr & (NOC_WORD_BYTES - 1));
-                be32 = (be32 << be_shift);
+                uint32_t be32 = (0xf << be_shift);
 
                 constexpr auto edm_cmd_buf = write_at_cmd_buf;
                 while (!noc_cmd_buf_ready(noc, edm_cmd_buf));
@@ -525,8 +531,19 @@ void kernel_main() {
                 NOC_CMD_BUF_WRITE_REG(noc, edm_cmd_buf, NOC_AT_LEN_BE, be32);
                 NOC_CMD_BUF_WRITE_REG(noc, edm_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
-                noc_nonposted_writes_num_issued[noc]++;
-                noc_nonposted_writes_acked[noc]++;
+                // Bookkeeping and EDM signal AFTER all data writes
+                auto iterations_payload = (payload_size_bytes + NOC_MAX_BURST_SIZE - 1) >> 14;
+                auto iterations_header = (sizeof(PACKET_HEADER_TYPE) + NOC_MAX_BURST_SIZE - 1) >> 14;
+                auto iterations_total = iterations_payload + iterations_header + 1;
+                noc_nonposted_writes_num_issued[noc] += iterations_total;
+                noc_nonposted_writes_acked[noc] += iterations_total;
+
+                fabric_connection.buffer_slot_write_counter.counter++;
+                fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
+                    fabric_connection.buffer_slot_index.get(), fabric_connection.num_buffers_per_channel)};
+                fabric_connection.edm_buffer_addr =
+                    fabric_connection.edm_buffer_base_addr +
+                    (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
             }
         }
 
