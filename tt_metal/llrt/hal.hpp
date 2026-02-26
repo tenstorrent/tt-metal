@@ -37,6 +37,10 @@
 
 enum class AddressableCoreType : uint8_t;
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
 namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
@@ -247,6 +251,7 @@ public:
         HalProgrammableCoreType core_type;
         HalProcessorClassType processor_class;
         uint32_t processor_id;
+        const llrt::RunTimeOptions& rtoptions;
     };
     virtual ~HalJitBuildQueryInterface() = default;
     // Returns a list of objects to be linked; these were compiled offline.

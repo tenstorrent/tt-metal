@@ -339,7 +339,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         build_config.is_fw,
         build_config.core_type,
         build_config.processor_class,
-        static_cast<uint32_t>(build_config.processor_id)};
+        static_cast<uint32_t>(build_config.processor_id),
+        env_.get_rtoptions()};
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
