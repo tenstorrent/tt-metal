@@ -16,6 +16,12 @@
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
+class MeshTensor;
+// To be removed after #37807
+namespace do_not_use {
+void do_not_use_update_mesh_tensor_storage(MeshTensor&, const DeviceStorage&);
+}
+
 namespace distributed {
 class MeshDevice;
 }
@@ -202,6 +208,8 @@ private:
     // Avoid using impl pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
     std::unique_ptr<attribute_type> impl;
+
+    friend void do_not_use::do_not_use_update_mesh_tensor_storage(MeshTensor&, const DeviceStorage&);
 };
 
 }  // namespace tt::tt_metal
