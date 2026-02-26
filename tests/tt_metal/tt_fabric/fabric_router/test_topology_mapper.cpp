@@ -493,7 +493,12 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
 
     EXPECT_THROW(
         TopologyMapper(
-            get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding),
+            get_cluster(),
+            get_distributed_context(),
+            mesh_graph,
+            *physical_system_descriptor_,
+            local_mesh_binding,
+            std::chrono::duration<float>(10.0f)),
         std::exception);
 }
 
@@ -768,7 +773,8 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
             mesh_graph,
             *physical_system_descriptor_,
             local_mesh_binding,
-            pins_missing),
+            pins_missing,
+            std::chrono::duration<float>(10.0f)),
         std::exception);
 }
 
@@ -1113,9 +1119,15 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
     // With STRICT policy and invalid mapping conditions (e.g., insufficient channels for inter-mesh connections),
     // TopologyMapper should throw an exception during mapping
     // This test verifies that the STRICT policy correctly enforces validation and fails when conditions are not met
+    // Use short timeout so non-controller ranks fail fast when controller throws
     EXPECT_THROW(
         TopologyMapper(
-            get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding),
+            get_cluster(),
+            get_distributed_context(),
+            mesh_graph,
+            *physical_system_descriptor_,
+            local_mesh_binding,
+            std::chrono::duration<float>(10.0f)),
         std::exception)
         << "TopologyMapper should throw with STRICT policy when mapping conditions are invalid (e.g., insufficient "
            "channels for inter-mesh connections)";
