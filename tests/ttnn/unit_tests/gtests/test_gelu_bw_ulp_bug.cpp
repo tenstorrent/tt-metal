@@ -5,7 +5,7 @@
 /**
  * GELU Backward ULP Precision Tests
  *
- * This test file validates the accuracy of ttnn::gelu_bw (GELU derivative) across
+ * This test file validates the accuracy of ttnn::experimental::gelu_bw (GELU derivative) across
  * the entire BFloat16 range using the same methodology as test_gelu_ulp_bug.cpp.
  *
  * MATHEMATICAL FORMULA:
@@ -244,10 +244,10 @@ float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float in
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
 
-    // Call gelu_bw with approximate="none" (exact mode)
-    auto result = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    // Call experimental gelu_bw with approximate="none" (polynomial approximation)
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
 
-    auto output_cpu = ttnn::from_device(result[0].value());
+    auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
     return static_cast<float>(output_vec[0]);
 }
@@ -414,8 +414,8 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run GELU backward once on entire tensor
-    auto result = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result[0].value());
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
     // Analyze results by region
@@ -553,8 +553,8 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result[0].value());
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
     // Compute ULP histogram
