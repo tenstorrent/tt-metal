@@ -1541,7 +1541,6 @@ class WanEncoder(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            dtype=dtype,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
