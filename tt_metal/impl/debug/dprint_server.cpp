@@ -169,6 +169,9 @@ namespace tt::tt_metal {
 class DPrintServer::Impl {
 public:
     Impl(llrt::RunTimeOptions& rtoptions);
+    Impl() = delete;
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
     virtual ~Impl();
 
     void set_mute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
@@ -341,12 +344,18 @@ private:
         }
     };
 
+    struct RiscData {
+        std::string firmare_elf_path;
+        ElfFileCacheEntry* firmware_elf_cache_entry = nullptr;
+        std::string kernel_elf_path;
+        ElfFileCacheEntry* kernel_elf_cache_entry = nullptr;
+        std::string message_buffer;
+        std::optional<std::string> line_prefix;
+        int last_loaded_kernel_id = -1;
+    };
+
     std::map<std::string, ElfFileCacheEntry> elf_cache_;
-    std::map<RiscKey, std::string, RiscKeyComparator> firmware_elf_cache_;
-    std::map<std::tuple<int, uint32_t>, std::string> kernel_elf_cache_;
-    std::map<RiscKey, int, RiscKeyComparator> risc_to_last_loaded_kernel_id_;
-    std::map<RiscKey, std::string, RiscKeyComparator> risc_message_buffer_;
-    std::map<RiscKey, std::string, RiscKeyComparator> risc_line_prefix_;
+    std::map<RiscKey, RiscData, RiscKeyComparator> risc_data_;
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -632,45 +641,27 @@ void DevicePrintImpl::print_buffer_data(
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
-            RiscKey kernel_id_key = {device_id, logical_core, header->risc_id};
-            auto last_loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
-            if (last_loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
-                if (last_loaded_kernel_id_it->second == header->info_id) {
-                    // We have already loaded this kernel, no need to do load it again.
-                    continue;
-                }
+            RiscKey risc_key = {device_id, logical_core, header->risc_id};
+            RiscData& risc_data = risc_data_[risc_key];
+            if (risc_data.last_loaded_kernel_id == static_cast<int>(header->info_id)) {
+                // We have already loaded this kernel, no need to do load it again.
+                continue;
+            }
 
+            if (risc_data.last_loaded_kernel_id != -1 && risc_data.kernel_elf_cache_entry != nullptr) {
                 // Decrease reference count of previously loaded kernel and remove it from cache if reference count
                 // reaches 0.
-                auto prev_kernel_cache_it =
-                    kernel_elf_cache_.find(std::make_tuple(last_loaded_kernel_id_it->second, header->risc_id));
-                if (prev_kernel_cache_it != kernel_elf_cache_.end()) {
-                    auto& prev_kernel_elf_path = prev_kernel_cache_it->second;
-                    auto elf_cache_it = elf_cache_.find(prev_kernel_elf_path);
-                    if (elf_cache_it != elf_cache_.end()) {
-                        auto& kernel_entry = elf_cache_it->second;
-                        kernel_entry.ref_count--;
-                        if (kernel_entry.ref_count == 0) {
-                            elf_cache_.erase(elf_cache_it);
-                        }
-                    }
+                if (risc_data.kernel_elf_cache_entry->ref_count <= 1) {
+                    elf_cache_.erase(risc_data.kernel_elf_path);
+                } else {
+                    risc_data.kernel_elf_cache_entry->ref_count--;
                 }
+                risc_data.kernel_elf_cache_entry = nullptr;
             }
 
+            // Update kernel id
             auto kernel_id = static_cast<int>(header->info_id);
-            risc_to_last_loaded_kernel_id_[kernel_id_key] = kernel_id;
-
-            auto kernel_elf_cache_it = kernel_elf_cache_.find(std::make_tuple(kernel_id, header->risc_id));
-            if (kernel_elf_cache_it != kernel_elf_cache_.end()) {
-                auto& kernel_elf_path = kernel_elf_cache_it->second;
-                auto elf_cache_it = elf_cache_.find(kernel_elf_path);
-                if (elf_cache_it != elf_cache_.end()) {
-                    // Kernel already in cache, just increase reference count and continue.
-                    auto& kernel_entry = elf_cache_it->second;
-                    kernel_entry.ref_count++;
-                    continue;
-                }
-            }
+            risc_data.last_loaded_kernel_id = kernel_id;
 
             // Find elf path from inspector using kernel id
             auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
@@ -678,12 +669,20 @@ void DevicePrintImpl::print_buffer_data(
             std::transform(
                 risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
+            risc_data.kernel_elf_path = elf_path.string();
+
+            auto elf_cache_it = elf_cache_.find(risc_data.kernel_elf_path);
+            if (elf_cache_it != elf_cache_.end()) {
+                // Kernel already in cache, just increase reference count and continue.
+                elf_cache_it->second.ref_count++;
+                continue;
+            }
 
             // Load elf file
-            kernel_elf_cache_[std::make_tuple(kernel_id, header->risc_id)] = elf_path.string();
-            auto& kernel_entry = elf_cache_[elf_path.string()];
-            kernel_entry.ref_count = 1;
-            kernel_entry.load_elf(elf_path);
+            auto& elf_cache_entry = elf_cache_[risc_data.kernel_elf_path];
+            elf_cache_entry.ref_count = 1;
+            risc_data.kernel_elf_cache_entry = &elf_cache_entry;
+            elf_cache_entry.load_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -691,24 +690,14 @@ void DevicePrintImpl::print_buffer_data(
             break;
         } else {
             // This is a normal print message, we should parse it and print it out.
+            RiscKey risc_key = {device_id, logical_core, header->risc_id};
+            RiscData& risc_data = risc_data_[risc_key];
 
             // Find elf file
             ElfFileCacheEntry* elf_entry_ptr = nullptr;
 
             if (header->is_kernel) {
-                RiscKey kernel_id_key = {device_id, logical_core, header->risc_id};
-                auto loaded_kernel_id_it = risc_to_last_loaded_kernel_id_.find(kernel_id_key);
-                if (loaded_kernel_id_it != risc_to_last_loaded_kernel_id_.end()) {
-                    auto kernel_elf_cache_it =
-                        kernel_elf_cache_.find(std::make_tuple(loaded_kernel_id_it->second, header->risc_id));
-                    if (kernel_elf_cache_it != kernel_elf_cache_.end()) {
-                        auto& kernel_elf_path = kernel_elf_cache_it->second;
-                        auto elf_cache_it = elf_cache_.find(kernel_elf_path);
-                        if (elf_cache_it != elf_cache_.end()) {
-                            elf_entry_ptr = &elf_cache_[kernel_elf_path];
-                        }
-                    }
-                }
+                elf_entry_ptr = risc_data.kernel_elf_cache_entry;
             } else {
                 // TODO: Find firmware elf. If it is still not loaded, load it into cache.
             }
@@ -740,12 +729,10 @@ void DevicePrintImpl::print_buffer_data(
                         auto formatted_message = format_message(format_str, payload_bytes);
 
                         // Find if we have something buffered from before
-                        auto risc_key = RiscKey{device_id, logical_core, header->risc_id};
-                        auto risc_message_buffer_it = risc_message_buffer_.find(risc_key);
-                        if (risc_message_buffer_it != risc_message_buffer_.end()) {
+                        if (!risc_data.message_buffer.empty()) {
                             // We have something in the buffer, prepend it to the current message and clear the buffer.
-                            formatted_message = risc_message_buffer_it->second + formatted_message;
-                            risc_message_buffer_.erase(risc_message_buffer_it);
+                            formatted_message = risc_data.message_buffer + formatted_message;
+                            risc_data.message_buffer.clear();
                         }
 
                         // Check if we hit new line
@@ -754,9 +741,8 @@ void DevicePrintImpl::print_buffer_data(
                         if (newline_pos != std::string::npos) {
                             // We will do message printing. Check if we have generated line prefix for this risc before,
                             // if not generate one.
-                            auto risc_line_prefix_it = risc_line_prefix_.find(risc_key);
                             std::string line_prefix;
-                            if (risc_line_prefix_it == risc_line_prefix_.end()) {
+                            if (!risc_data.line_prefix.has_value()) {
                                 // Compute line prefix based on RTOptions
                                 const bool prepend_device_core_risc =
                                     tt::tt_metal::MetalContext::instance()
@@ -769,9 +755,9 @@ void DevicePrintImpl::print_buffer_data(
                                         GetRiscName(device_id, logical_core, header->risc_id, true);
                                     line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
                                 }
-                                risc_line_prefix_[risc_key] = line_prefix;
+                                risc_data.line_prefix = line_prefix;
                             } else {
-                                line_prefix = risc_line_prefix_it->second;
+                                line_prefix = risc_data.line_prefix.value();
                             }
 
                             // Are we printing the whole string, or we need to split it into multiple lines because of
@@ -790,12 +776,12 @@ void DevicePrintImpl::print_buffer_data(
                                     newline_pos = full_message_view.find('\n', newline_start);
                                 }
                                 if (newline_start < full_message_view.size()) {
-                                    risc_message_buffer_[risc_key] = formatted_message.substr(newline_start);
+                                    risc_data.message_buffer = formatted_message.substr(newline_start);
                                 }
                             }
                         } else {
                             // We don't have a complete line yet, buffer the message for next time.
-                            risc_message_buffer_[risc_key] = formatted_message;
+                            risc_data.message_buffer = formatted_message;
                         }
                     }
                 }
