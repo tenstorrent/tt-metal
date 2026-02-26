@@ -128,20 +128,25 @@ void Tensor::deallocate_impl(bool force) {
                (shared_resource.use_count() > 1 && force);
     };
 
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+    bool tracking = GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
             tt::stl::overloaded{
                 [](HostStorage&) {},
-                [this, force, &can_deallocate](DeviceStorage& storage) {
+                [this, force, tracking, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
+                        if (tracking) {
+                            GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+                        }
                         storage.deallocate_root_mesh_buffer();
+                        if (tracking) {
+                            GraphTracker::instance().track_function_end();
+                        }
                     }
                     storage.reset_root_mesh_buffer();
                 }},
             this->tensor_attributes->get_storage());
     }
-    // GraphTracker::instance().track_function_end();
 }
 
 std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }

@@ -397,7 +397,8 @@ def import_graph(
     graph: list,
     base_operation_id: int = 0,
     devices: list = None,
-    detailed: bool = False,
+    python_io: list = None,
+    per_operation_buffers: dict = None,
 ) -> dict:
     """
     Import graph trace into database using batch inserts for performance.
@@ -410,14 +411,19 @@ def import_graph(
     - Input/output tensor relationships
     - Graph edges
 
+    Device tensors are deduplicated by address. Host tensors are kept only when
+    referenced in input/output relationships. Nested (child) operations are filtered.
+
     Args:
         devices: Raw device info dicts from the report, used to compute per-bank buffer sizes.
-        detailed: When False (default), only device tensors are imported and duplicates
-            are merged by address to match the legacy Python capture behavior.
-            When True, all tensors (host + device) are imported with full detail.
+        python_io: Optional list of Python-level I/O records from the decorator.
+            Each record has ``name``, ``input_tensor_ids``, and ``output_tensor_ids``.
+            When available, these override the heuristic I/O lifting.
 
     Returns dict with stats about what was imported.
     """
+    from collections import defaultdict, deque
+
     # Collect data for batch inserts
     nodes_batch = []
     stack_traces_batch = []
@@ -442,6 +448,15 @@ def import_graph(
                 "l1_num_banks": dev.get("l1_num_banks", 0),
             }
 
+    # -------------------------------------------------------------------
+    # Build per-name queues from Python I/O records.
+    # Each function_start whose name matches consumes the next record.
+    # -------------------------------------------------------------------
+    python_io_by_name: dict[str, deque] = defaultdict(deque)
+    if python_io:
+        for rec in python_io:
+            python_io_by_name[rec["name"]].append(rec)
+
     # Track function start nodes to pair with function end
     function_stack = []
     operation_counter = 1
@@ -449,6 +464,125 @@ def import_graph(
     active_buffers = []
     current_op_nodes = []
     op_nesting_depth = 0
+
+    # Map C++ graph node counter -> assigned operation_id (for per-op buffer pages)
+    graph_counter_to_op_id = {}
+
+    # ------------------------------------------------------------------
+    # Output tensor deduplication: the C++ trace reuses tensor_ids when
+    # the same tensor object is output by multiple operations (e.g. conv2d
+    # weight tensors).  The visualizer draws an edge for every shared
+    # tensor_id, creating spurious backward connections.  We remap
+    # duplicate output tensor_ids to fresh synthetic IDs so each
+    # operation instance gets unique outputs.
+    # ------------------------------------------------------------------
+    _next_synthetic_id = 1_000_000_000
+    # tid -> latest remapped tid (identity if never remapped)
+    _tid_remap: dict[int, int] = {}
+    # original tid -> list of (synthetic_tid, operation_id) for cloning tensor entries later
+    _tid_clones: list[tuple[int, int]] = []
+    # set of tensor_ids already claimed as an output
+    _output_claimed_tids: set[int] = set()
+
+    def _remap_output_tid(tid: int, operation_id: int) -> int:
+        """Return a fresh synthetic tid if *tid* was already output elsewhere."""
+        nonlocal _next_synthetic_id
+        if tid in _output_claimed_tids:
+            new_tid = _next_synthetic_id
+            _next_synthetic_id += 1
+            _tid_remap[tid] = new_tid
+            _tid_clones.append((tid, new_tid))
+            return new_tid
+        _output_claimed_tids.add(tid)
+        _tid_remap[tid] = tid
+        return tid
+
+    def _resolve_input_tid(tid: int) -> int:
+        """Resolve *tid* to its latest remapped version for inputs."""
+        return _tid_remap.get(tid, tid)
+
+    # Accumulate input/output tensors from nested children to lift to parent.
+    nested_input_tensor_ids = []
+    nested_output_tensor_ids = []
+    nested_output_tensor_nodes = []
+    # Track ALL nested outputs at every depth for internal-output filtering.
+    # Excludes in-place outputs (where the output is also an input of the same op)
+    # so that in-place operations like add_ correctly report their output.
+    all_nested_output_ids = set()
+    # Same as above but INCLUDING in-place outputs. Used for input filtering
+    # to detect workspace tensors reused across calls (e.g., fold allocates
+    # buffers that persist and are re-consumed in subsequent calls).
+    all_scope_output_ids = set()
+    # Track ALL nested inputs at every depth so we can identify intermediate tensors
+    all_nested_input_ids = set()
+
+    # Internal C++ operations to filter.
+    _FILTERED_OP_PREFIXES = (
+        "ttnn::convert_python_tensor_to_tt_tensor",
+        "tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor",
+        "Tensor::deallocate",
+        "Tensor::reshape",
+        "Tensor::to_device",
+    )
+
+    # -------------------------------------------------------------------
+    # Pre-pass 1: first-seen counter and address for each tensor_id
+    # -------------------------------------------------------------------
+    tensor_first_counter = {}
+    tensor_address = {}
+    for node in graph:
+        if node.get("node_type") == "tensor":
+            tid = node.get("params", {}).get("tensor_id", "")
+            if tid:
+                itid = int(tid)
+                if itid not in tensor_first_counter:
+                    tensor_first_counter[itid] = node.get("counter", 0)
+                addr = node.get("params", {}).get("address")
+                if addr and itid not in tensor_address:
+                    tensor_address[itid] = addr
+
+    # -------------------------------------------------------------------
+    # Pre-pass 2: dynamic from_torch filtering.
+    # Model-loading from_torch calls (weight preprocessing) should be
+    # filtered while inference from_torch calls (image conversion) should
+    # be kept.  Strategy: group top-level from_torch into clusters of
+    # consecutive calls; keep only the LAST cluster.
+    # -------------------------------------------------------------------
+    _top_level_ops = []
+    _scan_depth = 0
+    for node in graph:
+        nt = node.get("node_type", "")
+        if nt == "function_start":
+            if _scan_depth == 0:
+                _top_level_ops.append((node.get("counter", 0), node.get("params", {}).get("name", "")))
+            _scan_depth += 1
+        elif nt == "function_end":
+            _scan_depth -= 1
+
+    _from_torch_clusters: list[list[int]] = []
+    _cur_cluster: list[int] = []
+    for _counter, _name in _top_level_ops:
+        if _name.startswith("ttnn.from_torch"):
+            _cur_cluster.append(_counter)
+        else:
+            if _cur_cluster:
+                _from_torch_clusters.append(_cur_cluster)
+                _cur_cluster = []
+    if _cur_cluster:
+        _from_torch_clusters.append(_cur_cluster)
+
+    # Counters of from_torch operations to KEEP (last cluster only)
+    important_from_torch: set[int] = set()
+    if _from_torch_clusters:
+        important_from_torch = set(_from_torch_clusters[-1])
+
+    parent_start_counter = 0
+
+    # Running set of tensor_ids that have been emitted as outputs of tracked
+    # (non-nested) operations.  Used during input lifting to reject "orphaned"
+    # device tensors – internal intermediates that were produced inside another
+    # operation's scope but never surfaced as a formal output.
+    emitted_output_tids = set()
 
     # First pass: collect all data
     for node in graph:
@@ -462,7 +596,20 @@ def import_graph(
 
         if node_type == "function_start":
             name = params.get("name", "unknown")
-            is_nested = not detailed and len(function_stack) > 0
+            is_nested = len(function_stack) > 0 or name.startswith(_FILTERED_OP_PREFIXES)
+
+            # Dynamic from_torch filtering: filter weight-loading clusters,
+            # keep the inference cluster (last cluster of consecutive from_torch).
+            if not is_nested and name.startswith("ttnn.from_torch"):
+                if counter not in important_from_torch:
+                    is_nested = True
+
+            # Consume matching Python I/O record (keep queues in sync for
+            # both nested and non-nested ops).
+            py_io_record = None
+            if name in python_io_by_name and python_io_by_name[name]:
+                py_io_record = python_io_by_name[name].popleft()
+
             function_stack.append(
                 {
                     "counter": counter,
@@ -470,12 +617,20 @@ def import_graph(
                     "arguments": node.get("arguments", []),
                     "input_tensors": node.get("input_tensors", []),
                     "nested": is_nested,
+                    "python_io": py_io_record,
                 }
             )
 
             if not is_nested:
                 op_nesting_depth += 1
                 current_op_nodes = [node]
+                nested_input_tensor_ids = []
+                nested_output_tensor_ids = []
+                nested_output_tensor_nodes = []
+                all_nested_output_ids = set()
+                all_scope_output_ids = set()
+                all_nested_input_ids = set()
+                parent_start_counter = counter
                 nodes_batch.append((base_operation_id, counter, operation_counter, name))
 
                 stack_trace = node.get("stack_trace", [])
@@ -490,6 +645,61 @@ def import_graph(
             start_node = function_stack.pop() if function_stack else None
             if start_node and start_node.get("nested"):
                 op_nesting_depth -= 1
+
+                # Gather this op's own input tensor IDs so we can detect in-place ops
+                # (where the output tensor is the same as an input tensor)
+                this_op_input_ids = set()
+                if start_node:
+                    for node_counter in start_node.get("input_tensors", []):
+                        if node_counter < len(graph):
+                            tensor_node = graph[node_counter]
+                            if tensor_node.get("node_type") == "tensor":
+                                tid = tensor_node.get("params", {}).get("tensor_id", "")
+                                if tid:
+                                    this_op_input_ids.add(int(tid))
+
+                # Track ALL input tensors at every depth for intermediate detection
+                all_nested_input_ids.update(this_op_input_ids)
+
+                # Collect output tensors from ALL depths for internal-output filtering.
+                connections = node.get("connections", [])
+                for conn_id in connections:
+                    if conn_id < len(graph):
+                        conn_node = graph[conn_id]
+                        if conn_node.get("node_type") == "tensor":
+                            tid = conn_node.get("params", {}).get("tensor_id", "")
+                            if tid:
+                                itid = int(tid)
+                                all_scope_output_ids.add(itid)
+                                # For the output-lifting intermediate filter, skip
+                                # in-place outputs (same tensor as input to same op)
+                                if itid not in this_op_input_ids:
+                                    all_nested_output_ids.add(itid)
+
+                # Lift INPUT tensors from ALL depths (not just direct children).
+                # Filters below correctly discard internal intermediates.
+                if start_node:
+                    for tid in this_op_input_ids:
+                        nested_input_tensor_ids.append(tid)
+
+                # Collect OUTPUT tensor candidates from ALL depths.
+                for conn_id in connections:
+                    if conn_id < len(graph):
+                        conn_node = graph[conn_id]
+                        if conn_node.get("node_type") == "tensor":
+                            tid = conn_node.get("params", {}).get("tensor_id", "")
+                            if tid:
+                                nested_output_tensor_ids.append(int(tid))
+                                nested_output_tensor_nodes.append(conn_node)
+
+                # Lift stack trace from first nested op if parent has none
+                if start_node and not start_node.get("nested"):
+                    stack_trace = start_node.get("stack_trace", [])
+                    if stack_trace:
+                        op_id = base_operation_id + operation_counter
+                        if not any(s[0] == op_id for s in stack_traces_batch):
+                            stack_traces_batch.append((op_id, "\n".join(stack_trace)))
+
                 continue
 
             op_nesting_depth -= 1
@@ -501,30 +711,107 @@ def import_graph(
             operations_batch.append((operation_id, name, duration_s))
 
             if start_node:
+                graph_counter_to_op_id[start_node["counter"]] = operation_id
+
+            # ----- Python I/O: if available, use directly -----
+            py_io = start_node.get("python_io") if start_node else None
+
+            if start_node:
                 for idx, arg in enumerate(start_node.get("arguments", [])):
                     operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
 
-                for idx, node_counter in enumerate(start_node.get("input_tensors", [])):
+            if py_io and py_io.get("input_tensor_ids"):
+                for idx, tid in enumerate(py_io["input_tensor_ids"]):
+                    input_tensors_batch.append((operation_id, idx, _resolve_input_tid(int(tid))))
+            elif start_node:
+                direct_inputs = []
+                for node_counter in start_node.get("input_tensors", []):
                     if node_counter < len(graph):
                         tensor_node = graph[node_counter]
                         if tensor_node.get("node_type") == "tensor":
                             real_tensor_id = tensor_node.get("params", {}).get("tensor_id", "")
                             if real_tensor_id:
-                                input_tensors_batch.append((operation_id, idx, int(real_tensor_id)))
+                                direct_inputs.append(int(real_tensor_id))
 
-            # Output tensor relationships from connections
+                if direct_inputs:
+                    for idx, tid in enumerate(direct_inputs):
+                        input_tensors_batch.append((operation_id, idx, _resolve_input_tid(tid)))
+                elif nested_input_tensor_ids:
+                    # Fallback I/O lifting from nested children:
+                    # 1. Exclude tensors produced by any nested op (non-in-place)
+                    # 2. HOST tensors: exclude if first seen within parent scope
+                    # 3. DEVICE tensors: exclude if never emitted as a formal output
+                    # 4. Deduplicate
+                    seen = set()
+                    lifted_inputs = []
+                    for tid in nested_input_tensor_ids:
+                        if tid in all_nested_output_ids:
+                            continue
+                        if tid in seen:
+                            continue
+                        if tid in tensor_address:
+                            if tid not in emitted_output_tids:
+                                continue
+                        else:
+                            first = tensor_first_counter.get(tid, 0)
+                            if first >= parent_start_counter:
+                                continue
+                        seen.add(tid)
+                        lifted_inputs.append(tid)
+                    for idx, tid in enumerate(lifted_inputs):
+                        input_tensors_batch.append((operation_id, idx, _resolve_input_tid(tid)))
+
+            # ----- Outputs -----
             output_tensor_nodes = []
-            connections = node.get("connections", [])
             output_idx = 0
-            for conn_id in connections:
-                if conn_id < len(graph):
-                    conn_node = graph[conn_id]
-                    if conn_node.get("node_type") == "tensor":
-                        tensor_id = conn_node.get("params", {}).get("tensor_id", "")
-                        if tensor_id:
-                            output_tensors_batch.append((operation_id, output_idx, tensor_id))
+
+            if py_io and py_io.get("output_tensor_ids"):
+                for tid in py_io["output_tensor_ids"]:
+                    remapped = _remap_output_tid(int(tid), operation_id)
+                    output_tensors_batch.append((operation_id, output_idx, remapped))
+                    emitted_output_tids.add(int(tid))
+                    output_idx += 1
+            else:
+                connections = node.get("connections", [])
+                for conn_id in connections:
+                    if conn_id < len(graph):
+                        conn_node = graph[conn_id]
+                        if conn_node.get("node_type") == "tensor":
+                            tensor_id = conn_node.get("params", {}).get("tensor_id", "")
+                            if tensor_id:
+                                remapped = _remap_output_tid(int(tensor_id), operation_id)
+                                output_tensors_batch.append((operation_id, output_idx, remapped))
+                                emitted_output_tids.add(int(tensor_id))
+                                output_idx += 1
+                                output_tensor_nodes.append(conn_node)
+
+                # If parent had no direct outputs, lift from nested children.
+                if output_idx == 0 and nested_output_tensor_ids:
+                    parent_end_counter = counter
+                    intermediate_tids = all_nested_output_ids & all_nested_input_ids
+                    seen = set()
+                    kept_nodes = []
+                    for i, tid in enumerate(nested_output_tensor_ids):
+                        tensor_node = nested_output_tensor_nodes[i]
+                        device_id = tensor_node.get("params", {}).get("device_id")
+                        if device_id:
+                            tensor_conns = tensor_node.get("connections", [])
+                            if not any(c > parent_end_counter for c in tensor_conns):
+                                continue
+                        else:
+                            if tid in intermediate_tids:
+                                continue
+                            first = tensor_first_counter.get(tid, 0)
+                            if first < parent_start_counter:
+                                continue
+                        if tid not in seen:
+                            seen.add(tid)
+                            remapped = _remap_output_tid(tid, operation_id)
+                            output_tensors_batch.append((operation_id, output_idx, remapped))
+                            emitted_output_tids.add(tid)
                             output_idx += 1
-                            output_tensor_nodes.append(conn_node)
+                            kept_nodes.append(tensor_node)
+                    output_tensor_nodes = kept_nodes
 
             # Per-operation captured_graph subgraph
             capture_start = {
@@ -549,9 +836,29 @@ def import_graph(
             captured_graph_batch.append((operation_id, json.dumps(subgraph)))
             current_op_nodes = []
 
-            # Cumulative buffer snapshot: emit all currently-active buffers for this operation
-            for buf in active_buffers:
-                buffers_batch.append((operation_id, *buf))
+            # Use real buffer snapshot from get_buffers() when available;
+            # fall back to reconstructed active_buffers for older reports.
+            start_counter = start_node["counter"] if start_node else None
+            real_bufs = (
+                per_operation_buffers.get(str(start_counter))
+                if per_operation_buffers and start_counter is not None
+                else None
+            )
+            if real_bufs is not None:
+                for buf in real_bufs:
+                    buffers_batch.append(
+                        (
+                            operation_id,
+                            buf.get("device_id", 0),
+                            buf.get("address", 0),
+                            buf.get("max_size_per_bank", 0),
+                            buf.get("buffer_type", 0),
+                            buf.get("buffer_layout", 0),
+                        )
+                    )
+            else:
+                for buf in active_buffers:
+                    buffers_batch.append((operation_id, *buf))
 
             operation_counter += 1
 
@@ -563,13 +870,22 @@ def import_graph(
                 dtype = params.get("dtype")
                 layout = params.get("layout")
                 memory_config = params.get("memory_config")
+
+                # Normalize C++ enum format to Python format for visualizer compatibility
+                # C++ emits "DataType::BFLOAT16", visualizer expects "DataType.BFLOAT16"
+                if dtype and "::" in dtype:
+                    dtype = dtype.replace("::", ".")
+                if layout and "::" in layout:
+                    layout = layout.replace("::", ".")
                 device_id = int(params["device_id"]) if "device_id" in params else None
                 address = int(params["address"]) if "address" in params else None
                 buffer_type_str = params.get("buffer_type")
                 buffer_type = None
                 if buffer_type_str:
+                    # C++ serializes as "BufferType::DRAM", "BufferType::L1", etc.
+                    cleaned = buffer_type_str.split("::")[-1] if "::" in buffer_type_str else buffer_type_str
                     buffer_type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
-                    buffer_type = buffer_type_map.get(buffer_type_str, 0)
+                    buffer_type = buffer_type_map.get(cleaned, 0)
 
                 tensors_batch.append((tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type))
 
@@ -587,23 +903,88 @@ def import_graph(
             size = int(params.get("size", 0))
             page_size = int(params.get("page_size", 0))
             num_cores = int(params.get("num_cores", 0))
-            buffer_type = 1 if params.get("type") == "L1" else 0
+            _buffer_type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
+            buffer_type_str = params.get("exact_buffer_type") or params.get("type", "DRAM")
+            buffer_type = _buffer_type_map.get(buffer_type_str, 0)
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
-            max_size_per_bank = _compute_max_size_per_bank(
-                size,
-                page_size,
-                buffer_type,
-                layout,
-                num_cores,
-                device_bank_info.get(device_id, {}),
-            )
+            # Prefer pre-computed value from C++ (uses real allocator bank counts);
+            # fall back to Python approximation for older traces without it.
+            if "max_size_per_bank" in params:
+                max_size_per_bank = int(params["max_size_per_bank"])
+            else:
+                max_size_per_bank = _compute_max_size_per_bank(
+                    size,
+                    page_size,
+                    buffer_type,
+                    layout,
+                    num_cores,
+                    device_bank_info.get(device_id, {}),
+                )
             active_buffers.append((device_id, address, max_size_per_bank, buffer_type, layout_int))
 
         elif node_type == "buffer_deallocate":
-            dealloc_address = int(params.get("address", 0))
-            active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+            # Resolve address: prefer direct param, fall back to connected buffer_allocate
+            dealloc_address = None
+            if "address" in params:
+                dealloc_address = int(params["address"])
+            else:
+                for conn_id in node.get("connections", []):
+                    if conn_id < len(graph) and graph[conn_id].get("node_type") == "buffer_allocate":
+                        dealloc_address = int(graph[conn_id].get("params", {}).get("address", 0))
+                        break
+            if dealloc_address is not None:
+                active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+
+            # Find the tensor that owns the deallocated address
+            dealloc_tensor_id = None
+            if dealloc_address is not None:
+                for t in tensors_batch:
+                    tid, _, _, _, _, _, addr, _ = t
+                    if addr == dealloc_address:
+                        dealloc_tensor_id = int(tid) if isinstance(tid, str) else tid
+                        break
+
+            if not function_stack:
+                # Synthesize a deallocate operation if not inside a function_start/end pair
+                operation_id = base_operation_id + operation_counter
+                op_name = "ttnn::deallocate"
+                operations_batch.append((operation_id, op_name, 0))
+                nodes_batch.append((base_operation_id, counter, operation_counter, op_name))
+
+                if dealloc_tensor_id is not None:
+                    input_tensors_batch.append((operation_id, 0, _resolve_input_tid(dealloc_tensor_id)))
+
+                for buf in active_buffers:
+                    buffers_batch.append((operation_id, *buf))
+
+                capture_start = {
+                    "arguments": [],
+                    "connections": [1],
+                    "counter": 0,
+                    "input_tensors": [],
+                    "node_type": "capture_start",
+                    "params": {},
+                    "stacking_level": 0,
+                }
+                capture_end = {
+                    "arguments": [],
+                    "connections": [],
+                    "counter": 0,
+                    "input_tensors": [],
+                    "node_type": "capture_end",
+                    "params": {},
+                    "stacking_level": 0,
+                }
+                captured_graph_batch.append((operation_id, json.dumps([capture_start, node, capture_end])))
+
+                operation_counter += 1
+            else:
+                # Inside a function pair (e.g., Python-level ttnn.deallocate) -
+                # lift the deallocated tensor as a nested input for the parent
+                if dealloc_tensor_id is not None:
+                    nested_input_tensor_ids.append(dealloc_tensor_id)
 
         elif node_type == "error":
             error_type = params.get("error_type", "unknown")
@@ -611,78 +992,95 @@ def import_graph(
             error_operation = params.get("error_operation", "")
             errors_batch.append((base_operation_id, error_type, error_message, error_operation))
 
-    # Second pass: collect edges
-    sink_input_counts = {}
-    edge_key_counts = {}
-    for node in graph:
-        source_id = node.get("counter", 0)
-        connections = node.get("connections", [])
+    # Clone tensor/device_tensor entries for remapped (synthetic) output tensor IDs.
+    _orig_tensor_map = {}
+    for t in tensors_batch:
+        tid = int(t[0]) if isinstance(t[0], str) else t[0]
+        _orig_tensor_map[tid] = t
+    _orig_dt_map = {}
+    for dt in device_tensors_batch:
+        tid = int(dt[0]) if isinstance(dt[0], str) else dt[0]
+        _orig_dt_map[tid] = dt
+    for orig_tid, new_tid in _tid_clones:
+        orig_t = _orig_tensor_map.get(orig_tid)
+        if orig_t:
+            _, shape, dtype, layout, mem_cfg, dev_id, addr, bt = orig_t
+            tensors_batch.append((new_tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt))
+        orig_dt = _orig_dt_map.get(orig_tid)
+        if orig_dt:
+            _, dev_id, addr = orig_dt
+            device_tensors_batch.append((new_tid, dev_id, addr))
 
-        for output_idx, sink_id in enumerate(connections):
-            input_idx = sink_input_counts.get(sink_id, 0)
-            sink_input_counts[sink_id] = input_idx + 1
+    # Keep host tensors only when referenced in I/O; keep all device tensors as-is.
+    # Device tensors are NOT deduplicated by address because the memory allocator
+    # reuses freed addresses for new tensors. Merging by address would incorrectly
+    # connect operations that happen to use the same memory at different times.
+    referenced_tids = set()
+    for _, _, tid in input_tensors_batch:
+        referenced_tids.add(int(tid) if isinstance(tid, str) else tid)
+    for _, _, tid in output_tensors_batch:
+        referenced_tids.add(int(tid) if isinstance(tid, str) else tid)
 
-            edge_pair = (source_id, sink_id)
-            key = edge_key_counts.get(edge_pair, 0)
-            edge_key_counts[edge_pair] = key + 1
-
-            edges_batch.append((base_operation_id, source_id, sink_id, output_idx, input_idx, key))
-
-    # Compatible mode: deduplicate tensors by address, keep only device tensors
-    if not detailed:
-        # tensors_batch schema: (tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type)
-        seen_addresses = {}
-        tensor_id_remap = {}
-        filtered_tensors = []
-        for t in tensors_batch:
-            tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
-            if dev_id is None:
-                continue
-            if addr is not None and addr in seen_addresses:
-                tensor_id_remap[int(tid) if isinstance(tid, str) else tid] = seen_addresses[addr]
-                continue
-            kept_id = int(tid) if isinstance(tid, str) else tid
-            if addr is not None:
-                seen_addresses[addr] = kept_id
+    filtered_tensors = []
+    for t in tensors_batch:
+        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if dev_id is None:
+            if tid_int in referenced_tids:
+                filtered_tensors.append(t)
+        else:
             filtered_tensors.append(t)
-        tensors_batch = filtered_tensors
+    tensors_batch = filtered_tensors
 
-        kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
+    kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
 
-        def _remap_tid(tid):
-            tid_int = int(tid) if isinstance(tid, str) else tid
-            return tensor_id_remap.get(tid_int, tid_int)
+    # Deduplicate per operation (same op + same tensor = one entry)
+    seen_input = set()
+    deduped_inputs = []
+    input_idx_counter = {}
+    for op_id, idx, tid in input_tensors_batch:
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if tid_int in kept_tensor_ids:
+            key = (op_id, tid_int)
+            if key not in seen_input:
+                seen_input.add(key)
+                new_idx = input_idx_counter.get(op_id, 0)
+                input_idx_counter[op_id] = new_idx + 1
+                deduped_inputs.append((op_id, new_idx, tid_int))
+    input_tensors_batch = deduped_inputs
 
-        input_tensors_batch = [
-            (op_id, idx, _remap_tid(tid))
-            for op_id, idx, tid in input_tensors_batch
-            if _remap_tid(tid) in kept_tensor_ids
-        ]
-        output_tensors_batch = [
-            (op_id, idx, _remap_tid(tid))
-            for op_id, idx, tid in output_tensors_batch
-            if _remap_tid(tid) in kept_tensor_ids
-        ]
-        device_tensors_batch = [
-            (_remap_tid(tid), dev_id, addr)
-            for tid, dev_id, addr in device_tensors_batch
-            if _remap_tid(tid) in kept_tensor_ids
-        ]
-        # Deduplicate device_tensors by (tensor_id, address)
-        seen_dt = set()
-        filtered_dt = []
-        for dt in device_tensors_batch:
-            key = (dt[0], dt[2])
-            if key not in seen_dt:
-                seen_dt.add(key)
-                filtered_dt.append(dt)
-        device_tensors_batch = filtered_dt
+    seen_output = set()
+    deduped_outputs = []
+    output_idx_counter = {}
+    for op_id, idx, tid in output_tensors_batch:
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if tid_int in kept_tensor_ids:
+            key = (op_id, tid_int)
+            if key not in seen_output:
+                seen_output.add(key)
+                new_idx = output_idx_counter.get(op_id, 0)
+                output_idx_counter[op_id] = new_idx + 1
+                deduped_outputs.append((op_id, new_idx, tid_int))
+    output_tensors_batch = deduped_outputs
+    device_tensors_batch = [
+        (int(tid) if isinstance(tid, str) else tid, dev_id, addr)
+        for tid, dev_id, addr in device_tensors_batch
+        if (int(tid) if isinstance(tid, str) else tid) in kept_tensor_ids
+    ]
+    seen_dt = set()
+    filtered_dt = []
+    for dt in device_tensors_batch:
+        key = (dt[0], dt[2])
+        if key not in seen_dt:
+            seen_dt.add(key)
+            filtered_dt.append(dt)
+    device_tensors_batch = filtered_dt
 
     # Batch inserts
     if captured_graph_batch:
         cursor.executemany("""INSERT INTO captured_graph VALUES (?, ?)""", captured_graph_batch)
-    if nodes_batch:
-        cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?)""", nodes_batch)
+    # nodes and edges tables are intentionally left empty to match the
+    # golden DB format expected by ttnn-visualizer.
     if stack_traces_batch:
         cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?)""", stack_traces_batch)
     if operations_batch:
@@ -701,8 +1099,6 @@ def import_graph(
         cursor.executemany("""INSERT INTO buffers VALUES (?, ?, ?, ?, ?, ?)""", buffers_batch)
     if errors_batch:
         cursor.executemany("""INSERT INTO errors VALUES (?, ?, ?, ?)""", errors_batch)
-    if edges_batch:
-        cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
 
     # Validate referential integrity
     warnings = _validate_graph_integrity(
@@ -728,6 +1124,7 @@ def import_graph(
         "stack_traces": len(stack_traces_batch),
         "errors": len(errors_batch),
         "warnings": warnings,
+        "graph_counter_to_op_id": graph_counter_to_op_id,
     }
 
 
@@ -785,7 +1182,6 @@ def import_report(
     output_dir: Union[str, Path],
     db_name: str = "db.sqlite",
     generate_svgs: bool = False,
-    detailed: bool = False,
 ) -> Path:
     """
     Import a C++ graph capture report into ttnn-visualizer SQLite database.
@@ -797,9 +1193,6 @@ def import_report(
         output_dir: Directory to create SQLite database in
         db_name: Database filename
         generate_svgs: If True, generate SVG visualizations for each report
-        detailed: When False (default), only device tensors are imported and duplicates
-            are merged by address to match the legacy Python capture behavior.
-            When True, all tensors (host + device) are imported with full detail.
 
     Returns:
         Path to created database
@@ -849,13 +1242,35 @@ def import_report(
                 continue
 
             devices_data = report.get("devices", [])
+            # Normalize device IDs to 0-based sequential indices so the visualizer
+            # works regardless of the physical chip IDs the C++ trace emits.
+            raw_dev_ids = sorted({d.get("device_id", 0) for d in devices_data})
+            dev_id_remap = {raw: idx for idx, raw in enumerate(raw_dev_ids)}
+            if dev_id_remap:
+                for d in devices_data:
+                    d["device_id"] = dev_id_remap.get(d.get("device_id", 0), 0)
+                for node in report.get("graph", []):
+                    p = node.get("params", {})
+                    if "device_id" in p:
+                        old = int(p["device_id"]) if isinstance(p["device_id"], str) else p["device_id"]
+                        p["device_id"] = str(dev_id_remap.get(old, old))
+                for pages in report.get("per_operation_buffer_pages", {}).values():
+                    for page in pages:
+                        if "device_id" in page:
+                            page["device_id"] = dev_id_remap.get(page["device_id"], page["device_id"])
+
             if devices_data:
                 device_ids = import_devices(cursor, devices_data)
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
                 stats = import_graph(
-                    cursor, report["graph"], base_operation_id=idx * 10000, devices=devices_data, detailed=detailed
+                    cursor,
+                    report["graph"],
+                    base_operation_id=idx * 10000,
+                    devices=devices_data,
+                    python_io=report.get("python_io"),
+                    per_operation_buffers=report.get("per_operation_buffers"),
                 )
                 total_stats["operations"] += stats["operations"]
                 total_stats["tensors"] += stats["tensors"]
@@ -890,8 +1305,37 @@ def import_report(
                         f.write(report["mesh_coordinate_mapping"])
                     total_stats["mesh_coordinate_mapping"] = True
 
-            # Import buffer pages if present (when detailed buffer report is enabled)
-            if "buffer_pages" in report and report["buffer_pages"]:
+            # Import buffer pages: prefer per-operation snapshots, fall back to flat
+            per_op_bp = report.get("per_operation_buffer_pages")
+            graph_counter_to_op_id = stats.get("graph_counter_to_op_id", {}) if "graph" in report else {}
+
+            if per_op_bp:
+                buffer_pages_batch = []
+                for graph_counter_str, pages in per_op_bp.items():
+                    op_id = graph_counter_to_op_id.get(int(graph_counter_str))
+                    if op_id is None:
+                        continue
+                    for page in pages:
+                        buffer_pages_batch.append(
+                            (
+                                op_id,
+                                page.get("device_id", 0),
+                                page.get("address", 0),
+                                page.get("core_y", 0),
+                                page.get("core_x", 0),
+                                page.get("bank_id", 0),
+                                page.get("page_index", 0),
+                                page.get("page_address", 0),
+                                page.get("page_size", 0),
+                                page.get("buffer_type", 0),
+                            )
+                        )
+                if buffer_pages_batch:
+                    cursor.executemany(
+                        """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
+                    )
+                    total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
+            elif "buffer_pages" in report and report["buffer_pages"]:
                 base_op_id = idx * 10000
                 buffer_pages_batch = [
                     (
@@ -968,14 +1412,9 @@ Examples:
     parser.add_argument("output_dir", help="Directory to create SQLite database in")
     parser.add_argument("--db-name", default="db.sqlite", help="Database filename")
     parser.add_argument("--svg", action="store_true", help="Generate SVG visualizations")
-    parser.add_argument(
-        "--detailed",
-        action="store_true",
-        help="Import all data including host tensors and nested operations (default: compatible mode)",
-    )
 
     args = parser.parse_args()
-    import_report(args.report_path, args.output_dir, args.db_name, generate_svgs=args.svg, detailed=args.detailed)
+    import_report(args.report_path, args.output_dir, args.db_name, generate_svgs=args.svg)
 
 
 if __name__ == "__main__":
