@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <numbers>
 #include <vector>
 #include <limits>
 #include <iomanip>
@@ -142,9 +143,8 @@ inline int32_t bf16_value_order_index_daz(uint16_t bits) {
     if (bits & BF16_SIGN_MASK) {
         uint16_t magnitude = bits & 0x7FFF;
         return 0x7F7F - magnitude;
-    } else {
-        return 32640 + bits - BF16_MANTISSA_MASK;
     }
+    return 32640 + bits - BF16_MANTISSA_MASK;
 }
 
 inline int32_t bf16_value_order_index_daz(float f) { return bf16_value_order_index_daz(float_to_bf16_bits(f)); }
@@ -192,7 +192,7 @@ inline int32_t ulp_distance_bf16_daz(float a, float b) {
 // Uses double (fp64) intentionally: the golden reference must be higher precision
 // than BF16 to allow meaningful ULP distance measurement.
 inline double gelu_derivative_exact(double x) {
-    constexpr double SQRT2 = 1.4142135623730950488;
+    constexpr double SQRT2 = std::numbers::sqrt2;
     constexpr double INV_SQRT_2PI = 0.3989422804014327;
 
     double cdf;
@@ -209,7 +209,7 @@ inline double gelu_derivative_exact(double x) {
     double pdf = std::exp(-0.5 * x * x) * INV_SQRT_2PI;
 
     // GELU'(x) = cdf + x * pdf
-    return cdf + x * pdf;
+    return cdf + (x * pdf);
 }
 
 /**
@@ -986,9 +986,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     for (const auto& r : regions) {
         if (r.name == "Near negative [-2, -0.5]" || r.name == "Near zero [-0.5, 0.5]" ||
             r.name == "Near positive [0.5, 2]") {
-            if (r.max_ulp > core_max_ulp) {
-                core_max_ulp = r.max_ulp;
-            }
+            core_max_ulp = std::max(r.max_ulp, core_max_ulp);
         }
     }
 
