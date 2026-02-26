@@ -44,7 +44,6 @@ struct AllGatherAsyncDeviceOperation {
         const std::optional<uint32_t>& cluster_axis,
         bool use_optimal_ccl_for_llama,
         bool use_all_gather_async_llama_sharded,
-        bool use_all_gather_async_via_broadcast,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         const std::optional<uint32_t>& chunks_per_sync,
         const std::optional<uint32_t>& num_workers_per_link,
@@ -56,8 +55,7 @@ struct AllGatherAsyncDeviceOperation {
 
 enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 0,
-    VIA_BROADCAST = 1,
-    MINIMAL_DEFAULT = 2,
+    MINIMAL_DEFAULT = 1,
 };
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes);

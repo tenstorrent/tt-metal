@@ -254,7 +254,6 @@ def run_all_gather_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 sub_core_grids=sub_core_grids,
-                use_broadcast=True,
             )
 
         return tt_all_gather_out_tensor
@@ -368,10 +367,8 @@ def run_all_gather_impl(
             2,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 30,
+            True,
+            30,
             None,
             None,
             1.0,
@@ -408,10 +405,8 @@ def run_all_gather_impl(
             1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 35,
+            True,
+            35,
             None,
             None,
             1.0,
