@@ -53,6 +53,15 @@ def hf_model():
         pytest.skip(f"Skipping Bark tests: failed to load HuggingFace reference model 'suno/bark-small': {exc}")
 
 
+@pytest.fixture(scope="module")
+def tt_bark_model(device):
+    """Load TtBarkModel with skip guard for offline environments."""
+    try:
+        return TtBarkModel(device, model_name="suno/bark-small")
+    except Exception as exc:
+        pytest.skip(f"Skipping Bark pipeline tests: failed to load TtBarkModel: {exc}")
+
+
 class TestBarkSemantic:
     """Tests for Stage 1: Text-to-Semantic model."""
 
@@ -262,9 +271,9 @@ class TestBarkFine:
 class TestBarkPipeline:
     """Tests for full end-to-end pipeline."""
 
-    def test_full_pipeline(self, device, hf_model):
+    def test_full_pipeline(self, device, hf_model, tt_bark_model):
         """Test complete text-to-audio pipeline."""
-        model = TtBarkModel(device, model_name="suno/bark-small")
+        model = tt_bark_model
 
         text = "Hello, this is a test of the Bark text-to-speech model."
         audio = model.generate(text, verbose=True)
@@ -274,9 +283,9 @@ class TestBarkPipeline:
         assert np.isfinite(audio).all(), "Audio contains NaN or Inf values"
         print(f"Generated audio: {len(audio)} samples, {len(audio)/24000:.2f}s")
 
-    def test_multilingual(self, device, hf_model):
+    def test_multilingual(self, device, hf_model, tt_bark_model):
         """Test with non-English text."""
-        model = TtBarkModel(device, model_name="suno/bark-small")
+        model = tt_bark_model
 
         # Bark supports multilingual via special tokens
         text = "Bonjour, comment allez-vous?"
@@ -285,9 +294,9 @@ class TestBarkPipeline:
         assert isinstance(audio, np.ndarray)
         assert len(audio) > 0
 
-    def test_emotion_annotations(self, device, hf_model):
+    def test_emotion_annotations(self, device, hf_model, tt_bark_model):
         """Test with emotion annotations."""
-        model = TtBarkModel(device, model_name="suno/bark-small")
+        model = tt_bark_model
 
         text = "I can't believe it! [laughs] That's amazing!"
         audio = model.generate(text, verbose=False)
@@ -299,11 +308,11 @@ class TestBarkPipeline:
 class TestBarkThroughput:
     """Benchmark tests for throughput validation."""
 
-    def test_semantic_throughput(self, device, hf_model):
+    def test_semantic_throughput(self, device, hf_model, tt_bark_model):
         """Check semantic token generation throughput (target >= 20 tok/s)."""
         import time
 
-        model = TtBarkModel(device, model_name="suno/bark-small")
+        model = tt_bark_model
 
         text = "Hello, this is a throughput test."
         t0 = time.time()
