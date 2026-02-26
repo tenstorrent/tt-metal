@@ -65,7 +65,7 @@ models/demos/wormhole/bark/
 The implementation has been fully optimized for Tenstorrent hardware:
 - **Full TTNN Attention**: Eliminated all `to_torch` calls in the transformer blocks. All attention masking and scaling occur on-device.
 - **On-Device KV Caching**: Integrated persistent KV caches for stages 1 and 2, drastically reducing the compute requirements for autoregressive generation.
-- **On-Device Loops**: Generation loops for all stages run mostly on-device (logits-to-token decoding currently occurs on host).
+- **On-Device Loops**: Generation loops for stages 1 and 2 run mostly on-device; `ttnn.argmax` is used on-device, with only a scalar EOS-check token transferred to host per iteration.
 - **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device as a list of tensors, eliminating host-side synchronization during the codebook expansion process.
 - **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (e.g., 8x8 on N150).
 - **LoFi Math Fidelity**: Optimized math fidelity settings for increased throughput with negligible accuracy loss.
