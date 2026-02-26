@@ -1009,10 +1009,8 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
 
 TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     // Detailed per-segment ULP analysis matching exact implementation regions:
-    // - x < -12.4: Saturation to 0
-    // - [-12.4, -9): exp()-based asymptotic formula
-    // - [-9, -7): FL2 polynomial (shifted, t = x + 8)
-    // - [-7, -5): FL1 polynomial (shifted, t = x + 6)
+    // - x <= -13.375: Saturation to 0
+    // - (-13.375, -5]: Fused x*exp(t) with Mills ratio correction
     // - [-5, -3): LEFT polynomial (shifted, t = x + 4)
     // - [-3, 3.1719): CORE polynomial (degree 16)
     // - x >= 3.1719: Saturation to 1
@@ -1165,32 +1163,6 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
               << std::setw(12) << "-" << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x
               << "\n";
     std::cout << "================================================================================\n";
-}
-
-TEST_F(GeluBwPolyTest, CompareWithStandard) {
-    // Compare polynomial vs standard implementation at critical points
-    std::vector<float> test_values = {-4.0f, -3.719f, -3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
-
-    std::cout << "\n============================================================\n";
-    std::cout << "COMPARISON: Standard vs Polynomial GELU Backward\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(10) << "x" << std::setw(15) << "Expected" << std::setw(15) << "Standard" << std::setw(10)
-              << "ULP_std" << std::setw(15) << "Polynomial" << std::setw(10) << "ULP_poly\n";
-    std::cout << std::string(75, '-') << "\n";
-
-    for (float x : test_values) {
-        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
-        float actual_std = run_gelu_bw_single(*device_, x);
-        float actual_poly = run_gelu_bw_single(*device_, x);
-
-        int32_t ulp_std = bf16_ulp_bw::ulp_distance_bf16_daz(actual_std, expected);
-        int32_t ulp_poly = bf16_ulp_bw::ulp_distance_bf16_daz(actual_poly, expected);
-
-        std::cout << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(15) << std::scientific
-                  << std::setprecision(3) << expected << std::setw(15) << actual_std << std::setw(10) << ulp_std
-                  << std::setw(15) << actual_poly << std::setw(10) << ulp_poly << "\n";
-    }
-    std::cout << "============================================================\n";
 }
 
 // =============================================================================
