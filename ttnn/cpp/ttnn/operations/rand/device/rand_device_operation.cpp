@@ -19,6 +19,11 @@ void RandDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
+void RandDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_inputs(operation_attributes, tensor_args);
+}
+
 TensorSpec RandDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return ttnn::TensorSpec(
@@ -42,10 +47,12 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
 }
 
 tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    return tt::stl::hash::hash_objects_with_default_seed(
+        operation_attributes.shape,
+        operation_attributes.dtype,
+        operation_attributes.layout,
+        operation_attributes.memory_config);
 }
 
 }  // namespace ttnn::operations::rand

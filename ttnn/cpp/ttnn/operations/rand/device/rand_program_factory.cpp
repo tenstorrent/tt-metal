@@ -135,10 +135,20 @@ void RandDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint32_t output_addr = output.buffer()->address();
 
+    const float eps = 1e-6;
+    union {
+        float f;
+        uint32_t u;
+    } f2u_from{}, f2u_to{};
+    f2u_from.f = operation_attributes.from;
+    f2u_to.f = operation_attributes.to - eps;
+
     for (int i = 0; i < cores.size(); ++i) {
         {
             auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
             runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+            runtime_args[1] = f2u_from.u;
+            runtime_args[2] = f2u_to.u;
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
