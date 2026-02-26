@@ -19,10 +19,16 @@ namespace ttml::metal {
 //   w1: Gate projection weights [1, 1, embed_dim, hidden_dim]
 //   w2: Down projection weights [1, 1, hidden_dim, embed_dim]
 //   w3: Up projection weights [1, 1, embed_dim, hidden_dim]
+//   use_two_phases: If true (default), use Design A (gate-up kernel + matmul(M, W2));
+//                   if false, use the legacy single fused kernel.
 //
 // Returns:
 //   Output tensor [B, 1, S, embed_dim]
 ttnn::Tensor swiglu_fw(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3);
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& w1,
+    const ttnn::Tensor& w2,
+    const ttnn::Tensor& w3,
+    bool use_two_phases = true);
 
 }  // namespace ttml::metal
