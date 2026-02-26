@@ -40,6 +40,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 dim (number): the dimension to reduce.
                 largest (bool): whether to return the largest or the smallest elements. Defaults to `True`.
                 sorted (bool): whether to return the elements in sorted order. Defaults to `True`.
+                stable (bool): whether to return the elements in stable order. Defaults to `False`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -96,6 +97,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
         nb::arg("dim") = -1,
         nb::arg("largest") = true,
         nb::arg("sorted") = true,
+        nb::arg("stable") = false,
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),

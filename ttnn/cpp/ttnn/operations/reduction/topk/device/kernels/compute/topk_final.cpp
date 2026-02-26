@@ -57,6 +57,7 @@ void kernel_main() {
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
     constexpr uint32_t largest = get_compile_time_arg_val(12);
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
+    constexpr bool stable = get_compile_time_arg_val(14) == 1;
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -121,7 +122,7 @@ void kernel_main() {
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration(
+            process_iteration<stable>(
                 m_iter,                     // Current merge iteration
                 K,                          // TopK value
                 Wt,                         // Total width tiles (from all cores)

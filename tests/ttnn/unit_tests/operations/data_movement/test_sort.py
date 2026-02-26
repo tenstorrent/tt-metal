@@ -82,14 +82,15 @@ def test_sort_residual_core_range(device):
         (torch.float32, ttnn.float32),
     ],
 )
-def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
+@pytest.mark.parametrize("stable", [True, False])
+def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype, stable):
     torch.manual_seed(0)
 
     input = torch.randn(shape, dtype=torch_dtype)
 
     ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
-    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending, stable=stable)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=stable)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -104,9 +105,12 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
         # Validate sorted values
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
 
-        # Validate that the indices correctly index into the original tensor
-        ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
-        assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
+        # Validate indices
+        if stable:
+            assert_equal(torch_sort_indices.to(torch.int64), ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
+        else:
+            ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
+            assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
 
 
 @pytest.mark.parametrize(

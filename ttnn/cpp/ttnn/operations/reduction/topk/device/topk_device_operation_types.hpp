@@ -16,6 +16,7 @@ struct TopkParams {
     int8_t dim{};
     bool largest{};
     bool sorted{};
+    bool stable{};
     tt::tt_metal::MemoryConfig output_memory_config;
     tt::tt_metal::CoreRangeSet sub_core_grids;
 };
