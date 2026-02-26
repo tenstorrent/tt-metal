@@ -62,8 +62,16 @@ void kernel_main() {
         cb_push_back(cb_id_idx, 1);
         cb_push_back(cb_id_wt, 1);
 
+
+        // Calculate the row offset within the tile
+        uint32_t token_in_tile = i % 32;
+        uint32_t face_offset = (token_in_tile < 16) ? 0 : 512; // Face 0 or Face 2
+        uint32_t row_in_face = (token_in_tile % 16);
+        uint32_t idx_offset = 8 + face_offset + (row_in_face * 16); // 8 is for 16-byte TileHeader
+
         for (uint32_t j = 0; j < k; j++) {
-            uint16_t expert_idx = idx_ptr[8 + j]; // +8 to skip the 16-byte TileHeader
+            uint16_t expert_idx = idx_ptr[idx_offset + j];
+
 
             // W1
             uint32_t w1_rem = w1_expert_tiles;
