@@ -292,6 +292,8 @@ class TextModel(LightweightModule):
         hidden_states: ttnn.Tensor,
         kv_caches: List[Tuple[ttnn.Tensor, ttnn.Tensor]],
         current_pos: ttnn.Tensor,
+        rot_mats: Optional[List[ttnn.Tensor]] = None,
+        position_ids: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass (single token at a time).
@@ -303,19 +305,26 @@ class TextModel(LightweightModule):
             hidden_states: Input embeddings of shape [1, 1, 1, hidden_dim]
             kv_caches: List of (k_cache, v_cache) per layer
             current_pos: Current decode position tensor [batch]
+            rot_mats: Optional pre-computed [cos, sin] rotation matrices (for tracing)
+            position_ids: Optional position IDs tensor for computing rot_mats
 
         Returns:
             Logits tensor
         """
-        # Get RoPE embeddings for current position (PyTorch-based for decode)
-        pos_torch = ttnn.to_torch(current_pos)[0].item()
-        cos, sin = self.rotary_emb.get_cos_sin(seq_len=1, start_pos=pos_torch)
+        # Get RoPE embeddings for current position
+        if rot_mats is None:
+            if position_ids is None:
+                position_ids = torch.tensor([ttnn.to_torch(current_pos)[0].item()], dtype=torch.int32)
+            rot_mats = self.rotary_setup.get_rot_mats_decode(position_ids)
+
+        # Get decode transformation matrix
+        transformation_mat = self.transformation_mats["decode"]
 
         # Process through decoder blocks
         x = hidden_states
         for layer_idx, block in enumerate(self.blocks):
             kv_cache = kv_caches[layer_idx]
-            x = block.forward_decode(x, cos, sin, kv_cache, current_pos)
+            x = block.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos)
 
         # Final normalization
         x = self.ln_f(x)
