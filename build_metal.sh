@@ -30,6 +30,9 @@ declare -A BINARY_TOOLCHAIN=(
     # use_compiler() falls back to direct compiler path
 )
 
+# Valid --compiler flag values, in display order
+COMPILER_FLAGS=(clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14)
+
 # CLI flag → toolchain ID (for --compiler pinned versions)
 declare -A FLAG_TOOLCHAIN=(
     [clang-20]=clang-20-libstdcpp
@@ -308,7 +311,7 @@ if [ "$compiler" != "" ]; then
             if [ -n "${FLAG_TOOLCHAIN[$compiler]:-}" ]; then
                 toolchain_path="$(toolchain_file "${FLAG_TOOLCHAIN[$compiler]}")"
             else
-                echo "ERROR: Unknown compiler '$compiler'. Allowed: clang, gcc, clang-20, clang-20-libcpp, gcc-12, gcc-14."
+                echo "ERROR: Unknown compiler '$compiler'. Allowed: ${COMPILER_FLAGS[*]}."
                 show_help
                 exit 1
             fi;;
