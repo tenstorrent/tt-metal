@@ -166,8 +166,8 @@ void add_bias_and_addcmul_block(
 
     cb_wait_front(intermediate_cb, out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb, out_cb);
-    reconfig_data_format(intermediate_cb, out_cb);
+    add_tiles_init(intermediate_cb, ternary_a_cb);
+    reconfig_data_format(intermediate_cb, ternary_a_cb);
     pack_reconfig_data_format(out_cb);
 
     tile_id = 0;

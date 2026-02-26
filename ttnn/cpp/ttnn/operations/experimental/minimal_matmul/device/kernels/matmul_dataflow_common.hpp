@@ -219,7 +219,8 @@ void read_ternary_blocks_sync(
     const TensorShape2D& shape,
     uint32_t ternary_a_cb,
     uint32_t ternary_b_cb,
-    uint32_t tile_size_bytes,
+    uint32_t a_tile_size_bytes,
+    uint32_t b_tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
@@ -239,7 +240,7 @@ void read_ternary_blocks_sync(
         }
 
         noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
-        ternary_b_write_ptr += tile_size_bytes;
+        ternary_b_write_ptr += b_tile_size_bytes;
     }
     noc_async_read_barrier();
 
@@ -263,7 +264,7 @@ void read_ternary_blocks_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
             }
-            ternary_a_write_ptr += tile_size_bytes;
+            ternary_a_write_ptr += a_tile_size_bytes;
         }
         noc_async_read_barrier();
 
