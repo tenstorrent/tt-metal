@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
-#include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -51,7 +51,7 @@ class HostTensor {
      *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
      */
 
-    using attribute_type = TensorAttributes<HostStorage>;
+    using attribute_type = TensorImpl<HostStorage>;
 
 public:
     using volumn_type = std::uint64_t;
