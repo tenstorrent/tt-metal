@@ -172,7 +172,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         });
 
     // Re-run discovery
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver().get());
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
     get_physical_system_descriptor().clear();
     auto new_psd = run_physical_system_discovery(
         driver_ref, distributed_context_, &context_->hal(), context_->rtoptions().get_target_device(), true, true);
@@ -223,7 +223,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
 
     distributed_context_->barrier();
     // Re-run discovery
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver().get());
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
     get_physical_system_descriptor().clear();
     auto new_psd = run_physical_system_discovery(
         driver_ref, distributed_context_, &context_->hal(), context_->rtoptions().get_target_device(), true, true);

@@ -4,9 +4,10 @@
 
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include <unistd.h>
-#include <limits.h>
+#include <climits>
 #include <fstream>
 #include <algorithm>
 #include <set>
@@ -102,7 +103,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     return {tray_id, asic_location};
 }
 
-bool resolve_hostname_uniqueness(std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) {
+bool resolve_hostname_uniqueness(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context->rank());
@@ -397,7 +399,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
 
 void exchange_metadata(
     PhysicalSystemDescriptor& psd,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
@@ -477,7 +479,7 @@ namespace discovery_impl {
 
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::Cluster& cluster,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_live_discovery) {
@@ -585,7 +587,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
 PhysicalSystemDescriptor run_physical_system_discovery(
     tt::umd::Cluster& cluster,
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
@@ -639,7 +641,7 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     auto uncorr_addr =
         hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
 
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     bool arch_blackhole = cluster_desc->get_arch(0) == tt::ARCH::BLACKHOLE;
     // Memory layout for 64B metrics is different on WH vs BH systems/
     uint64_t hi_offset = arch_blackhole ? sizeof(uint32_t) : 0;
