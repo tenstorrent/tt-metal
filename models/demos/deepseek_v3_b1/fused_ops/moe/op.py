@@ -133,6 +133,7 @@ class MoeSem:
     INDEX_MCAST_RECEIVER = 6
     DOWN_PROJ_MCAST_RECEIVER = 7
     REDUCE_WORKER_FABRIC_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
+    REDUCE_SYNC = 12  # on sender core: reduce fabric cores signal done
 
 
 @dataclass
@@ -2714,6 +2715,7 @@ class MoeOp:
     INDEX_MCAST_RECEIVER_SEM = MoeSem.INDEX_MCAST_RECEIVER
     DOWN_PROJ_MCAST_RECEIVER_SEM = MoeSem.DOWN_PROJ_MCAST_RECEIVER
     REDUCE_WORKER_FABRIC_SEM_BASE = MoeSem.REDUCE_WORKER_FABRIC_BASE
+    REDUCE_SYNC_SEM = MoeSem.REDUCE_SYNC
 
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
@@ -3848,6 +3850,23 @@ class MoeOp:
             ]
         )
 
+        # Reduce-to-sender sync CT args (reduce fabric cores → sender core NCRISC)
+        sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
+        num_reduce_fabric_cores = len(reduce_params["fabric_cores"])
+        self.ncrisc_args.extend(
+            [
+                ("reduce_sync_sem_id", MoeOp.REDUCE_SYNC_SEM),
+                ("reduce_sync_num_fabric_cores", num_reduce_fabric_cores),
+            ]
+        )
+        self.brisc_args.extend(
+            [
+                ("reduce_sync_sem_id", MoeOp.REDUCE_SYNC_SEM),
+                ("reduce_sync_noc_x", sender_core_physical.x),
+                ("reduce_sync_noc_y", sender_core_physical.y),
+            ]
+        )
+
         # Fabric semaphores (worker→fabric signaling on fabric cores)
         reduce_worker_fabric_sem_base = MoeOp.REDUCE_WORKER_FABRIC_SEM_BASE
         fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
@@ -4190,6 +4209,10 @@ class MoeOp:
                     id=MoeOp.DOWN_PROJ_MCAST_RECEIVER_SEM, core_ranges=ctx.full_device_grid, initial_value=0
                 ),
             ]
+        if ctx.enable_reduce_to_one:
+            semaphore_descriptors.append(
+                ttnn.SemaphoreDescriptor(id=MoeOp.REDUCE_SYNC_SEM, core_ranges=ctx.full_device_grid, initial_value=0)
+            )
         return semaphore_descriptors
 
     def _build_io_tensors(self):
