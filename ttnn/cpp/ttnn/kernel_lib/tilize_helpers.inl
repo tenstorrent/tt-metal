@@ -12,14 +12,18 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
 
-#if __has_include("chlkc_pack_tile_dims.h")
-#include "chlkc_pack_tile_dims.h"
-#define PACK_TILE_DIMS_AVAILABLE
+// JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
+// The arrays are available in scope but guarded by TRISC type:
+//   - unpack_src_format[] : UNPACK and MATH TRISCs (not PACK)
+//   - pack_tile_r/c_dim[] : PACK TRISC only
+#if !defined(UCK_CHLKC_PACK)
+// unpack_src_format[] is in scope on UNPACK (UCK_CHLKC_UNPACK) and MATH (UCK_CHLKC_MATH) TRISCs
+#define UNPACK_DATA_FORMAT_AVAILABLE
 #endif
 
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_unpack_data_format.h"
-#define UNPACK_DATA_FORMAT_AVAILABLE
+#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)
+// pack_tile_r_dim[] / pack_tile_c_dim[] are in scope only on PACK TRISC (UCK_CHLKC_PACK)
+#define PACK_TILE_DIMS_AVAILABLE
 #endif
 
 namespace compute_kernel_lib {
@@ -52,9 +56,10 @@ constexpr bool has_supported_fast_tilize_format() {
     constexpr std::int32_t format = unpack_src_format[input_cb];
     return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
 #else
-    // If header not available, conservatively disallow fast_tilize
-    // Only enable fast_tilize when we can confirm the format is supported
-    return false;
+    // On PACK TRISC, unpack_src_format[] is not in scope — the pack side of
+    // fast_tilize is format-agnostic, so assume supported and let UNPACK/MATH
+    // TRISCs make the authoritative format decision.
+    return true;
 #endif
 }
 
