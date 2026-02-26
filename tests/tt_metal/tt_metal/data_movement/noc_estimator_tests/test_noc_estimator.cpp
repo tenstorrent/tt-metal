@@ -976,7 +976,6 @@ static void dram_accessor_sweep(
     DramDirection direction) {
     auto [bytes_per_page, max_bytes, max_pages] = unit_tests::dm::compute_physical_constraints(mesh_device);
 
-    log_info(LogTest, "Cores: {}", cores);
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_txn = 256;
 

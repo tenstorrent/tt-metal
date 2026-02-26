@@ -87,15 +87,7 @@ Each kernel logs structured metadata via `DeviceTimestampedData` for post-proces
 # Build
 ./build_metal.sh --build-tests
 
-# Run all NOC estimator tests, increase timeout due to the large number of tests being run
-./build/test/tt_metal/unit_tests_data_movement --timeout=1800 --gtest_filter="*NocEstimator*"
+# Run all NOC estimator tests, --report flag is for generating csv reports
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --timeout=1800 --gtest-filter="NocEstimator" --report
 
-# Run a single test
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*NocEstimatorL1OneToOne*"
-
-# Run only DRAM tests
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*NocEstimatorDRAM*"
-
-# Run only row/column tests
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*NocEstimatorL1*Row*:*NocEstimatorL1*Column*"
 ```
