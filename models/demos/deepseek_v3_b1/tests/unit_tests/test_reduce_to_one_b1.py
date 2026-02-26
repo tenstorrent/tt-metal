@@ -369,9 +369,9 @@ def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y})],
     indirect=["device_params"],
-    ids=["fabric_2d_torus_x"],
+    ids=["fabric_2d_torus_y"],
 )
 @pytest.mark.parametrize(
     "root_coord",
