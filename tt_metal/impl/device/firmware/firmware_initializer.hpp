@@ -7,11 +7,8 @@
 #include <memory>
 #include <unordered_set>
 #include <vector>
-#include <set>
 
 #include <llrt/rtoptions.hpp>
-
-#include "tt_metal/impl/device/firmware/firmware_initializer.hpp"
 
 namespace tt {
 class Cluster;
