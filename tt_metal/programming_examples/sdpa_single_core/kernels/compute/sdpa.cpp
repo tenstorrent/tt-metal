@@ -924,6 +924,12 @@ void sdpa_inner_loop_step(
 
     cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
+    // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
+    // reader can start fetching the next Q chunk during Phase 2.
+    if (is_last_iter) {
+        cb_pop_front(cb_q_in, Sq_chunk_t * head_dim_t);
+    }
+
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
@@ -1267,7 +1273,6 @@ void kernel_main() {
             }
         }
 
-        // Pop Q after all K chunks are processed for this Q chunk
-        cb_pop_front(cb_q_in, Sq_chunk_t * head_dim_t);
+        // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
     }
 }
