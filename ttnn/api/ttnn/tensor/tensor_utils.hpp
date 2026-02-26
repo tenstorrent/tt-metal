@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
@@ -34,6 +35,9 @@ bool is_device_tensor(const Tensor& tensor);
  *
  * @param cb_index The CB ID to use for this circular buffer
  * @param tensor The sharded tensor to derive CB configuration from
+ * @param address_offset Byte offset from buffer base address for CB placement (default 0)
+ * @param total_size Total CB size in bytes (default 0 = use tensor's full bank size)
+ * @param core_ranges Optional CoreRangeSet override; if std::nullopt, uses the tensor's shard grid
  * @return CBDescriptor with all fields populated from the tensor
  *
  * Example usage (replaces manual calculation of all CB fields):
@@ -55,6 +59,10 @@ bool is_device_tensor(const Tensor& tensor);
  * @endcode
  */
 CBDescriptor cb_descriptor_from_sharded_tensor(
-    uint8_t cb_index, const Tensor& tensor, uint32_t address_offset = 0, uint32_t total_size = 0);
+    uint8_t cb_index,
+    const Tensor& tensor,
+    uint32_t address_offset = 0,
+    uint32_t total_size = 0,
+    const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
 
 }  // namespace tt::tt_metal
