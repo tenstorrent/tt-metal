@@ -1,0 +1,8 @@
+﻿ttnn.transformer.paged\_flash\_multi\_latent\_attention\_decode
+===============================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.paged_flash_multi_latent_attention_decode:
+
+.. autooperation:: ttnn.transformer.paged_flash_multi_latent_attention_decode
