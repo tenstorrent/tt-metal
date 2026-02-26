@@ -291,7 +291,48 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
 
     assert tt_output.shape == gt_output.shape
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
-    logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
+    logger.info(f"Compare conv3d torch vs ttnn (qwen): {pcc_message}")
+    assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        [(1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+        [(1, 64, 8, 10, 9), 64, (1, 1, 1), (1, 1, 1), (0, 1, 1), "zeros"],
+        [(1, 32, 4, 8, 8), 32, (3, 3, 3), (2, 2, 2), (0, 1, 1), "zeros"],
+    ],
+    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222"],
+)
+def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+    """Test Conv3d with no config (auto-blocking with conservative defaults)."""
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+
+    # Prepare weights with C_in_block=0 (full C_in), matching the auto-blocking default
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d (auto-blocking) torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
 
 
