@@ -850,19 +850,12 @@ class MoeRoutedExpertOp:
         sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         mcast_data_sender_semaphore_addr = sem_addrs[MoeSem.MCAST_SENDER]
         mcast_data_receiver_semaphore_addr = sem_addrs[MoeSem.MCAST_DATA_RECEIVER]
-        down_proj_gather_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER]
-        gather_noc0_receiver_semaphore_addr = down_proj_gather_semaphore_addr
-        gather_noc1_receiver_semaphore_addr = down_proj_gather_semaphore_addr
+        gather_noc0_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER]
+        gather_noc1_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_GATHER]
         residual_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.RESIDUAL_MCAST_RECEIVER]
-        ag_gather_semaphore_addr = sem_addrs[MoeSem.AG_GATHER]
-        shared_down_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SHARED_DOWN_MCAST_RECEIVER]
-        bg_gather_semaphore_addr = sem_addrs[MoeSem.BG_GATHER]
-        shared_output_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SHARED_OUTPUT_MCAST_RECEIVER]
-        output_gather_semaphore_addr = sem_addrs[MoeSem.OUTPUT_GATHER]
         expert_scale_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.EXPERT_SCALE_MCAST_RECEIVER]
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
-        reduce_sync_semaphore_addr = sem_addrs[MoeSem.REDUCE_SYNC]
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -2254,16 +2247,16 @@ class MoeSharedExpertOp:
             mcast_grid: CoreRangeSet for mcast destination grid (same as routed input mcast)
             k_parallel: K parallelism factor
             n_parallel: N parallelism factor
-            ag_receiver_semaphore_addr: Gate gather NOC0 receiver sem ID
-            bg_receiver_semaphore_addr: Up gather NOC0 receiver sem ID
-            ag_noc1_receiver_semaphore_addr: Gate gather NOC1 receiver sem ID
-            bg_noc1_receiver_semaphore_addr: Up gather NOC1 receiver sem ID
-            shared_mcast_sender_semaphore_addr: Shared mcast sender sem ID
-            shared_mcast_receiver_semaphore_addr: Shared mcast receiver sem ID
-            output_gather_noc0_receiver_semaphore_addr: Output gather NOC0 receiver sem ID
-            output_gather_noc1_receiver_semaphore_addr: Output gather NOC1 receiver sem ID
-            output_mcast_sender_semaphore_addr: Output mcast sender sem ID
-            output_mcast_receiver_semaphore_addr: Output mcast receiver sem ID
+            ag_receiver_semaphore_addr: Gate gather NOC0 receiver sem address
+            bg_receiver_semaphore_addr: Up gather NOC0 receiver sem address
+            ag_noc1_receiver_semaphore_addr: Gate gather NOC1 receiver sem address
+            bg_noc1_receiver_semaphore_addr: Up gather NOC1 receiver sem address
+            shared_mcast_sender_semaphore_addr: Shared mcast sender sem address
+            shared_mcast_receiver_semaphore_addr: Shared mcast receiver sem address
+            output_gather_noc0_receiver_semaphore_addr: Output gather NOC0 receiver sem address
+            output_gather_noc1_receiver_semaphore_addr: Output gather NOC1 receiver sem address
+            output_mcast_sender_semaphore_addr: Output mcast sender sem address
+            output_mcast_receiver_semaphore_addr: Output mcast receiver sem address
 
         Returns:
             _MoeSharedExpertContext
