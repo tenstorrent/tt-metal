@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import os
+
 import pytest
 import torch
 from loguru import logger
@@ -42,7 +42,6 @@ def test_clip_encoder(
     reset_seeds,
 ) -> None:
     model_name_checkpoint = "stabilityai/stable-diffusion-xl-base-1.0"
-    os.environ.pop("TT_MM_THROTTLE_PERF", None)
 
     # Download model for CI v2
     model_location = model_location_generator(

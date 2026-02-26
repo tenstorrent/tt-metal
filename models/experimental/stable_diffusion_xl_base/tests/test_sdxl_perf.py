@@ -209,7 +209,7 @@ def test_refiner_unet(
 def test_sdxl_perf_device(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    os.environ["TT_MM_THROTTLE_PERF"] = "0" if "clip_encoder" in command else "5"
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
