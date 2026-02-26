@@ -609,6 +609,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 case DataType::FLOAT32: data_format = "Float32"; break;
                 case DataType::BFLOAT16: data_format = "Float16_b"; break;
                 case DataType::BFLOAT8_B: data_format = "Bfp8_b"; break;
+                case DataType::BFLOAT4_B: data_format = "Bfp4_b"; break;
                 default: TT_THROW("Unsupported data format for logical not unary: {}", input_dtype);
             }
             return {
