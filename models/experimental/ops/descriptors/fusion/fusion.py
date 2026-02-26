@@ -124,7 +124,7 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
     barrier_suffix: List[List[int]] = []
     rebind_spec: List[List[Tuple[int, int, int]]] = []
 
-    for role_idx, fused_kernel in enumerate(desc.kernels):
+    for fused_kernel in desc.kernels:
         # Find barrier_rt_offset and rebind_rt_offset from named CT args
         barrier_offset = None
         rebind_offset = None
@@ -227,20 +227,20 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
     desc = fused.descriptor
 
     # 1. Rebuild per-kernel RT args via C++ helpers
-    for role_idx, fused_kernel in enumerate(desc.kernels):
+    for ki, fused_kernel in enumerate(desc.kernels):
         fused_kernel.clear_runtime_args()
-        for op_idx, k_idx in entry.origin_kernel_map[role_idx]:
+        for op_idx, k_idx in entry.origin_kernel_map[ki]:
             fused_kernel.append_runtime_args_from(ops[op_idx].descriptor.kernels[k_idx])
-        if entry.barrier_suffix[role_idx]:
-            fused_kernel.extend_runtime_args_uniform(entry.barrier_suffix[role_idx])
-        rebind_vals = _recompute_rebind(entry.rebind_spec[role_idx], ops)
+        if entry.barrier_suffix[ki]:
+            fused_kernel.extend_runtime_args_uniform(entry.barrier_suffix[ki])
+        rebind_vals = _recompute_rebind(entry.rebind_spec[ki], ops)
         if rebind_vals:
             fused_kernel.extend_runtime_args_uniform(rebind_vals)
 
     # 2. Rebuild common_runtime_args
-    for role_idx, fused_kernel in enumerate(desc.kernels):
+    for ki, fused_kernel in enumerate(desc.kernels):
         common: List[int] = []
-        for op_idx, k_idx in entry.origin_kernel_map[role_idx]:
+        for op_idx, k_idx in entry.origin_kernel_map[ki]:
             src_kernel = ops[op_idx].descriptor.kernels[k_idx]
             try:
                 common.extend(list(src_kernel.common_runtime_args))
