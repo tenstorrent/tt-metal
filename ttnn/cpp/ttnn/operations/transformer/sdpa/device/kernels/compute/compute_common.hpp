@@ -1454,7 +1454,8 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
-    const bool is_causal) {
+    const bool is_causal,
+    const bool is_balanced) {
     uint32_t KV_chunks_processed_in_iter = 0;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
@@ -1483,13 +1484,22 @@ void sdpa_inner_loop(
             } else {
                 q_high_idx = Skt;
             }
-        } else if (sdpa_type == RING && is_causal) {
+        } else if (sdpa_type == RING) {
             const uint32_t nb = q_iter / (local_q_start * q_num_chunks);
             const uint32_t nq = (q_iter % (local_q_start * q_num_chunks)) / q_num_chunks;
             const uint32_t q_chunk = q_iter % q_num_chunks;
-            q_low_idx = q_chunk * Sq_chunk_t;
-            q_high_idx = q_low_idx + Sq_chunk_t;
-            q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+
+            if (is_causal) {
+                q_low_idx = q_chunk * Sq_chunk_t;
+                q_high_idx = q_low_idx + Sq_chunk_t;
+                q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+            }
+            if (is_balanced) {
+                if (q_chunk < q_num_chunks / 2) {
+                    DPRINT << "SKIPPING COMPUTE FOR Q: " << q_chunk << " HEAD: " << nq << ENDL();
+                    continue;
+                }
+            }
         }
 
         // Set up ping pong buffers
@@ -2128,7 +2138,8 @@ void sdpa_ring(
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
-    const bool is_causal) {
+    const bool is_causal,
+    const bool is_balanced) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2199,7 +2210,8 @@ void sdpa_ring(
         cb_lse_out,
         cb_prev_out,
         cb_out,
-        is_causal);
+        is_causal,
+        is_balanced);
 }
 
 /**

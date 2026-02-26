@@ -140,6 +140,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_info(tt::LogOp, "device index: {}", device_index);
     log_info(tt::LogOp, "is_causal: {}", args.is_causal);
+    log_info(tt::LogOp, "is_balanced: {}", args.is_balanced);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -370,7 +371,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_joint_k_chunks,
         num_q_chunks,
         args.all_gather_operation_attributes.ring_size,
-        args.is_causal};
+        args.is_causal,
+        args.is_balanced};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -414,7 +416,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         packed_identity_scalar,
         scale_union.u,
         args.all_gather_operation_attributes.ring_size,
-        args.is_causal};
+        args.is_causal,
+        args.is_balanced};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -452,7 +455,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         out_in1_num_subblocks,
         out_num_blocks,
         scale_union.u,
-        args.is_causal};
+        args.is_causal,
+        args.is_balanced};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -723,6 +727,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
     for (auto& segments : head_segments) {
+        continue;
         if (segments.size() < 2) {
             continue;
         }

@@ -311,6 +311,7 @@ void bind_sdpa(nb::module_& mod) {
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
             is_causal (bool): Whether to use causal attention masking. Defaults to True.
+            is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -348,7 +349,8 @@ void bind_sdpa(nb::module_& mod) {
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                CoreCoord ccl_core_grid_offset,
-               bool is_causal) {
+               bool is_causal,
+               bool is_balanced) {
                 auto outputs = self(
                     input_tensor_q,
                     input_tensor_k,
@@ -370,6 +372,7 @@ void bind_sdpa(nb::module_& mod) {
                     subdevice_id,
                     ccl_core_grid_offset,
                     is_causal,
+                    is_balanced,
                     scale,
                     compute_kernel_config);
                 return outputs;
@@ -396,7 +399,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("ccl_core_grid_offset"),
-            nb::arg("is_causal").noconvert() = true});
+            nb::arg("is_causal").noconvert() = false,
+            nb::arg("is_balanced").noconvert() = false});
 
     const auto* mla_doc =
         R"doc(
