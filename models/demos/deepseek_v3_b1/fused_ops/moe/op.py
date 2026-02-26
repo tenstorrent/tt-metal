@@ -38,7 +38,101 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import build_cb_reconfig_tensor, float_to_uint32, record_cb_metadata
+
+
+class MoeCB:
+    """CB ID constants for the fused MoE op (single source of truth).
+
+    All routed + shared expert CB IDs are defined here, grouped by tile dimension
+    for dense packing (fewer gaps → faster setup_local_cb_read_write_interfaces).
+    To reorder CB IDs, change values here only.
+    """
+
+    # ── 1x32, bfloat16 (IDs 0-12) ──
+    GATE_MM_INPUT = 0  # also mcast dst for gate_proj/up_proj input
+    GATE_MM_OUTPUT = 1  # routing-only
+    GATE_PROJ_OUT = 2
+    UP_PROJ_OUT = 3
+    DOWN_PROJ_GATHER_DST = 4
+    DOWN_PROJ_MCAST_DST = 5
+    DOWN_PROJ_OUT = 6
+    RESIDUAL_MCAST_DST = 7
+    SHARED_GU_OUT = 8
+    SHARED_DOWN_MCAST_DST = 9
+    SHARED_DOWN_OUT = 10
+    SHARED_RESIDUAL_ADD_OUT = 11
+    SHARED_OUTPUT_GATHER_DST = 12
+
+    # ── 1x16, bfloat16 (routing-only) ──
+    GATE_PROJ_INDEX = 13
+    MUL_SCALAR_SRC = 14
+    GATE_OUTPUT = 15
+    # ── 1x16, uint16 (routing-only) ──
+    GATE_OUTPUT_INDICES = 16
+
+    # ── 16x16, bfloat16 ──
+    MUL_IN0 = 17  # aliases UP_PROJ_OUT address
+    MUL_IN1 = 18  # aliases GATE_PROJ_OUT address
+    MUL_OUT = 19
+    SHARED_GROUP1 = 20  # gate gather dst on sender
+    SHARED_GROUP2 = 21  # up gather dst on sender
+    SHARED_INTERMED = 22  # gated reduce intermediate on sender
+    SHARED_MCAST_SRC = 23  # gated reduce output on sender
+    GATE_INPUT = 24  # routing-only
+    MUL_SCALAR = 25  # routing-only
+    GATE_BIAS = 26  # routing-only, tensor-backed
+    # ── 16x16, uint16 (routing-only) ──
+    GATE_INDICES = 27  # routing-only, tensor-backed
+
+    # ── 32x32, bfloat16 ──
+    RMSNORM_OUTPUT = 28
+    ADD_IN0 = 29  # aliases DOWN_PROJ_OUT address
+    ADD_IN1 = 30
+    ADD_OUT = 31
+
+    # ── Runtime-dependent tile/format (tensor-backed, from weight/activation tensors) ──
+    GATE_PROJ_IN1 = 32  # DRAM matmul in1 (bfloat4_b 32x32 in prod)
+    UP_PROJ_IN1 = 32  # alias: same as GATE_PROJ_IN1
+    DOWN_PROJ_IN1 = 33  # DRAM matmul in1, aliases GATE_PROJ_IN1 address
+    RESIDUAL_MCAST_SRC = 34  # reinterpreted tile (32x32 or 16x32)
+    RMSNORM_GAMMA = 35  # reinterpreted tile (32x32 or 16x32)
+    GATE_MM_WEIGHTS = 36  # routing-only
+    SHARED_GU_WEIGHTS = 37  # compute cores
+    SHARED_DOWN_IN1 = 38  # matmul cores
+
+    # ── 32x32, bfloat16 — Reduce CBs ──
+    REDUCE_LOCAL = ADD_OUT  # aliases add output
+    REDUCE_R1 = 39
+    REDUCE_R2 = 40
+    REDUCE_R3 = 41
+    REDUCE_OUTPUT = 42
+    REDUCE_SCRATCH = 43
+    REDUCE_PACKET = 44
+    REDUCE_PACKET_HEADER = 45
+
+
+class MoeSem:
+    """Semaphore ID constants for the fused MoE op.
+
+    Gather sems overlap with mcast receiver sems (different physical cores).
+    noc1_num_senders=0 for all gathers, so only noc0 sem is used.
+    """
+
+    MCAST_SENDER = 0
+    MCAST_DATA_RECEIVER = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER on sender
+    DOWN_PROJ_GATHER = 1  # sender core
+    RESIDUAL_MCAST_RECEIVER = 2  # mcast grid; overlaps with AG_GATHER on sender
+    AG_GATHER = 2  # sender core
+    SHARED_DOWN_MCAST_RECEIVER = 3  # mcast grid; overlaps with BG_GATHER on sender
+    BG_GATHER = 3  # sender core
+    SHARED_OUTPUT_MCAST_RECEIVER = 4  # mcast grid; overlaps with OUTPUT_GATHER on sender
+    OUTPUT_GATHER = 4  # sender core
+    # MoE-only mcast receivers (separate, not overlapped)
+    EXPERT_SCALE_MCAST_RECEIVER = 5
+    INDEX_MCAST_RECEIVER = 6
+    DOWN_PROJ_MCAST_RECEIVER = 7
+    REDUCE_WORKER_FABRIC_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
 
 
 @dataclass
@@ -83,6 +177,9 @@ class MoeContext:
     # RMSNorm runtime args (common across all devices)
     rmsnorm_epsilon_packed: int = 0
     rmsnorm_scalar_packed: int = 0
+
+    # CB reconfig
+    reconfig_moe_cbs: bool = False
 
 
 @dataclass
@@ -220,7 +317,8 @@ class _MoeRoutedExpertContext:
     reduce_packet_cb: int = 0
     reduce_packet_header_cb: int = 0
     reduce_params: dict = None
-    # Pre-built CB descriptors for reduce scratch/packet/header (set by _overlap_cbs_with_sdpa_buffer)
+    # Pre-built CB descriptors for reduce (set by _overlap_cbs_with_sdpa_buffer)
+    reduce_received_cb_descriptors: list = None  # CBs 39-42 (r1, r2, r3, output)
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
     reduce_packet_header_cb_descriptor: Any = None
@@ -782,50 +880,49 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
 
         # ==================================================================
-        # CB indices
+        # CB indices (from MoeOp class constants)
         # ==================================================================
-        rmsnorm_output_cb = 0
-        gate_mm_input_cb = 1  # Also used as mcast destination for gate_proj/up_proj input
-        gate_proj_cb_in1 = 9
-        gate_proj_cb_out = 11
-        up_proj_cb_in1 = gate_proj_cb_in1  # Shared CB: same buffer, kernel resets pointers between uses
-        up_proj_cb_mm_out = 12
-        mul_cb_in0 = 13
-        mul_cb_in1 = 14
-        mul_cb_out = 15
-        down_proj_gather_dst_cb = 16
-        down_proj_mcast_dst_cb = 17
-        down_proj_cb_in1 = 18
-        down_proj_cb_out = 19
-        add_cb_in0 = 22
-        add_cb_in1 = 23
-        add_cb_out = 24
+        rmsnorm_output_cb = MoeCB.RMSNORM_OUTPUT
+        gate_mm_input_cb = MoeCB.GATE_MM_INPUT
+        gate_proj_cb_in1 = MoeCB.GATE_PROJ_IN1
+        gate_proj_cb_out = MoeCB.GATE_PROJ_OUT
+        up_proj_cb_in1 = MoeCB.UP_PROJ_IN1
+        up_proj_cb_mm_out = MoeCB.UP_PROJ_OUT
+        mul_cb_in0 = MoeCB.MUL_IN0
+        mul_cb_in1 = MoeCB.MUL_IN1
+        mul_cb_out = MoeCB.MUL_OUT
+        down_proj_gather_dst_cb = MoeCB.DOWN_PROJ_GATHER_DST
+        down_proj_mcast_dst_cb = MoeCB.DOWN_PROJ_MCAST_DST
+        down_proj_cb_in1 = MoeCB.DOWN_PROJ_IN1
+        down_proj_cb_out = MoeCB.DOWN_PROJ_OUT
+        add_cb_in0 = MoeCB.ADD_IN0
+        add_cb_in1 = MoeCB.ADD_IN1
+        add_cb_out = MoeCB.ADD_OUT
 
         # Routing-only CB indices (0 when routing disabled)
-        gate_mm_weights_cb = 2 if enable_routing else 0
-        gate_mm_output_cb = 3 if enable_routing else 0
-        gate_input_cb = 4 if enable_routing else 0
-        gate_bias_cb = 5 if enable_routing else 0
-        gate_indices_cb = 6 if enable_routing else 0
-        gate_output_cb = 7 if enable_routing else 0
-        gate_output_indices_cb = 8 if enable_routing else 0
-        gate_proj_cb_index = 10 if enable_routing else 0
-        mul_cb_scalar_src = 20 if enable_routing else 0
-        mul_cb_scalar = 21 if enable_routing else 0
-        # ReduceToOne CBs (for multi-device reduce)
-        # Must be after shared expert CBs (25-38) to avoid conflicts
-        reduce_local_cb = add_cb_out  # Local data CB (same as add_cb_out for fusion)
-        reduce_received_cb_r1 = 39  # Round 1: receives LEAF data
-        reduce_received_cb_r2 = 40  # Round 2: receives ROOT3 data
-        reduce_received_cb_r3 = 41  # Round 3: receives ROOT2 data
-        reduce_output_cb = 42  # Final reduced output
-        reduce_scratch_cb = 43  # Scratch for compute
-        reduce_packet_cb = 44  # Scratch for sending packets
-        reduce_packet_header_cb = 45  # Packet header (persistent)
-        # Shared expert CBs (defined in MoeSharedExpertOp)
-        residual_mcast_src_cb = MoeSharedExpertOp.RESIDUAL_MCAST_SRC_CB
-        residual_mcast_dst_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB
-        rmsnorm_gamma_cb = MoeSharedExpertOp.RMSNORM_GAMMA_CB
+        gate_mm_weights_cb = MoeCB.GATE_MM_WEIGHTS if enable_routing else 0
+        gate_mm_output_cb = MoeCB.GATE_MM_OUTPUT if enable_routing else 0
+        gate_input_cb = MoeCB.GATE_INPUT if enable_routing else 0
+        gate_bias_cb = MoeCB.GATE_BIAS if enable_routing else 0
+        gate_indices_cb = MoeCB.GATE_INDICES if enable_routing else 0
+        gate_output_cb = MoeCB.GATE_OUTPUT if enable_routing else 0
+        gate_output_indices_cb = MoeCB.GATE_OUTPUT_INDICES if enable_routing else 0
+        gate_proj_cb_index = MoeCB.GATE_PROJ_INDEX if enable_routing else 0
+        mul_cb_scalar_src = MoeCB.MUL_SCALAR_SRC if enable_routing else 0
+        mul_cb_scalar = MoeCB.MUL_SCALAR if enable_routing else 0
+        # ReduceToOne CBs
+        reduce_local_cb = MoeCB.REDUCE_LOCAL
+        reduce_received_cb_r1 = MoeCB.REDUCE_R1
+        reduce_received_cb_r2 = MoeCB.REDUCE_R2
+        reduce_received_cb_r3 = MoeCB.REDUCE_R3
+        reduce_output_cb = MoeCB.REDUCE_OUTPUT
+        reduce_scratch_cb = MoeCB.REDUCE_SCRATCH
+        reduce_packet_cb = MoeCB.REDUCE_PACKET
+        reduce_packet_header_cb = MoeCB.REDUCE_PACKET_HEADER
+        # Shared expert CBs
+        residual_mcast_src_cb = MoeCB.RESIDUAL_MCAST_SRC
+        residual_mcast_dst_cb = MoeCB.RESIDUAL_MCAST_DST
+        rmsnorm_gamma_cb = MoeCB.RMSNORM_GAMMA
 
         # ==================================================================
         # RMSNorm tile reinterpretation (compute kernel needs 32x32 or 16x32 tiles)
@@ -1720,6 +1817,13 @@ class MoeRoutedExpertOp:
             ctx.rmsnorm_gamma_cb_descriptor,
         ]
 
+        # Reduce CBs (39-45)
+        if ctx.enable_reduce_to_one and ctx.reduce_received_cb_descriptors:
+            descriptors += ctx.reduce_received_cb_descriptors
+            descriptors.append(ctx.reduce_scratch_cb_descriptor)
+            descriptors.append(ctx.reduce_packet_cb_descriptor)
+            descriptors.append(ctx.reduce_packet_header_cb_descriptor)
+
         return descriptors
 
     @staticmethod
@@ -1821,9 +1925,9 @@ class MoeSharedExpertOp:
     """
 
     # CB indices for shared expert CBs referenced by routed expert setup
-    RESIDUAL_MCAST_SRC_CB = 25  # raw input on sender (residual mcast source)
-    RESIDUAL_MCAST_DST_CB = 26  # residual destination on mcast grid
-    RMSNORM_GAMMA_CB = 27  # RMSNorm gamma weights on sender
+    RESIDUAL_MCAST_SRC_CB = MoeCB.RESIDUAL_MCAST_SRC
+    RESIDUAL_MCAST_DST_CB = MoeCB.RESIDUAL_MCAST_DST
+    RMSNORM_GAMMA_CB = MoeCB.RMSNORM_GAMMA
 
     # ========================================================================
     # Setup APIs
@@ -2145,20 +2249,20 @@ class MoeSharedExpertOp:
         """
 
         # ==================================================================
-        # CB indices
+        # CB indices (from MoeOp class constants)
         # ==================================================================
-        shared_gu_weights_cb = 28
-        shared_gu_out_cb = 29
-        shared_group1_cb = 30  # gate gather dst on sender
-        shared_group2_cb = 31  # up gather dst on sender
-        shared_intermed_cb = 32  # gated reduce intermediate on sender
-        shared_mcast_src_cb = 33  # gated reduce output on sender
-        shared_residual_cb = MoeSharedExpertOp.RESIDUAL_MCAST_DST_CB  # = residual_mcast_dst_cb
-        shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
-        shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
-        shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, tensor-backed)
-        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, tensor-backed)
-        shared_output_gather_dst_cb = 38  # output gather destination (sender core, tensor-backed)
+        shared_gu_weights_cb = MoeCB.SHARED_GU_WEIGHTS
+        shared_gu_out_cb = MoeCB.SHARED_GU_OUT
+        shared_group1_cb = MoeCB.SHARED_GROUP1
+        shared_group2_cb = MoeCB.SHARED_GROUP2
+        shared_intermed_cb = MoeCB.SHARED_INTERMED
+        shared_mcast_src_cb = MoeCB.SHARED_MCAST_SRC
+        shared_residual_cb = MoeCB.RESIDUAL_MCAST_DST
+        shared_down_mcast_dst_cb = MoeCB.SHARED_DOWN_MCAST_DST
+        shared_down_matmul_in1_cb = MoeCB.SHARED_DOWN_IN1
+        shared_down_matmul_out_cb = MoeCB.SHARED_DOWN_OUT
+        shared_residual_add_out_cb = MoeCB.SHARED_RESIDUAL_ADD_OUT
+        shared_output_gather_dst_cb = MoeCB.SHARED_OUTPUT_GATHER_DST
 
         # ==================================================================
         # Dimensions
@@ -2596,23 +2700,20 @@ class MoeOp:
     single unified kernel invocation.
     """
 
-    # Semaphore IDs (top-level definition)
-    # Gather sems overlap with mcast receiver sems (different physical cores).
-    # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
-    MCAST_SENDER_SEM = 0
-    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
-    DOWN_PROJ_GATHER_SEM = 1  # sender core
-    RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
-    AG_GATHER_SEM = 2  # sender core
-    SHARED_DOWN_MCAST_RECEIVER_SEM = 3  # mcast grid; overlaps with BG_GATHER_SEM on sender core
-    BG_GATHER_SEM = 3  # sender core
-    SHARED_OUTPUT_MCAST_RECEIVER_SEM = 4  # mcast grid; overlaps with OUTPUT_GATHER_SEM on sender core
-    OUTPUT_GATHER_SEM = 4  # sender core
-    # MoE-only mcast receivers (separate, not overlapped)
-    EXPERT_SCALE_MCAST_RECEIVER_SEM = 5
-    INDEX_MCAST_RECEIVER_SEM = 6
-    DOWN_PROJ_MCAST_RECEIVER_SEM = 7
-    REDUCE_WORKER_FABRIC_SEM_BASE = 8  # on fabric cores only (8, 9, 10, 11 per worker slot)
+    # Semaphore IDs (from MoeSem class constants)
+    MCAST_SENDER_SEM = MoeSem.MCAST_SENDER
+    MCAST_DATA_RECEIVER_SEM = MoeSem.MCAST_DATA_RECEIVER
+    DOWN_PROJ_GATHER_SEM = MoeSem.DOWN_PROJ_GATHER
+    RESIDUAL_MCAST_RECEIVER_SEM = MoeSem.RESIDUAL_MCAST_RECEIVER
+    AG_GATHER_SEM = MoeSem.AG_GATHER
+    SHARED_DOWN_MCAST_RECEIVER_SEM = MoeSem.SHARED_DOWN_MCAST_RECEIVER
+    BG_GATHER_SEM = MoeSem.BG_GATHER
+    SHARED_OUTPUT_MCAST_RECEIVER_SEM = MoeSem.SHARED_OUTPUT_MCAST_RECEIVER
+    OUTPUT_GATHER_SEM = MoeSem.OUTPUT_GATHER
+    EXPERT_SCALE_MCAST_RECEIVER_SEM = MoeSem.EXPERT_SCALE_MCAST_RECEIVER
+    INDEX_MCAST_RECEIVER_SEM = MoeSem.INDEX_MCAST_RECEIVER
+    DOWN_PROJ_MCAST_RECEIVER_SEM = MoeSem.DOWN_PROJ_MCAST_RECEIVER
+    REDUCE_WORKER_FABRIC_SEM_BASE = MoeSem.REDUCE_WORKER_FABRIC_BASE
 
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
@@ -3644,6 +3745,25 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
 
+            # CB 39-42: reduce received/output CBs (tensor-backed, same L1 address on all devices)
+            reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
+            routed_ctx.reduce_received_cb_descriptors = []
+            for cb_id, tensor in [
+                (routed_ctx.reduce_received_cb_r1, routed_ctx.reduce_params["intermediate_r1_per_device"][0]),
+                (routed_ctx.reduce_received_cb_r2, routed_ctx.reduce_params["intermediate_r2_per_device"][0]),
+                (routed_ctx.reduce_received_cb_r3, routed_ctx.reduce_params["intermediate_r3_per_device"][0]),
+                (routed_ctx.reduce_output_cb, routed_ctx.reduce_params["output_per_device"][0]),
+            ]:
+                desc = ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor)
+                desc.core_ranges = reduce_all_cores_set
+                desc.total_size = reduce_payload
+                desc.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_id, data_format=ttnn.bfloat16, page_size=reduce_payload, tile=reduce_tile_desc
+                    )
+                ]
+                routed_ctx.reduce_received_cb_descriptors.append(desc)
+
     def _build_reduce_per_device(self, reduce_root_coord, coord, row, col, chip_id):
         """Apply reduce-to-one modifications to per-device state (self.device_*). No-op when reduce disabled."""
         ctx = self.ctx
@@ -3665,41 +3785,11 @@ class MoeOp:
 
         dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
-        # Per-device tensors
+        # Per-device tensors (L1 address is same on all devices, used for dst_l1_addr below)
         r1_tensor = reduce_params["intermediate_r1_per_device"][chip_id]
         r2_tensor = reduce_params["intermediate_r2_per_device"][chip_id]
         r3_tensor = reduce_params["intermediate_r3_per_device"][chip_id]
         out_tensor = reduce_params["output_per_device"][chip_id]
-
-        # CB descriptors for reduce receive buffers (39-42)
-        reduce_all_cores_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(c, c) for c in reduce_params["worker_cores_list"]]
-            + [ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]]
-        )
-        reduce_tile_desc = ttnn.TileDescriptor(32, 32)
-        reduce_payload = reduce_params["payload_size_bytes"]
-        reduce_dtype = ttnn.bfloat16
-
-        for cb_id, tensor in [
-            (routed_ctx.reduce_received_cb_r1, r1_tensor),
-            (routed_ctx.reduce_received_cb_r2, r2_tensor),
-            (routed_ctx.reduce_received_cb_r3, r3_tensor),
-            (routed_ctx.reduce_output_cb, out_tensor),
-        ]:
-            desc = ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor)
-            desc.core_ranges = reduce_all_cores_set
-            desc.total_size = reduce_payload
-            desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=cb_id, data_format=reduce_dtype, page_size=reduce_payload, tile=reduce_tile_desc
-                )
-            ]
-            self.device_cb_descs.append(desc)
-
-        # Scratch/packet/header CBs (43-45): pre-built by _overlap_cbs_with_sdpa_buffer
-        self.device_cb_descs.append(routed_ctx.reduce_scratch_cb_descriptor)
-        self.device_cb_descs.append(routed_ctx.reduce_packet_cb_descriptor)
-        self.device_cb_descs.append(routed_ctx.reduce_packet_header_cb_descriptor)
 
         # Destination L1 address depends on role
         if device_role == MESH_LEAF:
@@ -3867,6 +3957,7 @@ class MoeOp:
         reduce_output_tensor=None,
         reduce_semaphores=None,
         reduce_root_coord=None,
+        reconfig_moe_cbs=False,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
@@ -3957,6 +4048,7 @@ class MoeOp:
             mesh_cols=routed_ctx.mesh_cols,
             enable_routing=routed_ctx.enable_routing,
             enable_reduce_to_one=routed_ctx.enable_reduce_to_one,
+            reconfig_moe_cbs=reconfig_moe_cbs,
             # IO tensors
             gate_mm_weights_tensor=gate_mm_weights_tensor,
             gate_bias_tensor=gate_bias_tensor,
@@ -4002,11 +4094,36 @@ class MoeOp:
         self.ncrisc_common_rt_args = []
 
     def _build_cb_descriptors(self):
-        """Build combined CB descriptors for routed + shared expert."""
+        """Build combined CB descriptors for routed + shared expert + reduce."""
         cb_descriptors = []
         cb_descriptors += MoeRoutedExpertOp._build_cb_descriptors(self.ctx.routed_ctx)
         cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(self.ctx.shared_ctx)
+        if self.ctx.reconfig_moe_cbs:
+            self.cb_metadata = record_cb_metadata(cb_descriptors)
         return cb_descriptors
+
+    def _build_dummy_cb_descs(self):
+        """Build dummy CB descriptors — only preserve format_descriptors.
+
+        Everything else is dummied out. No buffer pointer, no address offset,
+        minimal total_size, full device grid for core_ranges.
+        The reconfig tensor provides the real config at kernel start.
+        """
+        full_grid = self.ctx.full_device_grid
+        dummy_descs = []
+        for desc in self.cb_descriptors:
+            dummy_desc = ttnn.CBDescriptor()
+            dummy_desc.total_size = desc.format_descriptors[0].page_size
+            dummy_desc.core_ranges = full_grid
+            dummy_desc.format_descriptors = desc.format_descriptors
+            dummy_descs.append(dummy_desc)
+        return dummy_descs
+
+    def _build_cb_reconfig_tensor(self):
+        """Build L1-sharded CB reconfig tensor using shared utility."""
+        self.reconfig_tensor = build_cb_reconfig_tensor(
+            self.cb_metadata, self.ctx.full_device_grid, self.ctx.mesh_device
+        )
 
     def _build_core_descriptors(self):
         """Build combined core descriptors for routed + shared expert."""
@@ -4098,6 +4215,8 @@ class MoeOp:
             ctx.sdpa_kv_cache_buffer,
             ctx.sdpa_out_interm_buffer,
         ]
+        if ctx.reconfig_moe_cbs:
+            io_tensors += [self.reconfig_tensor]
         if ctx.enable_reduce_to_one:
             io_tensors += [
                 ctx.reduce_intermediate_tensors[0],
@@ -4114,11 +4233,16 @@ class MoeOp:
             defines += [("ENABLE_ROUTING", "1")]
         if self.ctx.enable_reduce_to_one:
             defines += [("ENABLE_REDUCE_TO_ONE", "1")]
+        if self.ctx.reconfig_moe_cbs:
+            defines += [("RECONFIG_MOE_CBS", "1")]
         return defines
 
     def _build_descriptors(self):
         """Build all shared (non-per-device) descriptors and store on self."""
         self.cb_descriptors = self._build_cb_descriptors()
+        if self.ctx.reconfig_moe_cbs:
+            self._build_cb_reconfig_tensor()
+            self.dummy_cb_descs = self._build_dummy_cb_descs()
         self.unified_core_descs, self.per_core_descs = self._build_core_descriptors()
         self.semaphore_descriptors = self._build_semaphore_descriptors()
         self.io_tensors = self._build_io_tensors()
@@ -4131,6 +4255,12 @@ class MoeOp:
         self.brisc_args = []
         self.trisc_args = []
         self._append_compile_time_args(chip_id, num_iterations, self.ncrisc_args, self.brisc_args, self.trisc_args)
+
+        if self.ctx.reconfig_moe_cbs:
+            addr = self.reconfig_tensor.buffer_address()
+            self.ncrisc_args.append(("reconfig_cb_config_l1_addr", addr))
+            self.brisc_args.append(("reconfig_cb_config_l1_addr", addr))
+            self.trisc_args.append(("reconfig_cb_config_l1_addr", addr))
 
         self.device_cb_descs = list(self.cb_descriptors)
         self.device_sem_descs = list(self.semaphore_descriptors)
@@ -4175,6 +4305,8 @@ class MoeOp:
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
         reduce_semaphores: Optional[list] = None,
         reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,
+        # CB reconfig for fusion with preceding op
+        reconfig_moe_cbs=False,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4200,6 +4332,8 @@ class MoeOp:
             reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
             reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
             reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device
+            reconfig_moe_cbs: If True, create a per-core CB config tensor and reconfigure
+                CBs at kernel start (for fusion with a preceding op)
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor or reduce_output_tensor)
@@ -4233,6 +4367,7 @@ class MoeOp:
             reduce_output_tensor=reduce_output_tensor,
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
+            reconfig_moe_cbs=reconfig_moe_cbs,
         )
 
         # ==================================================================
@@ -4276,7 +4411,8 @@ class MoeOp:
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
-                    cbs=moe.device_cb_descs,
+                    # Note: for final fusion with MLA, cbs should kept as empty and let MLA create the CBs. (unless MLA is not covering all CBs creation that's used by MOE)
+                    cbs=moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs,
                     semaphores=moe.device_sem_descs,
                 )
 

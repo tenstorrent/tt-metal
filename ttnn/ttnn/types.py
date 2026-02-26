@@ -109,5 +109,6 @@ ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
 MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
 merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors
 cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
+get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
