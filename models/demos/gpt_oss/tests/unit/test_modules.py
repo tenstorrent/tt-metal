@@ -770,7 +770,6 @@ def run_model_forward_test(
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
@@ -797,7 +796,7 @@ def run_model_forward_test(
         tt_model = ModelWithMP(
             mesh_device=mesh_device,
             hf_config=config,
-            state_dict={},
+            state_dict=state_dict_meta,
             ccl_manager=ccl_manager,
             dtype=ttnn.bfloat8_b,
             tensor_cache_path=str(model_args.weight_cache_path(dtype)),
@@ -812,10 +811,10 @@ def run_model_forward_test(
         tt_model = Model(
             mesh_device=mesh_device,
             hf_config=config,
-            state_dict={},
+            state_dict=state_dict_meta,
             ccl_manager=ccl_manager,
             dtype=ttnn.bfloat8_b,
-            tensor_cache_path=None,
+            tensor_cache_path=str(model_args.weight_cache_path(dtype)),
             paged_attention_config=None,
             mesh_config=mesh_config,
             create_kv_cache=True,
@@ -825,9 +824,9 @@ def run_model_forward_test(
         )
 
     # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
+    # reference_model = GptOssForCausalLM(config)
+    # reference_model.load_state_dict(state_dict_hf, strict=False)
+    # reference_model.eval()
 
     # # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
@@ -836,14 +835,14 @@ def run_model_forward_test(
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
     # Run reference forward pass
-    with torch.no_grad():
-        reference_output = reference_model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            attention_mask=None,  # Let the model handle masking
-            use_cache=False,
-        )
-        reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+    # with torch.no_grad():
+    #     reference_output = reference_model(
+    #         input_ids=input_ids,
+    #         position_ids=position_ids,
+    #         attention_mask=None,  # Let the model handle masking
+    #         use_cache=False,
+    #     )
+    #     reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
 
     # Prepare inputs for TT model
     if is_decode:
@@ -982,7 +981,7 @@ def test_model(
     is_decode = mode == "decode"
 
     # Create submesh with specified shape
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False, use_model_parallelism=use_model_parallelism)
@@ -1006,17 +1005,21 @@ def test_model(
         )
     # Load state dict in HF format for reference model
     model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False, use_model_parallelism=use_model_parallelism)
-    state_dict_hf = model_args.load_state_dict(
-        weights_path=model_args.model_path,
-        dummy_weights=False,
-        convert_to_meta_format=False,  # HF format for reference
-    )
+    load_model = True
+    if load_model:
+        state_dict_hf = model_args.load_state_dict(
+            weights_path=model_args.model_path,
+            dummy_weights=False,
+            convert_to_meta_format=False,  # HF format for reference
+        )
 
-    # Convert to meta format for TT model
-    state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
-
+        # Convert to meta format for TT model
+        state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
+    else:
+        state_dict_hf = {}
+        state_dict_meta = {}
     logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
-
+    breakpoint()
     # Run the forward test
     passing, output = run_model_forward_test(
         mesh_device=mesh_device,

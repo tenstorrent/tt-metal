@@ -429,6 +429,7 @@ class ModelWithMP:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            ttnn.ReadDeviceProfiler(self.mp_submeshes[current_submesh_id])
             current_submesh_id = next_submesh_id
         logits = hidden_states
 

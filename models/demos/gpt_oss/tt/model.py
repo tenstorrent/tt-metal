@@ -363,6 +363,8 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            ttnn.ReadDeviceProfiler(self.mesh_device)
+
         logits = hidden_states
 
         if get_last_token != -1:
