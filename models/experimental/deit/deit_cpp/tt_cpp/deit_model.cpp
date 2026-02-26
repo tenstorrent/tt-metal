@@ -24,6 +24,7 @@ TtDeiTModel::TtDeiTModel(
             config,
             state_dict,
             embeddings_address,
+            device,
             use_mask_token
         );
 
@@ -93,23 +94,23 @@ TtDeiTModel::forward(
             throw std::runtime_error("You have to specify pixel_values");
         }
 
-        // Get head mask
+        // Process the provided head mask
         auto processed_head_mask = get_head_mask(head_mask, config_.num_hidden_layers);
 
-        // Convert pixel_values to torch tensor for embeddings processing
-        ttnn::Tensor pixel_values_host = ttnn::from_device(pixel_values);
-        auto pixel_values_torch = helper_funcs::to_torch(pixel_values_host);
-
-        // Check and convert dtype if needed
-        // Note: This is a simplified version - in practice you'd need to check the embeddings dtype
-        if (pixel_values_torch.dtype() != torch::kFloat32) {
-            pixel_values_torch = pixel_values_torch.to(torch::kFloat32);
+        // Convert bool_masked_pos to ttnn::Tensor if present
+        std::optional<ttnn::Tensor> ttnn_bool_masked_pos = std::nullopt;
+        if (bool_masked_pos.has_value()) {
+            auto mask = bool_masked_pos.value();
+            auto batch_size = mask.size(0);
+            auto num_patches = mask.size(1);
+            
+            auto float_mask_torch = mask.to(torch::kFloat32).reshape({static_cast<long>(batch_size), 1, static_cast<long>(num_patches), 1});
+            auto float_mask = helper_funcs::from_torch(float_mask_torch, std::nullopt, ttnn::Layout::ROW_MAJOR);
+            ttnn_bool_masked_pos = ttnn::to_device(float_mask, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
         }
 
         // Apply embeddings
-        const torch::Tensor* bool_masked_pos_ptr = bool_masked_pos.has_value() ? &bool_masked_pos.value() : nullptr;
-        auto embedding_output_torch = embeddings_->forward(pixel_values_torch, bool_masked_pos_ptr);
-        auto embedding_output = helper_funcs::torch_to_tt_tensor_tile(embedding_output_torch, device_);
+        auto embedding_output = embeddings_->forward(pixel_values, ttnn_bool_masked_pos);
 
         // Apply encoder
         std::optional<std::vector<ttnn::Tensor>> head_mask_opt = std::nullopt;
