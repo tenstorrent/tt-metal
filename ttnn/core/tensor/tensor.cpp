@@ -125,9 +125,12 @@ Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() { this->deallocate(/*force=*/false); }
 
-void Tensor::deallocate(bool) {
-    if (tensor_attributes == nullptr) {
+void Tensor::deallocate(bool force) {
+    if (!is_allocated()) {
         return;
+    }
+    if (force) {
+        tensor_attributes->deallocate();
     }
     tensor_attributes.reset();
 }
@@ -375,7 +378,7 @@ Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     }
 }
 
-bool Tensor::is_allocated() const { return tensor_attributes != nullptr; }
+bool Tensor::is_allocated() const { return tensor_attributes != nullptr && tensor_attributes->is_allocated(); }
 
 StorageType Tensor::storage_type() const { return tensor_attributes->storage_type(); }
 
