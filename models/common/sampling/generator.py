@@ -327,7 +327,7 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
-        ttnn.copy_host_to_device_tensor(self.seeds_tt_host_tensor, self.tt_sampling.seeds_tt_tensor)
+        # ttnn.copy_host_to_device_tensor(self.seeds_tt_host_tensor, self.tt_sampling.seeds_tt_tensor)
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
