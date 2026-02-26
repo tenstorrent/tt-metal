@@ -111,7 +111,8 @@ public:
      * pre-condition: The device tensor must not be in a default constructed state.
      */
     void deallocate() {
-        auto& device_storage = get_storage();
+        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
+        auto& device_storage = impl->storage_;
         // This implicitly deallocates the root mesh buffer if we are the sole owner.
         // An explicit deallocation call is not performed, as current day MeshBuffer could still be shared by other
         // owners. See: #38375
@@ -190,15 +191,6 @@ public:
         return impl->storage_;
     }
 
-private:
-    // Mutable version of get_storage().
-    DeviceStorage& get_storage() {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        return impl->storage_;
-    }
-
-public:
     // Derivables:
 
     DataType dtype() const { return tensor_spec().data_type(); }
