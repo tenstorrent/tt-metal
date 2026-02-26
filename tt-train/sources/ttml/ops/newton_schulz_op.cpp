@@ -27,22 +27,48 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
     uint32_t n = shape[-1];
     bool needs_transpose = (m > n);
 
+    if (steps <= 0) {
+        return X;
+    }
+
     if (needs_transpose) {
         X = ttnn::transpose(X, -2, -1);
+        shape = X.logical_shape();
     }
+
+    // Preallocate buffers: square shape [batch..., m_eff, m_eff] and X shape [batch..., m_eff, n_eff]
+    auto rank = shape.rank();
+    std::vector<uint32_t> mm_dims;
+    for (uint32_t i = 0; i < rank; ++i) {
+        mm_dims.push_back(shape[i]);
+    }
+    mm_dims.back() = mm_dims[rank - 2];
+    ttnn::Shape mm_shape(mm_dims);
+
+    auto* device = X.device();
+    auto buf_A = ttnn::empty(mm_shape, X.dtype(), X.layout(), device, X.memory_config());
+    auto buf_A2 = ttnn::empty(mm_shape, X.dtype(), X.layout(), device, X.memory_config());
+    auto buf_BX = ttnn::empty(shape, X.dtype(), X.layout(), device, X.memory_config());
 
     for (int iter = 0; iter < steps; ++iter) {
-        ttnn::Tensor A = ttnn_fixed::matmul(X, X, false, true);
+        // A = X @ X^T
+        ttnn_fixed::matmul(X, X, false, true, buf_A);
 
-        ttnn::Tensor b_A = ttnn::multiply(A, b);
-        ttnn::Tensor A_squared = ttnn_fixed::matmul(A, A, false, false);
-        ttnn::Tensor c_A_squared = ttnn::multiply(A_squared, c);
-        ttnn::Tensor B = ttnn::add(b_A, c_A_squared);
+        // A^2 = A @ A
+        ttnn_fixed::matmul(buf_A, buf_A, false, false, buf_A2);
 
-        ttnn::Tensor a_X = ttnn::multiply(X, a);
-        ttnn::Tensor B_X = ttnn_fixed::matmul(B, X, false, false);
-        X = ttnn::add(a_X, B_X);
+        // B = b*A + c*A^2: first scale A by b in-place, then fuse add with alpha
+        ttnn::multiply(buf_A, b, std::nullopt, std::nullopt, buf_A);
+        ttnn::addalpha(buf_A, buf_A2, c, std::nullopt, buf_A);
+
+        // X_new = a*X + B @ X: compute B @ X, then fuse add with alpha
+        ttnn_fixed::matmul(buf_A, X, false, false, buf_BX);
+        ttnn::addalpha(buf_BX, X, a, std::nullopt, X);
     }
+
+    buf_A.deallocate();
+    buf_A2.deallocate();
+    buf_BX.deallocate();
 
     if (needs_transpose) {
         X = ttnn::transpose(X, -2, -1);
