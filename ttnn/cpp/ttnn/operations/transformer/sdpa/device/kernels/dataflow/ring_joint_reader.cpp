@@ -30,8 +30,9 @@ void kernel_main() {
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
     constexpr uint32_t is_causal = get_compile_time_arg_val(20);
+    constexpr uint32_t is_balanced = get_compile_time_arg_val(21);
 
-    constexpr auto q_args = TensorAccessorArgs<21>();
+    constexpr auto q_args = TensorAccessorArgs<22>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -136,10 +137,7 @@ void kernel_main() {
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
     uint32_t ring_index = fused_op_receiver.ring_index;
-    // DPRINT << "READER BEGIN FOR " << rind_index << ENDL();
-    // uint32_t tmp = global_q_end - global_q_start;
-    // DPRINT << "GLOBAL Q RANGE: " << global_q_start << " - " << global_q_end << ENDL();
-    // DPRINT << "NUM LOCAL Q CHUNKS " << num_local_q_chunks << " K CHUNKS " << num_local_k_chunks << ENDL();
+    uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         // DPRINT << "Ring iter RD: " << ring_iter << ENDL();
@@ -152,14 +150,26 @@ void kernel_main() {
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work =
-            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && ring_index < ring_id);
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+                                         !(is_causal && ring_index < ring_id && !is_balanced);
 
         uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
         }
 
+        uint32_t iter_global_q_start = global_q_start;
+        uint32_t iter_num_kv_chunks = num_kv_chunks;
+        if (is_causal && is_balanced && ring_index != ring_id) {
+            if (ring_index < ring_id) {
+                iter_global_q_start += half_sequence;
+            } else {
+                iter_num_kv_chunks /= 2;
+            }
+        }
+
+        DPRINT << "RING ITER: " << ring_iter << " RING ID: " << ring_id << " GLOBAL Q START: " << iter_global_q_start
+               << " K END: " << iter_num_kv_chunks << ENDL();
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -167,6 +177,11 @@ void kernel_main() {
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
+
+            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                DPRINT << "SKIPPING COMPUTE FOR Q: " << q_chunk << " HEAD: " << nq << ENDL();
+                continue;
+            }
 
             Slice q_slice;
             uint32_t end_seq_tile;
@@ -190,7 +205,7 @@ void kernel_main() {
                 false /*transpose*/
             );
 
-            for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+            for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
@@ -313,4 +328,5 @@ void kernel_main() {
             cb_push_back(cb_v_in, v_chunk_tiles);
         }
     }
+    DPRINT << "READER EXIT" << ENDL();
 }

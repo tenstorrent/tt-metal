@@ -104,7 +104,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto L = joint_q_shape[2];
     // const auto DH = q_shape[3];
 
+    auto q_chunk_size = args.get_q_chunk_size();
+    auto k_chunk_size = args.get_k_chunk_size();
+
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
+
+    TT_FATAL(
+        !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
+        "q_chunk_size must divide half of local q seq_len in balanced case");
 
     TT_FATAL(
         k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
@@ -191,8 +198,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided
-    auto q_chunk_size = args.get_q_chunk_size();
-    auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
@@ -274,6 +279,7 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.joint_strategy,
         args.scale,
         args.is_causal,
+        args.is_balanced,
         args.logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -309,6 +315,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const bool is_causal,
+    const bool is_balanced,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
@@ -354,6 +361,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         joint_strategy,
         scale,
         is_causal,
+        is_balanced,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

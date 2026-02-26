@@ -26,6 +26,64 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
     return submesh_device
 
 
+def create_balanced_chunk_order(rp_factor):
+    """Create balanced chunk order for sequence reordering.
+
+    For rp_factor=4, creates 2*4=8 chunks with order: 0,7,1,6,2,5,3,4
+    This interleaves chunks from start and end to balance workload.
+    """
+    num_chunks = 2 * rp_factor
+    chunks = list(range(num_chunks))
+    balanced_order = []
+
+    left = 0
+    right = num_chunks - 1
+
+    for i in range(num_chunks):
+        if i % 2 == 0:
+            balanced_order.append(left)
+            left += 1
+        else:
+            balanced_order.append(right)
+            right -= 1
+
+    return balanced_order
+
+
+def reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
+    """Reorder tensor chunks along sequence dimension according to chunk_order."""
+    seq_len = tensor.shape[seq_dim]
+    num_chunks = len(chunk_order)
+    chunk_size = seq_len // num_chunks
+
+    # Split into chunks
+    chunks = []
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        if seq_dim == 2:
+            chunks.append(tensor[:, :, start:end, :])
+        else:
+            raise NotImplementedError(f"Reordering for seq_dim={seq_dim} not implemented")
+
+    # Reorder chunks according to chunk_order
+    reordered_chunks = [chunks[i] for i in chunk_order]
+
+    # Concatenate reordered chunks
+    return torch.cat(reordered_chunks, dim=seq_dim)
+
+
+def reverse_reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
+    """Reverse the chunk reordering to restore original order."""
+    # Create inverse permutation
+    inverse_order = [0] * len(chunk_order)
+    for new_pos, orig_pos in enumerate(chunk_order):
+        inverse_order[orig_pos] = new_pos
+
+    print(f"inverse order: {inverse_order}")
+    return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
+
+
 def run_ring_joint_sdpa(
     submesh,
     b,
@@ -51,6 +109,7 @@ def run_ring_joint_sdpa(
     pcc_threshold,
     max_mse=None,
     is_causal=False,
+    is_balanced=False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -138,6 +197,28 @@ def run_ring_joint_sdpa(
     padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
 
+    # Store original tensors for torch.nn.functional.scaled_dot_product_attention
+    original_padded_Q = padded_Q.clone()
+    original_padded_K = padded_K.clone()
+    original_padded_V = padded_V.clone()
+
+    # Apply balanced reordering if requested
+    chunk_order = None
+    if is_balanced:
+        rp_factor = submesh.shape[rp_axis]
+        chunk_order = create_balanced_chunk_order(rp_factor)
+        logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
+
+        # Verify expected pattern for common cases
+        if rp_factor == 4:
+            expected_order = [0, 7, 1, 6, 2, 5, 3, 4]
+            assert chunk_order == expected_order, f"Expected {expected_order}, got {chunk_order}"
+            logger.info(f"✓ Verified balanced chunk order for rp_factor=4: {chunk_order}")
+
+        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
+        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
+        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
+
     joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
     joint_K = fa_rand(b, nhk, joint_seq_len, head_dim_k)
     joint_V = fa_rand(b, nhv, joint_seq_len, head_dim_v)
@@ -149,6 +230,8 @@ def run_ring_joint_sdpa(
     logger.debug(f"padded_Q: {padded_Q.shape}")
     logger.debug(f"padded_K: {padded_K.shape}")
     logger.debug(f"padded_V: {padded_V.shape}")
+    if is_balanced:
+        logger.debug(f"Balanced reordering applied with chunk order: {chunk_order}")
 
     sdpa_input_shard_dims = [None, None]
     sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
@@ -251,6 +334,7 @@ def run_ring_joint_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
                 is_causal=is_causal,
+                is_balanced=is_balanced,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -304,8 +388,18 @@ def run_ring_joint_sdpa(
                 ),
             )
             print("Done to torch stuff...")
-            # Slice out any tile-padding
-            tt_out = tt_out[:, :, :base_seq_len, :]
+
+            # Reverse reordering for TT output if balanced reordering was applied
+            if is_balanced and chunk_order is not None:
+                logger.debug("Reversing balanced reordering for TT output")
+                # First slice to padded sequence length, then reverse reorder
+                tt_out_padded = tt_out[:, :, :padded_seq_len, :]
+                tt_out_reordered = reverse_reorder_tensor_chunks(tt_out_padded, chunk_order, seq_dim=2)
+                tt_out = tt_out_reordered[:, :, :base_seq_len, :]
+            else:
+                # Slice out any tile-padding
+                tt_out = tt_out[:, :, :base_seq_len, :]
+
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
             logger.debug(f"tt_out: {tt_out.shape}")
             logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
@@ -442,5 +536,6 @@ def test_mla_sdpa(
         all_gather_topology,
         skip_check,
         0.999,
-        is_causal=False,
+        is_causal=True,
+        is_balanced=True,
     )

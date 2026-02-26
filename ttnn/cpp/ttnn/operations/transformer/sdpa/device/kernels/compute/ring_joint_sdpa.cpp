@@ -49,6 +49,8 @@ void kernel_main() {
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(32);
     constexpr uint32_t is_causal = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t is_balanced = get_compile_time_arg_val(34) == 1;
+
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -85,6 +87,7 @@ void kernel_main() {
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
     uint32_t ring_index = fused_op_indexer.ring_index;
+    uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -95,8 +98,8 @@ void kernel_main() {
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work =
-            (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) && !(is_causal && ring_index < ring_id);
+        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
+                                         !(is_causal && ring_index < ring_id && !is_balanced);
 
         if (!ring_iter_does_work) {
             continue;
@@ -121,6 +124,18 @@ void kernel_main() {
 
         bool causality = (ring_iter == 0 ? is_causal : false);
 
+        uint32_t iter_global_q_start = global_q_start;
+        uint32_t iter_num_kv_chunks = num_kv_chunks;
+        if (is_causal && is_balanced && ring_index != ring_id) {
+            if (ring_index < ring_id) {
+                iter_global_q_start += half_sequence;
+            } else {
+                iter_num_kv_chunks /= 2;
+            }
+        }
+        bool balancing = (ring_index >= ring_id ? false : is_balanced);
+
+        DPRINT << "ITER KV: " << iter_num_kv_chunks << ENDL();
         sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, vDHt, scale_fp32>(
             qk_in0_block_w,
             qk_subblock_w,
@@ -138,7 +153,7 @@ void kernel_main() {
             global_q_end,
             num_local_q_chunks,
             NH,  // hack to pass NH, iter_k_chunk_start is always 0
-            num_kv_chunks,
+            iter_num_kv_chunks,
             q_chunk_tiles,
             k_chunk_tiles,
             v_chunk_tiles,
@@ -171,6 +186,8 @@ void kernel_main() {
             cb_lse_out,
             cb_prev_out,
             cb_out,
-            causality);
+            causality,
+            balancing);
     }
+    DPRINT << "COMPUTE EXIT" << ENDL();
 }
