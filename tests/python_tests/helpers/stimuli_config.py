@@ -36,7 +36,7 @@ class StimuliConfig:
 
     # === STATIC VARIABLES ===
     STIMULI_L1_ADDRESS_PERF = 0x21000
-    STIMULI_L1_ADDRESS_DEBUG = 0x65000
+    STIMULI_L1_ADDRESS_DEBUG = 0x70000
 
     WITH_COVERAGE: ClassVar[bool] = False
 

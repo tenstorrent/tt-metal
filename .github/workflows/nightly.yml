@@ -30,12 +30,12 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 10
+      test_splits: 5
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: true
+      use_durations: false
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -45,12 +45,12 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 10
+      test_splits: 5
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       random_order: false
       timeout_minutes: 360
       coverage: true
-      use_durations: true
+      use_durations: false
 
   nightly-summary:
     name: "📊 Nightly Summary"

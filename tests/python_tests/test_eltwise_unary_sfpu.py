@@ -115,6 +115,7 @@ def test_eltwise_unary_sfpu_float(
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
         MathOperation.Log,
+        MathOperation.Log1p,
         MathOperation.Reciprocal,
         MathOperation.Sin,
         MathOperation.Sqrt,
@@ -128,6 +129,7 @@ def test_eltwise_unary_sfpu_float(
         MathOperation.Threshold,
         MathOperation.ReluMax,
         MathOperation.ReluMin,
+        MathOperation.Tanh,
     ]:
         # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
         pytest.skip(

@@ -35,7 +35,6 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
-    generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -167,7 +166,6 @@ def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates)
         "sources/unpack_matmul_test.cpp",
         formats,
         templates=[
-            generate_input_dim(in0_dimensions, in1_dimensions),
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(0),

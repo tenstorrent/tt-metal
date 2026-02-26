@@ -41,7 +41,7 @@ int main()
 #endif
 
 #ifdef COVERAGE
-    constexpr std::uint32_t mailboxes_start = 0x63FC0;
+    constexpr std::uint32_t mailboxes_start = 0x6DFC0;
 #else
     constexpr std::uint32_t mailboxes_start = 0x1FFC0;
 #endif

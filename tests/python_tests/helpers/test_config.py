@@ -16,6 +16,7 @@ from typing import ClassVar, List
 
 import numpy as np
 import pytest
+import torch
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
@@ -28,6 +29,7 @@ from ttexalens.tt_exalens_lib import (
 )
 
 from . import device as device_module
+from . import golden_generators as golden_generators_module
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
@@ -69,6 +71,21 @@ class TestMode(Enum):
     DEFAULT = "Compile and consume sequentially"
     PRODUCE = "Just compile tests without executing them"
     CONSUME = "Just execute pre-compiled elfs"
+
+
+class DummyGoldenGenerator:
+    def __call__(*args, **kwargs):
+        return torch.zeros(1024, dtype=torch.bfloat16)
+
+    def transpose_faces_multi_tile(*args, **kwargs):
+        return torch.zeros(1024, dtype=torch.bfloat16)
+
+    def transpose_within_faces_multi_tile(*args, **kwargs):
+        return torch.zeros(1024, dtype=torch.bfloat16)
+
+
+def dummy_golden_generator(cls):
+    return DummyGoldenGenerator()
 
 
 class TestConfig:
@@ -137,7 +154,7 @@ class TestConfig:
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
-    RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x64000
+    RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
     TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
@@ -325,6 +342,7 @@ class TestConfig:
 
         if compile_producer:
             TestConfig.MODE = TestMode.PRODUCE
+            golden_generators_module.get_golden_generator = dummy_golden_generator
 
         if compile_consumer:
             TestConfig.MODE = TestMode.CONSUME
@@ -1083,7 +1101,7 @@ class TestConfig:
 
         return elfs
 
-    def run(self, location="0,0", delete_artefacts: bool = False):
+    def run(self, location="0,0"):
         self.generate_variant_hash()
         logger.info(
             "Running variant={} | location={}",
@@ -1110,9 +1128,6 @@ class TestConfig:
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device(location)
 
-        if delete_artefacts:
-            shutil.rmtree(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
-
         return self.variant_stimuli.collect_results(location)
 
 
@@ -1128,18 +1143,25 @@ def process_coverage_run_artefacts() -> bool:
         for variant in compiled_variants:
             stream_runs = glob.glob(os.path.join(variant, "*.stream"))
 
-            for stream in stream_runs:
+            if not stream_runs:
+                continue
 
+            stream_parts = []
+            for stream in stream_runs:
                 with open(stream, "rb") as fd:
-                    coverage_stream = fd.read()
+                    stream_parts.append(fd.read())
+            merged_stream = b"".join(stream_parts)
+
+            if merged_stream:
                 run_shell_command(
                     f"{TestConfig.GCOV_TOOL} merge-stream",
                     TestConfig.TESTS_WORKING_DIR,
-                    coverage_stream,
+                    merged_stream,
                     text=False,
                 )
 
-                info_hash = sha256(str(stream).encode()).hexdigest()
+                # Generate single .info file per variant
+                info_hash = sha256(str(variant).encode()).hexdigest()
                 command = (
                     f"lcov --gcov-tool {TestConfig.GCOV} --capture "
                     f"--directory {variant / 'obj/'} "

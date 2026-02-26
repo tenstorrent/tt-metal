@@ -112,7 +112,13 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
         1,
         input_dimensions,
         formats.output_format,
-    ).view(input_dimensions)
+    )
+
+    golden_tensor = (
+        golden_tensor.view([32, 32])
+        if golden_tensor.shape == torch.Size([1024])
+        else golden_tensor.view(input_dimensions)
+    )
 
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",

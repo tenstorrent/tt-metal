@@ -18,7 +18,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import TestConfig, TestMode
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
     NUM_FACES,
@@ -165,21 +165,25 @@ def transpose_dest(
     datacopy_tensor = generate_datacopy_golden(
         src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
     )
-    t_matrix = get_golden_generator(TransposeGolden)
-    golden_tensor = t_matrix.transpose_faces_multi_tile(
-        datacopy_tensor,
-        formats.output_format,
-        num_tiles=tile_cnt_A,
-        tilize=False,
-        input_dimensions=input_dimensions,
-    )
-    golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-        golden_tensor,
-        formats.output_format,
-        num_tiles=tile_cnt_A,
-        untilize=False,
-        input_dimensions=input_dimensions,
-    )
+
+    if TestConfig.MODE != TestMode.PRODUCE:
+        t_matrix = get_golden_generator(TransposeGolden)
+        golden_tensor = t_matrix.transpose_faces_multi_tile(
+            datacopy_tensor,
+            formats.output_format,
+            num_tiles=tile_cnt_A,
+            tilize=False,
+            input_dimensions=input_dimensions,
+        )
+        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+            golden_tensor,
+            formats.output_format,
+            num_tiles=tile_cnt_A,
+            untilize=False,
+            input_dimensions=input_dimensions,
+        )
+    else:
+        golden_tensor = []
 
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",

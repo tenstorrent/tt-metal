@@ -430,6 +430,16 @@ def sweep_matmul(
                             math_matmul
                         )
                         for face_layout_config in face_layout_config_sweep:
+                            # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
+                            # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
+                            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
+                            if (
+                                dest_acc == DestAccumulation.No
+                                and fmt.input_format == DataFormat.Float16_b
+                                and fmt.output_format == DataFormat.Float16
+                            ):
+                                continue
+
                             base_matmul_dims = MatmulConfig(
                                 tile_dimensions=tile_dims,
                                 face_layout_config=face_layout_config,
@@ -531,6 +541,16 @@ def sweep_tiny_tiles_matmul(
                 max_dst_indices.append(max_dst_index)
 
             for max_dst_idx in max_dst_indices:
+                # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
+                # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
+                # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
+                if (
+                    config["dest_acc"] == DestAccumulation.No
+                    and config["fmt"].input_format == DataFormat.Float16_b
+                    and config["fmt"].output_format == DataFormat.Float16
+                ):
+                    continue
+
                 combinations.append(
                     MatmulConfig(
                         tile_dimensions=tile_dims,

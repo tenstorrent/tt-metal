@@ -341,9 +341,9 @@ class MailboxesPerf(Enum):
 
 
 class MailboxesDebug(Enum):
-    Unpacker = 0x63FC4
-    Math = 0x63FC8
-    Packer = 0x63FCC
+    Unpacker = 0x6DFC4
+    Math = 0x6DFC8
+    Packer = 0x6DFCC
 
 
 format_tile_sizes = {

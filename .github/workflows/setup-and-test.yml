@@ -138,7 +138,7 @@ jobs:
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
-                --override-ini="addopts=-v" --timeout=60 \
+                --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
 
           echo "Running tests"
