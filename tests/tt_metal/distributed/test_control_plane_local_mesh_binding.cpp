@@ -156,8 +156,7 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
         ScopedEnvVar mesh_only("TT_MESH_ID", "0");
         EXPECT_THAT(
             ([&]() { return make_control_plane(kDualHostMeshDesc, get_dual_host_chip_mapping()); }),
-            ThrowsMessage<std::runtime_error>(HasSubstr("TT_MESH_HOST_RANK must be set when multiple host ranks are "
-                                                        "present in the mesh graph descriptor for mesh ID 0")));
+            ThrowsMessage<std::runtime_error>(HasSubstr("TopologyMapper: Inconsistent host ranks found for mesh 0")));
     }
 
     {
