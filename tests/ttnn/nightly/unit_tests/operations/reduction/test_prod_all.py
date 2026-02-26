@@ -40,9 +40,11 @@ def get_tensors(input_shape, output_shape, device):
         ([1, 4, 32, 32]),
         ([2, 2, 32, 32]),
         ([16, 16]),
-        # ([6, 4, 32, 32]), #Fails : expected result is inf but the result generated in nan
-        # ([1, 1, 320, 320]), #Fails : expected result is inf but the result generated in nan
-        # ([1, 3, 320, 64]), #Fails : expected result is inf but the result generated in nan
+        ([6, 4, 32, 32]),
+        ([1, 1, 320, 320]),
+        ([1, 3, 320, 64]),
+        ([]),  # 0D tensor
+        ([6, 0, 32]),  # 0-volume tensor
     ),
 )
 def test_prod(shapes, device):

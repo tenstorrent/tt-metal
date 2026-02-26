@@ -7,9 +7,12 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-#include <vector>
-#include <optional>
+#include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <optional>
+#include <variant>
+#include <vector>
 
 namespace reduction_common {
 
@@ -42,18 +45,26 @@ ttnn::SmallVector<int> generate_reduce_dim(
 constexpr float get_zero_volume_fill_value(const ReduceType type) {
     switch (type) {
         case ReduceType::Sum: return 0.0f;
+        case ReduceType::Mean:
+        case ReduceType::Max:
+        case ReduceType::Min:
+        case ReduceType::Std:
+        case ReduceType::Var: return std::numeric_limits<float>::quiet_NaN();
         case ReduceType::Prod: return 1.0f;
-        default: return std::numeric_limits<float>::quiet_NaN();
+        default:
+            // Don't just return NaN, since it may not be appropriate for all reduction types.
+            TT_THROW("Unhandled reduction type");
     }
 }
 
 /* Creates appropriate output tensor for a given zero volume input tensor.
-   The output tensor has the same shape as the input tensor, except that the dimensions
-   specified in dim are reduced to 1.
-   The output tensor is filled with NaN/0/inf based on the reduce_type.
+   The output tensor's shape is adjusted for keepdim:
+   - if keepdim is true, the dimensions specified in dim are set to 1.
+   - if keepdim is false, the dimensions specified in dim are removed.
+   The output tensor is filled with NaN/0/1 based on the reduce_type.
 */
 template <ReduceType reduce_type>
-static ttnn::Tensor zero_volume_reduce(
+ttnn::Tensor zero_volume_reduce(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int>& dim,
     const bool keepdim,
