@@ -108,7 +108,6 @@ class VisionTransformer(LightweightModule):
         x = x[window_index, :, :]
         x = x.reshape(patch_seq_len, -1)
 
-        # Pad each window to max_window_size so all windows are uniform (enables batched SDPA)
         if window_pad_info is not None:
             orig_cu = window_pad_info["orig_cu_seqlens"]
             max_W = window_pad_info["max_window_size"]
@@ -267,60 +266,72 @@ class DropInVisionTransformer(torch.nn.Module):
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
 
-            # 2b. Compute window metadata for batched SDPA optimization
+            # 2b. Compute window metadata for batched SDPA optimization.
             #     Instead of using windowed_scaled_dot_product_attention (O(S^2)),
             #     we batch windows into the batch dimension and use regular SDPA (O(S*W)).
+            #     When windows are non-uniform, pad them to uniform max_W and apply a mask
+            #     so real tokens don't attend to zero-padded positions.
             cu_window_seqlens_list = cu_window_seqlens.flatten().tolist()
             window_sizes = [
                 cu_window_seqlens_list[i + 1] - cu_window_seqlens_list[i]
                 for i in range(len(cu_window_seqlens_list) - 1)
             ]
             num_windows = len(window_sizes)
-            windows_already_uniform = num_windows > 0 and all(w == window_sizes[0] for w in window_sizes)
-            window_pad_info = None  # will be set if we need to pad non-uniform windows
+            windows_uniform = num_windows > 0 and all(w == window_sizes[0] for w in window_sizes)
+            window_pad_info = None
 
-            if not windows_already_uniform and num_windows > 0:
-                # Non-uniform windows (e.g., edge windows smaller due to grid not divisible by window_size).
-                # Pad each window to max_window_size on the host so all windows become uniform.
-                # This enables the batched SDPA optimization for all image sizes.
+            if windows_uniform:
+                windowed_window_info = {
+                    "uniform": True,
+                    "window_size": window_sizes[0],
+                    "num_windows": num_windows,
+                }
+            elif num_windows > 0:
                 max_W = max(window_sizes)
-                # Round up to multiple of 32 for tile alignment
                 max_W = ((max_W + 31) // 32) * 32
+                assert 2048 % max_W == 0, f"Aligned max window size {max_W} must divide 2048"
+
                 window_pad_info = {
                     "orig_cu_seqlens": cu_window_seqlens_list,
                     "orig_window_sizes": window_sizes,
                     "max_window_size": max_W,
                     "num_windows": num_windows,
                 }
-                # Update unpadded_seq_len and seq_len for the padded layout
                 unpadded_seq_len = num_windows * max_W
                 seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
-                # Update cu_window_seqlens to uniform
                 cu_window_seqlens = torch.tensor(
                     [i * max_W for i in range(num_windows + 1)], dtype=cu_window_seqlens.dtype
                 )
+                cu_seqlens = torch.tensor([0, unpadded_seq_len], dtype=cu_seqlens.dtype)
+
+                total_windowed_windows = seq_len // max_W
+                windowed_mask = torch.zeros(1, total_windowed_windows, max_W, max_W, dtype=torch.float32)
+                for i in range(num_windows):
+                    if window_sizes[i] < max_W:
+                        windowed_mask[:, i, :, window_sizes[i] :] = float("-inf")
+                tt_windowed_mask = ttnn.from_torch(
+                    windowed_mask,
+                    device=self.model_args.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat4_b,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                )
+                windowed_window_info = {
+                    "uniform": True,
+                    "window_size": max_W,
+                    "num_windows": num_windows,
+                    "attn_mask": tt_windowed_mask,
+                }
                 logger.info(
                     f"Padded {num_windows} non-uniform windows to uniform size {max_W} "
                     f"(original sizes: {sorted(set(window_sizes))})"
                 )
-
-            # Build windowed_window_info (now always uniform after padding)
-            if num_windows > 0:
-                effective_W = window_sizes[0] if windows_already_uniform else max_W
-                windowed_window_info = {
-                    "uniform": True,
-                    "window_size": effective_W,
-                    "num_windows": num_windows,
-                }
             else:
                 windowed_window_info = {"uniform": False}
 
-            # Full-attention layers: if window padding changed unpadded_seq_len, update cu_seqlens too
-            if window_pad_info is not None:
-                cu_seqlens = torch.tensor([0, unpadded_seq_len], dtype=cu_seqlens.dtype)
-
-            # Full-attention layers (4 of 32): use windowed SDPA as-is (single window = entire sequence).
-            # No batched optimization needed since there's only 1 window → same O(S^2) complexity.
+            # Full-attention layers (4 of 32): use windowed SDPA with a single segment
+            # covering the full (padded) sequence. No O(S²) mask needed — windowed SDPA
+            # handles the cu_seqlens boundary natively.
             full_window_info = {"uniform": False}
 
             # 3. Use reference model's patch embedding
@@ -330,7 +341,9 @@ class DropInVisionTransformer(torch.nn.Module):
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
 
-            # If windows need padding, pad the position embeddings (cos/sin) similarly
+            # If windows were padded to uniform size, remap position embeddings
+            # so each window's real tokens get their original rotary embeddings
+            # and padding positions get identity rotation (cos=1, sin=0).
             if window_pad_info is not None:
                 orig_cu = window_pad_info["orig_cu_seqlens"]
                 max_W = window_pad_info["max_window_size"]
@@ -406,6 +419,8 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(sin)
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
+            if "attn_mask" in windowed_window_info:
+                ttnn.deallocate(windowed_window_info["attn_mask"])
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor
@@ -421,7 +436,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
 
-            # 2b. If windows were padded to uniform size, extract original token positions
+            # 2b. If windows were padded to uniform size, extract original token positions.
             #     After patch_merger, each window's tokens were reduced by spatial_merge_unit.
             #     Remove the inter-window padding tokens (which produced garbage output).
             if window_pad_info is not None:
