@@ -92,23 +92,12 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
 
-    // Select compute kernel based on approximation mode
-    std::string compute_kernel_path;
-    if (args.approximate == "tanh") {
-        compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-            "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
-    } else {
-        // Piecewise polynomial approximation — Max ULP = 1 across all BF16 inputs,
-        // 33% fewer compute cycles than the previous erf+exp formula (fixes #35971).
-        compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-            "kernels/compute/eltwise_bw_gelu_poly.cpp";
-    }
-
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        compute_kernel_path,
+        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+                                     "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"
+                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+                                     "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode});
 
