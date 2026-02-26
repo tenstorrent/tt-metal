@@ -111,6 +111,7 @@ async function run() {
     const gtestLogsIndexPath = core.getInput('gtest-logs-index-path', { required: false }); // optional: path to gtest logs index JSON
     const otherLogsIndexPath = core.getInput('other-logs-index-path', { required: false }); // optional: path to other logs index JSON
     const lastSuccessTimestampsPath = core.getInput('last-success-timestamps-path', { required: false }); // optional: path to last success timestamps JSON
+    const forceRegressionJob = (core.getInput('force-regression-job', { required: false }) || '').trim(); // testing: force a single workflow:job as regression
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -228,11 +229,29 @@ async function run() {
       .filter(Boolean)
       .join('\n');
 
+    // Apply force-regression-job override (for testing branches)
+    let outputRegressedDetails = regressedDetails;
+    if (forceRegressionJob) {
+      const idx = forceRegressionJob.indexOf(':');
+      const workflowPart = idx >= 0 ? forceRegressionJob.slice(0, idx).trim() : '';
+      const jobPart = idx >= 0 ? forceRegressionJob.slice(idx + 1).trim() : '';
+      if (workflowPart && jobPart) {
+        outputRegressedDetails = [{
+          name: workflowPart,
+          workflow_path: `.github/workflows/${workflowPart}.yaml`,
+          failing_jobs: [{ name: jobPart }]
+        }];
+        core.info(`[FORCE-REGRESSION] Overriding regressed_workflows with: ${workflowPart} / ${jobPart}`);
+      } else {
+        core.warning(`[FORCE-REGRESSION] Invalid format (expected "workflow:job"): ${forceRegressionJob}`);
+      }
+    }
+
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);
     core.setOutput('alert_all_message', alertAllMessage || '');
-    core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
+    core.setOutput('regressed_workflows', JSON.stringify(outputRegressedDetails));
 
     await core.summary.addRaw(finalReport).write();
 

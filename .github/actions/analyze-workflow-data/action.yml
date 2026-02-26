@@ -34,6 +34,9 @@ inputs:
   last-success-timestamps-path:
     description: 'Path to JSON mapping workflow_name -> last success timestamp info (optional)'
     required: false
+  force-regression-job:
+    description: 'Testing only: force regressed_workflows to a single workflow:job (e.g. galaxy-e2e-tests:Galaxy CCL tests). When set, overrides actual regression detection.'
+    required: false
 
 outputs:
   failed_workflows:
