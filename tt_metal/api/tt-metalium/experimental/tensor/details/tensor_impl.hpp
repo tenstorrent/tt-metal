@@ -11,13 +11,13 @@
 namespace tt::tt_metal {
 
 template <typename Storage>
-struct TensorAttributes {
+struct TensorImpl {
     Storage storage_;
     TensorSpec tensor_spec_;
     TensorTopology tensor_topology_;
 };
 
-template struct TensorAttributes<HostStorage>;
-template struct TensorAttributes<DeviceStorage>;
+template struct TensorImpl<HostStorage>;
+template struct TensorImpl<DeviceStorage>;
 
 }  // namespace tt::tt_metal
