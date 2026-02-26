@@ -21,6 +21,7 @@ class IDevice;
 class GlobalSemaphore;
 
 namespace experimental {
+// TODO: Move to impl when this class is PIMPLed
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device,
     const CoreRangeSet& cores,
@@ -57,6 +58,7 @@ public:
 
 private:
     // private constructor used by experimental API
+    // TODO: Move to impl when this class is PIMPLed
     GlobalSemaphore(
         IDevice* device,
         const CoreRangeSet& cores,
