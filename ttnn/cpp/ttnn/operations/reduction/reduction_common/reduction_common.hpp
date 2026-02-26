@@ -35,6 +35,10 @@ ttnn::Tensor perform_transpose(
 
 ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, bool is_rank_le_4d);
 
+ttnn::SmallVector<int> generate_reduce_dim(
+    const ttnn::Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, int64_t, ttnn::SmallVector<int>>>& dim_arg);
+
 /* Creates appropriate output tensor for a given zero volume input tensor.
    The output tensor has the same shape as the input tensor, except that the dimensions
    specified in dim are reduced to 1.

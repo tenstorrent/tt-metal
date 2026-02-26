@@ -86,14 +86,7 @@ Tensor prod_impl(
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
     if (old_rank == 0 || input_a.logical_volume() == 0) {
-        ttnn::SmallVector<int> dim_vector;
-        if (dim.has_value()) {
-            if (dim.value() >= 0) {
-                dim_vector.push_back(dim.value());
-            } else {
-                dim_vector.push_back(dim.value() + old_rank);
-            }
-        }
+        ttnn::SmallVector<int> dim_vector = reduction_common::generate_reduce_dim(input_a, dim);
         return reduction_common::zero_volume_reduce<reduction_common::ReduceType::Prod>(
             input_a, dim_vector, keepdim, output_mem_config);
     }
