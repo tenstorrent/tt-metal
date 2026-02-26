@@ -45,10 +45,10 @@ ttnn::Tensor all_reduce(
         input_tensor,
         cluster_axis,
         *mesh_device,
-        std::nullopt,                                  // barrier_semaphores
-        std::nullopt,                                  // rs_global_semaphores
-        std::nullopt,                                  // ag_global_semaphores
-        ttnn::operations::reduction::ReduceType::Sum,  // Always use Sum
+        std::nullopt,                       // barrier_semaphores
+        std::nullopt,                       // rs_global_semaphores
+        std::nullopt,                       // ag_global_semaphores
+        reduction_common::ReduceType::Sum,  // Always use Sum
         memory_config,
         topology_,
         num_links,

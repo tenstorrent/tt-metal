@@ -39,6 +39,14 @@ ttnn::SmallVector<int> generate_reduce_dim(
     const ttnn::Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttnn::SmallVector<int>>>& dim_arg);
 
+constexpr float get_zero_volume_fill_value(const ReduceType type) {
+    switch (type) {
+        case ReduceType::Sum: return 0.0f;
+        case ReduceType::Prod: return 1.0f;
+        default: return std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
 /* Creates appropriate output tensor for a given zero volume input tensor.
    The output tensor has the same shape as the input tensor, except that the dimensions
    specified in dim are reduced to 1.
@@ -77,7 +85,7 @@ static ttnn::Tensor zero_volume_reduce(
         }
     }
 
-    constexpr float fill_value = (reduce_type == ReduceType::Sum) ? 0 : ((reduce_type == ReduceType::Prod) ? 1 : NAN);
+    constexpr float fill_value = get_zero_volume_fill_value(reduce_type);
 
     return ttnn::full(
         ttnn::Shape(output_shape),
