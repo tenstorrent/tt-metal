@@ -18,6 +18,7 @@ Usage:
     python run_pybullet_sim.py --verbose-actions  # See what PI0 predicts
     python run_pybullet_sim.py --seed 123  # Use different random seed
     python run_pybullet_sim.py --use-gemma-tokenizer  # Use official Gemma tokenizer (requires HF auth)
+    python run_pybullet_sim.py --replan-interval 10  # Execute 10 actions before re-planning (reduces oscillation)
 """
 
 import sys
@@ -749,13 +750,33 @@ class PI0SimulationEnv:
         print(f"✅ Episode complete!")
         print(f"{'='*70}")
         print(f"\n📊 Performance Summary:")
+
+        # Separate inference vs buffered steps
+        inference_times_only = [t for t in self.inference_times if t > 0]
+        preprocess_times_only = [t for t in self.preprocess_times if t > 0]
+        num_inferences = len(inference_times_only)
+        num_buffered = len(self.inference_times) - num_inferences
+
+        print(f"   Total steps:      {len(self.loop_times)}")
+        print(f"   Inference steps:  {num_inferences} ({num_inferences/len(self.loop_times)*100:.1f}%)")
+        print(f"   Buffered steps:   {num_buffered} ({num_buffered/len(self.loop_times)*100:.1f}%)")
+        print(f"   Re-plan interval: {self.replan_interval}")
+        print(f"")
         print(f"   Capture time:     {np.mean(self.capture_times):.2f} ± {np.std(self.capture_times):.2f} ms")
-        print(f"   Preprocess time:  {np.mean(self.preprocess_times):.2f} ± {np.std(self.preprocess_times):.2f} ms")
-        print(f"   Inference time:   {np.mean(self.inference_times):.2f} ± {np.std(self.inference_times):.2f} ms")
+        if preprocess_times_only:
+            print(
+                f"   Preprocess time:  {np.mean(preprocess_times_only):.2f} ± {np.std(preprocess_times_only):.2f} ms (when inferencing)"
+            )
+        if inference_times_only:
+            print(
+                f"   Inference time:   {np.mean(inference_times_only):.2f} ± {np.std(inference_times_only):.2f} ms (when inferencing)"
+            )
         print(f"   Total loop time:  {np.mean(self.loop_times):.2f} ± {np.std(self.loop_times):.2f} ms")
         print(f"   Control frequency: {1000.0/np.mean(self.loop_times):.1f} Hz")
-        print(f"\n   Min inference:    {np.min(self.inference_times):.2f} ms")
-        print(f"   Max inference:    {np.max(self.inference_times):.2f} ms")
+
+        if inference_times_only:
+            print(f"\n   Min inference:    {np.min(inference_times_only):.2f} ms")
+            print(f"   Max inference:    {np.max(inference_times_only):.2f} ms")
         print(f"{'='*70}\n")
 
         # Save video if recording was enabled
