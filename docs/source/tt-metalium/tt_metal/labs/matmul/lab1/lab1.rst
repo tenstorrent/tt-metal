@@ -1,6 +1,9 @@
 Lab 1: Single Core Matrix Multiplication
 ########################################
 
+.. contents:: Table of Contents
+   :depth: 4
+
 Introduction
 ************
 
