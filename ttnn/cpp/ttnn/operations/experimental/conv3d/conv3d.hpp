@@ -18,7 +18,7 @@ ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    const ttnn::experimental::prim::Conv3dConfig& config,
+    const std::optional<ttnn::experimental::prim::Conv3dConfig>& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
