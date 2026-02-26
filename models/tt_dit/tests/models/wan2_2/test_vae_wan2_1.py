@@ -1517,7 +1517,6 @@ def test_wan_decoder(
 def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d as TorchWanEncoder3D
 
-    # mesh_device.disable_and_clear_program_cache()
     in_channels = C
     torch_dtype = torch.float32
     base_dim = 96
@@ -1562,8 +1561,9 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        dtype=ttnn.bfloat16,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
 
@@ -1671,12 +1671,11 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
             if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
                 tt_feat_cache[j] = tt_feat_cache_host[j]
             else:
-                tt_feat_cache[j] = typed_tensor_2dshard(
+                tt_feat_cache[j] = bf16_tensor_2dshard(
                     tt_feat_cache_host[j],
                     mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     shard_mapping={h_axis: 2, w_axis: 3},
-                    dtype=tt_input_dtype,
                 )
 
 
@@ -1769,8 +1768,9 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        dtype=ttnn.bfloat16,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)

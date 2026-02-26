@@ -171,10 +171,10 @@ class WanAttentionBlock(Module):
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         padded_h = x_BTHWC.shape[2]
-        if padded_h != logical_h:
-            """
-            H is padded, so slice it out before attention
-            """
+        # Use > (not !=) to only slice when there are EXCESS padding rows (decoder upsample
+        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
+        # (shape[2] * factor < logical_h) which must NOT trigger slicing.
+        if padded_h > logical_h:
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
@@ -202,7 +202,7 @@ class WanAttentionBlock(Module):
         )
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
-        if padded_h != logical_h:
+        if padded_h > logical_h:
             """
             H should be padded to divide by H parallel factor.
             """
@@ -341,11 +341,12 @@ class WanCausalConv3d(Module):
         cache_x_BTHWC: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
-        x_BTHWC: (B, T, H, W, C) fractured on H and W
+        x_BTHWC: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
         cache_x_BTHWC: (B, T1, H, W, C) fractured on H and W
 
-        returns: (B, T, H, W, C) fractured on H and W
+        returns: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
         """
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanCausalConv3d expects ROW_MAJOR input, got {x_BTHWC.layout}"
         # NOTE: T padding is handled explicitly and depends on the cache
         t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
@@ -359,10 +360,10 @@ class WanCausalConv3d(Module):
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
 
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
-            """
-            H is padded to divide by H parallel factor. Must zero out padded portion of H.
-            """
+        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
+        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
+        # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
@@ -426,10 +427,10 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
-            """
-            H is padded to divide by H parallel factor. Must zero out padded portion of H.
-            """
+        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
+        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
+        # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
@@ -534,12 +535,13 @@ class WanResidualBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanResidualBlock expects TILE input, got {x_BTHWC.layout}"
         h_tile_BTHWC = (
             self.conv_shortcut(x_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        x_norm_tile_BTHWC = self.norm1(x_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -561,7 +563,7 @@ class WanResidualBlock(Module):
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
 
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -648,6 +650,7 @@ class WanMidBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanMidBlock expects TILE input, got {x_BTHWC.layout}"
         x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
         x_BTHWC = x_res_BTHWC
         for i in range(len(self.attentions)):
@@ -717,7 +720,9 @@ class WanConv2d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if (is_blackhole() or dtype == ttnn.float32)
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -755,10 +760,11 @@ class WanConv2d(Module):
         return self.mask_cache[key]
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
-            """
-            H is padded to divide by H parallel factor. Must zero out padded portion of H.
-            """
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
+        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
+        # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
 
@@ -822,10 +828,10 @@ class WanConv2d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
-            """
-            H is padded to divide by H parallel factor. Must zero out padded portion of H.
-            """
+        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
+        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
+        # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
@@ -889,6 +895,7 @@ class WanResample(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> tuple[ttnn.Tensor, int]:
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanResample expects ROW_MAJOR input, got {x_BTHWC.layout}"
         B, T, H, W, C = x_BTHWC.shape
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
@@ -1346,6 +1353,7 @@ class WanEncoder3D(Module):
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -1524,6 +1532,7 @@ class WanEncoder(Module):
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -1541,6 +1550,7 @@ class WanEncoder(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
