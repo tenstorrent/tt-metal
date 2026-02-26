@@ -128,7 +128,7 @@ _PHASE_STATE = {
 
 _PHASE_WAIT = {
     "riscv_1": (
-        "    FORCE_INLINE void wait() {\n"
+        "    __attribute__((noinline)) void wait() {\n"
         '        DeviceZoneScopedN("barrier-wait");\n'
         "        done++;\n"
         "        {\n"
@@ -139,7 +139,7 @@ _PHASE_WAIT = {
         "    }"
     ),
     "compute": (
-        "    FORCE_INLINE void wait() {\n"
+        "    __attribute__((noinline)) void wait() {\n"
         '        DeviceZoneScopedN("barrier-wait");\n'
         "        done++;\n"
         "        *compute_done = done;\n"
@@ -180,7 +180,7 @@ namespace segment_{seg_idx} {{
     volatile tt_l1_ptr uint32_t* arrive;
     volatile tt_l1_ptr uint32_t* release;
 
-    FORCE_INLINE void init() {{
+    __attribute__((noinline)) void init() {{
         call_count = 0;
         arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {arrive_offset}));
@@ -191,7 +191,7 @@ namespace segment_{seg_idx} {{
         *release = 0;
     }}
 
-    FORCE_INLINE void sync() {{
+    __attribute__((noinline)) void sync() {{
         if constexpr (num_cores > 1) {{
             uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);
             noc_semaphore_inc(core0_arrive_noc_addr, 1);
@@ -219,7 +219,7 @@ namespace segment_{seg_idx} {{
     uint32_t call_count;
     volatile tt_l1_ptr uint32_t* release;
 
-    FORCE_INLINE void init() {{
+    __attribute__((noinline)) void init() {{
         call_count = 0;
         release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
@@ -227,7 +227,7 @@ namespace segment_{seg_idx} {{
         *release = 0;
     }}
 
-    FORCE_INLINE void sync() {{
+    __attribute__((noinline)) void sync() {{
         while (*release < call_count + 1) {{ }}
         call_count++;
     }}
@@ -332,7 +332,7 @@ def _emit_coordinator_reset(
     Order: op semaphore reset -> reset_cbs -> rebind -> segment sync.
     """
     lines: List[str] = []
-    lines.append("    FORCE_INLINE void reset() {")
+    lines.append("    __attribute__((noinline)) void reset() {")
     if op_semaphore_info:
         lines.append("        // Reset op semaphores")
         for sem_id, initial_value in op_semaphore_info:
@@ -371,7 +371,7 @@ def _emit_follower_reset(
     For compute, rebind is guarded by ``#ifndef TRISC_MATH``.
     """
     lines: List[str] = []
-    lines.append("    FORCE_INLINE void reset() {")
+    lines.append("    __attribute__((noinline)) void reset() {")
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
@@ -410,7 +410,7 @@ def _coordinator_phase_state(has_compute: bool) -> str:
 def _coordinator_phase_wait(has_compute: bool) -> str:
     """Generate phase::wait() for BRISC — waits for whichever roles exist."""
     lines = [
-        "    FORCE_INLINE void wait() {",
+        "    __attribute__((noinline)) void wait() {",
         '        DeviceZoneScopedN("barrier-wait");',
         "        done++;",
         "        {",
@@ -549,7 +549,7 @@ def _generate_barrier_namespace(
     lines.append("")
 
     # init()
-    lines.append("FORCE_INLINE void init() {")
+    lines.append("__attribute__((noinline)) void init() {")
     if is_coordinator:
         lines.extend(_coordinator_init_body(has_compute).split("\n"))
     else:
