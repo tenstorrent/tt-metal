@@ -90,6 +90,13 @@ struct Core {
 };
 
 void kernel_main() {
+#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+    {
+        constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+        uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
+        unified_kernels::reconfig_cb_interfaces(cb_config);
+    }
+#endif
 // ============================================================================
 // Compile-time args — grouped into Moe::Routed / Moe::Shared structs
 // ============================================================================
@@ -315,59 +322,49 @@ void kernel_main() {
         } shared;
     } moe;
 
-    // Setup sharded persistent buffers (imperative — outside struct)
-    if constexpr (Core::is_sender_core) {
-        // RMSNorm gamma weights (tensor-backed)
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-        constexpr uint32_t rmsnorm_gamma_num_pages = get_named_compile_time_arg_val("rmsnorm_gamma_num_pages");
-        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_gamma_num_pages);
-
+    // Setup all tensor-backed sharded buffers (marks pre-loaded tiles as ready)
+    auto setup_all_sharded_buffers = [&]() {
+        if constexpr (Core::is_sender_core) {
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("rmsnorm_gamma_num_pages"));
 #ifdef ENABLE_ROUTING
-        constexpr uint32_t gate_bias_cb = get_named_compile_time_arg_val("gate_bias_cb");
-        constexpr uint32_t gate_input_indices_cb = get_named_compile_time_arg_val("gate_input_indices_cb");
-        unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
-        unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
-#endif  // ENABLE_ROUTING
-
-        // Residual mcast source (pre-RMSNorm input on sender, tensor-backed)
-        constexpr uint32_t shared_residual_mcast_src_cb =
-            get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
-        constexpr uint32_t shared_residual_mcast_src_num_pages =
-            get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
-    }
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_bias_cb"), 1);
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_input_indices_cb"), 1);
+#endif
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"));
+        }
 #ifdef ENABLE_ROUTING
-    if constexpr (Core::Routed::is_gate_mm_core) {
-        constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
-        constexpr uint32_t gate_mm_k_num_tiles = get_named_compile_time_arg_val("gate_mm_k_num_tiles");
-        constexpr uint32_t gate_mm_out_w = get_named_compile_time_arg_val("gate_mm_out_w");
-        unified_kernels::setup_sharded_buffer(gate_mm_in1, gate_mm_k_num_tiles * gate_mm_out_w);
-    }
-#endif  // ENABLE_ROUTING
-    if constexpr (Core::Routed::is_gate_proj_core) {
-        constexpr uint32_t mul_cb_in1 = get_named_compile_time_arg_val("mul_cb_in1");
-        constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("mul_num_tiles");
-        unified_kernels::setup_sharded_buffer(mul_cb_in1, mul_num_tiles);
-
-        constexpr uint32_t add_cb_in0 = get_named_compile_time_arg_val("add_cb_in0");
-        constexpr uint32_t add_cb_in0_wait_tiles = get_named_compile_time_arg_val("add_cb_in0_wait_tiles");
-        unified_kernels::setup_sharded_buffer(add_cb_in0, add_cb_in0_wait_tiles);
-
-        // NOTE: add_cb_in1 is NOT setup here — it is populated by the shared expert's Output Mcast
-    }
-    if constexpr (Core::Shared::is_compute_core) {
-        constexpr uint32_t shared_gu_weights_cb = get_named_compile_time_arg_val("shared_gu_weights_cb");
-        constexpr uint32_t shared_gu_weights_num_pages = get_named_compile_time_arg_val("shared_gu_weights_num_pages");
-        unified_kernels::setup_sharded_buffer(shared_gu_weights_cb, shared_gu_weights_num_pages);
-    }
-    if constexpr (Core::Shared::is_mcast_receiver_core) {
-        constexpr uint32_t shared_down_in1 = get_named_compile_time_arg_val("shared_down_matmul_in1");
-        constexpr uint32_t shared_down_k = get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles");
-        constexpr uint32_t shared_down_w = get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(shared_down_in1, shared_down_k * shared_down_w);
-
-        // NOTE: shared_residual_cb is no longer pre-loaded — it is populated by the Residual Mcast (step 0)
-    }
+        if constexpr (Core::Routed::is_gate_mm_core) {
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("gate_mm_in1"),
+                get_named_compile_time_arg_val("gate_mm_k_num_tiles") *
+                    get_named_compile_time_arg_val("gate_mm_out_w"));
+        }
+#endif
+        if constexpr (Core::Routed::is_gate_proj_core) {
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("mul_cb_in1"), get_named_compile_time_arg_val("mul_num_tiles"));
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
+        }
+        if constexpr (Core::Shared::is_compute_core) {
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("shared_gu_weights_cb"),
+                get_named_compile_time_arg_val("shared_gu_weights_num_pages"));
+        }
+        if constexpr (Core::Shared::is_mcast_receiver_core) {
+            unified_kernels::setup_sharded_buffer(
+                get_named_compile_time_arg_val("shared_down_matmul_in1"),
+                get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles") *
+                    get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core"));
+        }
+    };
+#ifndef RECONFIG_MOE_CBS
+    setup_all_sharded_buffers();
+#endif
 
 #elif defined(COMPILE_FOR_BRISC)
 
@@ -905,6 +902,16 @@ void kernel_main() {
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
 
     auto moe_body = [&]() {
+#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+        {
+            constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+            uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
+            unified_kernels::reconfig_cb_interfaces(cb_config);
+        }
+#if defined(COMPILE_FOR_NCRISC)
+        setup_all_sharded_buffers();
+#endif
+#endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
