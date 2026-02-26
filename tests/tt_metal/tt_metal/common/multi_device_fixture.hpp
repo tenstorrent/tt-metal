@@ -127,7 +127,7 @@ protected:
                 *config_.arch);
         }
 
-        const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+        const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
         if (config_.mesh_shape.has_value() && config_.mesh_shape->mesh_size() > system_mesh_shape.mesh_size()) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice test suite on a machine with SystemMesh {} that is smaller than the requested "
@@ -136,6 +136,8 @@ protected:
                 system_mesh_shape,
                 *config_.mesh_shape);
         }
+
+        init_max_cbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
@@ -173,7 +175,10 @@ protected:
         }
     }
 
+    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    uint32_t max_cbs_{};
 
 private:
     Config config_;
@@ -189,6 +194,11 @@ protected:
 class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
+};
+
+class MeshDevice1x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

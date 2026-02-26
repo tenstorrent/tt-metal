@@ -5,8 +5,9 @@ import os
 from loguru import logger
 import pytest
 import torch
+import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -16,45 +17,10 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class LMHeadTest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def generate_torch_weights(self, shape):
+    def generate_torch_input(self, shape):
         return torch.randn(shape) - 0.95
 
 
@@ -69,17 +35,14 @@ class LMHeadTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=(8, 8)):
+def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval):
     # Initialize input configurations
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     in1_dtype = ttnn.DataType.BFLOAT8_B
@@ -120,20 +83,16 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
 
     lm_head_test = LMHeadTest(
         mesh_device,
-        in0_shape=in0_shape,
-        in1_shape=in1_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        [
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT8_B,
-        in1_dtype=in1_dtype,
         out_dtype=ttnn.DataType.BFLOAT8_B,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 
@@ -161,7 +120,6 @@ def test_specific_chip_lm_head_matmul(
         mesh_device.get_device(logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
-        False,
     )
 
 
@@ -175,16 +133,11 @@ def test_specific_chip_lm_head_matmul(
 def test_specific_board_lm_head_matmul(
     t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_blackhole("Use test_blackhole_grid_size_lm_head_matmul test for blackhole!")
 @pytest.mark.parametrize(
-    "grid_size",
-    [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
-    ids=[f"{i}x8" for i in range(1, 9)] + [f"8x{i}" for i in range(1, 8)],  # 1x8, 2x8 ... 8x1, 8x2...
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param(1, id="1chips"),
@@ -194,18 +147,12 @@ def test_specific_board_lm_head_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iterations, determinism_check_interval):
-    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
+def test_grid_size_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval):
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_wormhole_b0("Use test_grid_size_lm_head_matmul for blackhole!")
 @pytest.mark.parametrize(
-    "grid_size",
-    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
-    ids=[f"{i}x10" for i in range(1, 14)]
-    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param(1, id="1chips"),
@@ -215,7 +162,71 @@ def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iteratio
     ],
     indirect=["mesh_device"],
 )
-def test_blackhole_grid_size_lm_head_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval
+def test_blackhole_grid_size_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval):
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((MESH_X, MESH_Y), id="all"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "sub_mesh_shape",
+    [
+        pytest.param((4, 1), id="4x1"),
+        pytest.param((4, 2), id="4x2"),
+        pytest.param((8, 1), id="8x1"),
+        pytest.param((8, 2), id="8x2"),
+        pytest.param((8, 3), id="8x3"),
+        pytest.param((6, 4), id="6x4"),
+        pytest.param((8, 4), id="8x4"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_coordinate",
+    [
+        pytest.param((0, 0), id="0-0"),
+        pytest.param((4, 0), id="4-0"),
+        pytest.param((0, 1), id="0-1"),
+        pytest.param((4, 1), id="4-1"),
+        pytest.param((0, 2), id="0-2"),
+        pytest.param((4, 2), id="4-2"),
+        pytest.param((0, 3), id="0-3"),
+        pytest.param((4, 3), id="4-3"),
+    ],
+)
+def test_mesh_size_lm_head_matmul(
+    mesh_device, sub_mesh_shape, mesh_coordinate, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
+    if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
+        pytest.skip(
+            f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"
+        )
+    sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
+    logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
+    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((MESH_X, MESH_Y), id="all"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_random_mesh_size_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval):
+    # generate random sub-mesh shape and mesh coordinate
+    valid_sub_mesh_shapes = [(x, y) for x in range(1, MESH_X + 1) for y in range(1, MESH_Y + 1)]
+    sub_mesh_shape = random.choice(valid_sub_mesh_shapes)
+    valid_mesh_coordinates = [
+        (x, y) for x in range(0, MESH_X + 1 - sub_mesh_shape[0]) for y in range(0, MESH_Y + 1 - sub_mesh_shape[1])
+    ]
+    mesh_coordinate = random.choice(valid_mesh_coordinates)
+
+    sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
+    logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
+    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval)

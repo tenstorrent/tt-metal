@@ -17,7 +17,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
@@ -264,13 +263,12 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         const auto& output_spec = input_spec;
         // Add default parameters
         int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
-        bool approximateMode = false;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::sigmoid,
             device,
             input_spec,
             vectorMode,
-            approximateMode,
+            ::ttnn::operations::unary::Sigmoid::SigmoidMode::ACCURATE,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -431,7 +429,13 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
+            ttnn::softmax,
+            device,
+            input_spec,
+            dim_arg,
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // compute_kernel_config
+            true);         // numeric_stable
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -745,7 +749,14 @@ TEST_P(MatmulOpIfTest, Matmul) {
             false,  // transpose_b
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
-            matmul_program_config);
+            matmul_program_config,
+            std::nullopt,   // activation
+            std::nullopt,   // compute_kernel_config
+            std::nullopt,   // core_grid
+            std::nullopt,   // output_tile
+            std::nullopt,   // optional_output_tensor
+            std::nullopt,   // global_cb
+            std::nullopt);  // sub_device_id
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
@@ -800,9 +811,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest
-    : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
-      public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
+class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
+                       public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {
     const auto& conv2d_config = GetParam();
@@ -859,14 +869,17 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             conv2d_config,
             std::nullopt,
-            output_spec.tensor_layout().get_memory_config());
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // dram_slice_config
+            false,         // return_output_dim
+            false);        // return_weights_and_bias
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 200000 : 150000;
+        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 150000 : 120000;
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
-        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
+        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 250000 : 220000;
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
         ASSERT_TRUE(query.output_tensor_specs.has_value());
         EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
@@ -877,7 +890,7 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
 INSTANTIATE_TEST_SUITE_P(
     Conv2dConfigVariations,
     Conv2dOpIfTest,
-    ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+    ::testing::Values(std::nullopt, ttnn::prim::Conv2dConfig{.deallocate_activation = true}));
 
 // ============================================================================
 // Transformer tests

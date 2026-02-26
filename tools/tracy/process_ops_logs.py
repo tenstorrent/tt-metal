@@ -108,7 +108,9 @@ OPS_CSV_HEADER = [
     "PM REQ O BW",
     "PM FPU UTIL (%)",
     "NOC UTIL (%)",
+    "MULTICAST NOC UTIL (%)",
     "DRAM BW UTIL (%)",
+    "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
     "SFPU Util Min (%)",
     "SFPU Util Median (%)",
@@ -884,7 +886,9 @@ def append_device_data(
                     if op_npe_stats is not None:
                         ops_found += 1
                         op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                        op["MULTICAST NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_mcast_write_link_util, 1)
                         op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                        op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
                         op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
@@ -1272,8 +1276,12 @@ def generate_reports(
 
                 if "NOC UTIL (%)" in active_op_record:
                     csv_row["NOC UTIL (%)"] = active_op_record.get("NOC UTIL (%)")
+                if "MULTICAST NOC UTIL (%)" in active_op_record:
+                    csv_row["MULTICAST NOC UTIL (%)"] = active_op_record.get("MULTICAST NOC UTIL (%)")
                 if "DRAM BW UTIL (%)" in active_op_record:
                     csv_row["DRAM BW UTIL (%)"] = active_op_record.get("DRAM BW UTIL (%)")
+                if "ETH BW UTIL (%)" in active_op_record:
+                    csv_row["ETH BW UTIL (%)"] = active_op_record.get("ETH BW UTIL (%)")
                 if "NPE CONG IMPACT (%)" in active_op_record:
                     csv_row["NPE CONG IMPACT (%)"] = active_op_record.get("NPE CONG IMPACT (%)")
 

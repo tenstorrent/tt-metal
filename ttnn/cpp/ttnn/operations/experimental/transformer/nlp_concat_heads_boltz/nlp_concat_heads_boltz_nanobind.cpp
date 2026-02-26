@@ -26,7 +26,7 @@ void bind_nlp_concat_heads_boltz(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor) {
                 return self(input_tensor, memory_config, optional_output_tensor);
             },
             nb::arg("input_tensor").noconvert(),

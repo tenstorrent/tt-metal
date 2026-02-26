@@ -25,8 +25,8 @@ namespace tt::tt_fabric {
     enum class ConnectionValidationMode;
     template <typename TargetNode, typename GlobalNode>
     MappingResult<TargetNode, GlobalNode> solve_topology_mapping(...);
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(...);
-    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_map_physical(...);
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(...);
+    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_graph_physical(...);
 }
 ```
 
@@ -81,6 +81,13 @@ public:
     bool is_valid_mapping(TargetNode target, GlobalNode global) const;
 };
 ```
+
+**Key Methods**:
+- **`add_required_trait_constraint`**: Restricts target nodes with a specific trait value to map ONLY to global nodes with the same trait value.
+- **`add_preferred_trait_constraint`**: Prioritizes mapping target nodes to global nodes with the same trait value.
+- **`add_required_constraint`**: Pins a specific target node to a specific global node.
+- **`add_preferred_constraint`**: Suggests a mapping for a specific target node.
+- **`get_valid_mappings`**: Query allowed global nodes for a target node.
 
 **Constraint Types**:
 - **Required**: MUST be satisfied - solver fails if any cannot be met
@@ -149,6 +156,12 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
 ```
 
+**Parameters**:
+- **`target_graph`**: The subgraph pattern to find (logical mesh).
+- **`global_graph`**: The larger host graph to search in (physical machine/cluster).
+- **`constraints`**: The set of required and preferred constraints.
+- **`connection_validation_mode`**: (Optional) Validation strictness for channel counts.
+
 ## Usage Examples
 
 ### Basic Usage
@@ -207,11 +220,11 @@ auto result = solve_topology_mapping(
 ```cpp
 // Build logical graphs from MeshGraph
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> logical_graphs =
-    build_adjacency_map_logical(mesh_graph);
+    build_adjacency_graph_logical(mesh_graph);
 
 // Build physical graphs from PhysicalSystemDescriptor
 std::map<MeshId, AdjacencyGraph<AsicID>> physical_graphs =
-    build_adjacency_map_physical(psd, asic_id_to_mesh_rank);
+    build_adjacency_map_physical(cluster_type, psd, asic_id_to_mesh_rank);
 ```
 
 ## Architecture
@@ -240,7 +253,7 @@ All implementation details are in `tt::tt_fabric::detail` namespace:
 3. **SearchHeuristic**: Unified node selection and candidate generation with integer cost-based priority
 4. **ConsistencyChecker**: Local and forward consistency validation during DFS
 5. **PathGraphDetector**: Fast path optimization for path graphs (O(n) instead of exponential)
-6. **DFSSearchEngine**: Core backtracking search with memoization
+6. **DFSSearchEngine**: Core backtracking search with memoization (stateful - maintains internal state during search)
 7. **MappingValidator**: Final mapping validation and result building
 
 ### Algorithm Flow
@@ -252,11 +265,12 @@ solve_topology_mapping(target_graph, global_graph, constraints)
 │
 ├─► Fast Path Detection: Check if target is path graph, try O(n) algorithm
 │
-├─► General DFS Search:
+├─► General DFS Search (DFSSearchEngine):
+│   ├─ Pre-assignment: Apply required constraints (pinnings) and validate consistency
 │   ├─ SearchHeuristic::select_and_generate_candidates() - select node, generate ordered candidates
 │   ├─ ConsistencyChecker::check_local_consistency() - validate with mapped neighbors
 │   ├─ ConsistencyChecker::check_forward_consistency() - ensure future nodes have options
-│   └─ Backtracking with memoization
+│   └─ Backtracking with memoization (state tracked internally)
 │
 └─► Validation: MappingValidator validates mapping and builds result
 ```
@@ -313,6 +327,7 @@ cost = -is_preferred * SOFT_WEIGHT
 
 #### Consistency Checking
 
+- **Pre-assignment Validation**: Required constraints (pinnings) are validated for consistency before search begins - adjacent target nodes pinned to non-adjacent global nodes cause early failure
 - **Local Consistency**: Verifies mapped neighbors are connected in global graph
 - **Forward Consistency**: Ensures future neighbors have viable candidates
 - **Channel Counts**: Validated according to `ConnectionValidationMode`
@@ -342,7 +357,8 @@ log_error(tt::LogFabric, "Error: {}", error_msg);  // Errors
 ```
 
 **Logging Points**:
-- Mapping start: Degree histograms for target and global graphs
+- Mapping start: Degree histograms for target and global graphs (e.g., `target_degree_histogram={2:4}, global_degree_histogram={2:4}`)
+- Pre-assignment conflicts: Early detection of conflicting required constraints
 - Validation failures: Detailed error messages explaining problems
 - Success: Statistics (DFS calls, backtracks, constraint satisfaction)
 
@@ -369,10 +385,10 @@ result.print(target_graph);
 
 ## Thread Safety
 
-The solver is **stateless** - all state is passed as parameters:
+The public API (`solve_topology_mapping()`) is **stateless** - each call creates its own internal state:
 - ✅ Thread-safe: Multiple threads can call `solve_topology_mapping()` concurrently
 - ✅ Reentrant: Can be called recursively
-- ✅ No global state: Each call is independent
+- ✅ No global state: Each call creates a new `DFSSearchEngine` instance internally
 
 ## Template Requirements
 

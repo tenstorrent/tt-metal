@@ -9,16 +9,16 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
 NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalcon7BProgramFactory::create(
-    const QkvHeadsFalcon7bParams& /*operation_attributes*/,
-    const QkvHeadsFalcon7bInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& a = tensor_args.input;
+    const NlpCreateQkvHeadsFalcon7bParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
+    NlpCreateQkvHeadsFalcon7bResult& tensor_return_value) {
+    const auto& a = tensor_args;
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -150,13 +150,13 @@ NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalco
 
 void NlpCreateQkvHeadsFalcon7BProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const QkvHeadsFalcon7bParams&,
-    const QkvHeadsFalcon7bInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const NlpCreateQkvHeadsFalcon7bParams&,
+    const Tensor& tensor_args,
+    NlpCreateQkvHeadsFalcon7bResult& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared = cached_program.shared_variables;
 
-    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* src_dram_buffer = tensor_args.buffer();
     auto* dst_dram_buffer_query = tensor_return_value.q.buffer();
     auto* dst_dram_buffer_key = tensor_return_value.k.buffer();
     auto* dst_dram_buffer_value = tensor_return_value.v.buffer();
@@ -178,4 +178,4 @@ void NlpCreateQkvHeadsFalcon7BProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b
+}  // namespace ttnn::experimental::prim

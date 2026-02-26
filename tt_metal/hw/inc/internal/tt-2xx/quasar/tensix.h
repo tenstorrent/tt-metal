@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,17 +14,21 @@
 #include <type_traits>
 
 #include "cfg_defines.h"
+// #include "tt_t6_global_reg_map.h" // non existent in HW repo
+// #include "tt_t6_global_map.h"
+#include "t6_debug_map.h"
+#include "t6_mop_config_map.h"
+#include "tt_t6_trisc_map.h"
+// #include <edc_map.h>
 
-// Convenience and type defines
-using uint = std::uint32_t;
-using byte = std::uint8_t;
-
-#define PREPROCESSOR_EVAL(x, y, z) x##y##z
-#define PREPROCESSOR_EXPAND(x, y, z) PREPROCESSOR_EVAL(x, y, z)
-
-#define MAX_THREADS 3  // max number of threads supported by single core
+#define MAX_THREADS 4  // max number of threads supported by single core. @THREAD_COUNT sensitive
 
 #define MAX_PACKERS 4  // number of packers in the design
+
+#define TEST_MAILBOX_ADDRESS (4)
+#define WALL_CLOCK_MAILBOX_ADDRESS 96
+#define PERF_COUNTER_MAILBOX_ADDRESS 112
+#define PERF_MAILBOX_SIZE 16
 
 // TODO: use this in firmware.cc
 #define MEMORY_WORD_SIZE_IN_BYTES (16)
@@ -41,41 +46,45 @@ using byte = std::uint8_t;
 
 // TODO: Consider redefining these as uint32_t rather then #defines
 
+#define L0_BASE 0xFFC00000  // 0xFFC00000 - 0xFFDFFFFF
+#define L1_BASE_ADDR 0x0    // 0x00000000 - 0xFFBFFFFF
+
+#define LOCAL_MEM_SIZE 4096
+
 // Reads and writes here access the tensix core register set. Each register is four bytes, but subword reads are
 // supported through byte enables. Register indices and contents are defined in local_regs.yaml.
-#define REGFILE_BASE 0xFFE00000  // 0xFFE00000 - 0xFFE3FFFF
+#define REGFILE_BASE GPRS_BASE
 
-// Writes here are appended to the tensix core instruction FIFO. This
-// has priority over incoming instruction fetch returns, which are
-// simply dropped. The instruction will stay in the queue if a loop
-// instruction is in progress. If the FIFO is full a write will stall
-// the RISC-V core (until there is space). Additionally, the
-// instruction queue is flushed in some cases.
-
-#define INSTRN_BUF_BASE 0xFFE40000
-// The HAL needs to know the size per cpu
-#define INSTRN_BUF_STRIDE 0x00010000
+// Writes here are appended to the tensix core instruction FIFO. This has priority over incoming instruction fetch
+// returns, which are simply dropped. The instruction will stay in the queue if a loop instruction is in progress. If
+// the FIFO gets overfull, writes are dropped? Additionally, the instruction queue is flushed in some cases.
+#define INSTRN_BUF_BASE IBUFFER_BASE
 
 // PC buffer is used to pass kernel IDs and parameters from Brisc to Triscs, and also as a sync point -- a read from pc
 // buffer+1 address will not return until that thread is idle.
-#define PC_BUF_BASE 0xFFE80000   // 0xFFE80000 - 0xFFEBFFFF
-#define PC1_BUF_BASE 0xFFE90000  // 0xFFE80000 - 0xFFEBFFFF
-#define PC2_BUF_BASE 0xFFEA0000
+#define PC_BUF_BASE PCBUFFER_BASE
 
 // Reads from here retrieve a value written by the tensix code, or 0 if there the mailbox FIFO is empty.
-#define TENSIX_MAILBOX0_BASE 0xFFEC0000  // Brisc
-#define TENSIX_MAILBOX1_BASE 0xFFEC1000  // Trisc0
-#define TENSIX_MAILBOX2_BASE 0xFFEC2000  // Trisc1
-#define TENSIX_MAILBOX3_BASE 0xFFEC3000  // Trisc2
+#define TENSIX_MAILBOX0_BASE TRISC_MAILBOX_BASE0  // Trisc0
+#define TENSIX_MAILBOX1_BASE TRISC_MAILBOX_BASE1  // Trisc1
+#define TENSIX_MAILBOX2_BASE TRISC_MAILBOX_BASE2  // Trisc2
+#define TENSIX_MAILBOX3_BASE TRISC_MAILBOX_BASE3  // Trisc2
+// #define TENSIX_MAILBOX4_BASE 0xFFEC4000  // Trisc3
 
 // Config registers
-#define TENSIX_CFG_BASE 0xFFEF0000  // 0xFFEF0000 - 0xFFF00000
+#define TENSIX_CFG_BASE CFG_REGS_BASE
 
 // MOP config registers
-#define TENSIX_MOP_CFG_BASE 0xFFB80000  // 0xFFB8000 - 0xFFB8100
+#define TENSIX_MOP_CFG_BASE MOP_CFG_BASE
+#define MOP_CFG_REGS ((volatile mop_config_regs_t*)(MOP_CFG_BASE))
+
+// These addresses are defined by software convention
+#define L1_KERNEL_BASE 0x1F000                        // This is a 128-bit address
+const static uint32_t L1_MATH_KERNEL_BASE = 0x1E000;  // This is a 128-bit address
+#define L1_L0_DUMP 0x1D000                            // This is a 128-bit address
 
 // TDMA register base
-#define RISCV_TDMA_REGS_START_ADDR 0xFFB11000
+#define RISCV_TDMA_REGS_START_ADDR TILE_COUNTERS_BASE
 #define RISCV_TDMA_REG_XMOV_SRC_ADDR 0xFFB11000
 #define RISCV_TDMA_REG_XMOV_DST_ADDR 0xFFB11004
 #define RISCV_TDMA_REG_XMOV_SIZE 0xFFB11008
@@ -88,22 +97,17 @@ using byte = std::uint8_t;
 #define RISCV_TDMA_REG_CLK_GATE_EN 0xFFB11024
 #define RISCV_TDMA_REG_CLK_GATE_HYST 0xFFB11028
 #define RISCV_TDMA_REG_XMOV_L1_BASE_ADDR 0xFFB1102C
-#define RISCV_TDMA_REG_FIFO_PACKED_TILE_SIZE(packer) (0xFFB11030 | ((packer) << 8))
-#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer) (0xFFB11034 | ((packer) << 8))
+#define RISCV_TDMA_REG_FIFO_PACKED_TILE_SIZE(packer) (0xFFB11030 | (packer << 8))
+#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer) (0xFFB11034 | (packer << 8))
 #define RISCV_TDMA_REG_FIFO_PACKED_TILE_STATUS (0xFFB11038)
 
-#define RISCV_TDMA_PACKED_TILE_FIFO_EMPTY(status, packer) (((status) >> ((packer) * 2)) & 0x1)
-#define RISCV_TDMA_PACKED_TILE_FIFO_FULL(status, packer) (((status) >> ((packer) * 2 + 1)) & 0x1)
+#define RISCV_TDMA_PACKED_TILE_FIFO_EMPTY(status, packer) ((status >> (packer * 2)) & 0x1)
+#define RISCV_TDMA_PACKED_TILE_FIFO_FULL(status, packer) ((status >> (packer * 2 + 1)) & 0x1)
 #define RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK 0x01
 #define RISCV_TDMA_STATUS_FLAG_MOVER1_BUSY_MASK 0x02
 #define RISCV_TDMA_STATUS_FLAG_FIFO_FULL_MASK 0x04
 #define RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK 0x08
 #define RISCV_TDMA_STATUS_FLAG_ERROR_MASK 0x10
-
-#define RISCV_SOFT_RESET_0_NONE 0x00000
-#define RISCV_SOFT_RESET_0_BRISC 0x00800
-#define RISCV_SOFT_RESET_0_NCRISC 0x40000
-#define RISCV_SOFT_RESET_0_TRISCS 0x07000
 
 // Debug registers
 /*
@@ -112,7 +116,7 @@ using byte = std::uint8_t;
 -- Stupid little helper to generate the defines shown below
 
 root = assert(os.getenv("ROOT"), "Must provide ROOT env var porinting to repo root")
-f = assert(io.open(root .. "/src/hardware/tensix/rtl/tt_risc_debug_regs.sv"))
+f = assert(io.open(root .. "/src/hardware/tensix/rtl/tt_t6_debug_regs.sv"))
 
 f = f:read("*a")
 
@@ -128,163 +132,165 @@ for nm,addr in f:gmatch("localparam%s*([a-zA-Z0-9_]*)%s*=%s*32'h(%x*)%s*;") do
     io.write")\n"
 end
 */
-#define RISCV_DEBUG_REGS_START_ADDR 0xFFB12000
-#define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0 (RISCV_DEBUG_REGS_START_ADDR | 0x0)
-#define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1 (RISCV_DEBUG_REGS_START_ADDR | 0x4)
-#define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD2 (RISCV_DEBUG_REGS_START_ADDR | 0x8)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0 (RISCV_DEBUG_REGS_START_ADDR | 0xC)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1 (RISCV_DEBUG_REGS_START_ADDR | 0x10)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2 (RISCV_DEBUG_REGS_START_ADDR | 0x14)
-#define RISCV_DEBUG_REG_PERF_CNT_FPU0 (RISCV_DEBUG_REGS_START_ADDR | 0x18)
-#define RISCV_DEBUG_REG_PERF_CNT_FPU1 (RISCV_DEBUG_REGS_START_ADDR | 0x1C)
-#define RISCV_DEBUG_REG_PERF_CNT_FPU2 (RISCV_DEBUG_REGS_START_ADDR | 0x20)
-#define RISCV_DEBUG_REG_PERF_CNT_L1_0 (RISCV_DEBUG_REGS_START_ADDR | 0x30)
-#define RISCV_DEBUG_REG_PERF_CNT_L1_1 (RISCV_DEBUG_REGS_START_ADDR | 0x34)
-#define RISCV_DEBUG_REG_PERF_CNT_L1_2 (RISCV_DEBUG_REGS_START_ADDR | 0x38)
-#define RISCV_DEBUG_REG_PERF_CNT_ALL (RISCV_DEBUG_REGS_START_ADDR | 0x3C)
-#define RISCV_DEBUG_REG_DBG_L1_MEM_REG0 (RISCV_DEBUG_REGS_START_ADDR | 0x48)
-#define RISCV_DEBUG_REG_DBG_L1_MEM_REG1 (RISCV_DEBUG_REGS_START_ADDR | 0x4C)
-#define RISCV_DEBUG_REG_DBG_L1_MEM_REG2 (RISCV_DEBUG_REGS_START_ADDR | 0x50)
-#define RISCV_DEBUG_REG_DBG_BUS_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x54)
-#define RISCV_DEBUG_REG_TENSIX_CREG_READ (RISCV_DEBUG_REGS_START_ADDR | 0x58)
-#define RISCV_DEBUG_REG_DBG_RD_DATA (RISCV_DEBUG_REGS_START_ADDR | 0x5C)
-#define RISCV_DEBUG_REG_THREAD1_CREG_READ (RISCV_DEBUG_REGS_START_ADDR | 0x5C)
-#define RISCV_DEBUG_REG_DBG_ARRAY_RD_EN (RISCV_DEBUG_REGS_START_ADDR | 0x60)
-#define RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD (RISCV_DEBUG_REGS_START_ADDR | 0x64)
-#define RISCV_DEBUG_REG_DBG_FEATURE_DISABLE (RISCV_DEBUG_REGS_START_ADDR | 0x68)
-#define RISCV_DEBUG_REG_DBG_ARRAY_RD_DATA (RISCV_DEBUG_REGS_START_ADDR | 0x6C)
-#define RISCV_DEBUG_REG_CG_CTRL_HYST0 (RISCV_DEBUG_REGS_START_ADDR | 0x70)
-#define RISCV_DEBUG_REG_CG_CTRL_HYST1 (RISCV_DEBUG_REGS_START_ADDR | 0x74)
-#define RISCV_DEBUG_REG_TENSIX_CREG_RDDATA (RISCV_DEBUG_REGS_START_ADDR | 0x78)
-#define RISCV_DEBUG_REG_CG_CTRL_HYST2 (RISCV_DEBUG_REGS_START_ADDR | 0x7C)
-#define RISCV_DEBUG_REG_THREAD1_CREG_RDDATA (RISCV_DEBUG_REGS_START_ADDR | 0x7C)
-#define RISCV_DEBUG_REG_RISC_DBG_CNTL_0 (RISCV_DEBUG_REGS_START_ADDR | 0x80)
-#define RISCV_DEBUG_REG_RISC_DBG_CNTL_1 (RISCV_DEBUG_REGS_START_ADDR | 0x84)
-#define RISCV_DEBUG_REG_RISC_DBG_STATUS_0 (RISCV_DEBUG_REGS_START_ADDR | 0x88)
-#define RISCV_DEBUG_REG_RISC_DBG_STATUS_1 (RISCV_DEBUG_REGS_START_ADDR | 0x8C)
-#define RISCV_DEBUG_REG_TRISC_PC_BUF_OVERRIDE (RISCV_DEBUG_REGS_START_ADDR | 0x90)
-#define RISCV_DEBUG_REG_DBG_INVALID_INSTRN (RISCV_DEBUG_REGS_START_ADDR | 0x94)
-#define RISCV_DEBUG_REG_DBG_INSTRN_BUF_CTRL0 (RISCV_DEBUG_REGS_START_ADDR | 0xA0)
-#define RISCV_DEBUG_REG_DBG_INSTRN_BUF_CTRL1 (RISCV_DEBUG_REGS_START_ADDR | 0xA4)
-#define RISCV_DEBUG_REG_DBG_INSTRN_BUF_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0xA8)
-#define RISCV_DEBUG_REG_STOCH_RND_MASK0 (RISCV_DEBUG_REGS_START_ADDR | 0xAC)
-#define RISCV_DEBUG_REG_STOCH_RND_MASK1 (RISCV_DEBUG_REGS_START_ADDR | 0xB0)
-#define RISCV_DEBUG_REG_FPU_STICKY_BITS (RISCV_DEBUG_REGS_START_ADDR | 0xB4)
-#define RISCV_DEBUG_REG_ETH_RISC_PREFECTH_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0xB8)
-#define RISCV_DEBUG_REG_ETH_RISC_PREFECTH_PC (RISCV_DEBUG_REGS_START_ADDR | 0xBC)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0 (RISCV_DEBUG_REGS_START_ADDR | 0xF0)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1 (RISCV_DEBUG_REGS_START_ADDR | 0xF4)
-#define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2 (RISCV_DEBUG_REGS_START_ADDR | 0xF8)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD (RISCV_DEBUG_REGS_START_ADDR | 0x100)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_INSTRN_THREAD (RISCV_DEBUG_REGS_START_ADDR | 0x104)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK (RISCV_DEBUG_REGS_START_ADDR | 0x108)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_UNPACK (RISCV_DEBUG_REGS_START_ADDR | 0x10C)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK (RISCV_DEBUG_REGS_START_ADDR | 0x110)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_PACK (RISCV_DEBUG_REGS_START_ADDR | 0x114)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1 (RISCV_DEBUG_REGS_START_ADDR | 0x118)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_DBG_L1 (RISCV_DEBUG_REGS_START_ADDR | 0x11C)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x120)
-#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x124)
-#define RISCV_DEBUG_REG_SOFT_RESET_0 (RISCV_DEBUG_REGS_START_ADDR | 0x1B0)
-#define RISCV_DEBUG_REG_ECC_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x1D0)
-#define RISCV_DEBUG_REG_ECC_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x1D4)
-#define RISCV_DEBUG_REG_WATCHDOG_TIMER (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
-#define RISCV_DEBUG_REG_WDT_CNTL (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)
-#define RISCV_DEBUG_REG_WDT_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x1E8)
-#define RISCV_DEBUG_REG_WALL_CLOCK_0 (RISCV_DEBUG_REGS_START_ADDR | 0x1F0)
-#define RISCV_DEBUG_REG_WALL_CLOCK_1 (RISCV_DEBUG_REGS_START_ADDR | 0x1F4)
-#define RISCV_DEBUG_REG_WALL_CLOCK_1_AT (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_CMD (RISCV_DEBUG_REGS_START_ADDR | 0x1FC)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_CNTL (RISCV_DEBUG_REGS_START_ADDR | 0x200)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x204)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF0_START_ADDR (RISCV_DEBUG_REGS_START_ADDR | 0x208)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF0_END_ADDR (RISCV_DEBUG_REGS_START_ADDR | 0x20C)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF1_START_ADDR (RISCV_DEBUG_REGS_START_ADDR | 0x210)
-#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF1_END_ADDR (RISCV_DEBUG_REGS_START_ADDR | 0x214)
-#define RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x218)
-#define RISCV_DEBUG_REG_DBG_L1_READBACK_OFFSET (RISCV_DEBUG_REGS_START_ADDR | 0x21C)
-#define RISCV_DEBUG_REG_LFSR_HIT_MASK (RISCV_DEBUG_REGS_START_ADDR | 0x220)
-#define RISCV_DEBUG_REG_DISABLE_RESET (RISCV_DEBUG_REGS_START_ADDR | 0x224)
-#define RISCV_DEBUG_REG_TRISC0_RESET_PC (RISCV_DEBUG_REGS_START_ADDR | 0x228)
-#define RISCV_DEBUG_REG_TRISC1_RESET_PC (RISCV_DEBUG_REGS_START_ADDR | 0x22C)
-#define RISCV_DEBUG_REG_TRISC2_RESET_PC (RISCV_DEBUG_REGS_START_ADDR | 0x230)
-#define RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE (RISCV_DEBUG_REGS_START_ADDR | 0x234)
-#define RISCV_DEBUG_REG_NCRISC_RESET_PC (RISCV_DEBUG_REGS_START_ADDR | 0x238)
-#define RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE (RISCV_DEBUG_REGS_START_ADDR | 0x23C)
-#define RISCV_DEBUG_REG_DEST_CG_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x240)
-#define RISCV_DEBUG_REG_CG_CTRL_EN (RISCV_DEBUG_REGS_START_ADDR | 0x244)
-#define RISCV_DEBUG_REG_CG_KICK (RISCV_DEBUG_REGS_START_ADDR | 0x248)
 
-// Here are the old manually-written defines that weren't covered by the
-// generator script, or are being depended on by legacy code:
-#define RISCV_DEBUG_REG_BREAKPOINT_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x1C0)
-#define RISCV_DEBUG_REG_BREAKPOINT_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x1C4)
-#define RISCV_DEBUG_REG_BREAKPOINT_DATA (RISCV_DEBUG_REGS_START_ADDR | 0x1C8)
-#define RISCV_DEBUG_REG_INSTRN_BUF_CTRL0 (RISCV_DEBUG_REGS_START_ADDR | 0x0A0)
-#define RISCV_DEBUG_REG_INSTRN_BUF_CTRL1 (RISCV_DEBUG_REGS_START_ADDR | 0x0A4)
-#define RISCV_DEBUG_REG_INSTRN_BUF_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x0A8)
-#define RISCV_DEBUG_REG_THREAD0_CREG_RDDATA (RISCV_DEBUG_REGS_START_ADDR | 0x078)
-#define RISCV_DEBUG_REG_WALL_CLOCK_L (RISCV_DEBUG_REGS_START_ADDR | 0x1F0)
-#define RISCV_DEBUG_REG_WALL_CLOCK_H (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
-#define RISCV_DEBUG_REG_WDT (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
-#define RISCV_DEBUG_REG_WDT_CNTL (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)
-#define RISCV_DEBUG_REG_WDT_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x1E8)
+#define RISCV_DEBUG_REGS ((volatile t6_debug_regs_t*)(LOCAL_REGS_BASE))
 
-struct riscv_debug_reg_dbg_dbus_cntl_t {
-    uint dbg_sig_sel : 16;
-    uint dbg_daisy_sel : 8;
-    uint dbg_rd_sel : 4;
-    uint dbg_reg_ovrd_en : 1;
-    uint dbg_daisy_en : 1;
-    uint dbg_reserved : 2;
-};
+/* Registers in the global space */
+// #define EDC_REGS ((volatile edc_biu_regfile_t *)(GLOBAL_REGS_BASE + EDC_REGS_BASE))
+// #define GSRS_REGS ((volatile uint32_t *)(GLOBAL_REGS_BASE + GSRS_REGS_BASE))
+// #define SEMAPHORE_REGS ((volatile uint32_t *)(GLOBAL_REGS_BASE + SEMAPHORE_REGS_BASE))
 
-union riscv_debug_reg_dbg_dbus_cntl_u {
-    uint val;
-    riscv_debug_reg_dbg_dbus_cntl_t f;
-};
+// The defines below are now replaced by the t6_debugs_reg_t structure written out in the RDL flow
 
-struct riscv_debug_reg_dbg_l1_mem_reg2_t {
-    uint mem_dump_mode : 4;
-    uint skip_cycles : 8;
-    uint mem_write : 1;
-    uint mem_read : 1;
-    uint reserved : 18;
-};
+#define RISCV_DEBUG_REGS_START_ADDR LOCAL_REGS_BASE
+// #define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0                 (RISCV_DEBUG_REGS_START_ADDR | 0x0)
+// #define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1                 (RISCV_DEBUG_REGS_START_ADDR | 0x4)
+// #define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD2                 (RISCV_DEBUG_REGS_START_ADDR | 0x8)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0                   (RISCV_DEBUG_REGS_START_ADDR | 0xC)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1                   (RISCV_DEBUG_REGS_START_ADDR | 0x10)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2                   (RISCV_DEBUG_REGS_START_ADDR | 0x14)
+// #define RISCV_DEBUG_REG_PERF_CNT_FPU0                           (RISCV_DEBUG_REGS_START_ADDR | 0x18)
+// #define RISCV_DEBUG_REG_PERF_CNT_FPU1                           (RISCV_DEBUG_REGS_START_ADDR | 0x1C)
+// #define RISCV_DEBUG_REG_PERF_CNT_FPU2                           (RISCV_DEBUG_REGS_START_ADDR | 0x20)
+// #define RISCV_DEBUG_REG_PERF_CNT_L1_0                           (RISCV_DEBUG_REGS_START_ADDR | 0x30)
+// #define RISCV_DEBUG_REG_PERF_CNT_L1_1                           (RISCV_DEBUG_REGS_START_ADDR | 0x34)
+// #define RISCV_DEBUG_REG_PERF_CNT_L1_2                           (RISCV_DEBUG_REGS_START_ADDR | 0x38)
+// #define RISCV_DEBUG_REG_PERF_CNT_ALL                            (RISCV_DEBUG_REGS_START_ADDR | 0x3C)
+// #define RISCV_DEBUG_REG_DBG_L1_MEM_REG0                         (RISCV_DEBUG_REGS_START_ADDR | 0x48)
+// #define RISCV_DEBUG_REG_DBG_L1_MEM_REG1                         (RISCV_DEBUG_REGS_START_ADDR | 0x4C)
+// #define RISCV_DEBUG_REG_DBG_L1_MEM_REG2                         (RISCV_DEBUG_REGS_START_ADDR | 0x50)
+// #define RISCV_DEBUG_REG_DBG_BUS_CTRL                            (RISCV_DEBUG_REGS_START_ADDR | 0x54)
+// #define RISCV_DEBUG_REG_TENSIX_CREG_READ                        (RISCV_DEBUG_REGS_START_ADDR | 0x58)
+// #define RISCV_DEBUG_REG_DBG_RD_DATA                             (RISCV_DEBUG_REGS_START_ADDR | 0x5C)
+// #define RISCV_DEBUG_REG_THREAD1_CREG_READ                       (RISCV_DEBUG_REGS_START_ADDR | 0x5C)
+// #define RISCV_DEBUG_REG_DBG_ARRAY_RD_EN                         (RISCV_DEBUG_REGS_START_ADDR | 0x60)
+// #define RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD                        (RISCV_DEBUG_REGS_START_ADDR | 0x64)
+// #define RISCV_DEBUG_REG_DBG_FEATURE_DISABLE                     (RISCV_DEBUG_REGS_START_ADDR | 0x68)
+// #define RISCV_DEBUG_REG_DBG_ARRAY_RD_DATA                       (RISCV_DEBUG_REGS_START_ADDR | 0x6C)
+// // #define RISCV_DEBUG_REG_CG_CTRL_HYST0                           (RISCV_DEBUG_REGS_START_ADDR | 0x70)
+// #// define RISCV_DEBUG_REG_CG_CTRL_HYST1                           (RISCV_DEBUG_REGS_START_ADDR | 0x74)
+// #define RISCV_DEBUG_REG_TENSIX_CREG_RDDATA                      (RISCV_DEBUG_REGS_START_ADDR | 0x78)
+// // #define RISCV_DEBUG_REG_CG_CTRL_HYST2                           (RISCV_DEBUG_REGS_START_ADDR | 0x7C)
+// #define RISCV_DEBUG_REG_THREAD1_CREG_RDDATA                     (RISCV_DEBUG_REGS_START_ADDR | 0x7C)
+// #define RISCV_DEBUG_REG_RISC_DBG_CNTL_0                         (RISCV_DEBUG_REGS_START_ADDR | 0x80)
+// #define RISCV_DEBUG_REG_RISC_DBG_CNTL_1                         (RISCV_DEBUG_REGS_START_ADDR | 0x84)
+// #define RISCV_DEBUG_REG_RISC_DBG_STATUS_0                       (RISCV_DEBUG_REGS_START_ADDR | 0x88)
+// #define RISCV_DEBUG_REG_RISC_DBG_STATUS_1                       (RISCV_DEBUG_REGS_START_ADDR | 0x8C)
+// #define RISCV_DEBUG_REG_TRISC_PC_BUF_OVERRIDE                   (RISCV_DEBUG_REGS_START_ADDR | 0x90)
+// #define RISCV_DEBUG_REG_DBG_INVALID_INSTRN                      (RISCV_DEBUG_REGS_START_ADDR | 0x94)
+// #define RISCV_DEBUG_REG_DBG_INSTRN_BUF_CTRL0                    (RISCV_DEBUG_REGS_START_ADDR | 0xA0)
+// #define RISCV_DEBUG_REG_DBG_INSTRN_BUF_CTRL1                    (RISCV_DEBUG_REGS_START_ADDR | 0xA4)
+// #define RISCV_DEBUG_REG_DBG_INSTRN_BUF_STATUS                   (RISCV_DEBUG_REGS_START_ADDR | 0xA8)
+// #define RISCV_DEBUG_REG_STOCH_RND_MASK0                         (RISCV_DEBUG_REGS_START_ADDR | 0xAC)
+// #define RISCV_DEBUG_REG_STOCH_RND_MASK1                         (RISCV_DEBUG_REGS_START_ADDR | 0xB0)
+// #define RISCV_DEBUG_REG_FPU_STICKY_BITS                         (RISCV_DEBUG_REGS_START_ADDR | 0xB4)
+// #define RISCV_DEBUG_REG_ETH_RISC_PREFECTH_CTRL                  (RISCV_DEBUG_REGS_START_ADDR | 0xB8)
+// #define RISCV_DEBUG_REG_ETH_RISC_PREFECTH_PC                    (RISCV_DEBUG_REGS_START_ADDR | 0xBC)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0                     (RISCV_DEBUG_REGS_START_ADDR | 0xF0)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1                     (RISCV_DEBUG_REGS_START_ADDR | 0xF4)
+// #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2                     (RISCV_DEBUG_REGS_START_ADDR | 0xF8)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD            (RISCV_DEBUG_REGS_START_ADDR | 0x100)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_H_INSTRN_THREAD            (RISCV_DEBUG_REGS_START_ADDR | 0x104)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK              (RISCV_DEBUG_REGS_START_ADDR | 0x108)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_UNPACK              (RISCV_DEBUG_REGS_START_ADDR | 0x10C)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK                (RISCV_DEBUG_REGS_START_ADDR | 0x110)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_PACK                (RISCV_DEBUG_REGS_START_ADDR | 0x114)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1                   (RISCV_DEBUG_REGS_START_ADDR | 0x118)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_H_DBG_L1                   (RISCV_DEBUG_REGS_START_ADDR | 0x11C)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU                      (RISCV_DEBUG_REGS_START_ADDR | 0x120)
+// #define RISCV_DEBUG_REG_PERF_CNT_OUT_H_FPU                      (RISCV_DEBUG_REGS_START_ADDR | 0x124)
+#define RISCV_DEBUG_REG_SOFT_RESET_0 (RISCV_DEBUG_REGS_START_ADDR | 0xB8)
+/*
+#define RISCV_DEBUG_REG_ECC_CTRL                                (RISCV_DEBUG_REGS_START_ADDR | 0x1D0)
+#define RISCV_DEBUG_REG_ECC_STATUS                              (RISCV_DEBUG_REGS_START_ADDR | 0x1D4)
+#define RISCV_DEBUG_REG_WATCHDOG_TIMER                          (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
+#define RISCV_DEBUG_REG_WDT_CNTL                                (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)
+#define RISCV_DEBUG_REG_WDT_STATUS                              (RISCV_DEBUG_REGS_START_ADDR | 0x1E8)
+#define RISCV_DEBUG_REG_WALL_CLOCK_0                            (RISCV_DEBUG_REGS_START_ADDR | 0x1F0)
+#define RISCV_DEBUG_REG_WALL_CLOCK_1                            (RISCV_DEBUG_REGS_START_ADDR | 0x1F4)
+#define RISCV_DEBUG_REG_WALL_CLOCK_1_AT                         (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_CMD                      (RISCV_DEBUG_REGS_START_ADDR | 0x1FC)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_CNTL                     (RISCV_DEBUG_REGS_START_ADDR | 0x200)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_STATUS                   (RISCV_DEBUG_REGS_START_ADDR | 0x204)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF0_START_ADDR          (RISCV_DEBUG_REGS_START_ADDR | 0x208)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF0_END_ADDR            (RISCV_DEBUG_REGS_START_ADDR | 0x20C)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF1_START_ADDR          (RISCV_DEBUG_REGS_START_ADDR | 0x210)
+#define RISCV_DEBUG_REG_TIMESTAMP_DUMP_BUF1_END_ADDR            (RISCV_DEBUG_REGS_START_ADDR | 0x214)
+#define RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL                       (RISCV_DEBUG_REGS_START_ADDR | 0x218)
+#define RISCV_DEBUG_REG_DBG_L1_READBACK_OFFSET                  (RISCV_DEBUG_REGS_START_ADDR | 0x21C)
+#define RISCV_DEBUG_REG_LFSR_HIT_MASK                           (RISCV_DEBUG_REGS_START_ADDR | 0x220)
+#define RISCV_DEBUG_REG_DISABLE_RESET                           (RISCV_DEBUG_REGS_START_ADDR | 0x224)
+#define RISCV_DEBUG_REG_TRISC0_RESET_PC                         (RISCV_DEBUG_REGS_START_ADDR | 0x228)
+#define RISCV_DEBUG_REG_TRISC1_RESET_PC                         (RISCV_DEBUG_REGS_START_ADDR | 0x22C)
+#define RISCV_DEBUG_REG_TRISC2_RESET_PC                         (RISCV_DEBUG_REGS_START_ADDR | 0x230)
+// #define RISCV_DEBUG_REG_TRISC3_RESET_PC                      (RISCV_DEBUG_REGS_START_ADDR | 0x234?)  FIXME tomd
+#define RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE                 (RISCV_DEBUG_REGS_START_ADDR | 0x234)
+#define RISCV_DEBUG_REG_NCRISC_RESET_PC                         (RISCV_DEBUG_REGS_START_ADDR | 0x238)
+#define RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE                (RISCV_DEBUG_REGS_START_ADDR | 0x23C)
+#define RISCV_DEBUG_REG_DEST_CG_CTRL                            (RISCV_DEBUG_REGS_START_ADDR | 0x240)
+#define RISCV_DEBUG_REG_CG_CTRL_EN                              (RISCV_DEBUG_REGS_START_ADDR | 0x244)
+#define RISCV_DEBUG_REG_CG_KICK                                 (RISCV_DEBUG_REGS_START_ADDR | 0x248)
+#define RISCV_DEBUG_IBUF_TIMEOUT                                (RISCV_DEBUG_REGS_START_ADDR | 0x24C)
+#define RISCV_DEBUG_IBUF_CNT_EN                                 (RISCV_DEBUG_REGS_START_ADDR | 0x250)
 
-union riscv_debug_reg_dbg_l1_mem_reg2_u {
-    uint val;
-    riscv_debug_reg_dbg_l1_mem_reg2_t f;
-};
+//#define RISCV_DEBUG_REG_TDMA_EZ_FMT_ADDR                        (RISCV_DEBUG_REGS_START_ADDR | 0x24C)
+//#define RISCV_DEBUG_REG_TDMA_EZ_FMT_DATA                        (RISCV_DEBUG_REGS_START_ADDR | 0x250)
+//Here are the old manually-written defines that weren't covered by the
+//generator script, or are being depended on by legacy code:
+#define RISCV_DEBUG_REG_BREAKPOINT_CTRL         (RISCV_DEBUG_REGS_START_ADDR | 0x1C0)
+#define RISCV_DEBUG_REG_BREAKPOINT_STATUS       (RISCV_DEBUG_REGS_START_ADDR | 0x1C4)
+#define RISCV_DEBUG_REG_BREAKPOINT_DATA         (RISCV_DEBUG_REGS_START_ADDR | 0x1C8)
+#define RISCV_DEBUG_REG_INSTRN_BUF_CTRL0        (RISCV_DEBUG_REGS_START_ADDR | 0x0A0)
+#define RISCV_DEBUG_REG_INSTRN_BUF_CTRL1        (RISCV_DEBUG_REGS_START_ADDR | 0x0A4)
+#define RISCV_DEBUG_REG_INSTRN_BUF_STATUS       (RISCV_DEBUG_REGS_START_ADDR | 0x0A8)
+#define RISCV_DEBUG_REG_THREAD0_CREG_RDDATA     (RISCV_DEBUG_REGS_START_ADDR | 0x078)
+#define RISCV_DEBUG_REG_WALL_CLOCK_L            (RISCV_DEBUG_REGS_START_ADDR | 0x1F0)
+#define RISCV_DEBUG_REG_WALL_CLOCK_H            (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
+#define RISCV_DEBUG_REG_WDT                     (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
+#define RISCV_DEBUG_REG_WDT_CNTL                (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)
+#define RISCV_DEBUG_REG_WDT_STATUS              (RISCV_DEBUG_REGS_START_ADDR | 0x1E8)
+*/
 
-#define SOFT_RESET_UNPACKER(arg) (((arg) & 0x3) << 0)
-#define SOFT_RESET_PACKER(arg) (((arg) & 0xf) << 2)
+#define SOFT_RESET_UNPACKER(arg) ((arg & 0x3) << 0)
+#define SOFT_RESET_PACKER(arg) ((arg & 0xf) << 2)
 #define SOFT_RESET_MOVER ((0x1) << 6)
 #define SOFT_RESET_SEARCH ((0x1) << 7)
 #define SOFT_RESET_GLUE ((0x1) << 8)
 #define SOFT_RESET_THCON ((0x1) << 9)
 #define SOFT_RESET_FPU ((0x1) << 10)
-#define SOFT_RESET_RISC_CTRL(arg) (((arg) & 0xf) << 11)  // Soft reset for RISCV cores. Bit 0 - Brisc, Bit 1+ - Trisc
+#define SOFT_RESET_RISC_CTRL(arg) \
+    (((arg & 0xf) << 11) | ((arg & 0x10) << 20))  // Soft reset for RISCV cores. Bit 0 - PIC, Bit 1+ - Triscs 0-3
 #define SOFT_RESET_SRCA_REG ((0x1) << 15)
 #define SOFT_RESET_SRCB_REG ((0x1) << 16)
 #define SOFT_RESET_DEST_REG ((0x1) << 17)
+#define SOFT_RESET_NCRISC_CTRL ((0x1) << 18)
 
 // TDMA flop register index offset
 #define TDMA_FLOPREG_IDX_BASE(arg) ((arg) * 32)
 
+////////////trisc ldm//////////////
+#define TRISC_LDM_BASE (LOCAL_REGS_BASE + 0x00002000)
+#define TRISC_LDM_BASE_PTR ((uint32_t volatile*)(TRISC_LDM_BASE))
+#define TRISC_LDM(core_id) (TRISC_LDM_BASE_PTR + (core_id) * 2048)
+
 /////////////
 // Interrupt controller definitions
-#define RISC_PIC_BASE 0xFFB1'3000
-#define RISC_PIC_BASE_PTR ((uint32_t volatile*)0xFFB1'3000)
-#define RISC_PIC_BRISC_SW_INT_EN (RISC_PIC_BASE_PTR + 0)
-#define RISC_PIC_BRISC_HW_INT_EN (RISC_PIC_BASE_PTR + 1)
-#define RISC_PIC_BRISC_INT_NO (RISC_PIC_BASE_PTR + 2)
-#define RISC_PIC_NCRISC_SW_INT_EN (RISC_PIC_BASE_PTR + 3)
-#define RISC_PIC_NCRISC_HW_INT_EN (RISC_PIC_BASE_PTR + 4)
-#define RISC_PIC_NCRISC_INT_NO (RISC_PIC_BASE_PTR + 5)
-#define RISC_PIC_SW_INT_REGS (RISC_PIC_BASE_PTR + 6)
-#define RISC_PIC_HW_INTS (RISC_PIC_BASE_PTR + 38)
-#define RISC_PIC_INT_PCS (RISC_PIC_BASE_PTR + 42)
+#define HW_INTS 15
+#define SW_INTS 4
+#define RISC_PIC_BASE (LOCAL_REGS_BASE + 0x00000400)
+#define RISC_PIC_BASE_PTR ((uint32_t volatile*)(RISC_PIC_BASE))
+#define RISC_PIC_BRISC_SW_INT_EN(core_id) (RISC_PIC_BASE_PTR + 0 + (core_id) * 64)
+#define RISC_PIC_BRISC_HW_INT_EN(core_id) (RISC_PIC_BASE_PTR + 1 + (core_id) * 64)
+#define RISC_PIC_BRISC_INT_NO(core_id) (RISC_PIC_BASE_PTR + 2 + (core_id) * 64)
+#define RISC_PIC_BRISC_SW_INT_REG(core_id) (RISC_PIC_BASE_PTR + 3 + (core_id) * 64)
+#define RISC_PIC_BRISC_HW_INT_REG(core_id) (RISC_PIC_BASE_PTR + 4 + (core_id) * 64)
+#define RISC_PIC_BRISC_HW_INT_CFG(core_id) (RISC_PIC_BASE_PTR + 5 + (core_id) * 64)
+#define RISC_PIC_BRISC_SW_IVT_BASE(core_id) (RISC_PIC_BASE_PTR + 6 + (core_id) * 64)
+#define RISC_PIC_BRISC_HW_IVT_BASE(core_id) (RISC_PIC_BASE_PTR + 6 + SW_INTS + (core_id) * 64)
+#define RISC_PIC_BRISC_EX_REG_BASE(core_id) (RISC_PIC_BASE_PTR + 6 + SW_INTS + HW_INTS + (core_id) * 64)
+
+#define DEBUG_DEST_BASE_PTR32 ((uint32_t volatile*)(DEST_REGS_BASE))
+#define DEBUG_DEST_BASE_PTR16 ((uint16_t volatile*)(DEST_REGS_BASE))
 
 /////////////
 // Instruction macro definitions
@@ -307,7 +313,7 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
     (0x49000000 | (arg))  // Load indirect from address specified in a TDMA register, with offset specified in TDMA
                           // register to a TDMA register. Supports autoincrementing offset
 #define INSTRN_AT_INCR_GET(arg) \
-    (0x61000000 | (arg))  // Atomic increment and get - will read value in targetted memory location and return it to
+    (0x61000000 | (arg))  // Atomic increment and get - will read value in targeted memory location and return it to
                           // TDMA register and post-increment it atomically
 #define INSTRN_AT_INCR_GET_PTR(arg) \
     (0x62000000 |                   \
@@ -315,7 +321,7 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
              // (contains a 32b read pointer and a 32b write pointer), return the pointer value to TDMA register and
              // post-increment it unless the FIFO condition precludes that. For example, write pointer will not be
              // incremented if FIFO is full. Read pointer will not be incremented if FIFO is empty. FIFO full or empty
-             // conditions are returned as an unsuccessfull return condition code, so that the thread controller can
+             // conditions are returned as an unsuccessful return condition code, so that the thread controller can
              // retry until success (retry reads if FIFO empty, retry writes if FIFO full.)
 #define INSTRN_AT_SWAP(arg) \
     (0x63000000 | (arg))  // Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones
@@ -343,8 +349,8 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
 #define INSTRN_SETADC(arg) (0x50000000 | (arg))        // Set address counter for one channel and one dimension.
 #define INSTRN_SETADCXY(arg) (0x51000000 | (arg))      // Set address counters for X and Y dimensions for all channels
 #define INSTRN_SETADCZW(arg) (0x54000000 | (arg))      // Set address counters for Z and W dimensions for all channels
-#define INSTRN_FLUSH(arg) (0x81000000 | (arg))         // Flush all buffers of oustanding instructions, reads/writes.
-#define INSTRN_NOP(arg) (0x02000000 | (arg))           // Do nothing and consume an instruction slot and a cycle
+#define INSTRN_FLUSH(arg) (0x81000000 | (arg))         // Flush all buffers of outstanding instructions, reads/writes.
+#define INSTRN_NOP(arg) (0x89000000 | (arg))           // Do nothing and consume an instruction slot and a cycle
 #define INSTRN_MOVA2D(arg) (0x1a000000 | (arg))        // Move SRCA register to DST
 #define INSTRN_ZEROSRC(arg) (0x1b000000 | (arg))       // Clear SRC registers
 #define INSTRN_SETPKEDGEOF(arg) (0x1d000000 | (arg))   // Set packer edge masking offsets
@@ -352,9 +358,6 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
 #define INSTRN_CLEAR_DVALID(arg) (0x37000000 | (arg))  // Clear dvalid bits
 #define INSTRN_SEMINIT(arg) (0xa3000000 | (arg))       // Initialize a semaphore
 #define INSTRN_ZEROACC(arg) (0x10000000 | (arg))       // Zero out the accumulator
-#define INSTRN_SFPENCC(arg) (0x8a000000 | (arg))       // Enable the SFPU CC state
-#define INSTRN_SFPLOADI(arg) (0x71000000 | (arg))      // Load an SFPU register
-#define INSTRN_SFPCONFIG(arg) (0x91000000 | (arg))     // Set SFPU config register state
 
 #define TENSIX_UNHALT_VAL \
     0x40000000  // When written into PC_BUF_BASE, tensix core will unhalt and continue execution at the previous PC.
@@ -396,68 +399,66 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
 
 // Address defines for "SETC registers" aka "Local registers" -- see src/meta/regspecs/local_regs.yaml
 // FIXME: This needs to be generated from that yaml file... it went out of date without anyone noticing :(
-/*
-#define ALU_FORMAT_SPEC_REG      1
-#define DEST_TARGET_REG_CFG      2
-//#define MISC_CFG                 3
-#define ALU_FORMAT_SPEC_REG0     4
-#define ALU_FORMAT_SPEC_REG1     5
-#define ALU_FORMAT_SPEC_REG2     6
-#define UNP0_ADDR_CTRL_XY_REG_0  8
-#define UNP0_ADDR_CTRL_ZW_REG_0  9
-#define UNP0_ADDR_BASE_REG_0     10
-#define UNP0_ADDR_CTRL_XY_REG_1  11
-#define UNP0_ADDR_CTRL_ZW_REG_1  12
-#define UNP0_ADDR_BASE_REG_1     13
-#define UNP1_ADDR_CTRL_XY_REG_0  14
-#define UNP1_ADDR_CTRL_ZW_REG_0  15
-#define UNP1_ADDR_BASE_REG_0     16
-#define UNP1_ADDR_CTRL_XY_REG_1  17
-#define UNP1_ADDR_CTRL_ZW_REG_1  18
-#define UNP1_ADDR_BASE_REG_1     19
-#define PCK0_ADDR_CTRL_XY_REG_0  20
-#define PCK0_ADDR_CTRL_ZW_REG_0  21
-#define PCK0_ADDR_BASE_REG_0     22
-#define PCK0_ADDR_CTRL_XY_REG_1  23
-#define PCK0_ADDR_CTRL_ZW_REG_1  24
-#define PCK0_ADDR_BASE_REG_1     25
-#define SRCA_REGW_BASE           26
-#define SRCB_REGW_BASE           27
-#define DEST_REGW_BASE           28
-#define MATH_FIDELITY_CTRL       29
-#define LOOP_CNT_REG0            32
-#define LOOP_CNT_REG1            33
-#define LOOP_CNT_REG2            34
-#define LOOP_CNT_REG3            35
-#define LOOP_CNT_REG4            36
-#define LOOP_CNT_REG5            37
-#define LOOP_CNT_REG6            38
-#define LOOP_CNT_REG7            39
-#define LOOP_CNT_REG8            40
-#define LOOP_CNT_REG9            41
-#define LOOP_CNT_REG10           42
-#define LOOP_CNT_REG11           43
-#define MATH_FIDELITY            44
-#define TXC_IC_INVALIDATE        45
-#define RISCV_IC_INVALIDATE      46
-#define STACC_RELU               47
-#define PCK_EDGE_OFFSET          48
-#define DEST_OFFSET              49
-#define DEBUG_MUX_CTRL           50
-#define DEBUG_MUX_RD             51
-#define SET_ADDRCNT_PROG_INC     52
-#define SET_REGWCNT_PROG_INC     53
-#define DEBUG_ARRAY_RD_CMD       54
-#define DEBUG_ARRAY_RD_EN        55
-#define CG_CTRL_EN               56
-#define CG_CTRL_KICK             57
-#define PERF_CNT_CMD0            58
-#define PERF_CNT_CMD1            59
-#define PERF_CNT_CMD2            60
-#define PERF_CNT_CMD3            61
-#define ENABLE_ACC_STATS         62
-#define DISABLE_RISC_BP          63
-*/
+#define ALU_FORMAT_SPEC_REG 1
+#define DEST_TARGET_REG_CFG 2
+// #define MISC_CFG                 3
+#define ALU_FORMAT_SPEC_REG0 4
+#define ALU_FORMAT_SPEC_REG1 5
+#define ALU_FORMAT_SPEC_REG2 6
+#define UNP0_ADDR_CTRL_XY_REG_0 8
+#define UNP0_ADDR_CTRL_ZW_REG_0 9
+#define UNP0_ADDR_BASE_REG_0 10
+#define UNP0_ADDR_CTRL_XY_REG_1 11
+#define UNP0_ADDR_CTRL_ZW_REG_1 12
+#define UNP0_ADDR_BASE_REG_1 13
+#define UNP1_ADDR_CTRL_XY_REG_0 14
+#define UNP1_ADDR_CTRL_ZW_REG_0 15
+#define UNP1_ADDR_BASE_REG_0 16
+#define UNP1_ADDR_CTRL_XY_REG_1 17
+#define UNP1_ADDR_CTRL_ZW_REG_1 18
+#define UNP1_ADDR_BASE_REG_1 19
+#define PCK0_ADDR_CTRL_XY_REG_0 20
+#define PCK0_ADDR_CTRL_ZW_REG_0 21
+#define PCK0_ADDR_BASE_REG_0 22
+#define PCK0_ADDR_CTRL_XY_REG_1 23
+#define PCK0_ADDR_CTRL_ZW_REG_1 24
+#define PCK0_ADDR_BASE_REG_1 25
+#define SRCA_REGW_BASE 26
+#define SRCB_REGW_BASE 27
+#define DEST_REGW_BASE 28
+#define MATH_FIDELITY_CTRL 29
+#define LOOP_CNT_REG0 32
+#define LOOP_CNT_REG1 33
+#define LOOP_CNT_REG2 34
+#define LOOP_CNT_REG3 35
+#define LOOP_CNT_REG4 36
+#define LOOP_CNT_REG5 37
+#define LOOP_CNT_REG6 38
+#define LOOP_CNT_REG7 39
+#define LOOP_CNT_REG8 40
+#define LOOP_CNT_REG9 41
+#define LOOP_CNT_REG10 42
+#define LOOP_CNT_REG11 43
+#define MATH_FIDELITY_REG 44
+#define TXC_IC_INVALIDATE 45
+#define RISCV_IC_INVALIDATE 46
+#define STACC_RELU 47
+#define PCK_EDGE_OFFSET 48
+#define DEST_OFFSET 49
+#define DEBUG_MUX_CTRL 50
+#define DEBUG_MUX_RD 51
+#define SET_ADDRCNT_PROG_INC 52
+#define SET_REGWCNT_PROG_INC 53
+#define DEBUG_ARRAY_RD_CMD 54
+#define DEBUG_ARRAY_RD_EN 55
+// #define CG_CTRL_EN               56
+#define CG_CTRL_KICK 57
+#define PERF_CNT_CMD0 58
+#define PERF_CNT_CMD1 59
+#define PERF_CNT_CMD2 60
+#define PERF_CNT_CMD3 61
+#define ENABLE_ACC_STATS 62
+#define DISABLE_RISC_BP 63
 
 #define ADDR_16K 0x4000
 #define ADDR_32K 0x8000
@@ -667,7 +668,7 @@ static constexpr unsigned int R63 = 63;
 #define R63_LO 126
 #define R63_HI 127
 
-enum cnt_id_t { UNP0 = 1, UNP1 = 2, PCK0 = 4 };
+typedef enum { UNP0 = 1, UNP1 = 2, PCK0 = 4 } cnt_id_t;
 
 #ifdef CPU_JAWBRIDGE
 #define TENSIX_MAX_KERNEL_LOOP_COUNT 128u
@@ -676,6 +677,9 @@ enum cnt_id_t { UNP0 = 1, UNP1 = 2, PCK0 = 4 };
 #endif
 
 /////////////
+// Convenience and type defines
+typedef std::uint32_t uint;
+typedef std::uint8_t byte;
 
 template <class T>
 inline T bitmask(unsigned int bits) {
@@ -690,7 +694,7 @@ inline T bitmask(unsigned int bits) {
 
 template <class T>
 inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int to_shift) {
-    using u_T = typename std::make_unsigned<T>::type;
+    typedef typename std::make_unsigned<T>::type u_T;
     u_T u_x(x);
 
     // verify that no bits are shifted away
@@ -720,60 +724,58 @@ inline typename std::make_unsigned<T>::type pack_field(
     return ((u_x >> from_shift) & bitmask<T>(bits)) << to_shift;
 }
 
-#define IRQ_HANDLER __attribute__((interrupt("machine"), noinline, used))
-
-#define ADC_FLOP_ADDR(addr, counter_id, channel_index, dimension_index)                        \
-    do {                                                                                       \
-        if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 0))      \
-            (addr) = 0;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 1)) \
-            (addr) = 1;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 2)) \
-            (addr) = 2;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 3)) \
-            (addr) = 3;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 0)) \
-            (addr) = 8;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 1)) \
-            (addr) = 9;                                                                        \
-        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 2)) \
-            (addr) = 10;                                                                       \
-        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 3)) \
-            (addr) = 11;                                                                       \
-        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 0)) \
-            (addr) = 16;                                                                       \
-        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 1)) \
-            (addr) = 17;                                                                       \
-        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 2)) \
-            (addr) = 18;                                                                       \
-        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 3)) \
-            (addr) = 19;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 0)) \
-            (addr) = 32;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 1)) \
-            (addr) = 33;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 2)) \
-            (addr) = 34;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 3)) \
-            (addr) = 35;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 0)) \
-            (addr) = 40;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 1)) \
-            (addr) = 41;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 2)) \
-            (addr) = 42;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 3)) \
-            (addr) = 43;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 0)) \
-            (addr) = 48;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 1)) \
-            (addr) = 49;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 2)) \
-            (addr) = 50;                                                                       \
-        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 3)) \
-            (addr) = 51;                                                                       \
-        else                                                                                   \
-            (addr) = 0;                                                                        \
+#define ADC_FLOP_ADDR(addr, counter_id, channel_index, dimension_index)                  \
+    do {                                                                                 \
+        if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 0))      \
+            addr = 0;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 1)) \
+            addr = 1;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 2)) \
+            addr = 2;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 3)) \
+            addr = 3;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 0)) \
+            addr = 8;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 1)) \
+            addr = 9;                                                                    \
+        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 2)) \
+            addr = 10;                                                                   \
+        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 3)) \
+            addr = 11;                                                                   \
+        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 0)) \
+            addr = 16;                                                                   \
+        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 1)) \
+            addr = 17;                                                                   \
+        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 2)) \
+            addr = 18;                                                                   \
+        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 3)) \
+            addr = 19;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 0)) \
+            addr = 32;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 1)) \
+            addr = 33;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 2)) \
+            addr = 34;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 3)) \
+            addr = 35;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 0)) \
+            addr = 40;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 1)) \
+            addr = 41;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 2)) \
+            addr = 42;                                                                   \
+        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 3)) \
+            addr = 43;                                                                   \
+        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 0)) \
+            addr = 48;                                                                   \
+        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 1)) \
+            addr = 49;                                                                   \
+        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 2)) \
+            addr = 50;                                                                   \
+        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 3)) \
+            addr = 51;                                                                   \
+        else                                                                             \
+            addr = 0;                                                                    \
     } while (0)
 
 #endif

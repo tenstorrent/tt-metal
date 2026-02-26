@@ -12,7 +12,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt_stl/span.hpp>
@@ -290,7 +289,7 @@ void RunMatmulBenchmark(
     const auto output_tile =
         (out_sharded && tile_h <= 16) ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w});
 
-    ttnn::operations::matmul::operation_attributes_t attributes{
+    ttnn::prim::MatmulParams attributes{
         .program_config = program_config,
         .bcast_batch = std::nullopt,
         .output_mem_config = out_mem_config,
@@ -303,7 +302,7 @@ void RunMatmulBenchmark(
         .transpose_a = false,
         .transpose_b = false,
         .output_tile = output_tile};
-    attributes = ttnn::operations::matmul::create_matmul_attributes(input_tensor_0, input_tensor_1, attributes, {});
+    attributes = ttnn::prim::create_matmul_attributes(input_tensor_0, input_tensor_1, attributes, {});
 
     ttnn::Tensor output_tensor;
     // Warmup iterations

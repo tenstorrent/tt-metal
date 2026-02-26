@@ -5,11 +5,11 @@
 #pragma once
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/reg_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
 
 inline void pack_and_push(uint32_t reg, uint32_t cb) {
     // NOTE:
@@ -43,6 +43,15 @@ inline void zero_dst_reg(const uint32_t i) {
     constexpr float zero = 0.0f;
     fill_tile_init();
     fill_tile(i, zero);
+}
+
+// Create and push a zero tile to the specified circular buffer
+inline void push_zero_tile(const uint32_t cb_id) {
+    constexpr uint32_t DST_REG_ID = 0;
+    tile_regs_acquire();
+    zero_dst_reg(DST_REG_ID);
+    tile_regs_commit();
+    pack_and_push(DST_REG_ID, cb_id);
 }
 
 inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {

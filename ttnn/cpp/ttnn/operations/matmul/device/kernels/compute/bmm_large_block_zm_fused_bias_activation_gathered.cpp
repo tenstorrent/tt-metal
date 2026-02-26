@@ -4,15 +4,12 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
 #include "internal/mod_div_lib.h"
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
-
-namespace NAMESPACE {
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -132,7 +129,56 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
     }
 }
 
-void MAIN {
+// Named CB arg lookup tables for batch-indexed output and partials CBs.
+// The factory emits "cb_mm_out_0" .. "cb_mm_out_N" and "cb_mm_partials_0" .. "cb_mm_partials_N"
+// as named compile-time args. These tables let fill_named_cb_array resolve them by index.
+constexpr const char* mm_out_cb_names[] = {
+    "cb_mm_out_0",
+    "cb_mm_out_1",
+    "cb_mm_out_2",
+    "cb_mm_out_3",
+    "cb_mm_out_4",
+    "cb_mm_out_5",
+    "cb_mm_out_6",
+    "cb_mm_out_7",
+    "cb_mm_out_8",
+    "cb_mm_out_9",
+    "cb_mm_out_10",
+    "cb_mm_out_11",
+    "cb_mm_out_12",
+    "cb_mm_out_13",
+    "cb_mm_out_14",
+    "cb_mm_out_15",
+};
+constexpr const char* mm_partials_cb_names[] = {
+    "cb_mm_partials_0",
+    "cb_mm_partials_1",
+    "cb_mm_partials_2",
+    "cb_mm_partials_3",
+    "cb_mm_partials_4",
+    "cb_mm_partials_5",
+    "cb_mm_partials_6",
+    "cb_mm_partials_7",
+    "cb_mm_partials_8",
+    "cb_mm_partials_9",
+    "cb_mm_partials_10",
+    "cb_mm_partials_11",
+    "cb_mm_partials_12",
+    "cb_mm_partials_13",
+    "cb_mm_partials_14",
+    "cb_mm_partials_15",
+};
+
+template <uint32_t N>
+constexpr std::array<uint32_t, N> fill_named_cb_array(const char* const* names) {
+    std::array<uint32_t, N> arr{};
+    for (uint32_t i = 0; i < N; ++i) {
+        arr[i] = get_named_compile_time_arg_val(names[i]);
+    }
+    return arr;
+}
+
+void kernel_main() {
     // Compile time args
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -155,17 +201,14 @@ void MAIN {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in2_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t sync_cb = get_compile_time_arg_val(21);
-    constexpr uint32_t sync_cb2 = get_compile_time_arg_val(22);
-    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(23);
-    constexpr std::array<uint32_t, batch> mm_out_cb_ids =
-        fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
-    constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
-    constexpr std::array<uint32_t, batch> mm_partials_cb_ids =
-        fill_array_with_next_n_args<uint32_t, INTERM_CB_ARRAY_IDX, batch>();
+    constexpr uint32_t in0_cb_id = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t in2_cb_id = get_named_compile_time_arg_val("cb_in2");
+    constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
+
+    constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
+    constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
 
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
@@ -419,4 +462,3 @@ void MAIN {
 #endif
     }
 }
-}  // namespace NAMESPACE

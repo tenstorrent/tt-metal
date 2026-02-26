@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@
 #include <variant>
 #include <vector>
 #include <random>
+#include <bit>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -37,43 +38,11 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
-
-struct WorkerMemMap {
-    uint32_t source_l1_buffer_address;
-    uint32_t packet_payload_size_bytes;
-    uint32_t test_results_address;
-    uint32_t target_address;
-    uint32_t notification_mailbox_address;
-    uint32_t test_results_size_bytes;
-};
-
-// Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
-    constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
-    constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
-    constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-
-    uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
-    uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
-    uint32_t target_address = source_l1_buffer_address;
-    uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
-
-    uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
-
-    return {
-        source_l1_buffer_address,
-        packet_payload_size_bytes,
-        test_results_address,
-        target_address,
-        notification_mailbox_address,
-        TEST_RESULTS_SIZE_BYTES};
-}
 
 // Helper struct for dual RISC memory layout generation
 // Provides memory map generation that supports both single and dual RISC modes
@@ -271,7 +240,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     auto mesh_shape = control_plane.get_physical_mesh_shape(sender_id.mesh_id);
 
-    auto worker_mem_map = generate_worker_mem_map(sender_device, edm_config.topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, edm_config.topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -466,7 +435,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -591,7 +560,7 @@ void run_unicast_test_bw_chips(
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -963,7 +932,7 @@ void RunTestMCastConnAPI(
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -1407,7 +1376,7 @@ void RunTest2DMCastConnAPI(
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -1753,7 +1722,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
         last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -2140,7 +2109,7 @@ TEST_F(NightlyFabric1DFixture, TestEDMConnectionStressTestQuick) {
 
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
     FabricApiType api_type,
     bool with_state) {
@@ -2207,26 +2176,27 @@ void FabricUnicastCommon(
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
 
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
 
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        noc_send_type,
+        noc_packet_type,
         static_cast<uint32_t>(dir_configs.size()),
         with_state,
-        0  // is_chip_multicast = 0
-    };
+        static_cast<uint32_t>(FabricPacketType::CHIP_UNICAST)};
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+        (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -2263,7 +2233,9 @@ void FabricUnicastCommon(
         receiver_programs[recv_dev] = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_programs[recv_dev],
-            (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+            (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                 ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
             {receiver_logical_core},
@@ -2319,7 +2291,7 @@ void FabricUnicastCommon(
 
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::variant<
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
@@ -2396,7 +2368,8 @@ void UDMFabricUnicastCommon(
     auto worker_mem_map = mem_helper.gen_mem_map(sender_device, 0);
     auto worker_mem_map_risc1 = mem_helper.gen_mem_map(sender_device, mem_helper.region_size);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE or
+        noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
         worker_mem_map_risc1.packet_payload_size_bytes = 16;
     } else {
@@ -2452,11 +2425,11 @@ void UDMFabricUnicastCommon(
 
     // Select kernel paths based on operation type
     const char* sender_kernel_path =
-        (noc_send_type == NOC_UNICAST_READ)
+        (noc_packet_type == NocPacketType::NOC_UNICAST_READ)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender.cpp";
     const char* receiver_kernel_path =
-        (noc_send_type == NOC_UNICAST_READ)
+        (noc_packet_type == NocPacketType::NOC_UNICAST_READ)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_receiver.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp";
 
@@ -2475,7 +2448,7 @@ void UDMFabricUnicastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        noc_send_type,
+        noc_packet_type,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -2503,7 +2476,7 @@ void UDMFabricUnicastCommon(
             worker_mem_map_risc1.test_results_size_bytes,
             worker_mem_map_risc1.notification_mailbox_address,
             worker_mem_map_risc1.target_address,
-            noc_send_type,
+            noc_packet_type,
             worker_mem_map_risc1.source_l1_buffer_address,
             worker_mem_map_risc1.packet_payload_size_bytes,
             num_packets,
@@ -2529,7 +2502,7 @@ void UDMFabricUnicastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        noc_send_type,
+        noc_packet_type,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
@@ -2556,7 +2529,7 @@ void UDMFabricUnicastCommon(
             worker_mem_map_risc1.test_results_size_bytes,
             worker_mem_map_risc1.notification_mailbox_address,
             worker_mem_map_risc1.target_address,
-            noc_send_type,
+            noc_packet_type,
             worker_mem_map_risc1.packet_payload_size_bytes,
             num_packets,
             time_seed,
@@ -2596,7 +2569,7 @@ void UDMFabricUnicastCommon(
         }
 
         // Clear target L1 memory for atomic increments
-        if (noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+        if (noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
             uint32_t total_size_to_clear = num_packets * worker_mem_map.packet_payload_size_bytes;
             std::vector<uint32_t> zeros(total_size_to_clear / sizeof(uint32_t), 0);
             tt_metal::detail::WriteToDeviceL1(
@@ -2668,7 +2641,7 @@ void UDMFabricUnicastCommon(
     }
 }
 
-void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, bool dual_risc) {
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType noc_packet_type, bool dual_risc) {
     // All-to-all test: all devices send to all other devices simultaneously
     // Sender cores are in the top half of compute grid, receiver cores are in the bottom half
     // Each receiver core receives from N-1 senders (one from each other device)
@@ -2736,7 +2709,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     auto worker_mem_map = mem_helper.gen_mem_map(device_ptrs[0], 0);
     auto worker_mem_map_risc1 = mem_helper.gen_mem_map(device_ptrs[0], mem_helper.region_size);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE or
+        noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
         worker_mem_map_risc1.packet_payload_size_bytes = 16;
     } else {
@@ -2801,7 +2775,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     }
 
     // Determine kernel paths based on operation type
-    const bool is_read = (noc_send_type == NOC_UNICAST_READ);
+    const bool is_read = (noc_packet_type == NocPacketType::NOC_UNICAST_READ);
     const char* sender_kernel_path =
         is_read ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender_all_to_all.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender_all_to_all.cpp";
@@ -2829,7 +2803,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
             worker_mem_map.test_results_size_bytes,
             worker_mem_map.notification_mailbox_address,
             worker_mem_map.target_address,  // target_address_base
-            noc_send_type,
+            noc_packet_type,
             worker_mem_map.source_l1_buffer_address,
             worker_mem_map.packet_payload_size_bytes,
             num_packets,
@@ -2845,7 +2819,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
             worker_mem_map.test_results_size_bytes,
             worker_mem_map.notification_mailbox_address,
             worker_mem_map.target_address,  // target_address_base
-            noc_send_type,
+            noc_packet_type,
             worker_mem_map.packet_payload_size_bytes,
             num_packets,
             time_seed,
@@ -2885,7 +2859,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 worker_mem_map_risc1.test_results_size_bytes,
                 worker_mem_map_risc1.notification_mailbox_address,
                 worker_mem_map_risc1.target_address,
-                noc_send_type,
+                noc_packet_type,
                 worker_mem_map_risc1.source_l1_buffer_address,
                 worker_mem_map_risc1.packet_payload_size_bytes,
                 num_packets,
@@ -2954,7 +2928,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 worker_mem_map_risc1.test_results_size_bytes,
                 worker_mem_map_risc1.notification_mailbox_address,
                 worker_mem_map_risc1.target_address,
-                noc_send_type,
+                noc_packet_type,
                 worker_mem_map_risc1.packet_payload_size_bytes,
                 num_packets,
                 time_seed,
@@ -3007,7 +2981,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         }
 
         // Clear target L1 memory for all N device slots (simple indexing uses N slots, slot receiver_device_idx unused)
-        if (noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+        if (noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
             uint32_t total_l1_to_clear = static_cast<uint32_t>(num_active_devices) * per_sender_l1_size;
             for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
                 CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
@@ -3120,7 +3094,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
 void Fabric2DMulticastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state) {
     CoreCoord sender_logical_core = {0, 0};
@@ -3163,7 +3137,7 @@ void Fabric2DMulticastCommon(
     }
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
 
     // Setup connections and collect receiver devices for each multicast route
     std::vector<FabricNodeId> dest_fabric_node_ids;
@@ -3298,7 +3272,7 @@ void Fabric2DMulticastCommon(
     auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
     CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
@@ -3307,11 +3281,10 @@ void Fabric2DMulticastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        noc_send_type,
+        noc_packet_type,
         num_connections,  // Number of connections (multicast routes)
         with_state,
-        1  // is_chip_multicast = 1
-    };
+        static_cast<uint32_t>(FabricPacketType::CHIP_MULTICAST)};
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -3333,7 +3306,9 @@ void Fabric2DMulticastCommon(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+        (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -3365,7 +3340,9 @@ void Fabric2DMulticastCommon(
         auto receiver_program = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_program,
-            (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+            (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                 ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
             {receiver_logical_core},
@@ -3415,7 +3392,7 @@ void Fabric2DMulticastCommon(
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
-    NocSendType noc_send_type,
+    NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>& pair_ordered_dir_configs,
     bool with_state) {
     CoreCoord sender_logical_core = {0, 0};
@@ -3454,7 +3431,10 @@ void FabricMulticastCommon(
     }
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
+
+    // Preserve original lists for connection setup
+    auto original_end_fabric_node_ids_by_dir = end_fabric_node_ids_by_dir;
 
     // Adjust lists to start from start_distance for each direction
     std::vector<FabricNodeId> dest_fabric_node_ids;
@@ -3464,7 +3444,11 @@ void FabricMulticastCommon(
             physical_end_device_ids_by_dir[dir].end());
         end_fabric_node_ids_by_dir[dir] = std::vector(
             end_fabric_node_ids_by_dir[dir].begin() + (start_distance - 1), end_fabric_node_ids_by_dir[dir].end());
-        dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][0]);
+
+        // Connect only to first hop (direct neighbor), regardless of start_distance
+        if (!original_end_fabric_node_ids_by_dir[dir].empty()) {
+            dest_fabric_node_ids.push_back(original_end_fabric_node_ids_by_dir[dir][0]);
+        }
     }
 
     // Choose a receiver device to compute RX core coords (use last device from first configured dir)
@@ -3476,7 +3460,7 @@ void FabricMulticastCommon(
     auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
     CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+    if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
@@ -3485,11 +3469,10 @@ void FabricMulticastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        noc_send_type,
+        noc_packet_type,
         static_cast<uint32_t>(dir_configs.size()),
         with_state,
-        1  // is_chip_multicast = 1
-    };
+        static_cast<uint32_t>(FabricPacketType::CHIP_MULTICAST)};
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -3507,7 +3490,9 @@ void FabricMulticastCommon(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+        (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -3536,7 +3521,9 @@ void FabricMulticastCommon(
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
-                (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+                (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+                 noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+                 noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                     ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                     : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
                 {receiver_logical_core},
@@ -3587,193 +3574,423 @@ void FabricMulticastCommon(
 
 // 1D Linear Fabric API Tests
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite) {
-    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWriteMultiDir) {
     FabricUnicastCommon(
-        this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
+        this,
+        NocPacketType::NOC_UNICAST_WRITE,
+        {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWriteWithState) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_WRITE,
+        NocPacketType::NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc) {
-    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicIncMultiDir) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicIncWithState) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite) {
-    FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWriteMultiDir) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_SCATTER_WRITE,
+        NocPacketType::NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWriteWithState) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_SCATTER_WRITE,
+        NocPacketType::NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite) {
-    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWriteMultiDir) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_INLINE_WRITE,
+        NocPacketType::NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWriteWithState) {
     FabricUnicastCommon(
         this,
-        NOC_UNICAST_INLINE_WRITE,
+        NocPacketType::NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc) {
-    FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicIncMultiDir) {
     FabricUnicastCommon(
         this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicIncWithState) {
     FabricUnicastCommon(
         this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
 }
 
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicInc) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicIncMultiDir) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicIncWithState) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        FabricApiType::Linear,
+        true);
+}
+
+void FabricSparseMulticastCommon(
+    BaseFabricFixture* fixture, const std::vector<std::tuple<RoutingDirection, uint16_t>>& pair_ordered_dir_configs) {
+    CoreCoord sender_logical_core = {0, 0};
+    CoreCoord receiver_logical_core = {1, 0};
+    uint32_t num_packets = 10;
+    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+
+    // Limit directions per cluster (T3K: up to 3, TG: up to 4)
+    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
+    std::vector<std::tuple<RoutingDirection, uint16_t>> dir_configs = pair_ordered_dir_configs;
+    if (dir_configs.size() > max_dirs) {
+        dir_configs.resize(max_dirs);
+    }
+
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    // Identify the maximum hop distance (most significant set bit) for each direction
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    for (auto [dir, hops] : dir_configs) {
+        fabric_hops[dir] = std::bit_width(hops);
+    }
+
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    ChipId src_physical_device_id;
+    std::unordered_map<RoutingDirection, std::vector<ChipId>> physical_end_device_ids_by_dir;
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_fabric_node_id,
+            end_fabric_node_ids_by_dir,
+            src_physical_device_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        GTEST_SKIP() << "No sparse multicast destinations found for requested directions";
+    }
+
+    // Preserve original lists for connection setup (like FabricMulticastCommon)
+    auto original_physical_end_device_ids_by_dir = physical_end_device_ids_by_dir;
+    auto original_end_fabric_node_ids_by_dir = end_fabric_node_ids_by_dir;
+
+    // Filter device lists to only include devices that should receive packets (like FabricMulticastCommon range
+    // filtering)
+    for (auto [dir, hops] : dir_configs) {
+        std::vector<ChipId> filtered_physical_devices;
+        std::vector<FabricNodeId> filtered_fabric_nodes;
+
+        for (size_t i = 0; i < physical_end_device_ids_by_dir[dir].size(); i++) {
+            if (hops & (1 << i)) {  // Only include devices where the hop bit is set
+                filtered_physical_devices.push_back(physical_end_device_ids_by_dir[dir][i]);
+                filtered_fabric_nodes.push_back(end_fabric_node_ids_by_dir[dir][i]);
+            }
+        }
+
+        physical_end_device_ids_by_dir[dir] = filtered_physical_devices;
+        end_fabric_node_ids_by_dir[dir] = filtered_fabric_nodes;
+    }
+
+    // Build destination fabric node ID list (for routing plane connection manager)
+    // Like regular multicast, only connect to the first hop in each direction
+    // The sparse routing is handled by packet headers, not direct connections
+    std::vector<FabricNodeId> dest_fabric_node_ids;
+    for (auto [dir, hops] : dir_configs) {
+        // Use original lists for connections (first hop only)
+        if (!original_end_fabric_node_ids_by_dir[dir].empty()) {
+            dest_fabric_node_ids.push_back(original_end_fabric_node_ids_by_dir[dir][0]);
+        }
+    }
+
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
+
+    tt_metal::Program sender_program = tt_metal::CreateProgram();
+
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
+
+    std::vector<uint32_t> compile_time_args = {
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.target_address,
+        NocPacketType::NOC_UNICAST_WRITE,  // Only support NocPacketType::NOC_UNICAST_WRITE for sparse
+                                           // multicast
+        static_cast<uint32_t>(dir_configs.size()),
+        0,  // with_state = false (not supported for sparse multicast)
+        static_cast<uint32_t>(FabricPacketType::CHIP_SPARSE_MULTICAST)};
+
+    std::vector<uint32_t> sender_runtime_args = {
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+    };
+    for (auto [dir, hops] : dir_configs) {
+        sender_runtime_args.push_back(static_cast<uint32_t>(hops));
+    }
+
+    auto sender_kernel = tt_metal::CreateKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        {sender_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
+
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        {},
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
+
+    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+
+    // Build and launch receiver programs for all destination devices in all configured directions
+    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
+    for (auto& [dir, hops] : dir_configs) {
+        for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
+            auto receiver_device = fixture->get_device(physical_end_device_id);
+            tt_metal::Program receiver_program = tt_metal::CreateProgram();
+            auto receiver_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+                {receiver_logical_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_time_args});
+
+            tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+            fixture->RunProgramNonblocking(receiver_device, receiver_program);
+            receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+        }
+    }
+
+    fixture->RunProgramNonblocking(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+
+    for (auto& [dev, prog] : receiver_programs) {
+        fixture->WaitForSingleProgramDone(dev, prog);
+    }
+
+    std::vector<uint32_t> sender_status;
+    tt_metal::detail::ReadFromDeviceL1(
+        sender_device->get_devices()[0],
+        sender_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        sender_status,
+        CoreType::WORKER);
+    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    for (auto& [dev, _] : receiver_programs) {
+        std::vector<uint32_t> recv_status;
+        tt_metal::detail::ReadFromDeviceL1(
+            dev->get_devices()[0],
+            receiver_logical_core,
+            worker_mem_map.test_results_address,
+            worker_mem_map.test_results_size_bytes,
+            recv_status,
+            CoreType::WORKER);
+        EXPECT_EQ(recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+    }
+}
+
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite) {
-    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWriteMultiDir) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_WRITE,
+        NocPacketType::NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWriteWithState) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_WRITE,
+        NocPacketType::NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc) {
-    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicIncMultiDir) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicIncWithState) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite) {
-    FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWriteMultiDir) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_SCATTER_WRITE,
+        NocPacketType::NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWriteWithState) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_SCATTER_WRITE,
+        NocPacketType::NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite) {
-    FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWriteMultiDir) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_INLINE_WRITE,
+        NocPacketType::NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWriteWithState) {
     FabricMulticastCommon(
         this,
-        NOC_UNICAST_INLINE_WRITE,
+        NocPacketType::NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc) {
-    FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(
+        this, NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicIncMultiDir) {
     FabricMulticastCommon(
         this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicIncWithState) {
     FabricMulticastCommon(
         this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
+        NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        true);
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicInc) {
+    FabricMulticastCommon(
+        this, NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicIncMultiDir) {
+    FabricMulticastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicIncWithState) {
+    FabricMulticastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
 }
 
 // Test cases using the new Fabric1DTensixFixture to test tensix config with mux
 TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocUnicastWriteMux) {
-    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
 }
 
 TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocAtomicIncMux) {
-    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
+    FabricUnicastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
 }
 
 TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocUnicastWriteMux) {
-    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 
 TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicIncMux) {
-    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+}
+
+// Fabric 1D sparse multicast test cases
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWrite) {
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0101)});  // Write to hops 1 and 3
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteSingleHop) {
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0100)});  // Write to hop 3 only
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteMultiDir) {
+    FabricSparseMulticastCommon(
+        this,
+        {
+            std::make_tuple(RoutingDirection::E, 0b1),    // Write to hop 1 eastward
+            std::make_tuple(RoutingDirection::W, 0b0011)  // Write to hops 1 and 2 westward
+        });
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

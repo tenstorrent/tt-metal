@@ -9,7 +9,7 @@
 #include <utility>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::experimental::prim {
 
 struct SliceWriteParams {
     const ttnn::Shape slice_start;
@@ -27,4 +27,4 @@ using WriterKernelArgs = std::vector<uint32_t>;
 using KernelRuntimeArgs = std::pair<ReaderKernelArgs, WriterKernelArgs>;
 using SliceWriteRuntimeArgs = std::vector<KernelRuntimeArgs>;
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::experimental::prim

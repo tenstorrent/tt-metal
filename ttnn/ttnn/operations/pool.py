@@ -70,6 +70,64 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
 
 
+def golden_rotate(
+    input_tensor: ttnn.Tensor,
+    angle: float,
+    center=None,
+    fill: float = 0.0,
+    expand: bool = False,
+    interpolation_mode: str = "nearest",
+    **_,
+):
+    """
+    Golden function for rotate operation using torchvision.transforms.functional.rotate.
+
+    Args:
+        input_tensor: Input tensor in NHWC format
+        angle: Rotation angle in degrees (positive = counter-clockwise)
+        center: Optional rotation center as (x, y) in pixel coordinates, where x is
+                the horizontal/width coordinate and y is the vertical/height coordinate.
+                If None, uses image center.
+        fill: Fill value for areas outside the rotated tensor
+        expand: Must be False (only same-size rotation supported)
+        interpolation_mode: "nearest" or "bilinear"
+
+    Returns:
+        Rotated tensor in NHWC format
+    """
+    import torch
+    import torchvision.transforms.functional as TF
+    from torchvision.transforms import InterpolationMode
+
+    # Convert NHWC to NCHW for torchvision
+    torch_input_nchw = input_tensor.permute(0, 3, 1, 2).to(torch.float32)
+
+    # Map interpolation mode
+    if interpolation_mode == "nearest":
+        torch_interp = InterpolationMode.NEAREST
+    elif interpolation_mode == "bilinear":
+        torch_interp = InterpolationMode.BILINEAR
+    else:
+        raise ValueError(f"Unsupported interpolation mode: {interpolation_mode}")
+
+    # Apply rotation
+    torch_output_nchw = TF.rotate(
+        torch_input_nchw,
+        angle=float(angle),
+        interpolation=torch_interp,
+        center=center,
+        fill=fill,
+    )
+
+    # Convert back to NHWC and original dtype
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+
+    return torch_output_nhwc
+
+
+ttnn.attach_golden_function(ttnn.rotate, golden_rotate)
+
+
 def prepare_grid_sample_grid(*args, **kwargs):
     """
     Precomputes grid sample data for optimized kernel execution.

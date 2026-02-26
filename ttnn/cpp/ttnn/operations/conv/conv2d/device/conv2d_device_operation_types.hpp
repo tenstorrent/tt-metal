@@ -15,8 +15,10 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
 
+namespace sliding_window = ttnn::operations::sliding_window;
+namespace op_slicing = ttnn::operations::op_slicing;
 using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
@@ -209,7 +211,7 @@ struct Conv2dParams {
     std::optional<bool> force_split_reader;
 };
 
-struct hashable_operation_attributes_t {
+struct Conv2dHashableParams {
     sliding_window::SlidingWindowConfig sliding_window_config{};
     uint32_t output_channels = 0;
     bool untilize_out = false;
@@ -240,4 +242,4 @@ struct conv_op_l1_usage {
     uint32_t CB_allocation_size;
 };
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

@@ -11,6 +11,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
+#include "mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -89,6 +90,13 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
+    if (mesh_device->get_view().get_devices().empty()) {
+        auto mesh_buffer =
+            std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
+        mesh_buffer->initialize_device_buffers();
+        return mesh_buffer;
+    }
+
     std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
@@ -117,7 +125,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->get_device(coord),
+            device()->impl().get_device(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -130,7 +138,7 @@ void MeshBuffer::initialize_device_buffers() {
 
     for (auto& [coord, device_buffer] : buffers_) {
         if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->is_local(coord)) {
+            if (mesh_device->impl().is_local(coord)) {
                 device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
             }
         }

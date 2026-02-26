@@ -17,7 +17,7 @@
 
 #include "concat_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::concat {
+namespace ttnn::prim {
 
 struct ConcatDeviceOperation {
     using operation_attributes_t = ConcatParams;
@@ -25,15 +25,14 @@ struct ConcatDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::ConcatProgramFactory,
-        program::ConcatS2STiledProgramFactory,
-        program::ConcatS2SRMProgramFactory,
-        program::ConcatS2SMultiProgramFactory,
-        program::ConcatS2IProgramFactory>;
+        ConcatProgramFactory,
+        ConcatS2STiledProgramFactory,
+        ConcatS2SRMProgramFactory,
+        ConcatS2SMultiProgramFactory,
+        ConcatS2IProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -47,14 +46,15 @@ struct ConcatDeviceOperation {
         std::vector<Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::data_movement::concat
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::concat::ConcatDeviceOperation::tensor_return_value_t concat(
+ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {
@@ -65,5 +65,7 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+
 }  // namespace ttnn::operations::data_movement

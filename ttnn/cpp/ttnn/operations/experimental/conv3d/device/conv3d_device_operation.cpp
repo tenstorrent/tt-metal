@@ -10,13 +10,14 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -25,27 +26,19 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
     const std::array<uint32_t, 3>& stride,
-    const std::array<uint32_t, 3>& kernel_size) {
-    uint32_t T_out = ((T_in + 2 * padding[0] - kernel_size[0]) / stride[0]) + 1;
-    uint32_t H_out = ((H_in + 2 * padding[1] - kernel_size[1]) / stride[1]) + 1;
-    uint32_t W_out = ((W_in + 2 * padding[2] - kernel_size[2]) / stride[2]) + 1;
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& dilation) {
+    uint32_t T_out = ((T_in + 2 * padding[0] - (dilation[0] * (kernel_size[0] - 1)) - 1) / stride[0]) + 1;
+    uint32_t H_out = ((H_in + 2 * padding[1] - (dilation[1] * (kernel_size[1] - 1)) - 1) / stride[1]) + 1;
+    uint32_t W_out = ((W_in + 2 * padding[2] - (dilation[2] * (kernel_size[2] - 1)) - 1) / stride[2]) + 1;
     return {T_out, H_out, W_out};
 }
 }  // namespace detail
 
-Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::Conv3dProgramFactory{};
-}
-
-void Conv3dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
+    const auto& input_shape = input_tensor_a.logical_shape();
 
     TT_FATAL(
         input_tensor_a.logical_shape().size() == 5,
@@ -78,31 +71,55 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.groups == 1, "Groups must be 1. got {}", args.groups);
     // assert padding on T is zero
     TT_FATAL(
-        args.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        args.padding[0],
-        args.padding[1],
-        args.padding[2]);
-    TT_FATAL(
         args.padding_mode == "zeros" || args.padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
         args.padding_mode);
+    TT_FATAL(
+        args.dilation[0] >= 1 && args.dilation[1] >= 1 && args.dilation[2] >= 1,
+        "Dilation must be >= 1 for all dimensions. got ({}, {}, {})",
+        args.dilation[0],
+        args.dilation[1],
+        args.dilation[2]);
+    auto effective_kernel = [](uint32_t k, uint32_t d) -> uint64_t { return (static_cast<uint64_t>(d) * (k - 1)) + 1; };
+    const uint64_t T_in = input_shape[1];
+    const uint64_t H_in = input_shape[2];
+    const uint64_t W_in = input_shape[3];
+    const uint64_t effective_k_t = effective_kernel(args.kernel_size[0], args.dilation[0]);
+    const uint64_t effective_k_h = effective_kernel(args.kernel_size[1], args.dilation[1]);
+    const uint64_t effective_k_w = effective_kernel(args.kernel_size[2], args.dilation[2]);
+    TT_FATAL(
+        T_in + 2 * static_cast<uint64_t>(args.padding[0]) >= effective_k_t,
+        "Effective kernel size exceeds padded T dimension (T_in={}, pad_t={}, k_t={}, d_t={})",
+        T_in,
+        args.padding[0],
+        args.kernel_size[0],
+        args.dilation[0]);
+    TT_FATAL(
+        H_in + 2 * static_cast<uint64_t>(args.padding[1]) >= effective_k_h,
+        "Effective kernel size exceeds padded H dimension (H_in={}, pad_h={}, k_h={}, d_h={})",
+        H_in,
+        args.padding[1],
+        args.kernel_size[1],
+        args.dilation[1]);
+    TT_FATAL(
+        W_in + 2 * static_cast<uint64_t>(args.padding[2]) >= effective_k_w,
+        "Effective kernel size exceeds padded W dimension (W_in={}, pad_w={}, k_w={}, d_w={})",
+        W_in,
+        args.padding[2],
+        args.kernel_size[2],
+        args.dilation[2]);
 
     if (args.config.C_out_block > 0) {
+        uint32_t padded_C_out = tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
         TT_FATAL(
-            args.output_channels % args.config.C_out_block == 0 &&
-                args.config.C_out_block % tt::constants::TILE_WIDTH == 0,
-            "C_out_block must be a multiple of {} and divide evenly into output channels. Got C_out_block={} and "
-            "output_channels={}.",
+            padded_C_out % args.config.C_out_block == 0 && args.config.C_out_block % tt::constants::TILE_WIDTH == 0,
+            "C_out_block must be a multiple of {} and divide evenly into padded output channels ({}). Got "
+            "C_out_block={} and output_channels={}.",
             tt::constants::TILE_WIDTH,
+            padded_C_out,
             args.config.C_out_block,
             args.output_channels);
     }
-
-    TT_FATAL(
-        args.output_channels % tt::constants::TILE_WIDTH == 0,
-        "Output channels must be a multiple of {}.",
-        tt::constants::TILE_WIDTH);
 
     // Validate weight shape and config arguments
     const auto patch_size =
@@ -172,16 +189,21 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     uint32_t H_in = input_tensor_a_shape[2];
     uint32_t W_in = input_tensor_a_shape[3];
     uint32_t C_out = args.output_channels;
+    uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
     auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size);
+        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
+    ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
     const auto& memory_config = args.output_mem_config;
     auto dtype = args.dtype;
 
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+    return TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 
 Tensor Conv3dDeviceOperation::create_output_tensors(
@@ -193,22 +215,21 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_value_t conv3d(
+ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
-    const ttnn::operations::experimental::conv3d::Conv3dConfig& config,
+    const ttnn::experimental::prim::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -219,10 +240,12 @@ ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_val
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    using OperationType = ttnn::operations::experimental::conv3d::Conv3dDeviceOperation;
+    using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    const std::array<uint32_t, 3> default_dilation = {1, 1, 1};
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .config = config,
@@ -233,9 +256,19 @@ ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_val
         .kernel_size = kernel_size_,
         .stride = stride_,
         .padding = padding_,
-        .dilation = dilation_,
+        .dilation =
+            (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
         .groups = groups_};
+    TT_FATAL(
+        config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
+        "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
+        config.dilation[0],
+        config.dilation[1],
+        config.dilation[2],
+        dilation_[0],
+        dilation_[1],
+        dilation_[2]);
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
 

@@ -154,7 +154,7 @@ def detect_device_architecture(device) -> str:
         try:
             return normalize_architecture(device._arch)
         except KeyError:
-            print(f"Warning: Device {device._id} has unknown architecture '{device._arch}', trying fallback methods")
+            print(f"Warning: Device {device.id} has unknown architecture '{device._arch}', trying fallback methods")
 
     # Method 2: Try type checking (requires architecture-specific imports)
     try:
@@ -167,12 +167,12 @@ def detect_device_architecture(device) -> str:
         elif device_type == BlackholeDevice:
             return "blackhole"
         else:
-            print(f"Warning: Unknown device type {device_type.__name__} for device {device._id}")
+            print(f"Warning: Unknown device type {device_type.__name__} for device {device.id}")
     except ImportError as e:
         print(f"Warning: Could not import device type classes for architecture detection: {e}")
 
     # Method 3: Final fallback with warning
-    print(f"Warning: Could not detect architecture for device {device._id}, defaulting to wormhole")
+    print(f"Warning: Could not detect architecture for device {device.id}, defaulting to wormhole")
     return "wormhole"
 
 

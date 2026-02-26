@@ -7,17 +7,17 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::experimental::prim {
 
-struct DetailParams {
+struct FastReduceNCParams {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct DetailInputs {
+struct FastReduceNCInputs {
     const Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::experimental::prim

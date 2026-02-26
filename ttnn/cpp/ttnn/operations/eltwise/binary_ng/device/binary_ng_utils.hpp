@@ -51,6 +51,8 @@ struct OpConfig {
         DIV,
         DIV_FLOOR,
         DIV_TRUNC,
+        REMAINDER,
+        FMOD,
         POWER,
         RSUB,
         GCD,
@@ -73,6 +75,7 @@ struct OpConfig {
         LE,
         HYPOT,
         WHERE,
+        EQ,
     };
 
     template <class EnumT>
@@ -117,6 +120,8 @@ std::optional<AllShardVolumes> get_shard_volumes(
     const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+
+bool is_uneven(const TensorSpec& t);
 
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
 

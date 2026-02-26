@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::conv3d::program {
+namespace ttnn::experimental::prim {
 
 Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
@@ -38,9 +38,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] = ttnn::operations::experimental::conv3d::detail::compute_output_dims(
-        T_in, H_in, W_in, operation_attributes.padding, operation_attributes.stride, operation_attributes.kernel_size);
+    auto [T_out, H_out, W_out] = detail::compute_output_dims(
+        T_in,
+        H_in,
+        W_in,
+        operation_attributes.padding,
+        operation_attributes.stride,
+        operation_attributes.kernel_size,
+        operation_attributes.dilation);
     uint32_t C_out = operation_attributes.output_channels;
+    uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
@@ -67,7 +74,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     */
 
     // If C_out_block is set, use it. Otherwise, use the full number of output channels.
-    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : C_out;
+    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
@@ -76,8 +83,13 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
     TT_FATAL(C_in_num_blocks * C_in_block == C_in, "C_in_num_blocks * C_in_block must equal C_in");
-    uint32_t C_out_num_blocks = tt::div_up(C_out, C_out_block);
-    TT_FATAL(C_out_num_blocks * C_out_block == C_out, "C_out_num_blocks * C_out_block must equal C_out");
+    uint32_t C_out_num_blocks = tt::div_up(padded_C_out, C_out_block);
+    TT_FATAL(
+        C_out_num_blocks * C_out_block == padded_C_out,
+        "C_out_num_blocks * C_out_block must equal padded_C_out ({}). Got C_out_num_blocks={}, C_out_block={}.",
+        padded_C_out,
+        C_out_num_blocks,
+        C_out_block);
 
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
@@ -188,6 +200,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.stride[2]);
     log_debug(
         tt::LogOp,
+        "Dilation: {}x{}x{}",
+        operation_attributes.dilation[0],
+        operation_attributes.dilation[1],
+        operation_attributes.dilation[2]);
+    log_debug(
+        tt::LogOp,
         "Padding: {}x{}x{}",
         operation_attributes.padding[0],
         operation_attributes.padding[1],
@@ -231,7 +249,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         semaphore_id,
         operation_attributes.stride[0],
         operation_attributes.stride[1],
-        operation_attributes.stride[2]};
+        operation_attributes.stride[2],
+        operation_attributes.dilation[0],
+        operation_attributes.dilation[1],
+        operation_attributes.dilation[2]};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
@@ -692,4 +713,4 @@ void Conv3dProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::conv3d::program
+}  // namespace ttnn::experimental::prim

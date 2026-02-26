@@ -7,12 +7,11 @@
 #include <stdint.h>
 #include <optional>
 
-#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "impl/context/metal_context.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
@@ -46,6 +45,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
     std::optional<uint32_t> dev_completion_q_rd_ptr;
+    std::optional<uint32_t> dev_dispatch_progress_ptr;
 
     std::optional<uint32_t> fabric_header_rb_base;
     std::optional<uint32_t> fabric_header_rb_entries;
@@ -98,7 +98,13 @@ public:
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,
-        bool d_variant);
+        bool d_variant,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;
 

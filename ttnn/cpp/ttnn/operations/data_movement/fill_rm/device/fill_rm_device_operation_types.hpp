@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm {
+namespace ttnn::prim {
 
 struct FillRmParams {
     uint32_t N{0};
@@ -24,4 +24,4 @@ struct FillRmInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::data_movement::fill_rm
+}  // namespace ttnn::prim

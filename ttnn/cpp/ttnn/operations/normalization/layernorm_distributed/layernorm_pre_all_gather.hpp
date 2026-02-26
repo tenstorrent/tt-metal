@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "device/layernorm_distributed_types.hpp"
+#include "device/layernorm_pre_all_gather_device_operation_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -18,8 +19,9 @@ struct ExecuteLayerNormPreAllGather {
         DataType dtype = DataType::BFLOAT16,
         const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<const ttnn::Tensor>& recip_tensor = std::nullopt);
 };
 
 }  // namespace operations::normalization

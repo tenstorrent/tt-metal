@@ -47,7 +47,6 @@ class Buffer;
 class Program;
 class SubDevice;
 
-class CommandQueue;
 class SystemMemoryManager;
 struct TraceBuffer;
 struct TraceDescriptor;
@@ -79,6 +78,10 @@ public:
     virtual int num_dram_channels() const = 0;
     virtual uint32_t l1_size_per_core() const = 0;
     virtual uint32_t dram_size_per_channel() const = 0;
+    // Returns the AI clock frequency in MHz for this device.
+    // This value is queried from the actual hardware via the cluster API
+    // and reflects the device's current operating frequency.
+    virtual int get_clock_rate_mhz() const = 0;
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
@@ -88,10 +91,6 @@ public:
 
     // Convert logical coordinates to virtual coordinates for worker coordinates
     virtual std::vector<CoreCoord> worker_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const = 0;
-
-    // Convert logical coordinates to virtaul coordinates for ethernet coordinates
-    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const = 0;
 
     // Returns the optimal DRAM bank coordinates to logical worker assignment based on which noc will be issuing DRAM
@@ -104,24 +103,6 @@ public:
 
     // Convert a logical coordinate to a virtual coordinate for a worker coordinate
     virtual CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const = 0;
-
-    // Convert a logical coordinate to virtual coordinate for an ethernet coordinate
-    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
-
-    // Convert a virtual ethernet coordinate to logical coordinate
-    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const = 0;
-
-    // Returns virtual coordinates of active ethernet cores. Some ethernet cores may be reserved for dispatch use.
-    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const = 0;
-
-    // Returns virtual coordinates of inactive ethernet cores
-    virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
-
-    // Returns true if the ethernet core is active
-    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
-    virtual std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
-    virtual std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const = 0;
-    virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
 
@@ -145,10 +126,6 @@ public:
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
 
-    // Set of logical ethernet core coordinates
-    // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
-    // core.y represents different channels along one <x>
-    virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
     [[deprecated(
         "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
     storage_only_cores() const = 0;
@@ -157,9 +134,6 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-
-    // If cq_id is not provided, the current command queue is returned from the current thread
-    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
@@ -173,13 +147,16 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_host() = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_device() = 0;
 
     // return false if compile fails (mainly come from Nebula on TG)
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual bool compile_fabric() = 0;
+    [[deprecated("This is an internal function. It will be removed.")]]
     virtual void configure_fabric() = 0;
-    virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 
@@ -225,6 +202,40 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Internal-only APIs! These should not be part of the public API surface
+    // TODO: Move these to impl (#34104)
+
+    // Convert logical coordinates to virtual coordinates for ethernet coordinates
+    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const = 0;
+
+    // Convert a virtual ethernet coordinate to logical coordinate
+    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const = 0;
+
+    // Convert a logical coordinate to virtual coordinate for an ethernet coordinate
+    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
+
+    // Returns virtual coordinates of active ethernet cores. Some ethernet cores may be reserved for dispatch use.
+    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const = 0;
+
+    // Returns virtual coordinates of inactive ethernet cores
+    virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
+
+    // Returns true if the ethernet core is active
+    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
+    virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
+
+    virtual std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
+    virtual std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const = 0;
+
+    // Set of logical ethernet core coordinates
+    // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
+    // core.y represents different channels along one <x>
+    virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
+
+    /////////////////////////////////////////////////////////////////////////////
 };
 
 }  // namespace tt::tt_metal

@@ -5,7 +5,7 @@
 #include <benchmark/benchmark.h>
 
 #include <ttnn/tensor/tensor.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

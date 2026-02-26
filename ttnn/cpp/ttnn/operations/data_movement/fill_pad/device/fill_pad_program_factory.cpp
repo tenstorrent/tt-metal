@@ -11,7 +11,9 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-namespace ttnn::operations::data_movement::fill_pad::program {
+namespace ttnn::prim {
+
+using namespace ttnn::operations::data_movement;
 
 FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& /*tensor_return_value*/) {
@@ -144,4 +146,4 @@ void FillPadProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::fill_pad::program
+}  // namespace ttnn::prim

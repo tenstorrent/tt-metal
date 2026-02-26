@@ -25,6 +25,7 @@ import io
 from triage import (
     ScriptConfig,
     TTTriageError,
+    log_warning,
     recurse_field,
     triage_field,
     hex_serializer,
@@ -39,6 +40,7 @@ from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
 
 import socket
@@ -86,6 +88,8 @@ def get_callstack(
                     if location in location._device.active_eth_block_locations:
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
+            except TimeoutDeviceRegisterError:
+                raise
             except Exception as e:
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
@@ -97,6 +101,8 @@ def get_callstack(
                     if location in location._device.active_eth_block_locations:
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
+            except TimeoutDeviceRegisterError:
+                raise
             except Exception as e:
                 try:
                     # If full callstack failed, we default to top callstack
@@ -113,9 +119,13 @@ def get_callstack(
                             )
                         error_message = "\n".join([error_message, additional_message])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
+                except TimeoutDeviceRegisterError:
+                    raise
                 except Exception as e:
                     # If top callstack failed too, print both error messages
                     return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
@@ -200,11 +210,50 @@ class CallstackProvider:
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
         self.force_active_eth = force_active_eth
+        self._callstack_cache: dict[tuple, CallstacksData] = {}
+        self.lock = threading.Lock()  # For thread-safe cache access
 
     def __del__(self):
         # After all callstacks are dumped, stop GDB server if it was started
         if self.gdb_server is not None:
             self.gdb_server.stop()
+
+    def get_cached_callstacks(
+        self,
+        location: OnChipCoordinate,
+        risc_name: str,
+        rewind_pc_for_ebreak: bool = False,
+        use_full_callstack: bool | None = None,
+        use_gdb_callstack: bool | None = None,
+    ) -> CallstacksData:
+        full = use_full_callstack if use_full_callstack is not None else self.full_callstack
+        gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
+
+        cache_key = (
+            location._device.id,
+            location.to_str("noc0"),
+            risc_name,
+            full,
+            gdb,
+            rewind_pc_for_ebreak,
+        )
+
+        with self.lock:
+            if cache_key in self._callstack_cache:
+                return self._callstack_cache[cache_key]
+
+        callstacks = self.get_callstacks(
+            location,
+            risc_name,
+            rewind_pc_for_ebreak=rewind_pc_for_ebreak,
+            use_full_callstack=use_full_callstack,
+            use_gdb_callstack=use_gdb_callstack,
+        )
+
+        with self.lock:
+            self._callstack_cache[cache_key] = callstacks
+
+        return callstacks
 
     def get_callstacks(
         self,
@@ -216,12 +265,14 @@ class CallstackProvider:
     ) -> CallstacksData:
         dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
+
         if risc_debug.is_in_reset():
             return CallstacksData(
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
+
         if location in location._device.active_eth_block_locations and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
@@ -292,6 +343,8 @@ class CallstackProvider:
                         callstack_with_message.callstack[0].pc = (
                             location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                         )
+                    except TimeoutDeviceRegisterError:
+                        raise
                     except:
                         pass
             else:
@@ -341,6 +394,8 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
         server.start()
         gdb_server = GdbServer(context, server, error_stream=io.StringIO())
         gdb_server.start()
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
 
@@ -353,6 +408,17 @@ def run(args, context: Context):
     gdb_callstack: bool = args["--gdb-callstack"]
     active_eth: bool = args["--active-eth"]
     force_active_eth = (full_callstack or gdb_callstack) and active_eth
+
+    if context.devices[0].is_blackhole():
+        if full_callstack:
+            log_warning(
+                "Full callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+        if gdb_callstack:
+            log_warning(
+                "GDB callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+
     if force_active_eth:
         WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."

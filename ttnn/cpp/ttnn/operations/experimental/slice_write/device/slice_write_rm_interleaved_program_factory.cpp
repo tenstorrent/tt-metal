@@ -5,7 +5,6 @@
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -17,7 +16,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -363,4 +362,4 @@ void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

@@ -10,13 +10,13 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::experimental::prim {
 
 // Shared struct for program artifacts - used for caching kernel handles and core info
 struct ReduceScatterProgramArtifacts {
@@ -29,7 +29,7 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
 };
 
-struct operation_attributes_t {
+struct ReduceScatterMinimalAsyncParams {
     uint32_t dim;
     uint32_t num_links;
     uint32_t ring_size;
@@ -44,6 +44,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -62,18 +63,16 @@ struct operation_attributes_t {
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_workers_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         return attrs;
     }
 };
 
-struct tensor_args_t {
+struct ReduceScatterMinimalAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
 };
-
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
 
 // Common validation function
 void reduce_scatter_common_validates(
@@ -85,4 +84,4 @@ void reduce_scatter_common_validates(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::experimental::prim

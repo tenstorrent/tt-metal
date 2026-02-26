@@ -11,7 +11,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::scatter {
+namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -30,4 +30,4 @@ struct ScatterReduceBfloat16ProgramFactory {
     static void override_runtime_arguments(cached_program_t&, const ScatterParams&, const ScatterInputs&, Tensor&);
 };
 
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim

@@ -54,7 +54,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Print stats if explicitly requested
     stats_reporter = StatsReporter(
-        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch
+        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch, metadata_loader
     )
 
     if verbose:
@@ -66,7 +66,9 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Plot results
     if plot:
-        plotter = Plotter(dm_stats, aggregate_stats, DEFAULT_OUTPUT_DIR, arch, test_id_to_name, test_id_to_comment)
+        plotter = Plotter(
+            dm_stats, aggregate_stats, DEFAULT_OUTPUT_DIR, arch, test_id_to_name, test_id_to_comment, metadata_loader
+        )
         plotter.plot_dm_stats()
 
     # Check performance

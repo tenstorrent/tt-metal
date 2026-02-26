@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_adamw_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <optional>
 
@@ -11,11 +12,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
-
-MorehAdamWDeviceOperation::program_factory_t MorehAdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MultiCore{};
-}
 
 void MorehAdamWDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
@@ -57,11 +53,6 @@ void MorehAdamWDeviceOperation::validate_inputs(
 }
 
 void MorehAdamWDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }

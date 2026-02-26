@@ -6,21 +6,11 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm::prefix_scan {
-
-PrefixScanDeviceOperation::program_factory_t PrefixScanDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::PrefixScanProgramFactory{};
-}
-
-void PrefixScanDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::experimental::prim {
 void PrefixScanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -75,26 +65,24 @@ tt::stl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.a;
     const auto& a_shape = a.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<PrefixScanDeviceOperation>(
-        args.math_fidelity, program_factory.index(), a.dtype(), a.memory_config(), a_shape.volume());
+        args.math_fidelity, a.dtype(), a.memory_config(), a_shape.volume());
 
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::ssm::prefix_scan
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
+ttnn::experimental::prim::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
     std::optional<MathFidelity> math_fidelity) {
-    using OperationType = ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PrefixScanDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),

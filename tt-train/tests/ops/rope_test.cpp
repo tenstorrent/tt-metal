@@ -6,6 +6,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"

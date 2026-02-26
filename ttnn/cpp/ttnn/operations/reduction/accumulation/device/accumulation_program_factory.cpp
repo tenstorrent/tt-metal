@@ -13,7 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 // calculate the offset between consecutive tiles between accumulation axis and last dimension
 uint32_t AccumulationProgramFactory::calc_input_tile_offset(const Shape& input_shape, const int32_t& dim) {
@@ -220,7 +220,7 @@ KernelHandle AccumulationProgramFactory::create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
     const std::vector<uint32_t>& runtime_args) {
     auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
 
@@ -229,4 +229,4 @@ KernelHandle AccumulationProgramFactory::create_kernel(
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim

@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::embedding {
+namespace ttnn::prim {
 
 enum class EmbeddingsType { GENERIC, PADDED, BINARY };
 enum class EmbeddingsIndexType { UINT32, BFP16 };
@@ -24,7 +24,4 @@ struct EmbeddingInputs {
     std::optional<Tensor> optional_output_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::embedding
+}  // namespace ttnn::prim

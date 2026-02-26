@@ -81,13 +81,11 @@ class MLA2D(MLA1D):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
                 dim=2,
-                topology=ttnn.Topology.Linear,
             ),
             "seq_rs_prefill": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=0,
                 dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
             ),
         }
 
@@ -103,21 +101,6 @@ class MLA2D(MLA1D):
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
         }
-
-    @classmethod
-    def create_page_table(
-        cls,
-        paged_config: PagedAttentionConfig,
-        mesh_device: ttnn.MeshDevice,
-        page_table: torch.Tensor | None = None,
-        batch_size_per_row: int = USERS_PER_ROW,
-    ) -> ttnn.Tensor:
-        return super().create_page_table(
-            paged_config=paged_config,
-            mesh_device=mesh_device,
-            page_table=page_table,
-            batch_size=batch_size_per_row * mesh_device.shape[0],
-        )
 
     @classmethod
     def create_state(

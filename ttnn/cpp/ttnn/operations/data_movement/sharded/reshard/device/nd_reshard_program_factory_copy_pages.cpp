@@ -9,14 +9,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard::program {
+namespace ttnn::prim {
 
 NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
-    const reshard::ReshardParams& operation_attributes,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& operation_attributes, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
+    auto& output = output_tensor;
 
     auto* input_buffer = input.buffer();
     auto* output_buffer = output.buffer();
@@ -85,18 +83,18 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
         {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .grid = grid, .cores = cores}};
 
     // Set initial runtime arguments
-    override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
+    override_runtime_arguments(cached_program, operation_attributes, tensor_args, output_tensor);
 
     return cached_program;
 }
 
 void NdReshardCopyPagesFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/,
+    const ReshardInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
 
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
@@ -130,4 +128,4 @@ void NdReshardCopyPagesFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshard::program
+}  // namespace ttnn::prim

@@ -12,7 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -163,4 +163,4 @@ void ConcatS2SMultiProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

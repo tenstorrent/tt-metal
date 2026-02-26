@@ -26,6 +26,7 @@ struct DeviceBuildEnv {
     JitBuildEnv build_env;
     std::vector<JitBuildState> firmware_build_states;
     std::vector<JitBuildState> kernel_build_states;
+    bool firmware_precompiled = false;
 };
 
 // A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
@@ -58,23 +59,34 @@ public:
 
     void build_firmware(ChipId device_id);
 
+    // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
+    std::string get_firmware_binary_path(
+        ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
+
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.
-    BuildIndexAndTypeCount get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
+    BuildIndexAndTypeCount get_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class, bool is_fw);
 
     // Method to get the build environment info for all devices
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    BuildEnvManager();
+    explicit BuildEnvManager(const Hal& hal);
     ~BuildEnvManager() = default;
 
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?
-    ProgCoreMapping build_state_indices_;
+    ProgCoreMapping kernel_build_state_indices_;
+    ProgCoreMapping firmware_build_state_indices_;
     std::mutex lock;
+
+    BuildIndexAndTypeCount get_kernel_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class) const;
+    BuildIndexAndTypeCount get_firmware_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class) const;
 };
 
 }  // namespace tt::tt_metal

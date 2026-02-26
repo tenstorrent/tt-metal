@@ -6,7 +6,7 @@
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::pool::upsample::program {
+namespace ttnn::prim {
 
 struct UpsampleBilinearProgramFactory {
     struct shared_variables_t {
@@ -19,13 +19,13 @@ struct UpsampleBilinearProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor);
+        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const UpsampleParams& operation_attributes,
-        const UpsampleInputs& tensor_args,
+        const Tensor& input_tensor,
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::pool::upsample::program
+}  // namespace ttnn::prim

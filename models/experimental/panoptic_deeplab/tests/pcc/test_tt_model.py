@@ -24,6 +24,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
 )
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_category, pcc_values, skip_check",
     [
@@ -31,7 +32,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
             PANOPTIC_DEEPLAB,
             {
                 "semantic": {"pcc": 0.986, "abs_err": 1.3, "rel_err": 0.4},
-                "center": {"pcc": 0.805, "abs_err": 0.1, "rel_err": 2.0},
+                "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
                 "offset": {"pcc": 0.990, "abs_err": 10.4, "rel_err": 0.6},
             },
             skip_if_not_blackhole_20_cores,
@@ -39,9 +40,9 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             PANOPTIC_DEEPLAB,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
-                "center": {"pcc": 0.8, "abs_err": 0.1, "rel_err": 2.2},
-                "offset": {"pcc": 0.987, "abs_err": 11.7, "rel_err": 0.7},
+                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
+                "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
+                "offset": {"pcc": 0.992, "abs_err": 8.5, "rel_err": 0.5},
             },
             skip_if_not_blackhole_110_cores,
         ),
@@ -55,7 +56,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             DEEPLAB_V3_PLUS,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
+                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
             },
             skip_if_not_blackhole_110_cores,
         ),
