@@ -45,13 +45,14 @@ constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
 constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(19);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
 constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
+constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
 
-constexpr uint32_t num_ct_args = 27;
+constexpr uint32_t num_ct_args = 28;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -224,7 +225,9 @@ void kernel_main() {
 
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
-        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_unit_blocks_per_core;
+        // Use actual row count per core (not padded), so coordinates_to_slice_coordinates
+        // produces correct absolute row offsets across MM cores.
+        const uint32_t tiles_ht_per_core = slice_Ht_per_core;
         const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
@@ -232,10 +235,12 @@ void kernel_main() {
             const uint32_t output_tile_id_start = b * output_batch_num_pages;
 
             for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
+                const uint32_t current_mm_block_ht =
+                    get_current_mm_block_ht(m_block_iter, mm_M_unit_blocks_per_core, mm_block_ht, slice_Ht_per_core);
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                     const uint32_t effective_chunk_width_in_tiles =
                         get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_full_block_wt);
-                    const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
+                    const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                     for (uint32_t i = 0; i < ring_size; i++) {
@@ -254,7 +259,7 @@ void kernel_main() {
                                 effective_worker_id,
                                 effective_subchunk_size,
                                 effective_chunk_width_in_tiles,
-                                mm_block_ht);
+                                current_mm_block_ht);
                             uint32_t tiles_to_read = how_many_tiles_to_read_formula(
                                 tile_row_in_mm_M_unit_block,
                                 chunk_col_in_tiles,
@@ -288,7 +293,7 @@ void kernel_main() {
                                         chunk_idx,
                                         N_full_block_wt,
                                         tiles_ht_per_core,
-                                        mm_block_ht,
+                                        mm_block_ht,  // full stride between blocks for absolute row calculation
                                         chunk_width_in_tiles,
                                         actual_slice_idx,
                                         slice_Wt,
@@ -301,7 +306,7 @@ void kernel_main() {
                                         effective_advance_by_tiles,
                                         effective_subchunk_size,
                                         effective_chunk_width_in_tiles,
-                                        mm_block_ht);
+                                        current_mm_block_ht);
 
                                     if (i < (ring_size - 1)) {
                                         // Write the tile(s) to the intermediate buffer on the neighboring device.
@@ -320,7 +325,8 @@ void kernel_main() {
                                                     chunk_idx,
                                                     N_full_block_wt,
                                                     tiles_ht_per_core,
-                                                    mm_block_ht,
+                                                    mm_block_ht,  // full stride between blocks for absolute row
+                                                                  // calculation
                                                     chunk_width_in_tiles,
                                                     actual_slice_idx,
                                                     slice_Wt,
@@ -332,7 +338,7 @@ void kernel_main() {
                                                     effective_advance_by_tiles,
                                                     effective_subchunk_size,
                                                     effective_chunk_width_in_tiles,
-                                                    mm_block_ht);
+                                                    current_mm_block_ht);
 
                                                 const auto noc_address1 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
