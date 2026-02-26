@@ -7,7 +7,8 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
+
 #include <tt_stl/optional_reference.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
@@ -53,7 +54,7 @@ class MeshDevice;
  *   Device and MeshBuffer will be null.
  */
 class MeshTensor {
-    using attribute_type = TensorAttributes<DeviceStorage>;
+    using attribute_type = TensorImpl<DeviceStorage>;
 
 public:
     using volumn_type = std::uint64_t;
