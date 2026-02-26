@@ -239,7 +239,7 @@ async function run() {
         outputRegressedDetails = [{
           name: workflowPart,
           workflow_path: `.github/workflows/${workflowPart}.yaml`,
-          failing_jobs: [{ name: jobPart }]
+          failing_jobs: [{ name: jobPart, owners: [{ name: 'Evan Banerjee' }] }]
         }];
         core.info(`[FORCE-REGRESSION] Overriding regressed_workflows with: ${workflowPart} / ${jobPart}`);
       } else {

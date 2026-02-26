@@ -240,7 +240,7 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
-          force-regression-job: ${{ github.ref == 'refs/heads/ebanerjee/refactoring-tester-with-regression' && 'galaxy-e2e-tests:Galaxy CCL tests' || '' }}
+          force-regression-job: ${{ github.ref == 'refs/heads/ebanerjee/refactoring-tester-with-regression' && 't3000-unit-tests:t3k_ttnn_tests' || '' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
