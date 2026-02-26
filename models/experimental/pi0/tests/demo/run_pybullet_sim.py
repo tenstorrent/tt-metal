@@ -196,6 +196,7 @@ class PI0SimulationEnv:
         verbose_actions=False,
         seed=42,
         use_gemma_tokenizer=False,
+        replan_interval=5,
     ):
         """
         Initialize simulation environment and PI0 model.
@@ -210,14 +211,20 @@ class PI0SimulationEnv:
             verbose_actions: Print predicted actions (default False)
             seed: Random seed for reproducibility (default 42)
             use_gemma_tokenizer: Try to use official Gemma tokenizer (requires HF auth)
+            replan_interval: How many actions to execute before re-planning (default 5)
         """
         # Set random seeds for reproducibility
         self.seed = seed
         self.use_gemma_tokenizer = use_gemma_tokenizer
+        self.replan_interval = replan_interval
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+
+        # Action buffer for reduced re-planning
+        self.action_buffer = None
+        self.action_buffer_idx = 0
         print("\n" + "=" * 70)
         print("   PI0 REAL-TIME SIMULATION - Franka Panda Robot (7-DOF)")
         print("=" * 70)
