@@ -6,7 +6,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {
 
@@ -48,9 +47,7 @@ namespace std {
 
 template <>
 struct hash<tt::tt_metal::DispatchCoreConfig> {
-    std::size_t operator()(const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) const {
-        return tt::stl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
-    }
+    std::size_t operator()(const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) const;
 };
 
 }  // namespace std

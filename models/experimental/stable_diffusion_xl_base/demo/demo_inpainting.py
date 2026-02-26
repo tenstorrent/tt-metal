@@ -33,6 +33,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_inpainting_pipeline
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     negative_prompts,
     num_inference_steps,
@@ -98,6 +99,7 @@ def run_demo_inference(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
         pipeline_config=TtSDXLInpaintingPipelineConfig(
+            image_resolution=image_resolution,
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
@@ -114,7 +116,7 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
-    height = width = 1024
+    height, width = image_resolution
     if input_images is None:  # when running the demo directly
         img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
         mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
@@ -164,9 +166,9 @@ def run_demo_inference(
     ) = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
-        torch_image=torch.randn(batch_size, 3, 1024, 1024),
-        torch_masked_image=torch.randn(batch_size, 3, 1024, 1024),
-        torch_mask=torch.randn(batch_size, 1, 1024, 1024),
+        torch_image=torch.randn(batch_size, 3, height, width),
+        torch_masked_image=torch.randn(batch_size, 3, height, width),
+        torch_mask=torch.randn(batch_size, 1, height, width),
     )
 
     tt_sdxl.compile_image_processing()
@@ -273,6 +275,14 @@ def run_demo_inference(
 # Currently assert that it is None
 
 
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -356,6 +366,7 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     negative_prompt,
     num_inference_steps,
@@ -376,10 +387,14 @@ def test_demo(
     input_images=None,
     input_masks=None,
 ):
+    if image_resolution == (512, 512):
+        pytest.skip("512x512 image resolution is not yet supported for inpainting pipeline.")
+
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         negative_prompt,
         num_inference_steps,

@@ -78,7 +78,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    MAX_L1_PER_BANK = 1000000 if num_devices == 4 or num_devices == 8 else 850000
+    MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
         VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
