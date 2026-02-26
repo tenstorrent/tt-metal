@@ -137,35 +137,12 @@ class WanAttentionBlock(Module):
 
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis, dtype=x_BTHWC.dtype
-                ),
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis,
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
+            x_BTHWC = self.ccl_manager.all_gather_persistent_buffer(
+                x_BTHWC, dim=2, mesh_axis=self.parallel_config.height_parallel.mesh_axis
             )
         if self.parallel_config.width_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape,
-                    3,
-                    self.parallel_config.width_parallel.mesh_axis,
-                    dtype=x_BTHWC.dtype,
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.width_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
+            x_BTHWC = self.ccl_manager.all_gather_persistent_buffer(
+                x_BTHWC, dim=3, mesh_axis=self.parallel_config.width_parallel.mesh_axis
             )
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
