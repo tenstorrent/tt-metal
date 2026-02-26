@@ -51,7 +51,7 @@ def load_vae_model_optimisations(
         init_kwargs["ff_weights_dtype"] = ff_weights_dtype
 
     # 512x512 and 1024x1024 share the same optimisations because they only differ in the number of DRAM
-    # slices which is determined by the tensor NHW dimenstion.
+    # slices which is determined by the tensor NHW dimension.
     if (height, width) == (512, 512):
         return VAEModelOptimisations(**init_kwargs)
     elif (height, width) == (1024, 1024):
