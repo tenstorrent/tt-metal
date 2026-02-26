@@ -488,7 +488,9 @@ bool is_llk_bcast(
         subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B)) {
+        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) /*||
+            all_match(DataType::FLOAT32) || all_match(DataType::INT32)  || all_match(DataType::UINT32) ||
+            all_match(DataType::UINT16)*/) {
             return true;
         }
     }
