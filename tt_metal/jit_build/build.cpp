@@ -313,6 +313,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     lflags_(env.lflags_),
     default_compile_opt_level_("Os"),
     default_linker_opt_level_("Os") {
+
+    bool is_legacy_kernel = false;
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
@@ -329,6 +331,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
     HalJitBuildQueryInterface::Params params{
         build_config.is_fw,
+        is_legacy_kernel,
         build_config.core_type,
         build_config.processor_class,
         static_cast<uint32_t>(build_config.processor_id),

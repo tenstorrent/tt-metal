@@ -33,6 +33,7 @@ static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
 struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use
     uint32_t num_threads_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
+    bool is_legacy_kernel = true;
 
     std::vector<uint32_t> compile_args;
 
