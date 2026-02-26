@@ -398,7 +398,7 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
  * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
  *
  * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
- * based on mesh assignments. This is useful when you have a pre-built adjacency graph and need to
+ * based on mesh groupings. This is useful when you have a pre-built adjacency graph and need to
  * organize it by mesh.
  *
  * The function:
@@ -407,13 +407,13 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
  * - Builds exit node graphs for each mesh
  *
  * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
- * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks.
- *                              Used to determine which mesh each ASIC belongs to.
+ * @param mesh_groupings Vector of mesh groupings, where each grouping is a set of ASIC IDs belonging to one mesh.
+ *                       Each element in the vector represents one mesh, and the index becomes the MeshId.
  * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
  */
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+    const std::vector<std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings);
 
 /**
  * @brief Map logical multi-mesh topology to physical multi-mesh topology
