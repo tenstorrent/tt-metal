@@ -122,6 +122,8 @@ class PostSDPA:
         sdpa_scale_fp32=1.0,
         sdpa_forwarder_cores=None,
         sdpa_cluster_axis=0,
+        sdpa_position_id_tensor_mesh=None,
+        sdpa_per_device_chunk_size=0,
     ):
         """
         Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
@@ -155,6 +157,11 @@ class PostSDPA:
             sdpa_scale_fp32: Scale value for SDPA reduction (default 1.0)
             sdpa_forwarder_cores: List of 2 CoreCoord for SDPA forwarders
             sdpa_cluster_axis: Axis for SDPA all-reduce (default 0, typically reduces across rows)
+            sdpa_position_id_tensor_mesh: Optional position ID tensor mesh (HEIGHT_SHARDED int32 [1,1]
+                per SDPA worker core). When provided with sdpa_per_device_chunk_size > 0, enables
+                position-based device validity masking.
+            sdpa_per_device_chunk_size: Chunk size per device for position validity. Device d in the
+                ring is valid iff position_id >= d * per_device_chunk_size. Default 0 (disabled).
 
         Returns:
             When ccl_enabled=True: output_tensor mesh with all-reduced result
@@ -262,15 +269,14 @@ class PostSDPA:
         # SDPA Reduce-to-All configuration (optional)
         # ========================================================================
         sdpa_enabled = sdpa_input_l_mesh is not None
+        sdpa_position_enabled = (
+            sdpa_enabled and sdpa_position_id_tensor_mesh is not None and sdpa_per_device_chunk_size > 0
+        )
         if sdpa_enabled:
-            # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
-            sdpa_worker_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),  # 4 cores
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),  # 4 cores
-                ]
-            )
-            num_sdpa_workers = 8
+            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
+            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
+
+            sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
 
             # SDPA forwarder cores: (6,9), (7,9) - provided by caller or default
             # Both must be on row 9 with x > 3 to be outside matmul2 grid (same compile-time args)
@@ -285,10 +291,6 @@ class PostSDPA:
 
             # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
             full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
-
-            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
-            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-            sdpa_input_ms_sample = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
 
             # Get actual tile dimensions from input tensor (matches original op)
             sdpa_tile = sdpa_input_l_sample.tile
@@ -362,7 +364,9 @@ class PostSDPA:
             sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
             sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
             sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-            sdpa_fwd_slot_size = 256 + sdpa_l_chunk_size_bytes  # Header + max payload
+            sdpa_fwd_slot_size = (
+                ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_l_chunk_size_bytes
+            )  # Header + max payload
             sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
 
             # SDPA semaphore ID for scatter arrival (new semaphore)
@@ -450,7 +454,7 @@ class PostSDPA:
         ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
         ccl_num_pages = gather2_dst_num_pages  # 224 pages of 1x32
         ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
-        ccl_packet_header_size_bytes = 32
+        ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         l1_alignment = 16
 
         has_residual = 1 if residual_tensor_mesh is not None else 0
@@ -605,6 +609,9 @@ class PostSDPA:
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
+                            # SDPA position
+                            ("sdpa_position_enabled", 1 if sdpa_position_enabled else 0),
+                            ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
                             # SDPA forwarder params
                             ("sdpa_fwd_slots_per_round", sdpa_fwd_slots_per_round),
                             ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
@@ -746,6 +753,9 @@ class PostSDPA:
                             ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
+                            # SDPA position
+                            ("sdpa_position_enabled", 1 if sdpa_position_enabled else 0),
+                            ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
                         ]
                     )
 
@@ -1081,13 +1091,14 @@ class PostSDPA:
                     cb_list.append(sdpa_ms_out_cb_descriptor)
 
                     # CB 24: SDPA packet slot (for fabric packet headers)
+                    sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
                     sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=sdpa_cb_packet_slot,
                         data_format=ttnn.uint32,
-                        page_size=256,  # Packet header size
+                        page_size=sdpa_packet_header_cb_size,
                     )
                     sdpa_packet_slot_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=256,
+                        total_size=sdpa_packet_header_cb_size,
                         core_ranges=sdpa_worker_grid,
                         format_descriptors=[sdpa_packet_slot_cb_format],
                     )
@@ -1271,6 +1282,7 @@ class PostSDPA:
                     ),
                     defines=kernel_defines,
                     unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 # Get kernel descriptors
@@ -1404,24 +1416,26 @@ class PostSDPA:
                     bwd_coord = ttnn.MeshCoordinate(bwd_row, bwd_col)
                     fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
                     bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
+
+                    # Ring-local device indices for position validity (ring along sdpa_cluster_axis)
+                    sdpa_ring_idx = row if sdpa_cluster_axis == 0 else col
+                    sdpa_fwd_ring_idx = fwd_row if sdpa_cluster_axis == 0 else fwd_col
+                    sdpa_bwd_ring_idx = bwd_row if sdpa_cluster_axis == 0 else bwd_col
+                    sdpa_num_ring_devices = mesh_shape[0] if sdpa_cluster_axis == 0 else mesh_shape[1]
+
+                    # Position tensor address (0 if position disabled)
+                    sdpa_pos_addr = 0
+                    if sdpa_position_enabled:
+                        sdpa_position_device = ttnn.get_device_tensors(sdpa_position_id_tensor_mesh)[device_idx]
+                        sdpa_pos_addr = sdpa_position_device.buffer_address()
+
                     # SDPA worker runtime args (per-core)
                     sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
                     sdpa_worker_brisc_rt_args = ttnn.RuntimeArgs()
+                    sdpa_worker_trisc_rt_args = ttnn.RuntimeArgs() if sdpa_position_enabled else None
 
                     # Get matmul1 input buffer address for scatter destination
                     scatter_dest_l1_addr = input_tensor_device.buffer_address()
-
-                    # Iterate over SDPA worker cores
-                    sdpa_worker_cores = [
-                        ttnn.CoreCoord(2, 8),
-                        ttnn.CoreCoord(3, 8),
-                        ttnn.CoreCoord(4, 8),
-                        ttnn.CoreCoord(5, 8),
-                        ttnn.CoreCoord(2, 9),
-                        ttnn.CoreCoord(3, 9),
-                        ttnn.CoreCoord(4, 9),
-                        ttnn.CoreCoord(5, 9),
-                    ]
 
                     # Type A/B worker split (like original sdpa_reduce_to_all op)
                     # This distributes R1/R2 traffic across both FWD and BWD forwarder instances
@@ -1439,6 +1453,7 @@ class PostSDPA:
                     bwd_r1_count = [0, 0]
                     bwd_r2_count = [0, 0]
 
+                    sdpa_worker_cores = ttnn.corerange_to_cores(sdpa_worker_grid)
                     for worker_idx, worker_core in enumerate(sdpa_worker_cores):
                         # Convert worker core to NOC coordinates (like original sdpa_reduce_to_all op)
                         worker_core_noc = device.worker_core_from_logical_core(worker_core)
@@ -1449,12 +1464,13 @@ class PostSDPA:
                         r1_recv_buffer_addr = sdpa_r1_recv_device.buffer_address()
                         r2_recv_buffer_addr = sdpa_r2_recv_device.buffer_address()
 
-                        sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y] = [
+                        ncrisc_base_args = [
                             r1_neighbor_sem_addr,
                             r2_neighbor_sem_addr,
                             r1_recv_buffer_addr,
                             r2_recv_buffer_addr,
                         ]
+                        sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y] = ncrisc_base_args
 
                         # BRISC runtime args: fabric destinations, scatter destinations
                         # Determine which matmul1 cores this worker scatters to (8 rows per worker)
@@ -1542,13 +1558,54 @@ class PostSDPA:
 
                         sdpa_worker_brisc_rt_args[worker_core.x][worker_core.y] = brisc_rt_args
 
+                        # Position runtime args (TRISC and NCRISC extension)
+                        if sdpa_position_enabled:
+                            # Compute ring-local neighbor indices based on Type A/B
+                            # Type A: R1=forward, R2=backward
+                            # Type B: R1=backward, R2=forward
+                            if is_type_a:
+                                pos_r1_neighbor_idx = sdpa_fwd_ring_idx
+                                pos_r2_neighbor_idx = sdpa_bwd_ring_idx
+                            else:
+                                pos_r1_neighbor_idx = sdpa_bwd_ring_idx
+                                pos_r2_neighbor_idx = sdpa_fwd_ring_idx
+
+                            # R2 neighbor's R1 neighbor: determine the R2 neighbor's type, then its R1 direction
+                            r2_neighbor_row_in_ring = pos_r2_neighbor_idx
+                            r2_neighbor_is_type_a = ((r2_neighbor_row_in_ring + worker_idx) % 2) == 0
+                            if r2_neighbor_is_type_a:
+                                pos_r2_neighbor_r1_idx = (pos_r2_neighbor_idx + 1) % sdpa_num_ring_devices
+                            else:
+                                pos_r2_neighbor_r1_idx = (
+                                    pos_r2_neighbor_idx - 1 + sdpa_num_ring_devices
+                                ) % sdpa_num_ring_devices
+
+                            # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
+                                sdpa_pos_addr,
+                                sdpa_ring_idx,
+                                pos_r1_neighbor_idx,
+                                pos_r2_neighbor_idx,
+                                pos_r2_neighbor_r1_idx,
+                            ]
+
+                            # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y].extend(
+                                [
+                                    sdpa_pos_addr,
+                                    pos_r1_neighbor_idx,
+                                    pos_r2_neighbor_idx,
+                                    pos_r2_neighbor_r1_idx,
+                                ]
+                            )
+
                     # Set SDPA worker runtime args
-                    # program.kernels[sdpa_worker_group.ncrisc_kernel_index].runtime_args = sdpa_worker_ncrisc_rt_args
-                    # program.kernels[sdpa_worker_group.brisc_kernel_index].runtime_args = sdpa_worker_brisc_rt_args
                     for group in kernel_result.groups:
                         if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
                             program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_worker_ncrisc_rt_args
                             program.kernels[group.brisc_kernel_index].runtime_args = sdpa_worker_brisc_rt_args
+                            if sdpa_worker_trisc_rt_args is not None:
+                                program.kernels[group.trisc_kernel_index].runtime_args = sdpa_worker_trisc_rt_args
 
                     # SDPA forwarder runtime args (using setup_fabric_connection like original SDPA op)
                     # Key: Build RuntimeArgs completely FIRST, then assign to program.kernels AFTER
@@ -1598,11 +1655,6 @@ class PostSDPA:
                     program.kernels[
                         sdpa_forwarder_group.ncrisc_kernel_index
                     ].runtime_args = sdpa_forwarder_ncrisc_rt_args
-                    # Set for ALL kernel groups that have is_sdpa_forwarder_core=1
-                    # for group in kernel_result.groups:
-                    #    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                    #        program.kernels[group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    #        program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_forwarder_ncrisc_rt_args
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -1632,6 +1684,8 @@ class PostSDPA:
                     sdpa_forwarder_scratch_mesh,
                 ]
             )
+        if sdpa_position_enabled:
+            io_tensors.append(sdpa_position_id_tensor_mesh)
 
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 

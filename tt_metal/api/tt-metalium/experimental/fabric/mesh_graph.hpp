@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -64,7 +63,9 @@ struct RouterEdge {
 struct hash_pair {
     template <class T1, class T2>
     size_t operator()(const std::pair<T1, T2>& p) const {
-        return tt::stl::hash::hash_objects(std::hash<T1>{}(p.first), std::hash<T2>{}(p.second));
+        size_t seed = std::hash<T1>{}(p.first);
+        seed ^= std::hash<T2>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
     }
 };
 

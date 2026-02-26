@@ -10,6 +10,7 @@
 #include "api/compute/pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
@@ -27,8 +28,6 @@
 #endif
 
 namespace ckernel {
-
-constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
 
 template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(uint32_t icb0) {

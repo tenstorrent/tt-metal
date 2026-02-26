@@ -64,6 +64,11 @@ public:
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
+    // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
+    // May differ when binaries are provided from an external source.
+    const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
+    void set_firmware_binary_root(const std::string& path) { firmware_binary_root_ = path; }
+
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
     uint32_t max_cbs_{};
@@ -73,6 +78,7 @@ private:
     std::string out_root_;
     std::string out_firmware_root_;
     std::string out_kernel_root_;
+    std::string firmware_binary_root_;
 
     // Tools
     std::string gpp_;
@@ -141,6 +147,7 @@ public:
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
+    const std::string& get_target_full_path() const { return this->target_full_path_; }
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
