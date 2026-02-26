@@ -377,11 +377,11 @@ struct FlashMLADecode {
                     }
                 } else {
                     // wait for 8 q heads
-                    uint32_t q_addr = get_read_ptr(args.cb_q_in);
-                    uint64_t q_noc_addr = get_noc_addr(args.output_core_noc_x, args.output_core_noc_y, q_addr);
+                    uint64_t q_noc_addr =
+                        get_noc_addr(args.output_core_noc_x, args.output_core_noc_y, get_read_ptr(args.cb_q_in));
                     cb_reserve_back(args.cb_q_in, q_chunk_tiles);
                     noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
-                    noc_async_read(q_noc_addr, q_addr, args.q_chunk_size_bytes, READ_NOC_INDEX);
+                    noc_async_read(q_noc_addr, get_write_ptr(args.cb_q_in), args.q_chunk_size_bytes, READ_NOC_INDEX);
                     noc_async_read_barrier(READ_NOC_INDEX);
                     cb_push_back(args.cb_q_in, q_chunk_tiles);
                 }
