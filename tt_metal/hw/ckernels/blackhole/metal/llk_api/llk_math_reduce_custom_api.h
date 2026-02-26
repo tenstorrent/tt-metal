@@ -66,4 +66,7 @@ inline void llk_math_reduce_block_max_row(const uint dst_index) {
  * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
-inline void llk_math_reduce_block_max_row_reinit() { reduce_max_row_configure_addrmod_reinit(); }
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_math_reduce_block_max_row_reinit() {
+    _llk_math_reduce_block_max_row_reinit_<is_fp32_dest_acc_en>();
+}

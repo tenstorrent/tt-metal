@@ -581,7 +581,8 @@ void reduce_c_row_group(
     uint32_t prev_cb,
     uint32_t row_group_index,
     bool do_eltwise_max = false,
-    uint32_t in0_row_group_index = 0xFFFFFFFF) {
+    uint32_t in0_row_group_index = 0xFFFFFFFF,
+    bool use_init = true) {
     constexpr uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
@@ -604,7 +605,11 @@ void reduce_c_row_group(
         }
     }
 
-    reduce_block_max_row_init<cols>();
+    if (use_init) {
+        reduce_block_max_row_init<cols>();
+    } else {
+        reduce_block_max_row_reinit_short<cols>();
+    }
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (in0_row_start + i) * cols;
         reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
@@ -942,7 +947,8 @@ void sdpa_inner_loop_step(
                 prev_max,
                 q_subblock,
                 !is_first_iter /*do_eltwise_max*/,
-                q_subblock /*in0_row_group_index*/);
+                q_subblock /*in0_row_group_index*/,
+                q_subblock == 0 /*use_init*/);
             cb_push_back(cur_max, sbh);
         }
 

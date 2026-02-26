@@ -90,8 +90,8 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 template <uint32_t block_ct_dim>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_reinit()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    MATH((llk_math_reduce_block_max_row_reinit<DST_ACCUM_MODE>()));
 }
 #endif
 
