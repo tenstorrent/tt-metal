@@ -265,6 +265,7 @@ RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV UV_PYTHON="$PYTHON_ENV_DIR/bin/python"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
@@ -315,6 +316,7 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV UV_PYTHON="$PYTHON_ENV_DIR/bin/python"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
