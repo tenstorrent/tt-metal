@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -85,7 +86,13 @@ Tensor prod_impl(
 
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
-    if (old_rank == 0 || input_a.logical_volume() == 0) {
+    // If the input is a rank 0 tensor (scalar), return a copy of it
+    if (old_rank == 0) {
+        return ttnn::clone(input_a, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+    }
+
+    // For a zero volume tensor, return a zero volume tensor with the shape adjusted for keepdim.
+    if (input_a.logical_volume() == 0) {
         ttnn::SmallVector<int> dim_vector = reduction_common::generate_reduce_dim(input_a, dim);
         return reduction_common::zero_volume_reduce<reduction_common::ReduceType::Prod>(
             input_a, dim_vector, keepdim, output_mem_config);
