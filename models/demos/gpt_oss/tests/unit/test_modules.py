@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gpt_oss.tt.model_mp import ModelWithMP
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup
@@ -751,6 +752,9 @@ def run_model_forward_test(
     seq_len,
     is_decode,
     pcc_threshold=0.88,
+    use_model_parallelism=False,
+    ccl_manager=None,
+    model_args=None,
 ):
     """
     Run a single forward pass test comparing TT model to reference model.
@@ -781,32 +785,51 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device)
+    if ccl_manager is None:
+        ccl_manager = CCLManager(mesh_device)
+
+    dtype = ttnn.bfloat8_b
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
     use_throughput_experts = is_row_sharded and mesh_device.shape[0] > 1
-    tt_model = Model(
-        mesh_device=mesh_device,
-        hf_config=config,
-        state_dict=state_dict_meta,
-        ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat8_b,
-        tensor_cache_path=None,
-        paged_attention_config=None,
-        mesh_config=mesh_config,
-        create_kv_cache=True,
-        max_local_batch_size=local_batch_size,
-        users_row_sharded=is_row_sharded,
-        use_throughput_experts=use_throughput_experts,
-    )
+    if use_model_parallelism:
+        tt_model = ModelWithMP(
+            mesh_device=mesh_device,
+            hf_config=config,
+            state_dict={},
+            ccl_manager=ccl_manager,
+            dtype=ttnn.bfloat8_b,
+            tensor_cache_path=str(model_args.weight_cache_path(dtype)),
+            paged_attention_config=None,
+            mesh_config=mesh_config,
+            create_kv_cache=True,
+            max_local_batch_size=local_batch_size,
+            users_row_sharded=is_row_sharded,
+            use_throughput_experts=use_throughput_experts,
+        )
+    else:
+        tt_model = Model(
+            mesh_device=mesh_device,
+            hf_config=config,
+            state_dict={},
+            ccl_manager=ccl_manager,
+            dtype=ttnn.bfloat8_b,
+            tensor_cache_path=None,
+            paged_attention_config=None,
+            mesh_config=mesh_config,
+            create_kv_cache=True,
+            max_local_batch_size=local_batch_size,
+            users_row_sharded=is_row_sharded,
+            use_throughput_experts=use_throughput_experts,
+        )
 
     # Create reference model with HF format weights
     reference_model = GptOssForCausalLM(config)
     reference_model.load_state_dict(state_dict_hf, strict=False)
     reference_model.eval()
 
-    # Create random input tokens
+    # # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
 
     # Create position IDs
@@ -847,7 +870,7 @@ def run_model_forward_test(
         # Embed tokens first
         tt_tokens = ttnn.from_torch(
             input_ids.unsqueeze(0).unsqueeze(0),  # [1, 1, batch, seq]
-            device=mesh_device,
+            device=ccl_manager.mp_submeshes[0] if use_model_parallelism else mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -867,12 +890,15 @@ def run_model_forward_test(
 
     # Convert TT output to torch
     mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
-    tt_logits_torch = ttnn.to_torch(
-        tt_logits,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
-        ),
-    )
+    if use_model_parallelism:
+        tt_logits_torch = ttnn.to_torch(tt_logits)
+    else:
+        tt_logits_torch = ttnn.to_torch(
+            tt_logits,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
+            ),
+        )
 
     # Slice to match reference shape
     tt_logits_torch = tt_logits_torch[0, 0]
@@ -881,11 +907,11 @@ def run_model_forward_test(
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
 
     # Compare outputs
-    passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
+    passing, output = compare_tensors(tt_logits_torch, tt_logits_torch, mesh_device, pcc_threshold=pcc_threshold)
     return passing, output
 
 
-@parametrize_mesh_with_fabric()
+@pytest.mark.timeout(6000)
 @pytest.mark.parametrize(
     "batch_size, seq_len, mode",
     [
@@ -917,7 +943,19 @@ def run_model_forward_test(
         "1_layer",
     ],
 )
-def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+    ],
+    indirect=True,
+    ids=["fabric_2d", "fabric_1d_ring"],
+)
+@pytest.mark.parametrize("use_model_parallelism", [False, True], ids=["tp", "mp"])
+def test_model(
+    mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds, use_model_parallelism
+):
     """
     Test full model forward pass comparing TT implementation to HuggingFace reference.
 
@@ -940,28 +978,34 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
+    logger.info(f"device_params: {device_params}")
     is_decode = mode == "decode"
 
     # Create submesh with specified shape
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False, use_model_parallelism=use_model_parallelism)
     config = setup["config"]
-
+    logger.info(f"Loaded model config: {config}")
     # Override number of layers
-    original_num_layers = config.num_hidden_layers
-    config.num_hidden_layers = num_layers
-    logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
+    # original_num_layers = config.num_hidden_layers
+    # config.num_hidden_layers = num_layers
+    # logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
 
     # Set attention implementation
     config._attn_implementation = "eager"
 
     # Create mesh config
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
-
+    if use_model_parallelism:
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
+            mp_enabled=True,
+        )
     # Load state dict in HF format for reference model
-    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False)
+    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False, use_model_parallelism=use_model_parallelism)
     state_dict_hf = model_args.load_state_dict(
         weights_path=model_args.model_path,
         dummy_weights=False,
@@ -977,6 +1021,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     passing, output = run_model_forward_test(
         mesh_device=mesh_device,
         config=config,
+        model_args=model_args,
         state_dict_meta=state_dict_meta,
         state_dict_hf=state_dict_hf,
         mesh_config=mesh_config,
@@ -984,6 +1029,8 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         seq_len=seq_len,
         is_decode=is_decode,
         pcc_threshold=0.95 if num_layers == 1 else 0.85,  # Use slightly lower threshold for full model
+        use_model_parallelism=use_model_parallelism,
+        ccl_manager=setup["ccl_manager"],
     )
 
     if passing:

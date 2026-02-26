@@ -380,14 +380,15 @@ def prepare_gpt_oss_generator_args(
         # "prefill_128k", #OOM error
     ],
 )
+@pytest.mark.parametrize("use_model_parallelism", [False, True], ids=["tp", "mp"])
 @pytest.mark.parametrize(
-    "use_model_parallelism, device_params",
+    "device_params",
     [
-        [True, [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}]],
-        [False, [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]],
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
     ],
     indirect=True,
-    ids=["model_parallelism", "tensor_parallelism"],
+    ids=["fabric_2d", "fabric_1d_ring"],
 )
 def test_gpt_oss_demo(
     mesh_device,
@@ -407,10 +408,14 @@ def test_gpt_oss_demo(
     long_context_mode,
     stop_at_eos,
     is_ci_env,
-    state_dict,
+    # state_dict,
     use_model_parallelism,
 ):
-    if not state_dict:
+    print("Device params:", device_params)
+    try:
+        state_dict
+    except:
+        print("State dict not found, using None")
         state_dict = None
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:

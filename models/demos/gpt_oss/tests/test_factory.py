@@ -33,7 +33,9 @@ class TestFactory:
         mesh_shape = mesh_device.shape
 
         # Setup ModelArgs (no import-time loading)
-        model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=not use_real_weights)
+        model_args = ModelArgs(
+            mesh_device=mesh_device, dummy_weights=not use_real_weights, use_model_parallelism=use_model_parallelism
+        )
 
         # Setup mesh config using actual mesh shape
         from models.demos.gpt_oss.config import ModeConfig
