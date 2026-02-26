@@ -154,6 +154,117 @@ def ttnn_quantize_fn(x: torch.Tensor, fmt: str) -> torch.Tensor:
     return ttnn.to_torch(tt_tensor).to(dtype=torch.float32)
 
 
+def bfp_tile_packed_size(mant_bits: int, tile_hw: int = 32) -> int:
+    """Return the packed byte size of a single BFP tile.
+
+    Layout: [exponent bytes] [packed mantissa+sign data bytes]
+    - Exponents: 1 byte per face row. 4 faces × 16 rows = 64 bytes.
+    - Data: (1 + mant_bits) bits per element, packed into bytes.
+      bfp8 (mant_bits=7): 8 bits × 1024 = 1024 bytes → total 1088
+      bfp4 (mant_bits=3): 4 bits × 1024 =  512 bytes → total  576
+      bfp2 (mant_bits=1): 2 bits × 1024 =  256 bytes → total  320
+    """
+    num_elements = tile_hw * tile_hw  # 1024
+    num_faces = 4
+    face_h = tile_hw // 2  # 16
+    exp_bytes = num_faces * face_h  # 64
+    bits_per_element = 1 + mant_bits  # sign + mantissa
+    data_bytes = (num_elements * bits_per_element) // 8
+    return exp_bytes + data_bytes
+
+
+# C++ pack/unpack bindings (SIMD-optimized)
+_bfp = ttnn._ttnn.bfp_utils
+
+_PACK_FN = {
+    7: _bfp.pack_bfp8,
+    3: _bfp.pack_bfp4,
+}
+
+_UNPACK_FN = {
+    7: _bfp.unpack_bfp8,
+    3: _bfp.unpack_bfp4,
+}
+
+
+def pack_bfp_tile(tile: np.ndarray, mant_bits: int) -> np.ndarray:
+    """Pack a single 32×32 float32 tile into raw BFP bytes via C++ SIMD pack.
+
+    Returns uint8 view of the packed uint32 data.
+    """
+    assert tile.shape == (32, 32), f"Expected (32, 32), got {tile.shape}"
+    pack_fn = _PACK_FN[mant_bits]
+    # C++ expects tile-ordered flat float32; tile is already 32×32
+    packed_u32 = np.asarray(pack_fn(tile.astype(np.float32).ravel()))
+    return packed_u32.view(np.uint8)
+
+
+def unpack_bfp_tile(packed: np.ndarray, mant_bits: int) -> np.ndarray:
+    """Unpack raw BFP bytes back to a 32×32 float32 tile via C++ SIMD unpack."""
+    unpack_fn = _UNPACK_FN[mant_bits]
+    packed_u32 = packed.view(np.uint32)
+    unpacked = np.asarray(unpack_fn(packed_u32))
+    return unpacked.reshape(32, 32)
+
+
+def pack_mixed_tiles(data: torch.Tensor, assignment: np.ndarray, tile_hw: int = 32) -> tuple[torch.Tensor, list[int]]:
+    """Pack a 2D float32 tensor into a flat uint8 tensor with per-tile BFP formats.
+
+    Args:
+        data: Float32 torch tensor of shape (H, W), must be tile-aligned.
+        assignment: (tiles_h, tiles_w) int array of format indices into MIXED_TILE_FORMATS.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        (flat_buffer, tile_mant_bits):
+          - flat_buffer: uint8 torch tensor of concatenated packed tiles.
+          - tile_mant_bits: list of mant_bits per tile in row-major order.
+    """
+    data_np = data.detach().float().cpu().numpy()
+    tiles_h, tiles_w = assignment.shape
+    chunks = []
+    tile_mant_bits = []
+    for tr in range(tiles_h):
+        for tc in range(tiles_w):
+            tile = data_np[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
+            fmt_name = MIXED_TILE_FORMATS[assignment[tr, tc]]
+            mant_bits = BFP_MANT_BITS[fmt_name]
+            tile_mant_bits.append(mant_bits)
+            chunks.append(pack_bfp_tile(tile, mant_bits))
+    flat_np = np.concatenate(chunks)
+    return torch.from_numpy(flat_np.copy()), tile_mant_bits
+
+
+def unpack_mixed_tiles(
+    flat_buffer: torch.Tensor, tile_mant_bits: list[int], tiles_h: int, tiles_w: int, tile_hw: int = 32
+) -> torch.Tensor:
+    """Unpack a flat uint8 tensor back into a 2D float32 tensor.
+
+    Args:
+        flat_buffer: uint8 torch tensor from pack_mixed_tiles.
+        tile_mant_bits: list of mant_bits per tile in row-major order.
+        tiles_h: Number of tile rows.
+        tiles_w: Number of tile columns.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        Float32 torch tensor of shape (tiles_h * tile_hw, tiles_w * tile_hw).
+    """
+    flat_np = flat_buffer.numpy().astype(np.uint8)
+    out = np.zeros((tiles_h * tile_hw, tiles_w * tile_hw), dtype=np.float32)
+    offset = 0
+    idx = 0
+    for tr in range(tiles_h):
+        for tc in range(tiles_w):
+            mant_bits = tile_mant_bits[idx]
+            size = bfp_tile_packed_size(mant_bits)
+            tile = unpack_bfp_tile(flat_np[offset : offset + size], mant_bits)
+            out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
+            offset += size
+            idx += 1
+    return torch.from_numpy(out)
+
+
 def mixed_tile_total_bytes(counts: dict[str, int], tile_hw: int = 32) -> float:
     total = 0.0
     elems_per_tile = float(tile_hw * tile_hw)
