@@ -311,12 +311,11 @@ class MaskFormerSwinBackbone:
             return ttnn.to_layout(tt_param, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
 
         def _to_tt_conv_weight_bias(w: torch.Tensor, b: Optional[torch.Tensor]):
+            # Keep raw conv weights on host; conv2d will prepare and cache device weights on first use.
             wt = ttnn.from_torch(
                 w.detach().contiguous(),
                 dtype=dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=mem_cfg,
             )
             bt = None
             if b is not None:
@@ -324,8 +323,6 @@ class MaskFormerSwinBackbone:
                     b.detach().contiguous().view(1, 1, 1, -1),
                     dtype=dtype,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.device,
-                    memory_config=mem_cfg,
                 )
             return wt, bt
 
@@ -686,6 +683,13 @@ class MaskFormerSwinBackbone:
                 return_output_dim=True,
                 return_weights_and_bias=True,
             )
+            # Ensure prepared weights are device-resident so trace capture doesn't trigger host->device fallbacks.
+            if hasattr(self._patch_w, "storage_type") and hasattr(ttnn, "StorageType"):
+                if self._patch_w.storage_type() != ttnn.StorageType.DEVICE:
+                    self._patch_w = ttnn.to_device(self._patch_w, self.device, memory_config=mem_cfg)
+            if self._patch_b is not None and hasattr(self._patch_b, "storage_type") and hasattr(ttnn, "StorageType"):
+                if self._patch_b.storage_type() != ttnn.StorageType.DEVICE:
+                    self._patch_b = ttnn.to_device(self._patch_b, self.device, memory_config=mem_cfg)
             self._patch_conv_prepared = True
         x = ttnn.reshape(x, (B, out_h, out_w, int(cfg.embed_dim)))
         # Patch norm

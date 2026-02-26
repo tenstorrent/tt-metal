@@ -77,6 +77,7 @@ class MaskFormerTransformerDecoder:
         # Input projection (Conv1x1): in_features -> hidden_dim
         self._input_proj_w = None
         self._input_proj_b = None
+        self._input_proj_prepared = False
 
         # Queries embedder (torch tensor, [Q, C])
         self._queries_embed: Optional["torch.Tensor"] = None
@@ -147,25 +148,57 @@ class MaskFormerTransformerDecoder:
         if debug:
             print(f"[maskformer][decoder] input_proj in BHW=({B},{H},{W}) C_in={int(tt_in.shape[-1])}", flush=True)
 
-        tt_proj, [_out_h, _out_w], [self._input_proj_w, self._input_proj_b] = ttnn.conv2d(
-            input_tensor=tt_in,
-            weight_tensor=self._input_proj_w,
-            bias_tensor=self._input_proj_b,
-            in_channels=int(tt_in.shape[-1]),
-            out_channels=int(self.config.hidden_dim),
-            batch_size=B,
-            input_height=H,
-            input_width=W,
-            kernel_size=(1, 1),
-            stride=(1, 1),
-            padding=(0, 0),
-            dilation=(1, 1),
-            groups=1,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        if self._input_proj_prepared:
+            [tt_proj, [_out_h, _out_w]] = ttnn.conv2d(
+                input_tensor=tt_in,
+                weight_tensor=self._input_proj_w,
+                bias_tensor=self._input_proj_b,
+                in_channels=int(tt_in.shape[-1]),
+                out_channels=int(self.config.hidden_dim),
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                kernel_size=(1, 1),
+                stride=(1, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            tt_proj, [_out_h, _out_w], [prep_w, prep_b] = ttnn.conv2d(
+                input_tensor=tt_in,
+                weight_tensor=self._input_proj_w,
+                bias_tensor=self._input_proj_b,
+                in_channels=int(tt_in.shape[-1]),
+                out_channels=int(self.config.hidden_dim),
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                kernel_size=(1, 1),
+                stride=(1, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+
+            # Ensure prepared weights are device-resident so trace capture doesn't trigger host->device fallbacks.
+            if hasattr(prep_w, "storage_type") and hasattr(ttnn, "StorageType"):
+                if prep_w.storage_type() != ttnn.StorageType.DEVICE:
+                    prep_w = ttnn.to_device(prep_w, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if prep_b is not None and hasattr(prep_b, "storage_type") and hasattr(ttnn, "StorageType"):
+                if prep_b.storage_type() != ttnn.StorageType.DEVICE:
+                    prep_b = ttnn.to_device(prep_b, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self._input_proj_w = prep_w
+            self._input_proj_b = prep_b
+            self._input_proj_prepared = True
 
         mem_seq = ttnn.reshape(tt_proj, (B, H * W, int(self.config.hidden_dim)))
         mem_seq = ttnn.to_layout(mem_seq, ttnn.TILE_LAYOUT)
@@ -566,6 +599,7 @@ class MaskFormerTransformerDecoder:
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        self._input_proj_prepared = False
 
         # Queries embedder
         q = state["queries_embedder.weight"]
