@@ -6,18 +6,23 @@
 
 #include <cstdint>
 #include <cstring>
+#include <tt-metalium/constants.hpp>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
-constexpr uint32_t TILE_WIDTH = 32U;
-constexpr uint32_t TILE_HEIGHT = 32U;
-constexpr uint32_t FACE_WIDTH = 16U;
-constexpr uint32_t FACE_HEIGHT = 16U;
 constexpr uint32_t onetile = 1U;
 
+// IEEE 754 bit representations for compile-time template parameters
+constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
+constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
+constexpr uint16_t BF16_ONE_BITS = 0x3F80;        // 1.0 in bfloat16
+constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
+constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
+
 inline uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+    using namespace tt::constants;
     // Get local coordinates within the tile
     uint32_t local_row = h % TILE_HEIGHT;
     uint32_t local_col = w % TILE_WIDTH;
@@ -93,6 +98,21 @@ void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
     cb_push_back(cb_id, onetile);
 }
 
+// Zero-fills already-reserved tile slots in a CB (e.g. tail padding so compute always sees block_size tiles).
+inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, uint32_t num_slots, uint32_t tile_size) {
+    if (num_slots == 0) {
+        return;
+    }
+    uint32_t l1_base = get_write_ptr(cb_id) + start_slot * tile_size;
+    const uint32_t num_u32_per_tile = tile_size / sizeof(uint32_t);
+    for (uint32_t s = 0; s < num_slots; ++s) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + s * tile_size);
+        for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
+            ptr[i] = 0;
+        }
+    }
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
@@ -102,27 +122,82 @@ void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
     generate_tile_with_packed_bfloat16_value(cb_id, packed_value);
 }
 
-// Generates a tile intended for performing row reduction through matrix multiplication.
-// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
-void generate_matmul_row_reduce_tile(uint32_t cb_id) {
-    constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
-    constexpr uint16_t zero = 0x0;
-
-    cb_reserve_back(cb_id, onetile);
-    uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+// Helper template for generating matmul row reduce tile with specific type and one value.
+// The tile pattern has 1.0 in the first column of even faces (left faces) and 0 elsewhere.
+template <typename T, T one_value>
+inline void fill_matmul_row_reduce_tile(uint32_t cb_id) {
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
-                if (!(face & 1U) && (w == 0)) {  // check whether face is even and width is zero
-                    *tile_ptr++ = one;
-                } else {
-                    *tile_ptr++ = zero;
-                }
+                // Set to 'one' only in first column (w==0) of even faces (left faces)
+                *tile_ptr++ = (!(face & 1U) && (w == 0)) ? one_value : static_cast<T>(0);
             }
         }
     }
+}
+
+// Generates a tile intended for performing row reduction through matrix multiplication.
+// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
+// Automatically determines the data type from the circular buffer's data format.
+// Supports: Float32, Float16_b (BF16), Int32, UInt32, UInt16, UInt8 formats.
+inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32: fill_matmul_row_reduce_tile<uint32_t, FP32_ONE_BITS>(cb_id); break;
+        case DataFormat::Int32:
+        case DataFormat::UInt32: fill_matmul_row_reduce_tile<uint32_t, 1>(cb_id); break;
+        case DataFormat::UInt16: fill_matmul_row_reduce_tile<uint16_t, 1>(cb_id); break;
+        case DataFormat::UInt8: fill_matmul_row_reduce_tile<uint8_t, 1>(cb_id); break;
+        default:  // Float16_b and other bf16 variants
+            fill_matmul_row_reduce_tile<uint16_t, BF16_ONE_BITS>(cb_id);
+            break;
+    }
+
+    cb_push_back(cb_id, onetile);
+}
+
+// Helper template for generating causal (lower triangular) mask tile.
+// mask[row, col] = one_value if col <= row, else zero_value
+// This creates a triangular pattern within the 32x32 tile for causal attention.
+template <typename T, T one_value, T zero_value>
+inline void fill_causal_mask_tile(uint32_t cb_id) {
+    using namespace tt::constants;
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t face_row_offset = (face >= 2) ? FACE_HEIGHT : 0;  // faces 2,3 are bottom
+        const uint32_t face_col_offset = (face & 1U) ? FACE_WIDTH : 0;   // faces 1,3 are right
+
+        for (uint32_t h = 0; h < FACE_HEIGHT; ++h) {
+            const uint32_t row = face_row_offset + h;
+            for (uint32_t w = 0; w < FACE_WIDTH; ++w) {
+                const uint32_t col = face_col_offset + w;
+                *tile_ptr++ = (col <= row) ? one_value : zero_value;
+            }
+        }
+    }
+}
+
+// Generates a causal (lower triangular) mask tile with auto-detected data format.
+// Reserves CB, fills triangular pattern, pushes to CB.
+// Result: mask[row, col] = 1.0 if col <= row, else 0.0
+inline void generate_causal_mask_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ONE_BITS, FP32_ZERO_BITS>(cb_id); break;
+        default:  // BFloat16
+            fill_causal_mask_tile<uint16_t, BF16_ONE_BITS, BF16_ZERO_BITS>(cb_id);
+            break;
+    }
+
     cb_push_back(cb_id, onetile);
 }
 
@@ -157,6 +232,22 @@ inline float uint32_to_float(uint32_t bits) {
 }
 
 // ----- Dataflow tile transfer utilities -----
+
+/**
+ * Utility: read a single tile from DRAM to CB.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param tile_idx Tile index in DRAM
+ */
+template <typename AddrGen>
+inline void read_one_tile(const uint32_t cb_idx, const AddrGen& addr_gen, const uint32_t tile_idx) {
+    cb_reserve_back(cb_idx, onetile);
+    const uint32_t l1_addr = get_write_ptr(cb_idx);
+    noc_async_read_page(tile_idx, addr_gen, l1_addr);
+    noc_async_read_barrier();
+    cb_push_back(cb_idx, onetile);
+}
 
 /**
  * Utility: read contiguous tiles in row-major order from DRAM to CB.

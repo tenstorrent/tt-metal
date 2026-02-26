@@ -2,27 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
+
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 128),
-    ]
-    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
+        ("prefill", _prefill_seq_len),
+    ],
 )
 @pytest.mark.parametrize(
     "topk_fallback,use_bitonic_sort",
@@ -42,11 +45,6 @@ def test_forward_pass(
 ):
     """Test forward pass against reference model."""
 
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
@@ -55,7 +53,14 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
-        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoEGate,
+        hf_config,
+        (hf_state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe_gate",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function
@@ -129,11 +134,10 @@ def test_forward_pass(
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    topk_indices_pcc_required = 1.0
     # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
-    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
-    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
-    assert torch.allclose(reference_topk_indices, tt_topk_indices_torch), f"TopK experts indices output does not match"
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
+    assert torch.equal(reference_topk_indices, tt_topk_indices_torch), "TopK experts indices output does not match"
 
 
 if __name__ == "__main__":

@@ -24,7 +24,6 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
@@ -49,6 +48,7 @@
 #include "device/device_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
+#include "debug/noc_debugging.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -63,6 +63,62 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 #if defined(TRACY_ENABLE)
+NOCDebugEvent make_noc_debug_event(
+    const CoreCoord& src_core,
+    const KernelProfilerNocEventMetadata::LocalNocEvent& event,
+    const KernelProfilerNocEventMetadata::LocalNocEventDstTrailer& trailer) {
+    using EMD = KernelProfilerNocEventMetadata;
+    int8_t src_x = static_cast<int8_t>(src_core.x);
+    int8_t src_y = static_cast<int8_t>(src_core.y);
+    switch (event.noc_xfer_type) {
+        case EMD::NocEventType::READ:
+            return NOCDebugEvent(NocReadEvent{
+                trailer.getDstAddr(),
+                trailer.getSrcAddr(),
+                event.getNumBytes(),
+                static_cast<uint32_t>(trailer.counter_value),
+                event.dst_x,
+                event.dst_y,
+                src_x,
+                src_y,
+                event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_: [[fallthrough]];
+        case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
+        case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
+        case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
+            bool is_semaphore = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST ||
+                                event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
+                            event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
+            return NOCDebugEvent(NocWriteEvent{
+                trailer.getSrcAddr(),
+                trailer.getDstAddr(),
+                event.getNumBytes(),
+                static_cast<uint32_t>(trailer.counter_value),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                is_semaphore,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
+        case EMD::NocEventType::READ_BARRIER_END:
+            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
+        case EMD::NocEventType::WRITE_FLUSH:
+            // This event is only being emitted from noc_async_writes_flushed which is non posted
+            // event.posted should always be false; if true, data was corrupted during read
+            TT_ASSERT(!event.posted);
+            return NOCDebugEvent(NocWriteFlushEvent{
+                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        default: return NOCDebugEvent(UnknownNocEvent{});
+    }
+}
+
 uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
     kernel_profiler::ControlBuffer offset;
     switch (risc_type) {
@@ -103,6 +159,17 @@ uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_ty
         default: TT_THROW("Invalid RISC type {}", risc_type);
     }
     return static_cast<uint32_t>(offset);
+}
+
+int get_processor_id(tracy::RiscType risc_type) {
+    switch (risc_type) {
+        case tracy::RiscType::BRISC: return 0;
+        case tracy::RiscType::NCRISC: return 1;
+        case tracy::RiscType::TRISC_0: return 2;
+        case tracy::RiscType::TRISC_1: return 3;
+        case tracy::RiscType::TRISC_2: return 4;
+        default: TT_THROW("Invalid RISC type {}", risc_type);
+    }
 }
 
 DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
@@ -750,6 +817,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // Additional metadata from trailer data
                     if (device_marker.meta_data.contains("dst_addr")) {
                         data["dst_addr"] = device_marker.meta_data["dst_addr"];
+                        data["src_addr"] = device_marker.meta_data["src_addr"];
+                        data["posted"] = device_marker.meta_data["posted"];
+                        data["noc_status_counter"] = device_marker.meta_data["noc_status_counter"];
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
@@ -1266,6 +1336,7 @@ void DeviceProfiler::resetControlBuffers(
     bool force_slow_dispatch) {
     ZoneScoped;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffer_resets;
+    const auto buffer_0_address = this->getProfilerDramBufferAddress(0);
     for (const CoreCoord& virtual_core : virtual_cores) {
         const std::vector<uint32_t>& control_buffer = core_control_buffers.at(virtual_core);
 
@@ -1276,23 +1347,19 @@ void DeviceProfiler::resetControlBuffers(
         core_control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
         core_control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] =
             control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] =
-            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0];
-        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] =
-            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0];
-        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0] =
-            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0];
-        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0] =
-            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0];
-        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] =
-            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0];
-        // Reset active indices to zero
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = buffer_0_address;
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = buffer_0_address;
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0] = buffer_0_address;
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0] = buffer_0_address;
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] = buffer_0_address;
         this->active_dram_buffer_per_core_risc_map[virtual_core].clear();
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(mesh_device, device, virtual_core, control_buffer_reset, force_slow_dispatch);
     }
+
+    this->resetActiveDramBufferIndices();
 }
 
 void DeviceProfiler::readProfilerBuffer(
@@ -1717,6 +1784,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     const std::vector<uint64_t>& trailer_data,
     uint32_t timer_id,
     uint64_t timestamp) {
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     using EMD = KernelProfilerNocEventMetadata;
@@ -1727,20 +1795,23 @@ void DeviceProfiler::readTsData16BMarkerData(
     auto event_contents = event_metadata.getContents();
 
     // Local Noc Event is expected to have one trailer with dst_addr
-    if (std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
-        const uint32_t total_data_size = trailer_data.size() + 1;
-        if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
-            TT_THROW(
-                "TS_DATA_16B marker expected {} trailers, got {}",
-                kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
-                total_data_size);
-        }
-
-        EMD trailer_metadata(trailer_data[0]);
-        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().dst_addr;
-    } else {
+    if (!std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
         TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
     }
+
+    const uint32_t total_data_size = trailer_data.size() + 1;
+    if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
+        TT_THROW(
+            "TS_DATA_16B marker expected {} trailers, got {}",
+            kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
+            total_data_size);
+    }
+
+    EMD trailer_metadata(trailer_data[0]);
+    const auto& trailer = trailer_metadata.getLocalNocEventDstTrailer();
+    meta_data["dst_addr"] = trailer.getDstAddr();
+    meta_data["src_addr"] = trailer.getSrcAddr();
+    meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer.counter_value);
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
@@ -1769,9 +1840,26 @@ void DeviceProfiler::readTsData16BMarkerData(
         return;
     }
 
+    auto& noc_debug_state = MetalContext::instance().noc_debug_state();
+    if (noc_debug_state) {
+        EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
+        const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        // disable linting here; slicing is __intended__
+        // NOLINTBEGIN
+        const CoreCoord virtual_core =
+            soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+        // NOLINTEND
+        noc_debug_state->push_event(
+            device_id,
+            timestamp,
+            get_processor_id(risc_type),
+            make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+    }
+
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+#endif
 }
 
 struct DispatchMetaData {
@@ -1960,6 +2048,19 @@ void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_d
     this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
 }
 
+void DeviceProfiler::clearStateForDeviceReinit() {
+    this->core_control_buffers.clear();
+    this->core_l1_data_buffers.clear();
+    this->active_dram_buffer_per_core_risc_map.clear();
+    this->device_markers_per_core_risc_map.clear();
+}
+
+void DeviceProfiler::resetActiveDramBufferIndices() {
+    // Reset all active DRAM buffer indices to 0 for all cores and RISCs
+    // This keeps host state in sync when device-side profiler buffers are cleared
+    this->active_dram_buffer_per_core_risc_map.clear();
+}
+
 DeviceAddr DeviceProfiler::getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const {
     const auto base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     const auto offset = getProfileBufferBankSizeBytes() * active_dram_buffer_index;
@@ -2122,7 +2223,7 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
-    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 
     constexpr uint8_t default_dram_buffer_index = 0;
 
@@ -2516,12 +2617,14 @@ void DeviceProfiler::pollDebugDumpResults(
                         "DRAM Buffer Address on risc {} virtual core {} is not valid. Host and Device state mismatch. "
                         "DRAM "
                         "buffer address on device: {}, "
-                        "Expected DRAM buffer address: {}, index: {}",
+                        "Expected DRAM buffer address: {}, index: {}, "
+                        "Complementary DRAM buffer address if switched indices: {}",
                         enchantum::to_string(risc_type),
                         virtual_core.str(),
                         dram_buffer_address,
                         this->getProfilerDramBufferAddress(active_dram_buffer_index),
-                        active_dram_buffer_index);
+                        active_dram_buffer_index,
+                        this->getProfilerDramBufferAddress(1 - active_dram_buffer_index));
                 }
             }
         }
@@ -2637,7 +2740,7 @@ void DeviceProfiler::pollDebugDumpResults(
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 bool getDeviceDebugDumpEnabled() {
-    return MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    return MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 }
 
 }  // namespace tt::tt_metal

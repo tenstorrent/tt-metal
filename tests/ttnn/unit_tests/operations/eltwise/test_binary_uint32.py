@@ -517,10 +517,10 @@ def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
     )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int64)
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch.int64)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 

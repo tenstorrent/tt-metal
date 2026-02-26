@@ -283,6 +283,7 @@ def run_reference_with_attention(
     hf_config: PretrainedConfig,
     mode: str,
     zeroed_cache: bool,
+    collect_output: bool = True,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
     """
     Run reference model with attention, using memory optimizations for large sequences.
@@ -298,9 +299,24 @@ def run_reference_with_attention(
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
     mask = None
 
-    # For sequences longer than 8192 tokens, use chunked processing
-    CHUNK_SIZE = 8192
-    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
+    # For sequences longer than the chunk size, use chunked processing.
+    # Auto-cap chunk size so the causal mask stays within a safe memory budget.
+    base_chunk_size = 8192
+    bytes_per_elem = torch.tensor([], dtype=torch.bfloat16).element_size()
+    target_mask_bytes = 128 * 1024**2
+    mask_denominator = batch_size * max_position_id_or_seq_len * bytes_per_elem
+    if mask_denominator > 0:
+        max_chunk_size = target_mask_bytes // mask_denominator
+        chunk_size = max(1, min(base_chunk_size, int(max_chunk_size)))
+    else:
+        max_chunk_size = base_chunk_size
+        chunk_size = base_chunk_size
+    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > chunk_size
+    if mode == "prefill":
+        logger.info(
+            f"Reference attention config: seq_len={max_position_id_or_seq_len} "
+            f"chunk_size={chunk_size} use_chunked_processing={use_chunked_processing}"
+        )
 
     if mode == "prefill":
         max_seq_len = position_ids_or_seq_lens.max().item()
@@ -373,15 +389,15 @@ def run_reference_with_attention(
 
     if use_chunked_processing:
         device = activation.device
-        num_chunks = (max_position_id_or_seq_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        num_chunks = (max_position_id_or_seq_len + chunk_size - 1) // chunk_size
 
-        output_chunks = []
+        output_chunks: list[torch.Tensor] = [] if collect_output else []
         current_cache = deepcopy(deepcopied_cache)
 
         with torch.no_grad():
             for chunk_idx in range(num_chunks):
-                start_idx = chunk_idx * CHUNK_SIZE
-                end_idx = min(start_idx + CHUNK_SIZE, max_position_id_or_seq_len)
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, max_position_id_or_seq_len)
                 chunk_size_actual = end_idx - start_idx
 
                 # Extract chunk from activation and position_ids
@@ -392,15 +408,19 @@ def run_reference_with_attention(
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
+                legacy_cache = current_cache.to_legacy_cache()
                 if layer_idx is not None:
-                    cache_tensor = current_cache.key_cache[layer_idx]
-                    current_cache_length = cache_tensor.shape[2]
+                    cache_tensor = legacy_cache[layer_idx][0]
                 else:
-                    legacy_cache = current_cache.to_legacy_cache()
-                    first_layer_cache = legacy_cache[0][0]
-                    current_cache_length = first_layer_cache.shape[2] if first_layer_cache.numel() > 0 else 0
+                    cache_tensor = legacy_cache[0][0]
+                current_cache_length = cache_tensor.shape[2] if cache_tensor.numel() > 0 else 0
 
                 kv_seq_len = current_cache_length + chunk_size_actual
+                mask_bytes = batch_size * chunk_size_actual * kv_seq_len * bytes_per_elem
+                logger.info(
+                    f"Reference chunk {chunk_idx + 1}/{num_chunks}: start={start_idx} end={end_idx} "
+                    f"kv_seq_len={kv_seq_len} mask_mb={mask_bytes / (1024 ** 2):.1f}"
+                )
 
                 # Create causal mask for this chunk
                 # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
@@ -416,8 +436,6 @@ def run_reference_with_attention(
                         :, :, i, current_cache_length : current_cache_length + i + 1
                     ] = 0.0  # Causal mask within chunk
 
-                chunk_cache = deepcopy(current_cache)
-
                 # Set output_attentions=False to avoid storing attention weights that scale quadratically with sequence length
                 chunk_output = reference_model(
                     activation_chunk,
@@ -425,23 +443,25 @@ def run_reference_with_attention(
                     position_ids=position_ids_chunk,
                     output_attentions=False,
                     use_cache=True,
-                    **{kv_arg_name: chunk_cache},
+                    **{kv_arg_name: current_cache},
                 )
 
                 chunk_out, current_cache = extract_output_and_cache(chunk_output)
-
-                output_chunks.append(chunk_out)
+                if collect_output:
+                    output_chunks.append(chunk_out)
 
                 # Free intermediate tensors to reduce memory usage
-                del activation_chunk, position_ids_chunk, mask_chunk, chunk_cache, chunk_output
+                del activation_chunk, position_ids_chunk, mask_chunk, chunk_output
 
-            # Concatenate all chunk outputs
-            model_output_tensor = torch.cat(output_chunks, dim=1)
-
-            # Clean up chunk list
-            del output_chunks
-
-            out = model_output_tensor
+            if collect_output:
+                # Concatenate all chunk outputs
+                model_output_tensor = torch.cat(output_chunks, dim=1)
+                # Clean up chunk list
+                del output_chunks
+                out = model_output_tensor
+            else:
+                # Some callers only need the cache and can skip storing large outputs.
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
             output_cache = current_cache
     else:
         # Standard processing for shorter sequences or decode mode
@@ -461,6 +481,8 @@ def run_reference_with_attention(
             )
 
             out, output_cache = extract_output_and_cache(model_output_raw)
+            if not collect_output:
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
 
     return out, input_cache, output_cache
 
@@ -626,9 +648,45 @@ def get_test_weight_config(
     cache_path: Path,
     mesh_device: ttnn.Device,
     force_recalculate: bool,
+    *,
+    test_name: str | None = None,
+    real_weights: bool = True,
+    layer_id: str | int | None = None,
 ) -> Any:
-    """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    """Get the weight config, either by loading from cache or recalculating.
+
+    When ``test_name`` is provided the cache sub-directory is derived from
+    weight-relevant parameters only (``test_name``, ``ModuleClass``,
+    ``real_weights``, ``layer_id``).  Runtime parameters that do **not**
+    affect weight conversion (mode, seq_len, batch_size, position_ids, …)
+    are intentionally excluded so that e.g. decode and prefill variants share
+    the same cached weights.
+
+    ``num_hidden_layers`` and ``mesh_shape`` are already captured by
+    :func:`get_weight_config` in its internal sub-path, so they are not
+    needed here either.
+
+    When ``test_name`` is ``None`` the function falls back to
+    ``PYTEST_CURRENT_TEST`` for backward compatibility.
+
+    Args:
+        test_name: Test file name (e.g. ``"test_embedding"``).
+        real_weights: ``True`` when using real model weights,
+            ``False`` for randomly-initialised weights.
+        layer_id: Identifies which layer / sub-module the weights come from.
+            Typically a module-path string (``"model.layers.0.mlp"``), an
+            integer layer index, or a descriptive qualifier for random weights
+            (``"kv_lora_rank"``).  ``None`` when no further distinction is
+            needed.
+    """
+    if test_name is not None:
+        parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
+        if layer_id is not None:
+            parts.append(str(layer_id))
+        weight_config_id = "/".join(parts)
+    else:
+        weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
+    per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )

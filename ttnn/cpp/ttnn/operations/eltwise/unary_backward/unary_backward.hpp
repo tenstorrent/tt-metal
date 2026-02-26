@@ -532,7 +532,7 @@ struct ExecuteUnaryBackwardFill {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> input_grad = std::nullopt);
+        const std::optional<Tensor>& input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardProd {

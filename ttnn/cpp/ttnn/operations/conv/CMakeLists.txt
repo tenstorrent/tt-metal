@@ -1,7 +1,7 @@
 add_library(ttnn_op_conv ${LIB_TYPE})
 add_library(TTNN::Ops::Conv ALIAS ttnn_op_conv)
 
-target_precompile_headers(ttnn_op_conv REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_conv REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_conv)
 set_target_properties(
     ttnn_op_conv
@@ -19,6 +19,11 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            conv2d/conv2d.hpp
+            conv2d/device/conv2d_device_operation_types.hpp
+            conv2d/device/conv2d_device_operation.hpp
+            conv2d/device/conv2d_op_sharded_program_factory.hpp
+            conv2d/device/conv2d_op_width_sharded_program_factory.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -37,12 +42,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_conv PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_conv
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_conv PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
@@ -52,4 +52,4 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/conv
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_op_conv LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_conv FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

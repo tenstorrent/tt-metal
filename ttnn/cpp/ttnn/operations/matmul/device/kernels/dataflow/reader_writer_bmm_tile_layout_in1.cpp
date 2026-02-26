@@ -51,10 +51,10 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(18);
 
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t one_tile = 1;
     // WRITER
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
@@ -82,7 +82,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
 #ifdef INTERMEDIATE_CB_READ
-            constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+            constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
             cb_reserve_back(in1_intermediate_cb_index, one_tile);
             uint32_t l1_write_addr_helper = get_write_ptr(in1_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ

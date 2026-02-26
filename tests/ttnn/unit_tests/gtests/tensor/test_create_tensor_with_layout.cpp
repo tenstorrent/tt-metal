@@ -6,7 +6,6 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
@@ -15,6 +14,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
@@ -35,7 +35,7 @@ struct CreateTensorParams {
 
 }  // namespace
 
-class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithDevice,
+class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithSuiteDevice<CreateTensorWithLayoutTest>,
                                    public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorWithLayoutTest, Tile) {

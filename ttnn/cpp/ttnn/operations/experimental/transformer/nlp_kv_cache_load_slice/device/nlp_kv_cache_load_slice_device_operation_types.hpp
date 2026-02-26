@@ -6,19 +6,16 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct NlpKvCacheLoadSliceParams {
     ttnn::Shape output_tensor_start;
     ttnn::Shape output_tensor_end;
 };
 
-struct tensor_args_t {
+struct NlpKvCacheLoadSliceInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
+}  // namespace ttnn::experimental::prim

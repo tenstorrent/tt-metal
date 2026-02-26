@@ -10,15 +10,14 @@
 
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_gather_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllGatherAsyncParams {
     int32_t dim = 0;
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
@@ -37,7 +36,7 @@ struct operation_attributes_t {
     bool reverse_order = false;
     std::optional<CoreRangeSet> sub_core_grid;
 
-    operation_attributes_t(
+    AllGatherAsyncParams(
         int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -99,13 +98,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllGatherAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
 };
 
-using spec_return_value_t = TensorSpec;
-
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::ccl::all_gather_async
+}  // namespace ttnn::experimental::prim

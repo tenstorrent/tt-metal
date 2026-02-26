@@ -363,10 +363,6 @@ bool single_core_reconfig(
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -404,10 +400,6 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);

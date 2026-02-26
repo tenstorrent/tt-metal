@@ -10,10 +10,7 @@
 
 // Printing tiles from CBs requires reading CB config from generated files
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
-#include "chlkc_pack_data_format.h"
-#include "chlkc_pack_tile_dims.h"
+#include "chlkc_descriptors.h"
 #endif
 
 // Macros for printing circular buffer internals
@@ -60,6 +57,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
     uint32_t bit_offset = 0;
     uint32_t mask = 0;
     switch (data_format) {
+#ifndef ARCH_QUASAR
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
             adjusted_idx = idx / 4;
@@ -74,6 +72,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
             break;
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b:
+#endif
         default:
             adjusted_idx = idx / 1;
             bit_offset = (idx % 1) * 8;
@@ -198,7 +197,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 
         // DataFormat, rd/wr pointer, and Tile size all depend on RISC + in/out
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        tile_info_t tile_info = get_tile_info(cb, ptr_type, cb_type);
+        tile_info_t tile_info = get_tile_info(cb, cb_type, ptr_type);
 #else
         tile_info_t tile_info = get_tile_info(cb);
 #endif

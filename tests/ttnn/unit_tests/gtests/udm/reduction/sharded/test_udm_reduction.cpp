@@ -35,10 +35,10 @@
 
 #include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 
-#include "tt_metal/experimental/udm/mesh_kernel.hpp"
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
-#include "tt_metal/experimental/udm/mesh_circular_buffer.hpp"
-#include "tt_metal/experimental/udm/mesh_semaphore.hpp"
+#include <tt-metalium/experimental/udm/mesh_kernel.hpp>
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
+#include <tt-metalium/experimental/udm/mesh_circular_buffer.hpp>
+#include <tt-metalium/experimental/udm/mesh_semaphore.hpp>
 #include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
 namespace tt::tt_metal::experimental::udm_tests {
@@ -69,7 +69,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     uint32_t num_cores_y = mesh_shape[-2];  // Number of rows in mesh (independent reduction groups)
     uint32_t num_cores_x = mesh_shape[-1];  // Number of cores per row (reduction dimension)
 
-    TT_ASSERT(num_cores_x > 1, "Need multiple cores per row for reduction");
+    TT_FATAL(num_cores_x > 1, "Need multiple cores per row for reduction");
 
     // ===== GET SHAPE FROM MESH TENSOR BUILDER =====
     auto shape_in_pages = input_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();

@@ -4,16 +4,15 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/matmul.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t argrt = 0;
     uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
     uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
@@ -133,4 +132,3 @@ void MAIN {
     // Done with the transformation matrix, so remove from CB
     cb_pop_front(trans_mat_cb, onetile);
 }
-}  // namespace NAMESPACE

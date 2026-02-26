@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 
-#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -15,15 +14,10 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-Matmul_RS::program_factory_t Matmul_RS::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Matmul_RS_PF{};
-}
-
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.second_weight_tensor.has_value()) {
-        operation_attributes_t::matmul_device_t::validate_on_program_cache_hit(
+        operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
             {{tensor_args.matmul.input_tensor,
               tensor_args.matmul.weight_tensor,
@@ -31,7 +25,7 @@ void Matmul_RS::validate_on_program_cache_hit(
              {std::nullopt},
              {}});
     } else {
-        operation_attributes_t::matmul_device_t::validate_on_program_cache_hit(
+        operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
             {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {}});
     }
@@ -91,8 +85,6 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
 
 tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
@@ -102,8 +94,7 @@ tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.use_noc1_only,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id(),
-        program_factory.index());
+        tensor_args.rs.input_tensor.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
@@ -148,7 +139,7 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     }
 
     bool user_run_batched = ttnn::operations::matmul::utilities::is_input_batched(weight_tensor.logical_shape());
-    auto matmul_struct = operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
         weight_tensor,
         /*parameters=*/

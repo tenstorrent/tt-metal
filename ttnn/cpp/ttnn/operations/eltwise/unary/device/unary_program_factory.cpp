@@ -12,14 +12,17 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::unary::program {
+namespace ttnn::prim {
+
+using ttnn::operations::unary::UnaryOpType;
+namespace utils = ttnn::operations::unary::utils;
 
 static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
 
 UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -64,8 +67,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
-        ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, input_cb_page_size);
@@ -137,7 +139,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
                 if (value1 > 0.5f) {
-                    unary_defines["WHERE"] = "where_tile";
+                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
+                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
                     unary_defines["CLAMP"] = "clamp_tile";
                 } else if (value1 >= 0.0f) {
                     unary_defines["CLAMP"] = "clamp_tile";
@@ -213,9 +216,9 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
 void UnaryProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -245,7 +248,7 @@ void UnaryProgramFactory::override_runtime_arguments(
 // Sub Core Grids : should be fused later with UnaryProgramFactory directing all_device_cores to use cores from
 // sub_core_grids and update the override args accordingly after adding cores as rtargs
 UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -307,7 +310,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);
@@ -416,9 +419,9 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
 void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;
@@ -446,4 +449,4 @@ void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::unary::program
+}  // namespace ttnn::prim

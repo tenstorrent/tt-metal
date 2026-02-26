@@ -53,16 +53,9 @@ class CCL:
     def get_max_links(self, axis):
         """
         Get the maximum number of links for the given axis.
+        Legacy TG used to have fewer links on axis 1, 6U has no such limitation
         """
-
-        return 1  # Multi-link has PCC issues
-
-        if axis == 0:
-            return 4
-        elif axis == 1:
-            return 3
-        else:
-            raise ValueError("Axis must be 0 or 1.")
+        return 4
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """

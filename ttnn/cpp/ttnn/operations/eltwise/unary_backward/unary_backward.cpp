@@ -456,12 +456,12 @@ std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    bool approximate_mode = false;
-    Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
+    grad_tensor.reserve(1);
+    Tensor sig_result =
+        ttnn::sigmoid(input, (int)unary::VecMode::RC, unary::Sigmoid::SigmoidMode::ACCURATE, output_mem_config);
     Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-    Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(prod_term_2);
+    grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -526,7 +526,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     std::vector<std::optional<Tensor>> result = {std::nullopt};
     result[0] = input_grad.has_value()
@@ -878,8 +878,8 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    bool approximate_mode = false;
-    Tensor sigmoid_res = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
+    Tensor sigmoid_res =
+        ttnn::sigmoid(input, (int)unary::VecMode::RC, unary::Sigmoid::SigmoidMode::ACCURATE, output_mem_config);
     Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid_res, std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
         ttnn::multiply(
@@ -1561,8 +1561,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
         input_grad = ttnn::empty_like(grad);
     }
 
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
+    auto output_memory_config =
+        input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
 
     if (approximate == "tanh") {

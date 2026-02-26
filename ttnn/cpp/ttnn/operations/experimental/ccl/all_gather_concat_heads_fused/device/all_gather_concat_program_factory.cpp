@@ -24,7 +24,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::program {
+namespace ttnn::experimental::prim {
 
 using namespace ttnn::ccl;
 
@@ -43,10 +43,10 @@ struct llama_config {
 };
 
 AllGatherConcatMeshWorkloadFactory::cached_mesh_workload_t AllGatherConcatMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherConcatParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherConcatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -63,10 +63,10 @@ AllGatherConcatMeshWorkloadFactory::cached_mesh_workload_t AllGatherConcatMeshWo
 }
 
 AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherConcatParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherConcatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& temp_tensor = tensor_args.buffer_tensor;
     auto& output_tensor = tensor_return_value;
@@ -595,9 +595,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
 void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherConcatParams& operation_attributes,
+    const AllGatherConcatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& temp_tensor = tensor_args.buffer_tensor;
     const auto& output = tensor_return_value;
@@ -638,4 +638,4 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::program
+}  // namespace ttnn::experimental::prim

@@ -16,12 +16,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::conv::conv2d {
-
+namespace ttnn {
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
-using ResultWithOptions = std::variant<
+using Conv2dResult = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+using Conv2dResultWithOptions = std::variant<
     ttnn::Tensor,
     std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>,
     std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
@@ -30,31 +29,35 @@ using ResultWithOptions = std::variant<
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-// Public operation interface
-struct Conv2dOperation {
-    static ResultWithOptions invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        MeshDevice* device,
-        uint32_t in_channels,
-        uint32_t out_channels,
-        uint32_t batch_size,
-        uint32_t input_height,
-        uint32_t input_width,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride = std::array<uint32_t, 2>{1, 1},
-        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding = std::array<uint32_t, 2>{0, 0},
-        std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
-        uint32_t groups = 1,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
-        bool return_output_dim = false,
-        bool return_weights_and_bias = false);
-};
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
+
+Conv2dResultWithOptions conv2d(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride = std::array<uint32_t, 2>{1, 1},
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding = std::array<uint32_t, 2>{0, 0},
+    std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
+    uint32_t groups = 1,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
+    const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
+    bool return_output_dim = false,
+    bool return_weights_and_bias = false);
+
+}  // namespace ttnn
+
+namespace ttnn::operations::conv::conv2d {
 
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,
@@ -77,7 +80,3 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     MeshDevice* device);
 
 }  // namespace ttnn::operations::conv::conv2d
-
-namespace ttnn {
-constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
-}

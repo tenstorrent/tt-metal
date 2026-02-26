@@ -957,7 +957,7 @@ MatmulProgramConfig get_program_config(
     const bool transpose_a,
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
-    const operation_attributes_t& attributes) {
+    const ttnn::prim::MatmulParams& attributes) {
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
@@ -981,7 +981,8 @@ MatmulProgramConfig get_program_config(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
                         input_tensor_a.device()->compute_with_storage_grid_size().x,

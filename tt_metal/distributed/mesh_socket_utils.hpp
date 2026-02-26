@@ -7,8 +7,19 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/tt_align.hpp>
+
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/hw/inc/hostdev/socket.h"
 
 namespace tt::tt_metal::distributed {
+
+struct SocketSenderSize {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
+    const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
+    const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
+};
 
 // Utiity struct used for Sender and Receiver Hanshaking.
 // Each endpoint (sender/receiver) needs to know the following about its peer:

@@ -12,7 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -29,9 +29,7 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint
 }  // namespace
 
 ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -152,9 +150,9 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
 
 void ConcatS2SMultiProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ConcatParams& /*operation_attributes*/,
+    const ConcatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
@@ -165,4 +163,4 @@ void ConcatS2SMultiProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

@@ -26,9 +26,9 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_progress_monitor.hpp"
-#include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_latency_results.hpp"
+#include "tt_fabric_test_bandwidth_results.hpp"
 #include "tt_fabric_test_bandwidth_profiler.hpp"
-#include "tt_fabric_test_latency_manager.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 #include "tt_fabric_test_code_profiler.hpp"
 #include "tt_fabric_telemetry_manager.hpp"
@@ -47,6 +47,7 @@ using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using PerformanceTestMode = tt::tt_fabric::fabric_tests::PerformanceTestMode;
+using ChannelTrimmingMode = tt::tt_fabric::fabric_tests::ChannelTrimmingMode;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
@@ -90,7 +91,7 @@ using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyz
 using BandwidthStatistics = tt::tt_fabric::fabric_tests::BandwidthStatistics;
 using BandwidthProfiler = ::BandwidthProfiler;
 using BandwidthResultsManager = tt::tt_fabric::fabric_tests::BandwidthResultsManager;
-using LatencyTestManager = ::LatencyTestManager;
+using LatencyResultsManager = tt::tt_fabric::fabric_tests::LatencyResultsManager;
 
 // Helper functions for parsing traffic pattern parameters
 using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
@@ -121,7 +122,10 @@ public:
 
     void process_traffic_config(TestConfig& config);
 
-    bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
+    bool open_devices(const TestFabricSetup& fabric_setup,
+                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
+        return fixture_->open_devices(fabric_setup, channel_trimming_mode);
+    }
 
     void compile_programs();
 
@@ -218,9 +222,9 @@ private:
 
     void create_latency_kernels_for_device(TestDevice& test_device);
 
-    LatencyTestManager::LatencyWorkerLocation get_latency_sender_location();
+    LatencyResultsManager::LatencyWorkerLocation get_latency_sender_location();
 
-    LatencyTestManager::LatencyWorkerLocation get_latency_receiver_location();
+    LatencyResultsManager::LatencyWorkerLocation get_latency_receiver_location();
 
     void add_traffic_config(const TestTrafficConfig& traffic_config);
 
@@ -256,7 +260,7 @@ private:
     // Managers (bandwidth)
     std::unique_ptr<BandwidthProfiler> bandwidth_profiler_;
     std::unique_ptr<BandwidthResultsManager> bandwidth_results_manager_;
-    std::unique_ptr<LatencyTestManager> latency_test_manager_;
+    std::unique_ptr<LatencyResultsManager> latency_test_manager_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     bool code_profiling_enabled_ = false;
 

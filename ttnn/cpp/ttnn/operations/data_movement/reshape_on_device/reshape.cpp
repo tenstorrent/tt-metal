@@ -4,7 +4,7 @@
 
 #include "clone/clone.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -34,7 +34,7 @@ static Tensor manual_insertion(
     auto cpu_tensor = input_tensor.cpu();
     auto output =
         Tensor(
-            cpu_tensor.storage(),
+            cpu_tensor.host_storage(),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(

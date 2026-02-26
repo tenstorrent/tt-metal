@@ -3,22 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "concatenate_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "concatenate_heads_program_factory.hpp"
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::transformer {
-
-ConcatenateHeadsDeviceOperation::program_factory_t ConcatenateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::ConcatenateHeadsProgramFactory{};
-}
-
-void ConcatenateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::experimental::prim {
 void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -53,7 +43,7 @@ void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
         "Unsupported grid shape");
 }
 
-spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
+TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -68,7 +58,7 @@ spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
-tensor_return_value_t ConcatenateHeadsDeviceOperation::create_output_tensors(
+Tensor ConcatenateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -81,27 +71,22 @@ tt::stl::hash::hash_t ConcatenateHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<ConcatenateHeadsDeviceOperation>(
-        args.output_mem_config,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume());
+        args.output_mem_config, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation::tensor_return_value_t concatenate_heads(
+ttnn::experimental::prim::ConcatenateHeadsDeviceOperation::tensor_return_value_t concatenate_heads(
     const ttnn::Tensor& input_tensor,
     const CoreCoord& compute_with_storage_grid_size,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation;
+    using OperationType = ttnn::experimental::prim::ConcatenateHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .compute_with_storage_grid_size = compute_with_storage_grid_size,

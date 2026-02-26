@@ -13,7 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 
-namespace ttnn::operations::data_movement::move::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -58,13 +58,13 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
 }  // namespace
 
 MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const MoveOperationAttributes& /*operation_attributes*/,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
-    const tensor_return_value_t& output = tensor_return_value;
+    const Tensor& output = tensor_return_value;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
@@ -180,14 +180,14 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
 void MoveOverlapProgramFactory::override_runtime_arguments(
     MoveOverlapProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const MoveOperationAttributes& /*operation_attributes*/,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     auto& program = cached_program.program;
     const Tensor& input = tensor_args.input_tensor;
-    tensor_return_value_t& output = tensor_return_value;
+    Tensor& output = tensor_return_value;
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -206,4 +206,4 @@ void MoveOverlapProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::move::program
+}  // namespace ttnn::prim

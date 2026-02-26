@@ -210,10 +210,6 @@ void run_single_core_copy_block_matmul_partials(
 
 TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
@@ -225,17 +221,13 @@ TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
 }
 TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
                 .reader_ublock = 8,
                 .writer_ublock = 8,
-                .compute_ublock = 8,
+                .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
@@ -246,10 +238,6 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
 
 TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {

@@ -376,16 +376,20 @@ def test_sinh(device, h, w, layout):
 @pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("vector_mode", [4])
 def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
+    class sigmoid_wrap:
+        def __init__(self):
+            self.golden_function = ttnn.sigmoid.golden_function
+
+        def __call__(self, input_tensor, vector_mode, fast_and_approximate_mode):
+            return ttnn.sigmoid(
+                input_tensor,
+                vector_mode=vector_mode,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+            )
+
     run_unary_with_approx_mode_test(
-        device, h, w, ttnn.sigmoid, vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
+        device, h, w, sigmoid_wrap(), vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
     )
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logical_not(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.logical_not, layout=layout)
 
 
 def run_unary_test_range(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, pcc=0.9999):
@@ -681,7 +685,7 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(golden_tensor, output_tensor)
 
 
@@ -1073,7 +1077,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    {0.65, 7.7, 36.49, 58.6, 97.2},
+    (0.65, 7.7, 36.49, 58.6, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1103,7 +1107,7 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
 )
 @pytest.mark.parametrize(
     "param",
-    {7.0, 36.49, 58.5, 97.2},
+    (7.0, 36.49, 58.5, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1131,7 +1135,7 @@ def test_unary_shrink_functions_bf8b_ttnn(input_shapes, param, ttnn_function, de
 )
 @pytest.mark.parametrize(
     "param",
-    {0.45, 7.7, 197.2, 1e5},
+    (0.45, 7.7, 197.2, 1e5),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1683,20 +1687,22 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     golden_tensor = golden_function(in_data)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2.0)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1.0)
+    elif ttnn_dtype == ttnn.float32:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3.0)
     else:
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
 
 
 def test_cbrt_arange(device):
     # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
+
+    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
-    # Mask NaN, special values where cbrt has ULP>1 (Covered in atol test below).
-    # Also mask values in range -1 to 1.
-    mask = torch.isnan(input_tensor) | torch.isinf(input_tensor) | ((input_tensor > -1.0) & (input_tensor < 1.0))
+    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
+    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
     input_tensor[mask] = 1.0
 
     tt_in = ttnn.from_torch(
@@ -1712,7 +1718,7 @@ def test_cbrt_arange(device):
 
     tt_result = ttnn.cbrt(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
@@ -1911,7 +1917,7 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
 
 @pytest.mark.parametrize(
     "param",
-    {-1.5, 1.7, 0.0},
+    (-1.5, 0.0, 1.7),
 )
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
@@ -1944,7 +1950,7 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
+    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9),
 )
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
@@ -2121,3 +2127,20 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
             )
     else:
         assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat8_b)],
+)
+def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
+    input_shape = (1, 1, 32, 32)
+    in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
+    in_data[..., ::5] = 0  # every 5th element is zero
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.logical_not(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logical_not)
+    golden_tensor = golden_function(in_data, device=device)
+    assert torch.equal(output_tensor, golden_tensor)

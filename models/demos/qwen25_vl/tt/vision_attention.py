@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -66,8 +67,7 @@ class VisionAttention(LightweightModule):
         # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
-        self.num_all_gather_links = configuration.num_all_gather_links
+
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
@@ -88,7 +88,7 @@ class VisionAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-
+        self.configuration = configuration
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
@@ -122,7 +122,6 @@ class VisionAttention(LightweightModule):
         self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
         )
-
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -475,7 +474,9 @@ class VisionAttention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
+                program_config=self.configuration.get_attn_sdpa_program_config(
+                    Mode.PREFILL, seq_len, chunk_start_idx, None
+                ),
             )
         else:
             attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
@@ -485,7 +486,7 @@ class VisionAttention(LightweightModule):
                 cu_seqlens,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
 
         # deallocate keys and values

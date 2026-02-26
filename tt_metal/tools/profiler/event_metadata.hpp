@@ -46,19 +46,22 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         SEMAPHORE_INC = 27,
         SEMAPHORE_WAIT = 28,
         SEMAPHORE_SET = 29,
+        SEMAPHORE_SET_REMOTE = 30,
+        SEMAPHORE_SET_MULTICAST = 31,
+        SEMAPHORE_INC_MULTICAST = 32,
 
         // NOTE: fabric events should be contiguous to allow quick range check!
-        FABRIC_UNICAST_WRITE = 30,
-        FABRIC_UNICAST_INLINE_WRITE = 31,
-        FABRIC_UNICAST_ATOMIC_INC = 32,
-        FABRIC_FUSED_UNICAST_ATOMIC_INC = 33,
-        FABRIC_MULTICAST_WRITE = 34,
-        FABRIC_MULTICAST_ATOMIC_INC = 35,
-        FABRIC_UNICAST_SCATTER_WRITE = 36,
-        FABRIC_ROUTING_FIELDS_1D = 37,
-        FABRIC_ROUTING_FIELDS_2D = 38,
+        FABRIC_UNICAST_WRITE = 33,
+        FABRIC_UNICAST_INLINE_WRITE = 34,
+        FABRIC_UNICAST_ATOMIC_INC = 35,
+        FABRIC_FUSED_UNICAST_ATOMIC_INC = 36,
+        FABRIC_MULTICAST_WRITE = 37,
+        FABRIC_MULTICAST_ATOMIC_INC = 38,
+        FABRIC_UNICAST_SCATTER_WRITE = 39,
+        FABRIC_ROUTING_FIELDS_1D = 40,
+        FABRIC_ROUTING_FIELDS_2D = 41,
 
-        UNSUPPORTED = 39,
+        UNSUPPORTED = 42,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -75,19 +78,45 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         NocType noc_type : 4;
         NocVirtualChannel noc_vc : 4;
         uint8_t payload_chunks;
+        uint8_t posted : 1;
+        uint8_t reserved : 7;
 
-        void setNumBytes(uint32_t num_bytes) {
+        void setAttributes(uint32_t num_bytes, bool p) {
             uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
             payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            posted = p;
         }
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
     };
 
     // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
     struct LocalNocEventDstTrailer {
-        uint32_t dst_addr;
-        uint32_t padding;
-    } __attribute__((packed));
+        uint64_t dst_addr_4b : 22;     // Destination address / 4 (4-byte aligned base)
+        uint64_t dst_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
+        uint64_t src_addr_4b : 22;     // Source address / 4 (4-byte aligned base)
+        uint64_t src_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
+        uint64_t counter_value : 12;   // Counter value
+
+        LocalNocEventDstTrailer() = default;
+
+        // Prevent accidental construction from raw integers due to bit fields above. Use
+        // EMD::getLocalNocEventDstTrailer() instead.
+        explicit LocalNocEventDstTrailer(uint64_t) = delete;
+        explicit LocalNocEventDstTrailer(uint32_t) = delete;
+        explicit LocalNocEventDstTrailer(int) = delete;
+
+        void setDstAddr(uint32_t addr) {
+            dst_addr_4b = addr >> 2;
+            dst_addr_offset = addr & 0x3;
+        }
+        uint32_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
+
+        void setSrcAddr(uint32_t addr) {
+            src_addr_4b = addr >> 2;
+            src_addr_offset = addr & 0x3;
+        }
+        uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
+    };
 
     // represents a fabric NOC event
     enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH, DYNAMIC_MESH };

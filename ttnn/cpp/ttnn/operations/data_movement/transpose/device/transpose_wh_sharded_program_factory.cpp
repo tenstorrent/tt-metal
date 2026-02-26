@@ -12,14 +12,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFactory::create(
-    const transpose::operation_attributes_t& /*operation_attributes*/,
-    const transpose::tensor_args_t& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
@@ -142,20 +139,19 @@ TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFact
 
 void TransposeWHShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::operation_attributes_t& /*operation_attributes*/,
-    const transpose::tensor_args_t& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
     const auto& src_tensor = tensor_args.input;
-    auto& dst_tensor = tensor_return_value;
 
     auto* const src_buffer = src_tensor.buffer();
-    auto* const dst_buffer = dst_tensor.buffer();
+    auto* const dst_buffer = output_tensor.buffer();
 
     bool src0_sharded = src_tensor.is_sharded();
-    bool out_sharded = dst_tensor.is_sharded();
+    bool out_sharded = output_tensor.is_sharded();
 
     auto shard_spec = src_tensor.shard_spec().value();
 
@@ -225,4 +221,4 @@ void TransposeWHShardedProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_variables.writer_kernel_id, cores, unary_writer_args);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

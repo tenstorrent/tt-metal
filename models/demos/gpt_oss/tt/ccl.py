@@ -3,11 +3,9 @@
 
 import ttnn
 
-# import torch
-
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
@@ -26,7 +24,7 @@ class CCLManager:
         self.barrier_idx = 0
 
     def _init_subdevice(self):
-        compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
+        compute_grid_size = ttnn.CoreCoord(8, 8)
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )

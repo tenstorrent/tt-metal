@@ -18,14 +18,8 @@ std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_da
     return two_bfloats;
 }
 
-std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bfloat16_values, bool print) {
-    if (num_bfloat16_values % 2 != 0) {
-        throw std::invalid_argument("num_bfloat16_values must be even (packed in pairs)");
-    }
-
-    const size_t num_pairs = num_bfloat16_values / 2;
-    std::vector<std::uint32_t> vec(num_pairs, 0);
-
+std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bool print) {
+    std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
     for (size_t i = 0; i < vec.size(); i++) {
         float num_1_float = i * 2;
         float num_2_float = (i * 2) + 1;
@@ -41,7 +35,7 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bfloat16_
         }
 
         // pack 2 uint16 into uint32
-        vec[i] = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 
     return vec;

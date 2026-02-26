@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <vector>
 
-namespace ttnn::operations::experimental::paged_cache::update::program {
+namespace ttnn::experimental::prim {
 
 struct PagedUpdateCacheSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -27,15 +27,15 @@ struct PagedUpdateCacheProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedUpdateCacheParams& operation_attributes,
+        const PagedUpdateCacheInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedUpdateCacheParams& operation_attributes,
+        const PagedUpdateCacheInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 struct PagedUpdateCacheMeshWorkloadFactory {
@@ -43,16 +43,16 @@ struct PagedUpdateCacheMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const PagedUpdateCacheParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedUpdateCacheInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedUpdateCacheParams& operation_attributes,
+        const PagedUpdateCacheInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::update::program
+}  // namespace ttnn::experimental::prim

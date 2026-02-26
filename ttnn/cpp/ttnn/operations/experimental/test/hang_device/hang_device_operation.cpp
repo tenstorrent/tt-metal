@@ -2,18 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "hang_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn::prim {
-
-ExecuteTestHangDeviceOperation::program_factory_t ExecuteTestHangDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return SingleCore{};
-}
 
 void ExecuteTestHangDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& /*tensor_args*/) {}
