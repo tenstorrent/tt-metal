@@ -55,21 +55,21 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     /** reader
      */
-    uint32_t stick_size = a.padded_shape()[-1] * a.element_size();
-    uint32_t num_sticks_in_row = 1;
-    uint32_t stick_size_of_last_stick_in_row = stick_size;
+    uint32_t page_size = a.padded_shape()[-1] * a.element_size();
+    uint32_t num_pages_in_row = 1;
+    uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
-        stick_size = shard_width * a.element_size();  // For ND sharding, a stick is a row of the shard.
-        num_sticks_in_row = tt::div_up(logical_width,
-                                       shard_width);  // Compute number of sticks in one tensor row.
+        page_size = shard_width * a.element_size();  // For ND sharding, a page is a row of the shard.
+        num_pages_in_row = tt::div_up(logical_width,
+                                      shard_width);  // Compute number of pages in one tensor row.
         uint32_t padding_size =
-            (num_sticks_in_row * stick_size) -
-            (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last stick in the row.
-        stick_size_of_last_stick_in_row = stick_size - padding_size;
+            (num_pages_in_row * page_size) -
+            (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last page in the row.
+        size_of_valid_data_in_last_page_in_row = page_size - padding_size;
     }
-    std::vector<uint32_t> reader_ct_args = {stick_size, num_sticks_in_row, stick_size_of_last_stick_in_row};
+    std::vector<uint32_t> reader_ct_args = {page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
@@ -119,7 +119,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
-    uint32_t stick_start_id = 0;
+    uint32_t page_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
@@ -128,13 +128,13 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core * TILE_HEIGHT,
-            stick_size,
+            page_size,
             ntiles_per_block,
-            stick_size,
+            page_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            stick_start_id};
+            page_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {
@@ -147,7 +147,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
-        stick_start_id += TILE_HEIGHT * nblocks_per_core * num_sticks_in_row;  // adjust for ND sharded tensors
+        page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;  // adjust for ND sharded tensors
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
@@ -157,13 +157,13 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
         const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core_cliff * TILE_HEIGHT,
-            stick_size,
+            page_size,
             ntiles_per_block,
-            stick_size,
+            page_size,
             std::uint32_t{1},  // full blocks in row
             std::uint32_t{0},  // num leftover tiles
             std::uint32_t{0},  // leftover width in row
-            stick_start_id};
+            page_start_id};
 
         // writer runtime args
         const std::array writer_rt_args = {

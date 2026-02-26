@@ -231,9 +231,7 @@ def test_tilize_nd_sharded_to_legacy_sharded(
         memory_config=input_memory_config,
     )
     ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
-    out_shard_spec = ttnn_output_tensor.memory_config().shard_spec
-    print("output shard shape:", out_shard_spec.shape)
-    print("output shard grid:", out_shard_spec.grid)
+
     output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     assert_equal(input_torch_tensor, output_torch_tensor)
