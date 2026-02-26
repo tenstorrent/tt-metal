@@ -33,9 +33,18 @@ struct DevicePrintMemoryLayout {
         uint32_t rpos;
         DevicePrintRiscCoreState risc_state[PROCESSOR_COUNT];  // Has kernel printed since starting
     } aux;
+    static_assert(
+        sizeof(Aux) == 4 + 4 + (PROCESSOR_COUNT * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4,
+        "Aux struct size must be correct");
     static_assert(sizeof(Aux) % 4 == 0, "Aux struct must be a multiple of 4 bytes for proper alignment of data");
     uint8_t data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(Aux)];
-
-} __attribute__((packed));
+    static_assert(sizeof(data) % 4 == 0, "Data array size must be a multiple of 4 bytes for proper alignment");
+};
+static_assert(
+    sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * DevicePrintMemoryLayout::PROCESSOR_COUNT,
+    "DevicePrintMemoryLayout size must match total buffer size");
+static_assert(
+    sizeof(DevicePrintMemoryLayout) % 4 == 0,
+    "DevicePrintMemoryLayout size must be a multiple of 4 bytes for proper alignment");
 
 #endif
