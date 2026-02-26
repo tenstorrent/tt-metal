@@ -20,7 +20,7 @@ class ResetUtil:
 
         self.arch = arch
         self.command, self.args = self._find_command()
-        self.reset()
+        # self.reset()  # Disabled: skip suite-level reset to test if it's needed
 
     def _find_command(self):
         custom_command = os.getenv("TT_SMI_RESET_COMMAND")

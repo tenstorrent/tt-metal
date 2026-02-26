@@ -328,11 +328,9 @@ class MasterConfigLoader:
                 logger.info(f"✅ Using V2 JSON: {v2_path}")
                 master_file_path = v2_path
             else:
-                logger.warning(f"⚠️  V2 JSON not found at {v2_path}")
-                logger.warning(
-                    f"   Please ensure ttnn_operations_master_v2.json exists in model_tracer/traced_operations/"
-                )
-                master_file_path = v2_path  # Set it anyway, will fail gracefully in load_master_data
+                # JSON not available (e.g., in CI execution jobs where only pre-generated
+                # vectors are needed). Skip silently — the loader will return empty configs.
+                master_file_path = None
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -345,6 +343,9 @@ class MasterConfigLoader:
         to allow the system to function in degraded mode (no traced configs).
         """
         if self.master_data is None:
+            if self.master_file_path is None:
+                self.master_data = {"operations": {}}
+                return
             try:
                 with open(self.master_file_path, "r") as f:
                     self.master_data = json.load(f)
