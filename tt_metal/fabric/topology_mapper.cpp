@@ -68,36 +68,47 @@ void execute_with_timeout(
     OperationType&& operation,
     const std::string& operation_description,
     std::chrono::duration<float> timeout,
-    const tt::tt_metal::distributed::multihost::DistributedContext* abort_on_timeout,
+    const tt::tt_metal::distributed::multihost::DistributedContext* /* abort_on_timeout */,
     Args&&... args) {
     std::atomic<bool> operation_completed{false};
     std::atomic<bool> operation_failed{false};
     std::exception_ptr exception_ptr{nullptr};
 
+    // Use internal flag
+    std::atomic<bool>* operation_failed_to_use = &operation_failed;
+
     // Run operation in a separate thread
     std::thread operation_thread([&]() {
         try {
+            // Check if we should abort before starting
+            if (operation_failed_to_use->load()) {
+                throw std::runtime_error("Operation cancelled due to timeout on another rank");
+            }
             operation(std::forward<Args>(args)...);
-            operation_completed = true;
+            if (!operation_failed_to_use->load()) {
+                operation_completed = true;
+            }
         } catch (...) {
             exception_ptr = std::current_exception();
-            operation_failed = true;
+            operation_failed_to_use->store(true);
         }
     });
 
     // Wait for completion or timeout
     auto start = std::chrono::steady_clock::now();
-    while (!operation_completed && !operation_failed) {
+    while (!operation_completed && !operation_failed_to_use->load()) {
         std::this_thread::yield();
         if (timeout.count() > 0.0f) {
             auto now = std::chrono::steady_clock::now();
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
-                // Timeout occurred - detach the thread
-                operation_thread.detach();
-                // Abort all processes to prevent other ranks from hanging in the collective op
-                if (abort_on_timeout != nullptr) {
-                    abort_on_timeout->abort(1);
+                // Timeout occurred - signal the operation thread to stop and throw
+                // The operation thread will check operation_failed and throw if needed
+                operation_failed_to_use->store(true);
+                // Wait briefly for thread to respond, then detach if still running
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (operation_thread.joinable()) {
+                    operation_thread.detach();
                 }
                 TT_THROW(
                     "Timeout while waiting for {} operation. One or more hosts may have failed.",
@@ -112,7 +123,7 @@ void execute_with_timeout(
     }
 
     // Re-throw any exception that occurred in the thread
-    if (operation_failed && exception_ptr) {
+    if (operation_failed_to_use->load() && exception_ptr) {
         std::rethrow_exception(exception_ptr);
     }
 }
@@ -124,7 +135,7 @@ void wait_for_request_with_timeout(
     const std::string& operation_description,
     int rank,
     std::chrono::duration<float> timeout,
-    const tt::tt_metal::distributed::multihost::DistributedContext* abort_on_timeout = nullptr) {
+    const tt::tt_metal::distributed::multihost::DistributedContext* /* abort_on_timeout */ = nullptr) {
     auto start = std::chrono::steady_clock::now();
 
     while (!req->test()) {
@@ -134,11 +145,7 @@ void wait_for_request_with_timeout(
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
                 req->cancel();
-                // Abort all processes to prevent controller (rank 0) from hanging when it
-                // tries to ssend to processes that have already exited due to this timeout.
-                if (abort_on_timeout != nullptr) {
-                    abort_on_timeout->abort(1);
-                }
+                // Throw exception instead of aborting - let exceptions propagate normally
                 TT_THROW(
                     "Timeout while waiting for {} from rank {}. Controller likely failed.",
                     operation_description,
