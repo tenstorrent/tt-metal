@@ -349,7 +349,7 @@ def _generate_phase_namespace(
     transformed = _transform_phase_source(body, phase_idx, ct_arg_offset)
     dedented = _dedent_ignoring_column_zero(transformed)
 
-    lines.append("void run() {")
+    lines.append("__attribute__((noinline)) void run() {")
     if phase_name:
         lines.append(f'    DeviceZoneScopedN("{phase_name}");')
     for line in dedented.split("\n"):
@@ -648,6 +648,9 @@ def _generate_fused_source(
         source_no_includes = _strip_file_scope_defines(source_no_includes, file_scope_define_names)
         source_no_includes = _clean_phase_source(source_no_includes)
         source_no_includes = re.sub(r"\bkernel_main\b", "run", source_no_includes)
+        # Mark run() as noinline to reduce binary size — each phase's run()
+        # is called exactly once from kernel_main(), so inlining wastes code space.
+        source_no_includes = source_no_includes.replace("void run(", "__attribute__((noinline)) void run(", 1)
         source_no_includes = _offset_compile_time_args_in_source(source_no_includes, phase_idx, ct_offset)
 
         lines.extend(
