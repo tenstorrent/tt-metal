@@ -1,0 +1,6 @@
+# Streamlit demo dependencies for PETR 3D Object Detection
+streamlit>=1.28.0
+plotly>=5.18.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+torch>=2.0.0

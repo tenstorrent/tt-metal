@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tenstorrent AI Models Portfolio</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a3a 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            padding: 40px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+        h1 {
+            font-size: 3em;
+            background: linear-gradient(90deg, #00D4FF, #7B68EE);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 1.3em;
+            color: #888;
+        }
+        .hardware-badge {
+            display: inline-block;
+            background: linear-gradient(90deg, #FF6B6B, #FF9F43);
+            padding: 8px 20px;
+            border-radius: 20px;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0,212,255,0.2);
+        }
+        .card.highlight {
+            border: 2px solid #00D4FF;
+            background: rgba(0,212,255,0.1);
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .card-icon {
+            font-size: 2em;
+            margin-right: 15px;
+        }
+        .card-title {
+            font-size: 1.4em;
+            color: #00D4FF;
+        }
+        .model-list {
+            list-style: none;
+        }
+        .model-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .model-list li:last-child {
+            border-bottom: none;
+        }
+        .model-name {
+            font-weight: 500;
+        }
+        .model-desc {
+            font-size: 0.85em;
+            color: #888;
+        }
+        .badge {
+            font-size: 0.7em;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+        .badge-new {
+            background: #4ECDC4;
+            color: #000;
+        }
+        .badge-demo {
+            background: #FF6B6B;
+            color: #fff;
+        }
+        .badge-perf {
+            background: #FFE66D;
+            color: #000;
+        }
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 50px;
+            margin-top: 50px;
+            padding: 30px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 15px;
+        }
+        .stat {
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 3em;
+            font-weight: bold;
+            background: linear-gradient(90deg, #00D4FF, #7B68EE);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stat-label {
+            color: #888;
+            margin-top: 5px;
+        }
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔷 Tenstorrent AI Models Portfolio</h1>
+            <p class="subtitle">Production-Ready Models for Tenstorrent Hardware</p>
+            <span class="hardware-badge">⚡ Blackhole & Wormhole</span>
+        </header>
+
+        <div class="grid">
+            <!-- 3D Perception - Highlighted -->
+            <div class="card highlight">
+                <div class="card-header">
+                    <span class="card-icon">🚗</span>
+                    <span class="card-title">3D Perception</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <div>
+                            <span class="model-name">PETR</span>
+                            <div class="model-desc">Multi-camera 3D Object Detection</div>
+                        </div>
+                        <span class="badge badge-demo">DEMO</span>
+                    </li>
+                    <li>
+                        <div>
+                            <span class="model-name">DETR3D</span>
+                            <div class="model-desc">3D Detection Transformer</div>
+                        </div>
+                    </li>
+                    <li>
+                        <div>
+                            <span class="model-name">BEVFormer</span>
+                            <div class="model-desc">Bird's Eye View Transformer</div>
+                        </div>
+                    </li>
+                    <li>
+                        <div>
+                            <span class="model-name">UniAD</span>
+                            <div class="model-desc">Unified Autonomous Driving</div>
+                        </div>
+                    </li>
+                    <li>
+                        <div>
+                            <span class="model-name">VADv2</span>
+                            <div class="model-desc">Vectorized Scene Representation</div>
+                        </div>
+                    </li>
+                    <li>
+                        <div>
+                            <span class="model-name">Transfuser</span>
+                            <div class="model-desc">Multi-modal Sensor Fusion</div>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Vision Classification -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">👁️</span>
+                    <span class="card-title">Vision - Classification</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <span class="model-name">ResNet50</span>
+                        <span class="badge badge-perf">PERF</span>
+                    </li>
+                    <li>
+                        <span class="model-name">VGG16/19</span>
+                    </li>
+                    <li>
+                        <span class="model-name">MobileNetV2/V3</span>
+                    </li>
+                    <li>
+                        <span class="model-name">ViT (Vision Transformer)</span>
+                    </li>
+                    <li>
+                        <span class="model-name">EfficientNet B0-B7</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Swin Transformer</span>
+                    </li>
+                    <li>
+                        <span class="model-name">DeiT</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Vision Detection/Segmentation -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🎯</span>
+                    <span class="card-title">Vision - Detection & Segmentation</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <div>
+                            <span class="model-name">YuNet</span>
+                            <div class="model-desc">Face Detection</div>
+                        </div>
+                        <span class="badge badge-demo">DEMO</span>
+                    </li>
+                    <li>
+                        <span class="model-name">EfficientDet</span>
+                    </li>
+                    <li>
+                        <span class="model-name">RetinaNet</span>
+                    </li>
+                    <li>
+                        <span class="model-name">SSD512</span>
+                    </li>
+                    <li>
+                        <span class="model-name">SegFormer</span>
+                    </li>
+                    <li>
+                        <span class="model-name">UNet / VGG-UNet</span>
+                    </li>
+                    <li>
+                        <span class="model-name">PanopticDeepLab</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Generative -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🎨</span>
+                    <span class="card-title">Generative AI</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <div>
+                            <span class="model-name">Stable Diffusion 1.4/XL</span>
+                            <div class="model-desc">Text-to-Image Generation</div>
+                        </div>
+                        <span class="badge badge-demo">DEMO</span>
+                    </li>
+                    <li>
+                        <span class="model-name">OFT (LoRA Fine-tuning)</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- LLMs -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">💬</span>
+                    <span class="card-title">Large Language Models</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <span class="model-name">LLaMA 2 / LLaMA 3</span>
+                        <span class="badge badge-perf">PERF</span>
+                    </li>
+                    <li>
+                        <span class="model-name">DeepSeek V3</span>
+                        <span class="badge badge-new">NEW</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Falcon 7B / 40B</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Mistral 24B</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Grok</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Mamba (SSM)</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- NLP -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">📝</span>
+                    <span class="card-title">NLP & Embeddings</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <span class="model-name">BERT Large</span>
+                        <span class="badge badge-perf">PERF</span>
+                    </li>
+                    <li>
+                        <span class="model-name">DistilBERT</span>
+                    </li>
+                    <li>
+                        <span class="model-name">SqueezeBERT</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Sentence-BERT</span>
+                    </li>
+                    <li>
+                        <span class="model-name">BGE Large</span>
+                    </li>
+                    <li>
+                        <span class="model-name">T5</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Bloom</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Multimodal -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🔮</span>
+                    <span class="card-title">Multimodal</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <span class="model-name">Qwen2.5-VL / Qwen3-VL</span>
+                        <span class="badge badge-new">NEW</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Gemma3 4B</span>
+                    </li>
+                    <li>
+                        <span class="model-name">SigLIP</span>
+                    </li>
+                    <li>
+                        <span class="model-name">TrOCR</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Robotics -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🤖</span>
+                    <span class="card-title">Robotics & Control</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <div>
+                            <span class="model-name">OpenVLA</span>
+                            <div class="model-desc">Vision-Language-Action</div>
+                        </div>
+                        <span class="badge badge-demo">DEMO</span>
+                    </li>
+                    <li>
+                        <span class="model-name">SmolVLA</span>
+                        <span class="badge badge-demo">DEMO</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Pi0</span>
+                    </li>
+                    <li>
+                        <span class="model-name">BlazePose</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Audio -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🔊</span>
+                    <span class="card-title">Audio</span>
+                </div>
+                <ul class="model-list">
+                    <li>
+                        <span class="model-name">SpeechT5 TTS</span>
+                    </li>
+                    <li>
+                        <span class="model-name">Audio Models</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-number">60+</div>
+                <div class="stat-label">Models</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number">6</div>
+                <div class="stat-label">3D Perception</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number">10+</div>
+                <div class="stat-label">LLMs</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number">5</div>
+                <div class="stat-label">Streamlit Demos</div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Tenstorrent AI Models | tt-metal Repository | Open Source</p>
+            <p style="margin-top: 10px;">🔷 Blackhole | 🟣 Wormhole | 🔶 Grayskull</p>
+        </footer>
+    </div>
+</body>
+</html>
