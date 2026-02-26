@@ -819,6 +819,8 @@ def test_optimized_moe_decode_block(
     ############################################
     tilized_combine_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
+    scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
+
     fast_reduce_output_memory_config = ttnn.MemoryConfig(
         ttnn.BufferType.L1,
         ttnn.NdShardSpec(
@@ -1011,9 +1013,6 @@ def test_optimized_moe_decode_block(
         # logger.info("Tilized Compute Input")
         # logger.info(f"Input: {tt_combine_output.shape}")
 
-        # tt_tilized_compute_output = ttnn.tilize(
-        #     tt_combine_output, memory_config=tilized_combine_output_memory_config, use_multicore=True
-        # )
         tt_tilized_compute_output = ttnn.to_layout(
             tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
         )
@@ -1022,33 +1021,42 @@ def test_optimized_moe_decode_block(
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("NNNNN")
 
-        # TODO: (GR)
-        # post_combine_output_tensor = ttnn.mul(post_combine_output_tensor, topk_weights_chunk)
-
         # logger.info("Unsqueeze Input")
         # logger.info(f"Input: {tt_tilized_compute_output.shape}")
 
         # unsqueeze
-        # (32, 32, 896) -> (32, 1, 32, 896)
+        # (8, 32, 896) -> (8, 1, 32, 896)
         tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
 
         logger.info("OOOOO")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("PPPPP")
 
-        # logger.info("Fast Reduce Input")
+        # TODO: (GR)
+        # logger.info("Scale Input")
         # logger.info(f"Input: {tt_unsqueezed_output.shape}")
-
-        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-            tt_unsqueezed_output,
-            dim=0,
-            split_size=int(tt_unsqueezed_output.shape[-1] // rs_devices),
-            output_memory_config=fast_reduce_output_memory_config,
-        )
+        # topk_experts_weights = ttnn.permute(tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config)
+        # topk_experts_weights = ttnn.to_layout(topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config)
+        # tt_scaled_output = ttnn.mul(tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config)
+        tt_scaled_output = tt_unsqueezed_output
 
         logger.info("QQQQQ")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info("RRRRR")
+
+        # logger.info("Fast Reduce Input")
+        # logger.info(f"Input: {tt_scaled_output.shape}")
+
+        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+            tt_scaled_output,
+            dim=0,
+            split_size=int(tt_scaled_output.shape[-1] // rs_devices),
+            output_memory_config=fast_reduce_output_memory_config,
+        )
+
+        logger.info("SSSSS")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+        logger.info("TTTTT")
 
         # logger.info("Reduce Scatter Input")
         # logger.info(f"Single Slice: {tt_fast_reduce_output_tensors[0].shape}")
@@ -1062,9 +1070,9 @@ def test_optimized_moe_decode_block(
             cluster_axis=1,
         )
 
-        logger.info("RRRRR")
+        logger.info("UUUUU")
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        logger.info("SSSSS")
+        logger.info("VVVVV")
 
         logger.info(f"Final Output Shape: {tt_final_output.shape}")
         return tt_final_output, comb_out
