@@ -23,8 +23,16 @@ try:
 except ImportError:
     from . import _ttml
 
+# IMPORTANT: Import all Python subpackages AFTER _ttml is available but BEFORE
+# calling _recursive_import_from_ttml. This establishes the real Python packages
+# in sys.modules with proper __path__ and __file__ attributes.
+# The subpackages can now access _ttml for their C++ type imports.
+from . import autograd
+from . import models
+from . import modules
+
 from ._recursive_import import _recursive_import_from_ttml
 
 # Recursively import all _ttml symbols into this module
-# Python implementations in subpackages will take precedence
+# C++ symbols are merged into the already-imported Python packages
 _recursive_import_from_ttml(_ttml, sys.modules[__name__])

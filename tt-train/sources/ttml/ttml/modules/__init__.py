@@ -2,28 +2,35 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python modules package for ttml."""
+"""Python modules package for ttml.
 
-import sys
+This package combines C++ module implementations from _ttml with Python
+implementations. C++ classes are imported directly from _ttml.modules.
+"""
 
-# Import C++ bindings
-from .. import _ttml
-from .._recursive_import import _recursive_import_from_ttml
+# Import C++ types
+# Note: _ttml is a top-level module, not a subpackage of ttml
+import _ttml
 
-if hasattr(_ttml, "modules"):
-    _recursive_import_from_ttml(_ttml.modules, sys.modules[__name__])
+RunMode = _ttml.modules.RunMode
+ModuleBase = _ttml.modules.ModuleBase
+LinearLayer = _ttml.modules.LinearLayer
+InferenceMode = _ttml.modules.InferenceMode
 
-from .._ttml.modules import RunMode, ModuleBase
-
+# Import Python implementations
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 __all__ = [
-    "AbstractModuleBase",
+    # C++ classes
     "ModuleBase",
+    "RunMode",
+    "LinearLayer",
+    "InferenceMode",
+    # Python classes
+    "AbstractModuleBase",
     "ModuleDict",
     "ModuleList",
     "Parameter",
     "Buffer",
-    "RunMode",
 ]

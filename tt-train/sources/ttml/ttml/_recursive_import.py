@@ -43,42 +43,49 @@ def _ensure_submodule_exists(
     """
     full_name = f"{parent_module.__name__}.{submodule_name}"
 
-    # First, check if it exists in sys.modules (might be a package that was imported)
-    if full_name in sys.modules:
-        existing_module = sys.modules[full_name]
-        if inspect.ismodule(existing_module):
-            # Use the existing module from sys.modules (preserves Python packages)
-            if (
-                not hasattr(parent_module, submodule_name)
-                or getattr(parent_module, submodule_name) is not existing_module
-            ):
-                setattr(parent_module, submodule_name, existing_module)
-            return existing_module
-
-    # Check if submodule already exists in parent
-    if hasattr(parent_module, submodule_name):
-        submodule = getattr(parent_module, submodule_name)
-        if inspect.ismodule(submodule):
-            # If it's already a module, use it (preserves Python packages)
-            # Make sure it's registered in sys.modules
-            if full_name not in sys.modules:
-                sys.modules[full_name] = submodule
-            return submodule
-
-    # Try to import it as a package if it might be one
-    # This handles the case where ttml.modules is a Python package
+    # FIRST: Try to import as a real Python package before checking sys.modules
+    # This is critical because we want to use the real package with __path__ and __file__
+    # rather than a synthetic module that might have been created earlier
     try:
         spec = importlib.util.find_spec(full_name)
         if spec is not None and spec.loader is not None:
-            # It's a real package/module, import it
+            # It's a real package/module, import it properly
             imported_module = importlib.import_module(full_name)
+            # Update sys.modules and parent attribute with the real package
+            sys.modules[full_name] = imported_module
             setattr(parent_module, submodule_name, imported_module)
             return imported_module
     except (ImportError, ModuleNotFoundError, ValueError):
-        # Not a real package, continue to create a new module
+        # Not a real package, continue to check other options
         pass
 
-    # Create a new module only if it doesn't exist
+    # Check if it exists in sys.modules and is a proper module (with __file__ or __path__)
+    if full_name in sys.modules:
+        existing_module = sys.modules[full_name]
+        if inspect.ismodule(existing_module):
+            # Only use existing module if it's a real package (has __path__ or __file__)
+            # Otherwise, we may have a synthetic module that should be replaced
+            if hasattr(existing_module, "__path__") or hasattr(
+                existing_module, "__file__"
+            ):
+                if (
+                    not hasattr(parent_module, submodule_name)
+                    or getattr(parent_module, submodule_name) is not existing_module
+                ):
+                    setattr(parent_module, submodule_name, existing_module)
+                return existing_module
+
+    # Check if submodule already exists in parent and is a real package
+    if hasattr(parent_module, submodule_name):
+        submodule = getattr(parent_module, submodule_name)
+        if inspect.ismodule(submodule):
+            # Only use if it's a real package (has __path__ or __file__)
+            if hasattr(submodule, "__path__") or hasattr(submodule, "__file__"):
+                if full_name not in sys.modules:
+                    sys.modules[full_name] = submodule
+                return submodule
+
+    # Create a new synthetic module only if no real package exists
     submodule = types.ModuleType(full_name)
     sys.modules[full_name] = submodule
     setattr(parent_module, submodule_name, submodule)

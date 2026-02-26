@@ -12,7 +12,8 @@ integrating with the existing C++ autograd system.
 from typing import Any, List, Sequence, Tuple
 
 # Import C++ bindings
-from .. import _ttml as cpp
+# Note: _ttml is a top-level module, not a subpackage of ttml
+import _ttml as cpp
 
 
 class FunctionContext:

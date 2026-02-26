@@ -39,8 +39,11 @@ Example usage:
 from .function import Function, FunctionContext, get_links
 
 # Import C++ bindings from _ttml.autograd
+# Note: _ttml is a top-level module, not a subpackage of ttml
 try:
-    from ttml._ttml import autograd as _cpp_autograd
+    import _ttml
+
+    _cpp_autograd = _ttml.autograd
 
     # Re-export C++ classes
     AutoContext = _cpp_autograd.AutoContext

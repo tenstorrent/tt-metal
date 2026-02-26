@@ -14,8 +14,8 @@ tt-train must be built as part of tt-metal using `build_metal.sh --build-tt-trai
 
 ```bash
 cd /path/to/tt-metal
-./create_venv.sh
 ./build_metal.sh --build-tt-train
+./create_venv.sh
 ```
 
 **Manual setup:** If needed, create the `.pth` files manually:

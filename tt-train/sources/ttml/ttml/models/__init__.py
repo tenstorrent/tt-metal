@@ -5,22 +5,28 @@
 """Python models package for ttml.
 
 This package provides Python implementations of models using ttml operations.
+C++ types are imported from _ttml.models and must be available before Python
+submodules that depend on them.
 """
 
-import sys
+# Import C++ types first (needed by Python submodules)
+# Note: _ttml is a top-level module, not a subpackage of ttml
+import _ttml
 
-# Import C++ bindings
-from .. import _ttml
-from .._recursive_import import _recursive_import_from_ttml
+RunnerType = _ttml.models.RunnerType
+WeightTyingType = _ttml.models.WeightTyingType
+memory_efficient_runner = _ttml.models.memory_efficient_runner
 
-if hasattr(_ttml, "models"):
-    _recursive_import_from_ttml(_ttml.models, sys.modules[__name__])
-
-# Import Python implementations
+# Import Python implementations (can now use C++ types)
 from .linear_regression import LinearRegression, create_linear_regression_model
 from .nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 
 __all__ = [
+    # C++ types
+    "RunnerType",
+    "WeightTyingType",
+    "memory_efficient_runner",
+    # Python implementations
     "LinearRegression",
     "create_linear_regression_model",
     "NanoGPT",
