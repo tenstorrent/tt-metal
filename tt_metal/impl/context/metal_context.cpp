@@ -9,6 +9,7 @@
 #include <mutex>
 #include <future>
 #include <set>
+#include <array>
 #include <vector>
 #include <unordered_set>
 
@@ -16,6 +17,7 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "context_id.hpp"
 #include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -353,12 +355,54 @@ void MetalContext::teardown() {
 }
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
-std::atomic<MetalContext*> g_instance{nullptr};
+std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
 std::mutex g_instance_mutex;
 bool registered_atexit = false;
 
-MetalContext& MetalContext::instance() {
-    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+void MetalContext::register_atexit_locked() {
+    if (!registered_atexit) {
+        std::atexit([]() {
+            // Don't check device count because the destruction order is complicated and we can't guarantee that the
+            // client isn't holding onto devices on process exit.
+            MetalContext::destroy_instance(false);
+        });
+        registered_atexit = true;
+    }
+}
+
+ContextId MetalContext::create_instance(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) {
+    std::lock_guard lock(g_instance_mutex);
+    register_atexit_locked();
+    // Silicon context is always at SILICON_CONTEXT_ID
+    if (!descriptor->is_mock_device()) {
+        // Real hardware: only one instance allowed, always at context_id 0
+        if (g_instances[SILICON_CONTEXT_ID].load(std::memory_order_acquire) != nullptr) {
+            TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
+        }
+        MetalContext* instance = new MetalContext(SILICON_CONTEXT_ID, descriptor);
+        g_instances[SILICON_CONTEXT_ID] = instance;
+        return SILICON_CONTEXT_ID;
+    }
+
+    // Find a free slot in g_instances
+    for (ContextId context_id = 1; context_id < MAX_CONTEXT_COUNT; ++context_id) {
+        if (g_instances[context_id] == nullptr) {
+            MetalContext* instance = new MetalContext(context_id, descriptor);
+            g_instances[context_id] = instance;
+            if (!registered_atexit) {
+                std::atexit([]() { MetalContext::destroy_all_instances(false); });
+                registered_atexit = true;
+            }
+            return context_id;
+        }
+    }
+    TT_THROW("Maximum MetalContext count ({}) reached.", MAX_CONTEXT_COUNT);
+}
+
+MetalContext& MetalContext::instance(ContextId context_id) {
+    TT_FATAL(context_id < MAX_CONTEXT_COUNT, "context_id {} is out of range (max {}).", context_id, MAX_CONTEXT_COUNT);
+
+    MetalContext* instance = g_instances[context_id].load(std::memory_order_acquire);
     if (instance) {
         // There is a potential race condition here if the instance is being torn down while this call is running or
         // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
@@ -367,26 +411,33 @@ MetalContext& MetalContext::instance() {
     }
     std::lock_guard lock(g_instance_mutex);
     // Check again in case another thread created the instance while we were waiting for the lock.
-    instance = g_instance.load(std::memory_order_acquire);
+    instance = g_instances[context_id].load(std::memory_order_acquire);
     if (!instance) {
-        instance = new MetalContext();
-        g_instance.store(instance, std::memory_order_release);
-        if (!registered_atexit) {
-            std::atexit([]() {
-                // Don't check device count because the destruction order is complicated and we can't guarantee that the
-                // client isn't holding onto devices on process exit.
-                MetalContext::destroy_instance(false);
-            });
-            registered_atexit = true;
-        }
+        // SILICON_CONTEXT_ID is implictly created to match legacy behaviour
+        TT_FATAL(
+            context_id == SILICON_CONTEXT_ID,
+            "No MetalContext instance for context_id {}. Create one via create_instance().",
+            context_id);
+        instance = new MetalContext(context_id, std::make_shared<MetalliumObjectDescriptor>());
+        g_instances[context_id].store(instance, std::memory_order_release);
+        register_atexit_locked();
     }
     return *instance;
 }
 
-void MetalContext::destroy_instance(bool check_device_count) {
-    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
-    // one thread while no work is being done on the MetalContext.
-    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+void MetalContext::destroy_all_instances(bool check_device_count) {
+    std::lock_guard lock(g_instance_mutex);
+    for (ContextId context_id = 0; context_id < MAX_CONTEXT_COUNT; ++context_id) {
+        if (g_instances[context_id] != nullptr) {
+            destroy_instance(context_id, check_device_count);
+        }
+    }
+}
+
+void MetalContext::destroy_instance(ContextId context_id, bool check_device_count) {
+    TT_FATAL(context_id < MAX_CONTEXT_COUNT, "context_id {} is out of range (max {}).", context_id, MAX_CONTEXT_COUNT);
+    MetalContext* instance = g_instances[context_id].load(std::memory_order_acquire);
+    ;
     if (!instance) {
         return;
     }
@@ -395,9 +446,9 @@ void MetalContext::destroy_instance(bool check_device_count) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
     delete instance;
-    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
-    // return the old instance.
-    g_instance.store(nullptr, std::memory_order_release);
+    // Only store to g_instances[context_id] after the instance is deleted to allow MetalContext::instance() calls
+    // during teardown to return the old instance.
+    g_instances[context_id].store(nullptr, std::memory_order_release);
 }
 
 void MetalContext::teardown_base_objects() {
@@ -428,18 +479,21 @@ void MetalContext::initialize_base_objects() {
 
     // Check if mock mode was configured via API (before env vars take effect)
     // In the future the user would pass it in directly instead of the global state from get_mock_cluster_desc()
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>(*mock_cluster_desc);
-    } else {
-        query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>();
-    }
+    // if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+    //     log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    //     query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>(*mock_cluster_desc);
+    // } else {
+    //     query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>();
+    // }
     query_.initialize(query_descriptor_);
 
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
 }
 
-MetalContext::MetalContext() {
+MetalContext::MetalContext(ContextId context_id, const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) :
+    context_id_(context_id),
+    query_descriptor_(descriptor),
+    device_manager_(std::make_unique<DeviceManager>(context_id)) {
     initialize_base_objects();
 
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
@@ -447,8 +501,6 @@ MetalContext::MetalContext() {
     if (rtoptions().is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions().get_custom_fabric_mesh_graph_desc_path();
     }
-
-    device_manager_ = std::make_unique<DeviceManager>();
 }
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {

@@ -14,6 +14,7 @@
 #include "tt_metal/impl/context/context_descriptor.hpp"
 #include "tt_metal/impl/context/metallium_object.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "impl/context/context_id.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -60,15 +61,21 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance();
 
-    static void destroy_instance(bool check_device_count = true);
+    static ContextId create_instance(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor);
+
+    static MetalContext& instance(ContextId context_id = SILICON_CONTEXT_ID);
+
+    static void destroy_all_instances(bool check_device_count = true);
+
+    static void destroy_instance(ContextId context_id = SILICON_CONTEXT_ID, bool check_device_count = true);
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;
     const llrt::RunTimeOptions& rtoptions() const;
     const Hal& hal() const;
+    ContextId get_context_id() const;
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
@@ -161,8 +168,10 @@ public:
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext();
+    MetalContext(ContextId context_id, const std::shared_ptr<MetalliumObjectDescriptor>& descriptor);
     ~MetalContext();
+
+    static void register_atexit_locked();
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
@@ -191,6 +200,7 @@ private:
 
     bool initialized_ = false;
     bool force_reinit_ = false;
+    ContextId context_id_ = 0;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
