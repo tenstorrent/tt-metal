@@ -94,8 +94,7 @@ public:
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
 
-    virtual bool GetSectionContents(
-        std::string_view name, std::vector<std::byte>& out, uint64_t& virtual_address) const = 0;
+    virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const = 0;
 
 private:
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
@@ -132,18 +131,15 @@ public:
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
 
-    virtual bool GetSectionContents(
-        std::string_view name, std::vector<std::byte>& out, uint64_t& virtual_address) const override {
+    virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const override {
         for (const auto& shdr : GetShdrs()) {
             const char* sec_name = GetName(shdr);
             if (name == sec_name) {
-                auto bytes = GetContents(shdr);
-                out.assign(bytes.begin(), bytes.end());
                 virtual_address = shdr.sh_addr;
-                return true;
+                return GetContents(shdr);
             }
         }
-        return false;
+        return {};
     }
 
 private:
@@ -276,12 +272,11 @@ ElfFile::~ElfFile() {
     }
 }
 
-bool ElfFile::GetSectionContents(
-    const std::string& section_name, std::vector<std::byte>& content_buffer, uint64_t& virtual_address) const {
+std::span<std::byte> ElfFile::GetSectionContents(std::string_view section_name, uint64_t& virtual_address) const {
     if (pimpl_ == nullptr) {
-        return false;
+        return {};
     }
-    return pimpl_->GetSectionContents(section_name, content_buffer, virtual_address);
+    return pimpl_->GetSectionContents(section_name, virtual_address);
 }
 
 void ElfFile::ReleaseImpl() {

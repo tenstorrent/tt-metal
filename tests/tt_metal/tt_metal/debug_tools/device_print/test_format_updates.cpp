@@ -32,13 +32,14 @@ public:
 
         const auto& segments = elf.GetSegments();
         ASSERT_FALSE(segments.empty());
-        std::vector<std::byte> format_strings_info_bytes;
         uint64_t format_strings_info_address = 0;
-        ASSERT_TRUE(elf.GetSectionContents(
-            ".device_print_strings_info", format_strings_info_bytes, format_strings_info_address));
-        std::vector<std::byte> format_strings_bytes;
+        std::span<std::byte> format_strings_info_bytes =
+            elf.GetSectionContents(".device_print_strings_info", format_strings_info_address);
+        ASSERT_FALSE(format_strings_info_bytes.empty());
         uint64_t format_strings_address = 0;
-        ASSERT_TRUE(elf.GetSectionContents(".device_print_strings", format_strings_bytes, format_strings_address));
+        std::span<std::byte> format_strings_bytes =
+            elf.GetSectionContents(".device_print_strings", format_strings_address);
+        ASSERT_FALSE(format_strings_bytes.empty());
 
         // Extract strings from sections
         DevicePrintStringInfo* info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());

@@ -319,9 +319,9 @@ private:
     struct ElfFileCacheEntry {
         uint32_t ref_count;
         ll_api::ElfFile elf_file;
-        std::vector<std::byte> format_strings_info_bytes;
+        std::span<std::byte> format_strings_info_bytes;
         uint64_t format_strings_info_address;
-        std::vector<std::byte> format_strings_bytes;
+        std::span<std::byte> format_strings_bytes;
         uint64_t format_strings_address;
         DevicePrintStringInfo* string_info_ptr = nullptr;
         size_t string_info_size = 0;
@@ -329,13 +329,14 @@ private:
         void load_elf(const std::filesystem::path& elf_path) {
             try {
                 elf_file.ReadImage(elf_path);
-                elf_file.GetSectionContents(
-                    ".device_print_strings_info", format_strings_info_bytes, format_strings_info_address);
-                elf_file.GetSectionContents(".device_print_strings", format_strings_bytes, format_strings_address);
+                format_strings_info_bytes =
+                    elf_file.GetSectionContents(".device_print_strings_info", format_strings_info_address);
+                format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
                 string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
                 string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
             } catch (...) {
                 // Failed to load ELF file
+                log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path.string());
             }
         }
     };
