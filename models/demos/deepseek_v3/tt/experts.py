@@ -108,8 +108,11 @@ class Experts(AbstractModule):
         hidden_size = hf_config.hidden_size
         moe_intermediate_size = hf_config.moe_intermediate_size
 
-        # Calculate input and output memory configurations
-        if mode == "decode":
+        # Calculate input and output memory configurations.
+        # For decode, prefer L1 but fall back to DRAM when too many experts per device
+        # would exceed L1 capacity (e.g. T3K has 32 experts/device vs TG's 8).
+        # Threshold of 16 experts/device is a conservative safe limit for L1.
+        if mode == "decode" and num_experts_per_device <= 16:
             input_memory_config = ttnn.L1_MEMORY_CONFIG
             output_memory_config = ttnn.L1_MEMORY_CONFIG
         else:
