@@ -18,11 +18,17 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
+)
+from models.experimental.tt_symbiote.modules.rope import (
+    TTNNRotaryPositionEmbedding,
+)
+from models.experimental.tt_symbiote.modules.normalization import (
+    TTNNRMSNorm,
+)
 
 import os
-from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
-from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 
 
 class TorchSDPAAttention(torch.nn.Module):
@@ -89,8 +95,11 @@ class TTNNSDPAAttention(TTNNModule):
         assert dropout == 0.0, "TTNNSDPAAttention does not support dropout"
         is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
         is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
-        if attention_mask is not None and attention_mask.layout != ttnn.TILE_LAYOUT:
-            attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if attention_mask is not None:
+            if attention_mask.layout != ttnn.TILE_LAYOUT:
+                attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if attention_mask.dtype != query.dtype:
+                attention_mask = ttnn.typecast(attention_mask, query.dtype)
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
