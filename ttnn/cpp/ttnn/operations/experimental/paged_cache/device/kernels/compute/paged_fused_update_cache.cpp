@@ -7,6 +7,8 @@
 #include "api/compute/common.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -32,45 +34,31 @@ void kernel_main() {
     constexpr uint32_t num_heads = get_compile_time_arg_val(8);
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
-    pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
-    cb_wait_front(in_cb, Wt);
-    cb_reserve_back(untilized_in_cb, Wt);
-    pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
-    cb_push_back(untilized_in_cb, Wt);
-    cb_pop_front(in_cb, Wt);
+    // Untilize input (single block, init only - no uninit needed)
+    if (!is_input1) {
+        compute_kernel_lib::untilize<
+            Wt,
+            in2_cb,
+            untilized_in_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+    } else {
+        compute_kernel_lib::untilize<
+            Wt,
+            in1_cb,
+            untilized_in_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+    }
 
-    reconfig_data_format_srca(in_cb, cache_cb);
-    pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
+        // Untilize a block from the cache with reconfiguration from previous iteration
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
-        // Untilize a block from the cache
-        cb_wait_front(cache_cb, Wt);
-        cb_reserve_back(untilized_cache_cb, Wt);
-
-        pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
-
-        cb_push_back(untilized_cache_cb, Wt);
-        cb_pop_front(cache_cb, Wt);
-
-        pack_untilize_uninit(untilized_cache_cb);
-
-        reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
-        pack_reconfig_data_format(untilized_cache_cb, out_cb);
-
-        tilize_init(untilized_cache2_cb, Wt, out_cb);
-
-        // Wait on writer to update block. Tilize.
-        cb_wait_front(untilized_cache2_cb, Wt);
-
-        cb_reserve_back(out_cb, Wt);
-
-        tilize_block(untilized_cache2_cb, Wt, out_cb);
-
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
-        pack_reconfig_data_format(out_cb, untilized_cache_cb);
+        // Wait on writer to update block. Tilize with reconfiguration
+        compute_kernel_lib::tilize<untilized_cache2_cb, out_cb>(Wt, 1);
     }
 }
