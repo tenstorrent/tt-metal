@@ -480,7 +480,7 @@ jobs:
     name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (inputs.arch == 'blackhole' && fromJSON('["in-service", "arch-blackhole", "pipeline-functional"]'))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
