@@ -429,6 +429,11 @@ def test_typecast_nd_sharded_float(
     input_tensor = ttnn.from_torch(
         torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
+
+    # Build CPU-side reference: run the same input -> tt_input_dtype -> tt_output_dtype
+    cpu_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    cpu_reference = ttnn.to_torch(cpu_tensor)
+
     output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
     assert output_tensor.dtype == tt_output_dtype
 
@@ -436,7 +441,7 @@ def test_typecast_nd_sharded_float(
 
     # Compare in a common dtype so shapes/dtypes align
     common_dtype = torch.float32
-    assert torch.equal(torch_input.to(common_dtype), npu_result.to(common_dtype))
+    assert torch.equal(cpu_reference.to(common_dtype), npu_result.to(common_dtype))
 
 
 # Tests that legacy-sharded inputs violating TypecastShardedProgramFactory preconditions
