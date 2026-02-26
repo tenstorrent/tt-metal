@@ -26,6 +26,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     N,
     scalar=1.0,
     dtype=ttnn.bfloat16,
+    gate_dtype=None,
     use_bias=False,
     M_block_size=8,
     K_block_size=8,
@@ -37,29 +38,35 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 ):
     """
     Test dit_minimal_matmul_addcmul_fused: output = addcmul_input1 + (scalar * matmul_output * addcmul_input2).
+
+    Args:
+        gate_dtype: Optional ttnn dtype for the gate (addcmul_b) tensor.
+                    Defaults to None, which uses the same dtype as the matmul inputs.
     """
+    # Resolve gate dtype: default to the main dtype
+    tt_gate_dtype = gate_dtype if gate_dtype is not None else dtype
+
     torch.manual_seed(0)
 
     # Create torch inputs
-    torch_matmul_input = torch.randn(M, K, dtype=torch.bfloat16)
-    torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
-    torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # base value (full shape)
-    torch_addcmul_b = torch.randn(1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
-    torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
+    torch_matmul_input = torch.randn(M, K, dtype=torch.float32)
+    torch_matmul_weight = torch.randn(K, N, dtype=torch.float32)
+    torch_addcmul_a = torch.randn(M, N, dtype=torch.float32)  # base value (full shape)
+    torch_addcmul_b = torch.randn(1, N, dtype=torch.float32)  # gate (broadcast like bias)
+    torch_bias = torch.randn(1, N, dtype=torch.float32) if use_bias else None
 
-    # Compute expected torch output (full fused operation)
+    # Compute expected torch output (full fused operation) in float32 for accuracy
     with torch.no_grad():
         torch_matmul_output = torch_matmul_input @ torch_matmul_weight
         if torch_bias is not None:
             torch_matmul_output = torch_matmul_output + torch_bias
-        # Full fused result (what we want in the future)
         torch_expected_fused = torch.addcmul(torch_addcmul_a, torch_matmul_output, torch_addcmul_b, value=scalar)
 
     # Convert to ttnn tensors
     tt_matmul_input = ttnn.from_torch(torch_matmul_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_matmul_weight = ttnn.from_torch(torch_matmul_weight, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_addcmul_a = ttnn.from_torch(torch_addcmul_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=tt_gate_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bias = None
     if torch_bias is not None:
         tt_bias = ttnn.from_torch(torch_bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -160,6 +167,30 @@ def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
         scalar=scalar_value,
         dtype=ttnn.bfloat16,
         use_bias=False,
+    )
+    assert check_result["pcc"] > 0.9995
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "no_bias"])
+def test_dit_minimal_matmul_addcmul_fused_fp32_gate(device, use_bias):
+    """Test with fp32 gate (addcmul_b) and bfloat16 residual (addcmul_a).
+
+    Regression test for tile size mismatch in read_ternary_blocks_sync:
+    the dataflow kernel uses a single tile_size_bytes for both ternary_a and
+    ternary_b write-pointer advancement.  When ternary_b is fp32 (tile size
+    ~2048 B) but the passed tile_size_bytes comes from ternary_a (bfloat16,
+    ~1088 B), consecutive fp32 gate tiles overlap in the CB, corrupting data.
+    """
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
+        device=device,
+        M=256,
+        K=512,
+        N=1024,
+        scalar=1.0,
+        dtype=ttnn.bfloat16,
+        gate_dtype=ttnn.float32,
+        use_bias=use_bias,
     )
     assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02
