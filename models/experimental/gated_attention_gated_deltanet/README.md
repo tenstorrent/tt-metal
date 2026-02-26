@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Gated Attention & Gated DeltaNet — TTNN Implementation
 
 This module contains pure-functional PyTorch reference implementations and their TTNN (Tenstorrent) counterparts for two attention mechanisms used in the **Qwen3-Next** architecture:
