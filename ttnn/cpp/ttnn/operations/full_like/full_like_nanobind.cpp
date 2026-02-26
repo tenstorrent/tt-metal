@@ -12,7 +12,7 @@
 
 #include "full_like.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
+#include "ttnn/operations/full_like/full_like.hpp"
 
 namespace ttnn::operations::full_like {
 
