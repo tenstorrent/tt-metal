@@ -10,6 +10,7 @@ CBs from different phases with matching configurations (data_format, page_size,
 unpack_to_dest_mode) share hardware slots; mismatches get separate slots.
 """
 
+import itertools
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -34,7 +35,7 @@ class CBInfo:
 
     original_index: int
     total_size: int
-    data_format: Any  # tt::DataFormat
+    data_format: Any  # int (raw tt::DataFormat uint8) or mock value in tests
     page_size: int
     core_ranges: Any  # CoreRangeSet
     has_buffer: bool = False  # True if backed by an L1 Buffer allocation
@@ -44,6 +45,16 @@ class CBInfo:
     address_offset: int = 0  # From CBDescriptor.address_offset
     source_fmt: Any = None  # Reference to original CBFormatDescriptor
     source_cb: Any = None  # Reference to original CBDescriptor
+
+    @property
+    def pool_key(self) -> "CBPoolKey":
+        """Compatibility key for CB pool allocation."""
+        return CBPoolKey(
+            data_format=self.data_format,
+            page_size=self.page_size,
+            has_buffer=self.has_buffer,
+            unpack_to_dest_mode=self.unpack_to_dest_mode,
+        )
 
 
 @dataclass
@@ -104,6 +115,7 @@ class CBPoolAllocator:
         # either reuse an existing complete alias group or get fresh slots —
         # reusing non-aliased slots would corrupt phases that use them independently.
         self._slot_alias_groups: Dict[int, frozenset] = {}  # slot_index -> group members
+        self._unique_alias_groups: Set[frozenset] = set()  # deduped set of alias groups
 
     def reserve_index(self, index: int) -> None:
         """Reserve a slot index without creating a pool slot or remap entry.
@@ -196,19 +208,14 @@ class CBPoolAllocator:
                 # Allocate fresh slots for all members
                 for orig_idx in members_sorted:
                     info = cb_info[orig_idx]
-                    key = CBPoolKey(
-                        data_format=info.data_format,
-                        page_size=info.page_size,
-                        has_buffer=info.has_buffer,
-                        unpack_to_dest_mode=info.unpack_to_dest_mode,
-                    )
-                    slot_idx = self._allocate_new_slot(key, info, orig_idx, phase_idx)
+                    slot_idx = self._allocate_new_slot(info.pool_key, info, orig_idx, phase_idx)
                     slots_used_this_phase.add(slot_idx)
                     remap[orig_idx] = slot_idx
                 # Record the new alias group
                 new_group = frozenset(remap[m] for m in members_sorted)
                 for slot_idx in new_group:
                     self._slot_alias_groups[slot_idx] = new_group
+                self._unique_alias_groups.add(new_group)
 
         self.phase_remaps.append(remap)
 
@@ -227,13 +234,9 @@ class CBPoolAllocator:
         - Each member slot is compatible (same CBPoolKey) with a current CB
         - No member slot is already used this phase
         """
-        # Collect existing alias groups
-        seen_groups: Set[frozenset] = set()
-        for group in self._slot_alias_groups.values():
-            if group not in seen_groups and len(group) == len(members):
-                seen_groups.add(group)
-
-        for group in seen_groups:
+        for group in self._unique_alias_groups:
+            if len(group) != len(members):
+                continue
             # Check no slot in this group is used this phase
             if group & slots_used_this_phase:
                 continue
@@ -256,28 +259,26 @@ class CBPoolAllocator:
     ) -> Optional[List[Tuple[int, int]]]:
         """Match aliased CB members to existing group slots by compatible CBPoolKey.
 
+        Tries all permutations of group_slots so that aliased CBs whose keys
+        appear in a different order than the existing group still match
+        (N=2 → 2 perms, N=3 → 6 perms, trivial cost).
+
         Returns list of (orig_idx, slot_idx) pairs or None if no valid matching.
         """
-        # Build keys for current members
-        member_keys = []
-        for orig_idx in members:
-            info = cb_info[orig_idx]
-            key = CBPoolKey(
-                data_format=info.data_format,
-                page_size=info.page_size,
-                has_buffer=info.has_buffer,
-                unpack_to_dest_mode=info.unpack_to_dest_mode,
-            )
-            member_keys.append((orig_idx, key))
+        member_keys = [(orig_idx, cb_info[orig_idx].pool_key) for orig_idx in members]
 
-        # Try simple order-preserving match (members and group_slots both sorted)
-        result = []
-        for (orig_idx, key), slot_idx in zip(member_keys, group_slots):
-            slot = self._slots.get(slot_idx)
-            if slot is None or slot.config != key:
-                return None
-            result.append((orig_idx, slot_idx))
-        return result
+        for perm in itertools.permutations(group_slots):
+            result = []
+            valid = True
+            for (orig_idx, key), slot_idx in zip(member_keys, perm):
+                slot = self._slots.get(slot_idx)
+                if slot is None or slot.config != key:
+                    valid = False
+                    break
+                result.append((orig_idx, slot_idx))
+            if valid:
+                return result
+        return None
 
     def _partition_by_identity(
         self, cb_info: Dict[int, CBInfo]
@@ -286,12 +287,7 @@ class CBPoolAllocator:
         identity_cbs = []
         remaining_cbs = []
         for orig_idx, info in sorted(cb_info.items()):
-            key = CBPoolKey(
-                data_format=info.data_format,
-                page_size=info.page_size,
-                has_buffer=info.has_buffer,
-                unpack_to_dest_mode=info.unpack_to_dest_mode,
-            )
+            key = info.pool_key
             has_identity = False
             if key in self._config_to_slots:
                 for candidate_idx in self._config_to_slots[key]:
@@ -420,6 +416,18 @@ class CBPoolAllocator:
         (e.g. matmul's c_4/c_5 aliased CBDescriptor).  Constructs NEW
         CBDescriptor objects per alias group — never emits originals — so that
         multi-phase slot sharing cannot produce duplicate buffer_index conflicts.
+
+        MUTATION CONTRACT:
+        This method mutates ``source_fmt.buffer_index`` on the original
+        CBFormatDescriptor objects (line: ``slot.source_fmt.buffer_index =
+        slot_idx``).  Callers MUST bracket the build with save/restore:
+
+            graph.py _build_groups() → _save_cb_state()
+                → ... → build_merged_cb_descriptors()
+                → ... → _restore_cb_state()
+
+        The C++ CBFormatDescriptor bindings do not support deepcopy, so
+        in-place mutation + restore is the only viable pattern.
         """
         slot_alias = self._compute_slot_alias_groups(phases)
 
@@ -441,12 +449,17 @@ class CBPoolAllocator:
                 slot = self._slots[slot_idx]
                 max_total = max(max_total, slot.total_size)
                 if slot.source_fmt is not None:
-                    # Mutate source_fmt buffer_index (save/restore handles revert)
+                    # MUTATION: overwrites original buffer_index; caller's
+                    # _save_cb_state/_restore_cb_state bracket reverts this.
                     slot.source_fmt.buffer_index = slot_idx
                     fmts.append(slot.source_fmt)
 
             if not fmts:
-                continue  # Skip slots with no format descriptors (test mocks)
+                raise ValueError(
+                    f"Alias group {group_id} has slots {slot_indices} but no "
+                    f"format descriptors — every allocated CBSlot must have a "
+                    f"source_fmt (set by _allocate_new_slot from extract_cb_info)"
+                )
 
             # Find buffer from the EARLIEST phase that has a buffer-backed CB
             # mapping to any slot in this group.  This matches the rebind logic
@@ -526,10 +539,7 @@ def extract_cb_info(
     for cb_group_id, cb_desc in enumerate(descriptor.cbs):
         for fmt_desc in cb_desc.format_descriptors:
             cb_idx = fmt_desc.buffer_index
-            try:
-                data_format = fmt_desc.data_format
-            except (TypeError, AttributeError):
-                data_format = None
+            data_format = fmt_desc.data_format_as_uint8  # int (raw tt::DataFormat uint8)
             # Look up unpack_to_dest_mode for this CB
             utd_mode = None
             if unpack_to_dest_modes is not None:
@@ -677,6 +687,18 @@ def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
 
     These "phantom" CBs need identity-mapped reservations in the pool to prevent
     real CBs from being allocated at conflicting indices.
+
+    CONTRACT:
+    - Phantom CBs are identity-mapped (orig_idx == slot_idx) in the remap.
+    - They are NOT added to slots_used_this_phase, so real CBs CAN share
+      their slot index in a later phase (the phantom's code path is dead
+      at runtime — e.g., cb_bias when bias is absent).
+    - They are NOT in self._slots, so they are excluded from:
+      - per-phase CB reset arrays (emitted by _emit_phase_cb_arrays)
+      - build_merged_cb_descriptors (no CBSlot → no merged CB)
+      - build_unpack_to_dest_mode (no CBSlot → Default mode)
+    - Safe because the kernel code path referencing the phantom CB index
+      is unreachable at runtime (guarded by a compile-time or runtime flag).
     """
     real_cb_indices = set(phase.cb_info.keys())
 
@@ -685,6 +707,13 @@ def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
         for name, value in kernel_desc.named_compile_time_args:
             if _is_cb_named_arg(name, value) and value not in real_cb_indices:
                 phantom.add(value)
+
+    if phantom:
+        logger.debug(
+            "Phase %d: phantom CB indices %s (referenced in named args but no CBDescriptor)",
+            phase.phase_idx,
+            sorted(phantom),
+        )
 
     return phantom
 
