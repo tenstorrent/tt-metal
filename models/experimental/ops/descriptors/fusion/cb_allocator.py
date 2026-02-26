@@ -10,6 +10,7 @@ CBs from different phases with matching configurations (data_format, page_size,
 unpack_to_dest_mode) share hardware slots; mismatches get separate slots.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
@@ -38,6 +39,11 @@ class CBInfo:
     core_ranges: Any  # CoreRangeSet
     has_buffer: bool = False  # True if backed by an L1 Buffer allocation
     unpack_to_dest_mode: Any = None  # UnpackToDestMode enum (Default or UnpackToDestFp32)
+    tile: Any = None  # Optional TileDescriptor from CBFormatDescriptor
+    alias_group: int = -1  # Sequential ID per CBDescriptor in cbs list
+    address_offset: int = 0  # From CBDescriptor.address_offset
+    source_fmt: Any = None  # Reference to original CBFormatDescriptor
+    source_cb: Any = None  # Reference to original CBDescriptor
 
 
 @dataclass
@@ -65,9 +71,9 @@ class CBSlot:
 
     slot_index: int
     config: CBPoolKey
-    cb_descriptor: Any  # Best CBDescriptor (largest total_size, phase 0 buffer preferred)
     total_size: int  # Max total_size across all phases sharing this slot
-    source_phase: int  # Phase that provided the current cb_descriptor
+    source_cb: Any = None  # Reference to the original CBDescriptor (set on first alloc, not updated on reuse)
+    source_fmt: Any = None  # Reference to the original CBFormatDescriptor
 
 
 class CBPoolAllocator:
@@ -198,13 +204,13 @@ class CBPoolAllocator:
         return None
 
     def _reuse_slot(self, slot_idx: int, info: CBInfo, phase_idx: int) -> None:
-        """Reuse an existing slot, updating total_size if needed."""
+        """Reuse an existing slot, updating total_size if needed.
+
+        source_cb/source_fmt are NOT updated — the first allocating phase's
+        references are kept stable for build_merged_cb_descriptors.
+        """
         slot = self._slots[slot_idx]
-        if info.total_size > slot.total_size:
-            slot.total_size = info.total_size
-            if slot.source_phase != 0:
-                slot.cb_descriptor = self._get_cb_descriptor(info, phase_idx)
-                slot.source_phase = phase_idx
+        slot.total_size = max(slot.total_size, info.total_size)
 
     def _allocate_new_slot(self, key: CBPoolKey, info: CBInfo, orig_idx: int, phase_idx: int) -> int:
         """Allocate a fresh slot, raising ValueError on overflow.
@@ -232,9 +238,9 @@ class CBPoolAllocator:
         self._slots[slot_idx] = CBSlot(
             slot_index=slot_idx,
             config=key,
-            cb_descriptor=self._get_cb_descriptor(info, phase_idx),
             total_size=info.total_size,
-            source_phase=phase_idx,
+            source_cb=info.source_cb,
+            source_fmt=info.source_fmt,
         )
         self._slot_to_orig_index[slot_idx] = orig_idx
         if key not in self._config_to_slots:
@@ -242,14 +248,48 @@ class CBPoolAllocator:
         self._config_to_slots[key].append(slot_idx)
         return slot_idx
 
-    @staticmethod
-    def _get_cb_descriptor(info: CBInfo, phase_idx: int) -> Dict[str, int]:
-        """Create a lookup key for finding the CBDescriptor later."""
-        return {"phase_idx": phase_idx, "cb_idx": info.original_index}
-
     def get_remap(self, phase_idx: int) -> Dict[int, int]:
         """Return {orig_cb_idx: slot_idx} for a phase."""
         return self.phase_remaps[phase_idx]
+
+    def _compute_slot_alias_groups(
+        self,
+        phases: List["PhaseInfo"],
+    ) -> Dict[int, int]:
+        """Compute which pool slots should share an L1 allocation.
+
+        Returns Dict[slot_index, alias_group_id].  Slots with the same
+        group_id came from the same multi-format CBDescriptor in at least
+        one phase and will be emitted as a single merged CBDescriptor.
+        """
+        slot_groups: Dict[int, int] = {}
+        next_group = 0
+
+        for phase_idx, phase in enumerate(phases):
+            remap = self.phase_remaps[phase_idx]
+            by_alias: Dict[int, List[int]] = defaultdict(list)
+            for orig_idx, info in phase.cb_info.items():
+                if orig_idx in remap:
+                    by_alias[info.alias_group].append(remap[orig_idx])
+
+            for alias_id, slot_indices in by_alias.items():
+                if len(slot_indices) <= 1:
+                    continue
+                existing = {slot_groups[s] for s in slot_indices if s in slot_groups}
+                if existing:
+                    group_id = min(existing)
+                else:
+                    group_id = next_group
+                    next_group += 1
+                for s in slot_indices:
+                    slot_groups[s] = group_id
+
+        for slot_idx in self._slots:
+            if slot_idx not in slot_groups:
+                slot_groups[slot_idx] = next_group
+                next_group += 1
+
+        return slot_groups
 
     def build_merged_cb_descriptors(
         self,
@@ -257,37 +297,21 @@ class CBPoolAllocator:
     ) -> list:
         """Build merged CB descriptors from the pool.
 
-        Returns one CBDescriptor per allocated slot, sorted by slot index.
-        Uses the largest total_size and prefers phase 0's buffer-backed descriptor.
+        Uses stored source_cb/source_fmt references (set during slot allocation)
+        to return original CBDescriptor objects.  id()-based dedup ensures
+        multi-format CBDescriptors (aliased slots) appear only once.
 
-        Two-phase approach: first collect all (slot, descriptor, format_descriptor)
-        tuples while buffer_indices are still at their original values, then apply
-        all in-place modifications.
+        Two-phase approach: first collect all (slot, source_cb, source_fmt)
+        tuples, then apply buffer_index mutations and dedup.
         """
-        # Phase 1: Collect all results while buffer_indices are unmodified
+        # Collect results from stored references
         results = []
         for slot_idx in sorted(self._slots.keys()):
             slot = self._slots[slot_idx]
-            ref = slot.cb_descriptor
-            phase = phases[ref["phase_idx"]]
-            orig_idx = ref["cb_idx"]
+            if slot.source_cb is not None and slot.source_fmt is not None:
+                results.append((slot_idx, slot.total_size, slot.source_cb, slot.source_fmt))
 
-            # Find the actual CBDescriptor from the phase's ProgramDescriptor
-            best_desc = None
-            best_fmt = None
-            for cb_desc in phase.op_descriptor.descriptor.cbs:
-                for fmt_desc in cb_desc.format_descriptors:
-                    if fmt_desc.buffer_index == orig_idx:
-                        best_desc = cb_desc
-                        best_fmt = fmt_desc
-                        break
-                if best_desc is not None:
-                    break
-
-            if best_desc is not None:
-                results.append((slot_idx, slot.total_size, best_desc, best_fmt))
-
-        # Phase 2: Apply all in-place modifications.
+        # Apply buffer_index mutations and compute max total_size per CBDescriptor
         merged = []
         seen_ids: Set[int] = set()
         max_size_by_id: Dict[int, int] = {}
@@ -304,8 +328,6 @@ class CBPoolAllocator:
                 merged.append(cb_desc)
 
         # Pass through GlobalCB-backed CBDescriptors not already in merged set.
-        # CBDescriptors with only remote_format_descriptors (no local) are missed
-        # by the pool-based lookup above, so we append them here unchanged.
         for phase in phases:
             for cb_desc in phase.op_descriptor.descriptor.cbs:
                 if cb_desc.has_global_circular_buffer():
@@ -353,7 +375,7 @@ def extract_cb_info(
     Returns a dict mapping CB index -> CBInfo.
     """
     cb_info = {}
-    for cb_desc in descriptor.cbs:
+    for cb_group_id, cb_desc in enumerate(descriptor.cbs):
         for fmt_desc in cb_desc.format_descriptors:
             cb_idx = fmt_desc.buffer_index
             try:
@@ -370,6 +392,12 @@ def extract_cb_info(
                     pass
             if utd_mode is None:
                 utd_mode = UnpackToDestMode.Default
+            # Extract optional tile descriptor
+            tile = None
+            try:
+                tile = fmt_desc.tile
+            except (TypeError, AttributeError):
+                pass
             cb_info[cb_idx] = CBInfo(
                 original_index=cb_idx,
                 total_size=cb_desc.total_size,
@@ -378,6 +406,11 @@ def extract_cb_info(
                 core_ranges=cb_desc.core_ranges,
                 has_buffer=cb_desc.has_buffer(),
                 unpack_to_dest_mode=utd_mode,
+                tile=tile,
+                alias_group=cb_group_id,
+                address_offset=cb_desc.address_offset,
+                source_fmt=fmt_desc,
+                source_cb=cb_desc,
             )
     return cb_info
 
