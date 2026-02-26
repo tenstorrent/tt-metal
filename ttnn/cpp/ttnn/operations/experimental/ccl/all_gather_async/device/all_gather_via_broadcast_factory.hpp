@@ -11,14 +11,6 @@
 namespace ttnn::experimental::prim {
 
 struct AllGatherViaBroadcastFactoryProgramArtifacts {
-    // tt::tt_metal::KernelHandle reader_kernel_id{};
-    // tt::tt_metal::KernelHandle writer_kernel_id{};
-    // std::vector<tt::tt_metal::CoreCoord> all_cores;
-    // uint32_t num_directions_per_link = 0;
-    // uint32_t num_workers_per_direction = 0;
-    // uint32_t num_mux_cores_per_direction_per_link = 0;
-    // uint32_t num_cores_per_link = 0;
-
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
@@ -46,12 +38,6 @@ struct AllGatherViaBroadcastFactory {
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    // static cached_program_t create_at(
-    //     const AllGatherAsyncParams& operation_attributes,
-    //     const ttnn::MeshCoordinate& mesh_coordinate,
-    //     const AllGatherAsyncInputs& tensor_args,
-    //     Tensor& output_tensor);
 
     static cached_program_t create_at(
         const AllGatherAsyncParams& operation_attributes,
