@@ -550,8 +550,11 @@ PhysicalGroupingDescriptor pgd("path/to/physical_groupings.textproto");
 // Load MGD
 MeshGraphDescriptor mgd("path/to/mesh_graph_descriptor.textproto");
 
+// Load PSD (required for validation/filtering)
+tt::tt_metal::PhysicalSystemDescriptor psd("path/to/physical_system_descriptor.textproto");
+
 // Get valid groupings for MGD instances (returns nested map: type -> name -> vector of GroupingInfo)
-auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
 // Access matched groupings organized by instance type and name
 // There can be multiple valid groupings for each MGD instance

@@ -564,12 +564,6 @@ void process_higher_layer_and_recurse(
 namespace tt::tt_fabric {
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
-    const MeshGraphDescriptor& mesh_graph_descriptor) const {
-    return get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, static_cast<const tt::tt_metal::PhysicalSystemDescriptor*>(nullptr));
-}
-
-ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor);
