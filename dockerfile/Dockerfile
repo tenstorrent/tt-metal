@@ -265,7 +265,6 @@ RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-ENV UV_PYTHON="$PYTHON_ENV_DIR/bin/python"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
@@ -313,17 +312,12 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
-# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
-COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
-RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
-
-# Remove uv and relocatable markers from pyvenv.cfg to prevent externally-managed detection
-RUN sed -i '/^uv = /d; /^relocatable = /d' "$PYTHON_ENV_DIR/pyvenv.cfg"
+# Upgrade uv to latest version (to match release image)
+RUN umask 000 && uv pip install --python "$PYTHON_ENV_DIR/bin/python" --upgrade uv
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-ENV UV_PYTHON="$PYTHON_ENV_DIR/bin/python"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
