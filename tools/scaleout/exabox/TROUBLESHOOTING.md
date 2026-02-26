@@ -247,7 +247,10 @@ while attempting to start process rank 0.
 
 **Cause**: Node may have rebooted or had a transient issue.
 
-**Solution**: Run `sudo tt_reidle_downed_node.sh` on the login node to bring them back to idle.
+**Solution**: Run the following on the login node to bring them back to idle:
+```bash
+sudo /usr/local/bin/tt_reidle_downed_node.sh <hostname>
+```
 
 **Diagnosis**: Check `uptime` on the affected node. If uptime is low, the machine rebooted unexpectedly - may need further investigation.
 
@@ -302,7 +305,10 @@ If this issue persists, report to infra team to fix group synchronization.
 
 **Resolution steps**:
 1. Try a soft reboot first (faster than power cycle)
-2. If reboot doesn't help, try a full power cycle
+2. If reboot doesn't help, try a full power cycle:
+   ```bash
+   sudo ipmitool chassis power cycle
+   ```
 3. If still failing after power cycle, it's likely a hardware issue (often GDDR related)
 
 **Diagnosis**: If issue persists, have syseng check for GDDR BIST failures. Common signature: UBBx ASICy GDDRz failing BIST, related to CA.
@@ -403,6 +409,9 @@ pcieport 0000:c0:01.4: AER: aer_layer=Transaction Layer, aer_agent=Receiver ID
 **Cause**: Unknown - possibly something in SW or the handoff process during cluster bringup. Lower priority for debugging since power cycle resolves it.
 
 **Solution**: Power cycle the affected hosts via BMC. This clears the stall and allows cluster validation to proceed.
+```bash
+sudo ipmitool chassis power cycle
+```
 
 **Concern**: If this happens repeatedly on the same system after handoff to SW, it needs more investigation.
 
@@ -418,7 +427,11 @@ pcieport 0000:c0:01.4: AER: aer_layer=Transaction Layer, aer_agent=Receiver ID
 
 **Cause**: GDDR training failure on that specific chip.
 
-**Solution**: Try virtual AC power cycle first to see if it's recoverable. If GDDR issue persists after power cycle, it's a hardware problem that may require chip/board replacement.
+**Solution**: Try virtual AC power cycle first to see if it's recoverable:
+```bash
+sudo ipmitool chassis power cycle
+```
+If GDDR issue persists after power cycle, it's a hardware problem that may require chip/board replacement.
 
 ---
 
@@ -432,7 +445,10 @@ Example: bh-glx-c01u08 showing only 31 chips, missing tray_id=2, asic_location=7
 
 **Cause**: ASIC failed to initialize after software reboot. Software reboot (`tt-smi reset` or OS reboot) is not sufficient to recover the chip.
 
-**Solution**: Full power cycle via BMC (not just software reboot). Contact someone with BMC access to power cycle the machine.
+**Solution**: Full power cycle via BMC (not just software reboot). Contact someone with BMC access to power cycle the machine:
+```bash
+sudo ipmitool chassis power cycle
+```
 
 After power cycle, verify all 32 chips come up:
 ```bash
@@ -560,7 +576,10 @@ Physical Discovery found 12 missing port/cable connections:
 1. Identify the affected hosts and trays from the error output
 2. Have someone physically reseat the QSFP cables at the reported ports
 3. Re-run validation
-4. If still missing, power cycle both affected machines
+4. If still missing, power cycle both affected machines:
+   ```bash
+   sudo ipmitool chassis power cycle
+   ```
 5. If still missing after power cycle, swap the cable
 6. If issue persists after cable swap, escalate to syseng for hardware investigation
 
@@ -581,6 +600,9 @@ Example: Missing connections between c01u02 and c01u08 - physical cables checked
 2. If physical looks fine, it's likely a transient issue
 
 **Solution**: Power cycle both affected machines via BMC. This resolved ethernet connectivity issues on the 8x16 cluster.
+```bash
+sudo ipmitool chassis power cycle
+```
 
 ---
 
@@ -785,6 +807,9 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
 **Cause**: Unknown - possibly firmware/driver interaction issue. The firmware team noted this is strange because they don't have anything that runs on the Tensixes. Each host was broken in the same way.
 
 **Solution**: Power cycle resolved the issue, though root cause remains unknown. This is concerning but not an immediate blocker.
+```bash
+sudo ipmitool chassis power cycle
+```
 
 **Debugging approach**: Start with debug on the SW side - do basic reads and writes over PCIe to ensure data lands in L1 as expected. Loop in syseng as needed depending on what you see.
 
@@ -801,6 +826,9 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
 **Cause**: Under investigation.
 
 **Workaround**: Power cycle and retry. Issue is intermittent.
+```bash
+sudo ipmitool chassis power cycle
+```
 
 ---
 
