@@ -178,6 +178,8 @@ ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelT
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
