@@ -550,7 +550,7 @@ ttnn_tensor = ttnn.from_torch(
 )
 
 # Verify it's sharded
-ttnn.visualize_tensor(ttnn_tensor
+ttnn.visualize_tensor(ttnn_tensor)
 
 # Invoke ttnn.gelu on each of the devices in the mesh
 output_tensor = ttnn.gelu(ttnn_tensor)
