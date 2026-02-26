@@ -14,10 +14,29 @@ Run with the evals venv Python, e.g.:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 from collections import defaultdict
 
 from lm_eval.tasks import TaskManager
+
+TASK_ALIASES = {
+    # Historical/tti-eval naming aliases.
+    "r1_aime24": "aime24",
+}
+
+
+def resolve_task_name(task_name: str, manager: TaskManager) -> str | None:
+    if task_name in manager.task_index:
+        return task_name
+    alias = TASK_ALIASES.get(task_name)
+    if alias and alias in manager.task_index:
+        return alias
+    if task_name.startswith("r1_"):
+        stripped = task_name[len("r1_") :]
+        if stripped in manager.task_index:
+            return stripped
+    return None
 
 
 def main() -> None:
@@ -40,7 +59,8 @@ def main() -> None:
         raise SystemExit(f"Prompt count ({len(prompts)}) != generations count ({len(gens)})")
 
     manager = TaskManager()
-    tasks = {}
+    tasks: dict[str, object] = {}
+    alias_notes: dict[str, str] = {}
 
     # metrics[task][metric] -> list of values
     metrics = defaultdict(lambda: defaultdict(list))
@@ -49,10 +69,17 @@ def main() -> None:
         task_name = prompt_item.get("task")
         if not task_name:
             raise SystemExit(f"Prompt item {i} missing 'task' field")
-        if task_name not in tasks:
-            tasks[task_name] = manager.load_task_or_group(task_name)[task_name]
+        resolved = resolve_task_name(task_name, manager)
+        if resolved is None:
+            suggestions = difflib.get_close_matches(task_name, manager.task_index.keys(), n=5)
+            hint = f" Closest: {', '.join(suggestions)}" if suggestions else ""
+            raise SystemExit(f"Unknown lm-eval task '{task_name}'.{hint}")
+        if resolved != task_name:
+            alias_notes[task_name] = resolved
+        if resolved not in tasks:
+            tasks[resolved] = manager.load_task_or_group(resolved)[resolved]
 
-        task = tasks[task_name]
+        task = tasks[resolved]
         doc = prompt_item.get("doc")
         if doc is None:
             raise SystemExit(f"Prompt item {i} missing 'doc' field")
@@ -64,7 +91,10 @@ def main() -> None:
 
     # Print summary
     for task_name, task_metrics in metrics.items():
-        print(f"\nTask: {task_name}")
+        display = task_name
+        if task_name in alias_notes:
+            display = f"{task_name} (alias of {alias_notes[task_name]})"
+        print(f"\nTask: {display}")
         for metric_name, values in task_metrics.items():
             mean = sum(values) / len(values) if values else 0.0
             print(f"  {metric_name}: {mean:.4f} ({len(values)} samples)")
