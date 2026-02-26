@@ -11,8 +11,11 @@
 
 #include <llrt/rtoptions.hpp>
 
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/impl/device/firmware/firmware_initializer.hpp"
+
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
