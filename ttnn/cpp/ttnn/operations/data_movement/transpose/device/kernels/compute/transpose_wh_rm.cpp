@@ -32,7 +32,13 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         cb_push_back(cb_untilize, Ht);
 
         // untilize
-        compute_kernel_lib::untilize<Ht, cb_untilize, cb_out>(1);
+        compute_kernel_lib::untilize<
+            Ht,
+            cb_untilize,
+            cb_out,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     }
 }
 
@@ -147,7 +153,12 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input with activation pattern (Ht rows × Wt tiles)
-        compute_kernel_lib::tilize<cb_in, cb_tilize>(Wt, Ht);
+        compute_kernel_lib::tilize<
+            cb_in,
+            cb_tilize,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Wt, Ht);
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);

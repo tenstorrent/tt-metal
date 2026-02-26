@@ -36,20 +36,9 @@ void kernel_main() {
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration
-        compute_kernel_lib::untilize<
-            Wt,
-            cache_cb,
-            untilized_cache_cb,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<
-            untilized_cache2_cb,
-            out_cb,
-            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
+        compute_kernel_lib::tilize<untilized_cache2_cb, out_cb>(Wt, 1);
     }
 }
