@@ -294,20 +294,34 @@ class MoEGate(AbstractModule):
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
-        batch_size = logits.shape[2]
-        logits = ttnn.reshape(logits, (batch_size, 16, 16))
+        mesh_device = cfg["mesh_device"]
+        temp_a = ttnn.to_torch(
+            logits,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
+        )
+        num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
+        assert num_experts == 256, "num_experts should be 256"
+        batch_size_per_device = logits.shape[2]
+
+        batch_size = batch_size_per_device * mesh_device.shape[0]
+        reshaped_input_shape = (batch_size_per_device, 16, 16)
+        output_shape = (batch_size_per_device, 1, 16)
+
+        logits = ttnn.reshape(logits, reshaped_input_shape)
+
         grid = cfg["mesh_device"].compute_with_storage_grid_size()
         input_shard_shape = (16, 16)
         logits_shard_shape = (32, 32)
         output_shard_shape = (1, 16)
         input_tile = ttnn.Tile(input_shard_shape)
+        logits_tile = ttnn.Tile(logits_shard_shape)
         output_tile = ttnn.Tile(output_shard_shape)
         core_grid = ttnn.num_cores_to_corerangeset(
-            batch_size,
+            batch_size_per_device,
             ttnn.CoreCoord(grid.x, grid.y),
             row_wise=True,
         )
-        # Shard spec: single core
+
         input_shard_spec = ttnn.ShardSpec(
             core_grid,
             input_shard_shape,
@@ -317,6 +331,7 @@ class MoEGate(AbstractModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
 
+        # currently we cannot convert the tile size of logits to 16*16, but the memory layout is the same since the length is 256
         logits_shard_spec = ttnn.ShardSpec(
             core_grid,
             logits_shard_shape,
@@ -336,23 +351,25 @@ class MoEGate(AbstractModule):
         )
 
         # change the memory config of the logits
-        # logits = ttnn.to_layout(logits, layout=ttnn.TILE_LAYOUT, memory_config=input_mem_config)
         logits = ttnn.to_memory_config(logits, memory_config=logits_mem_config)
 
         # create the bias
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size, 1)))
-        scores_correction_bias = ttnn.reshape(scores_correction_bias, (batch_size, 16, 16))
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
+        scores_correction_bias = ttnn.reshape(scores_correction_bias, (batch_size_per_device, 16, 16))
         scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_mem_config)
 
         # create the output buffer
-        output_tensor = ttnn.zeros(
-            (batch_size, 1, 16),
+        torch_output = torch.zeros((batch_size, 1, 16), dtype=torch.bfloat16)
+        output_tensor = ttnn.from_torch(
+            torch_output,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
             memory_config=output_mem_config,
+            tile=output_tile,
         )
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=output_mem_config)
 
         torch_input_indices = torch.arange(16 * 16, dtype=torch.int32)
         torch_input_indices = torch_input_indices.unsqueeze(0).expand(batch_size, -1)
@@ -362,24 +379,27 @@ class MoEGate(AbstractModule):
             torch_input_indices,
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
             memory_config=input_mem_config,
             tile=input_tile,
         )
 
-        ttnn_output_indices = ttnn.zeros(
-            (batch_size, 1, 16),
+        torch_output_indices = torch.zeros((batch_size, 1, 16), dtype=torch.uint16)
+        ttnn_output_indices = ttnn.from_torch(
+            torch_output_indices,
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
             memory_config=output_mem_config,
+            tile=output_tile,
         )
 
         eps = 1e-20
         scaling_factor = 2.5
         enable_sigmoid = True
 
-        import pdb
-
-        pdb.set_trace()
         topk_experts_scores_normalized, topk_experts_indices = DeepseekMoeGateSingleCore.op(
             logits,
             scores_correction_bias,
@@ -390,6 +410,14 @@ class MoEGate(AbstractModule):
             scaling_factor,
             enable_sigmoid,
         )
+
+        temp_b = ttnn.to_torch(
+            logits,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
+        )
+
+        bias_tensor = torch.zeros((1, 16, 16), dtype=torch.bfloat16)
+        input_tensor = temp_b[0, :16, :].unsqueeze(0)
 
         return topk_experts_scores_normalized, topk_experts_indices
 

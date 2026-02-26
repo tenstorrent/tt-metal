@@ -154,9 +154,6 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(device)
 
-    import pdb
-
-    pdb.set_trace()
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(10):
         ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
