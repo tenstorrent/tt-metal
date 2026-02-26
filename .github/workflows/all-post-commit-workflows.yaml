@@ -172,6 +172,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      contents: read
+      actions: read
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -181,6 +183,7 @@ jobs:
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
+      use-artifacts-from-run: 22425884273
 
   tests-to-run:
     runs-on: ubuntu-latest
