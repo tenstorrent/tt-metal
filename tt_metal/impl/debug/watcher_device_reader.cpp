@@ -33,6 +33,7 @@
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
+#include "debug_helpers.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -744,54 +745,16 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     }
     std::string error_msg =
         fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
-    switch (assert_status.tripped()) {
-        case dev_msgs::DebugAssertTripped: {
-            error_msg += fmt::format("tripped an assert on line {}.", assert_status.line_num());
-            // TODO: Get rid of this once #6098 is implemented.
-            error_msg +=
-                " Note that file name reporting is not yet implemented, and the reported line number for the assert "
-                "may be from a different file.";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC reads flushed barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC non-posted writes sent barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC non-posted atomics flushed barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC posted writes sent barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertRtaOutOfBounds: {
-            error_msg += "accessed unique runtime arg index out of bounds.";
-            break;
-        }
-        case dev_msgs::DebugAssertCrtaOutOfBounds: {
-            error_msg += "accessed common runtime arg index out of bounds.";
-            break;
-        }
-        default:
-            LogRunningKernels();
-            TT_THROW(
-                "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
-                virtual_coord_.str(),
-                assert_status.tripped());
+    std::string assert_msg = get_debug_assert_message(
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+    if (assert_msg.empty()) {
+        LogRunningKernels();
+        TT_THROW(
+            "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
+            virtual_coord_.str(),
+            assert_status.tripped());
     }
+    error_msg += assert_msg;
     error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);

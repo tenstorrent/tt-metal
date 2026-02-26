@@ -12,7 +12,6 @@
 
 #include "full_like.hpp"
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
 
 namespace ttnn::operations::full_like {
 
