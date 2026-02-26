@@ -513,6 +513,13 @@ void kernel_main() {
                     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_AT_LEN_BE, be32);
                     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
+                    // Capture end timestamp after sending response
+                    uint64_t end_timestamp = get_timestamp();
+
+                    // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+                    uint64_t elapsed_cycles = end_timestamp - start_timestamp;
+                    result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
+
                     // Inlined: advance_buffer_slot_write_index()
                     fabric_connection.buffer_slot_write_counter.counter++;
                     fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
@@ -528,13 +535,6 @@ void kernel_main() {
                 }
             }
         }
-
-        // Capture end timestamp after sending response
-        uint64_t end_timestamp = get_timestamp();
-
-        // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
-        uint64_t elapsed_cycles = end_timestamp - start_timestamp;
-        result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
     }
 
     fabric_connection.close();

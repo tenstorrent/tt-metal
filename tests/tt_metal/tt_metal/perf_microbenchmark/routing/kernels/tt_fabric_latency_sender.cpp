@@ -122,18 +122,13 @@ void kernel_main() {
     };
 
     auto send_payload_packet = [&fabric_connection, payload_packet_header, send_buffer_address, payload_size_bytes]() {
-        __asm__ volatile("# abouto to wait for slot");
         fabric_connection.wait_for_empty_write_slot();
         if (payload_size_bytes > 0) {
-            __asm__ volatile("# sending payload");
             fabric_connection.send_payload_without_header_non_blocking_from_address(
                 send_buffer_address, payload_size_bytes);
-            __asm__ volatile("# done sending payload");
         }
-        __asm__ volatile("# sending header");
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-        __asm__ volatile("# done sending header");
     };
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
@@ -200,19 +195,24 @@ void kernel_main() {
         send_header_benchmark_ptr[sample_idx] = 0;
 
         // Send one message per sample
-        auto send_start = get_timestamp();
+        auto start_timestamp = get_timestamp();
+        uint64_t send_start, send_end;
+        if constexpr (measure_individual_phases) {
+            send_start = get_timestamp();
+        }
         if constexpr (enable_fused_payload_with_sync) {
             send_payload_packet();
         } else {
             if constexpr (sem_inc_only) {
                 send_seminc_packet();
             } else {
-                __asm__ volatile("# about to send payload");
-
                 // Time wait_for_empty_write_slot (inlined)
                 //=========================================WAIT FOR EMPTY WRITE
                 // SLOT=================================================
-                uint64_t wait_start = get_timestamp();
+                uint64_t wait_start, wait_end;
+                if constexpr (measure_individual_phases && measure_wait_for_slot) {
+                    wait_start = get_timestamp();
+                }
                 // Inlined: fabric_connection.wait_for_empty_write_slot()
                 {
                     WAYPOINT("FWSW");
@@ -227,8 +227,8 @@ void kernel_main() {
                     }
                     WAYPOINT("FWSD");
                 }
-                uint64_t wait_end = get_timestamp();
                 if constexpr (measure_individual_phases && measure_wait_for_slot) {
+                    wait_end = get_timestamp();
                     wait_for_slot_benchmark_ptr[sample_idx] = static_cast<uint32_t>(wait_end - wait_start);
                 }
                 const uint8_t noc = get_fabric_worker_noc();
@@ -239,7 +239,10 @@ void kernel_main() {
                 //=========================================SEND PAYLOAD WITHOUT
                 // HEADER=================================================
                 if (payload_size_bytes > 0) {
-                    uint64_t payload_start = get_timestamp();
+                    uint64_t payload_start, payload_end;
+                    if constexpr (measure_individual_phases && measure_send_payload) {
+                        payload_start = get_timestamp();
+                    }
                     {
                         // Fully inline ncrisc_noc_fast_write_any_len loop
                         uint32_t src_addr = send_buffer_address;
@@ -283,15 +286,18 @@ void kernel_main() {
                         NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, len_bytes);
                         NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
                     }
-                    uint64_t payload_end = get_timestamp();
                     if constexpr (measure_individual_phases && measure_send_payload) {
+                        payload_end = get_timestamp();
                         send_payload_benchmark_ptr[sample_idx] = static_cast<uint32_t>(payload_end - payload_start);
                     }
                 }
 
                 // FULLY INLINED send_payload_flush (header write)
                 //=========================================SEND HEADER=================================================
-                uint64_t header_start = get_timestamp();
+                uint64_t header_start, header_end;
+                if constexpr (measure_individual_phases && measure_send_header) {
+                    header_start = get_timestamp();
+                }
                 {
                     // Header is always < NOC_MAX_BURST_SIZE, no chunking needed
                     uint32_t src_addr = (uint32_t)payload_packet_header;
@@ -314,7 +320,6 @@ void kernel_main() {
                 }
                 // Inlined: update_edm_buffer_free_slots() -> noc_inline_dw_write ->
                 // noc_fast_default_write_dw_inline This signal to EDM is still in critical path
-                __asm__ volatile("# update edm buffer ");
                 {
                     auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
 
@@ -336,6 +341,16 @@ void kernel_main() {
                     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_AT_LEN_BE, edm_signal_be32);
                     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
+                    if constexpr (measure_individual_phases && measure_send_header) {
+                        header_end = get_timestamp();
+                        send_header_benchmark_ptr[sample_idx] = static_cast<uint32_t>(header_end - header_start);
+                    }
+
+                    if constexpr (measure_individual_phases) {
+                        send_end = get_timestamp();
+                        send_benchmark_ptr[sample_idx] = static_cast<uint32_t>(send_end - send_start);
+                    }
+
                     // Inlined: advance_buffer_slot_write_index()
                     fabric_connection.buffer_slot_write_counter.counter++;
                     fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
@@ -349,17 +364,14 @@ void kernel_main() {
                     auto iterations_header = (sizeof(PACKET_HEADER_TYPE) + NOC_MAX_BURST_SIZE - 1) >> 14;
                     noc_nonposted_writes_num_issued[noc] += iterations_payload + iterations_header + 1;
                     noc_nonposted_writes_acked[noc] += iterations_payload + iterations_header + 1;
-                }
-                uint64_t header_end = get_timestamp();
-                if constexpr (measure_individual_phases && measure_send_header) {
-                    send_header_benchmark_ptr[sample_idx] = static_cast<uint32_t>(header_end - header_start);
+
+                    if constexpr (measure_individual_phases) {
+                        send_end = get_timestamp();
+                        send_benchmark_ptr[sample_idx] = static_cast<uint32_t>(send_end - send_start);
+                    }
                 }
             }
         }
-        auto send_end = get_timestamp();
-        send_benchmark_ptr[sample_idx] = static_cast<uint32_t>(send_end - send_start);
-
-        auto start_timestamp = get_timestamp();
 
         // Don't want to include noc command buffer response time in the total latency measurement
         noc_async_writes_flushed();
