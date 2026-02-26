@@ -291,6 +291,7 @@ class PI0SimulationEnv:
         # Video recording setup
         self.record_video = record_video
         self.video_frames = []
+        self.video_writer = None
         if record_video:
             if video_path is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -298,6 +299,16 @@ class PI0SimulationEnv:
             else:
                 self.video_path = video_path
             print(f"\n📹 Video recording enabled: {self.video_path}")
+
+            # Try to initialize incremental video writer
+            try:
+                import imageio
+
+                self.video_writer = imageio.get_writer(self.video_path, fps=20, codec="libx264", quality=8)
+                print(f"   Using incremental video writing (memory-efficient)")
+            except Exception as e:
+                print(f"   Using buffered mode (stores all frames in RAM)")
+                self.video_writer = None
         else:
             self.video_path = None
 
@@ -363,16 +374,36 @@ class PI0SimulationEnv:
 
         # Convert to numpy array (remove alpha channel)
         frame = np.array(rgb[:, :, :3], dtype=np.uint8)
-        self.video_frames.append(frame)
+
+        # Write incrementally if writer is available (memory-efficient)
+        if self.video_writer is not None:
+            self.video_writer.append_data(frame)
+        else:
+            # Fallback: store in memory (slower for long runs)
+            self.video_frames.append(frame)
 
     def save_video(self):
         """
         Save recorded frames to video file using imageio.
+        Handles both incremental writing mode and buffered mode.
         """
-        if not self.record_video or len(self.video_frames) == 0:
+        if not self.record_video:
             return
 
         try:
+            # If using incremental writer, just close it
+            if self.video_writer is not None:
+                print(f"\n📹 Finalizing video: {self.video_path}...")
+                self.video_writer.close()
+                print(f"   ✅ Video saved successfully!")
+                print(f"   Location: {os.path.abspath(self.video_path)}")
+                return
+
+            # Fallback: buffered mode (save all frames at once)
+            if len(self.video_frames) == 0:
+                print("   ⚠️  No frames captured")
+                return
+
             import imageio
 
             print(f"\n📹 Saving video to {self.video_path}...")
@@ -792,6 +823,15 @@ class PI0SimulationEnv:
     def close(self):
         """Cleanup resources."""
         print("\n🧹 Cleaning up...")
+
+        # Close video writer if still open
+        if hasattr(self, "video_writer") and self.video_writer is not None:
+            try:
+                self.video_writer.close()
+                print("   📹 Video writer closed")
+            except:
+                pass
+
         ttnn.close_device(self.device)
         p.disconnect()
         print("✅ Done!\n")
