@@ -28,7 +28,7 @@ import argparse
 import os
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 from loguru import logger
@@ -178,12 +178,13 @@ class Molmo2Generator:
         # Separate trace state for prefill and decode
         self.prefill_traces = {}  # {seq_len: (trace_id, trace_inputs, trace_output)}
         self.decode_trace_id = None
-        self.decode_trace_inputs = None
+        self.decode_trace_tensors = None
         self.decode_trace_output = None
 
         # KV cache (initialized on first run)
         self.kv_caches = None
         self.current_pos = None
+        self.decode_position = 0  # Track position on host for trace updates
 
         # Mesh mapper
         self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
@@ -211,6 +212,9 @@ class Molmo2Generator:
 
     def reset_kv_cache(self, start_pos: int = 0):
         """Reset KV cache position for new generation."""
+        # Reset host-side position tracker
+        self.decode_position = start_pos
+
         if self.current_pos is not None:
             pos_tensor = torch.full((self.batch_size,), start_pos, dtype=torch.int32)
             pos_ttnn = ttnn.from_torch(
@@ -412,55 +416,145 @@ class Molmo2Generator:
 
         return trace_output
 
-    def _capture_decode_trace(self) -> Tuple[int, ttnn.Tensor, List[ttnn.Tensor]]:
+    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
+        """
+        Allocate tensors needed for traced decode.
+
+        Args:
+            hidden_dim: Hidden dimension for embeddings
+
+        Returns:
+            Dict with pre-allocated tensors
+        """
+        # Allocate hidden states tensor [1, 1, 1, hidden_dim]
+        trace_hidden_states = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Get initial rot_mats for position 0 to get the shape/config
+        initial_pos = torch.tensor([0], dtype=torch.int32)
+        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(initial_pos)
+
+        # Allocate rot_mats tensors (HEIGHT_SHARDED)
+        trace_cos = ttnn.allocate_tensor_on_device(
+            rot_mats[0].shape,
+            rot_mats[0].dtype,
+            rot_mats[0].layout,
+            self.mesh_device,
+            rot_mats[0].memory_config(),
+        )
+        trace_sin = ttnn.allocate_tensor_on_device(
+            rot_mats[1].shape,
+            rot_mats[1].dtype,
+            rot_mats[1].layout,
+            self.mesh_device,
+            rot_mats[1].memory_config(),
+        )
+
+        # Copy initial values
+        ttnn.copy(rot_mats[0], trace_cos)
+        ttnn.copy(rot_mats[1], trace_sin)
+
+        # Clean up temporary rot_mats
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+
+        return {
+            "hidden_states": trace_hidden_states,
+            "cos": trace_cos,
+            "sin": trace_sin,
+        }
+
+    def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
         """
         Capture trace for decode phase (single token generation).
 
+        Args:
+            trace_tensors: Dict with pre-allocated tensors
+
         Returns:
-            Tuple of (trace_id, trace_output, trace_inputs)
+            Tuple of (trace_id, trace_output)
         """
         logger.info("Compiling decode (first run)...")
 
-        # Create dummy single token input
-        dummy_token = torch.zeros((1, 1), dtype=torch.long)
-
-        # Get embeddings
-        input_ids_ttnn = ttnn.from_torch(
-            dummy_token,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
-
-        hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
+        # Get rot_mats from trace tensors
+        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
 
         # First run to compile decode
         logits = self.model.text_model.forward_decode(
-            hidden_states=hidden_states,
+            hidden_states=trace_tensors["hidden_states"],
             kv_caches=self.kv_caches,
             current_pos=self.current_pos,
+            rot_mats=rot_mats,
         )
         logger.info("Decode compiled")
-
-        # Prepare inputs for trace
-        hidden_states_trace = self.model.text_model.embed_tokens(input_ids_ttnn)
 
         # Capture trace
         logger.info("Capturing decode trace...")
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         logits_trace = self.model.text_model.forward_decode(
-            hidden_states=hidden_states_trace,
+            hidden_states=trace_tensors["hidden_states"],
             kv_caches=self.kv_caches,
             current_pos=self.current_pos,
+            rot_mats=rot_mats,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Decode trace captured")
 
-        return trace_id, logits_trace, [hidden_states_trace]
+        return trace_id, logits_trace
+
+    def _execute_decode_trace(
+        self,
+        trace_id: int,
+        trace_tensors: dict,
+        trace_output: ttnn.Tensor,
+        hidden_states: ttnn.Tensor,
+        position: int,
+    ) -> ttnn.Tensor:
+        """
+        Execute captured decode trace with new inputs.
+
+        Args:
+            trace_id: Captured trace ID
+            trace_tensors: Pre-allocated trace tensors
+            trace_output: Trace output tensor
+            hidden_states: New hidden states tensor
+            position: Current decode position
+
+        Returns:
+            Output logits tensor
+        """
+        # Copy new hidden states to trace input
+        ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+
+        # Update current_pos tensor (used by paged_update_cache in the trace)
+        new_pos_ttnn = ttnn.from_torch(
+            torch.tensor([position], dtype=torch.int32),
+            dtype=ttnn.int32,
+            device=self.mesh_device,
+            mesh_mapper=self.mesh_mapper,
+        )
+        ttnn.copy(new_pos_ttnn, self.current_pos)
+        ttnn.deallocate(new_pos_ttnn)
+
+        # Update rotation matrices for current position
+        pos_tensor = torch.tensor([position], dtype=torch.int32)
+        new_rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(pos_tensor)
+        ttnn.copy(new_rot_mats[0], trace_tensors["cos"])
+        ttnn.copy(new_rot_mats[1], trace_tensors["sin"])
+        ttnn.deallocate(new_rot_mats[0])
+        ttnn.deallocate(new_rot_mats[1])
+
+        # Execute trace
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return trace_output
 
     def run_prefill(
         self,
@@ -562,56 +656,71 @@ class Molmo2Generator:
         """
         start_time = time.perf_counter()
 
-        # Create token tensor
+        # Get current position
+        current_pos_value = self.decode_position
+
+        # Create token tensor and get embeddings
         token_tensor = torch.tensor([[token_id]], dtype=torch.long)
+        input_ids_ttnn = ttnn.from_torch(
+            token_tensor,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
 
         if use_trace:
             if self.decode_trace_id is None:
-                trace_id, trace_output, trace_inputs = self._capture_decode_trace()
+                # Allocate trace tensors and capture trace
+                logger.info("Allocating decode trace tensors...")
+                self.decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim=4096)
+
+                # Copy initial hidden states
+                ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
+
+                # Update rot_mats for current position (not position 0 from allocation)
+                pos_tensor = torch.tensor([current_pos_value], dtype=torch.int32)
+                rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(pos_tensor)
+                ttnn.copy(rot_mats[0], self.decode_trace_tensors["cos"])
+                ttnn.copy(rot_mats[1], self.decode_trace_tensors["sin"])
+                ttnn.deallocate(rot_mats[0])
+                ttnn.deallocate(rot_mats[1])
+
+                # Capture trace
+                trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors)
                 self.decode_trace_id = trace_id
-                self.decode_trace_inputs = trace_inputs
                 self.decode_trace_output = trace_output
-
-            # Update inputs and execute trace
-            input_ids_ttnn = ttnn.from_torch(
-                token_tensor,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_mapper,
-            )
-            hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
-            ttnn.copy(hidden_states, self.decode_trace_inputs[0])
-
-            ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=False)
-            logits = self.decode_trace_output
+                logits = trace_output
+            else:
+                # Execute trace with new inputs
+                logits = self._execute_decode_trace(
+                    self.decode_trace_id,
+                    self.decode_trace_tensors,
+                    self.decode_trace_output,
+                    hidden_states,
+                    current_pos_value,
+                )
         else:
             # Run without tracing
-            input_ids_ttnn = ttnn.from_torch(
-                token_tensor,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_mapper,
-            )
-            hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
-
             logits = self.model.text_model.forward_decode(
                 hidden_states=hidden_states,
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
             )
 
+        ttnn.deallocate(hidden_states)
+
         end_time = time.perf_counter()
         decode_time = (end_time - start_time) * 1000
 
-        # Increment position
-        pos_torch = ttnn.to_torch(self.current_pos)
-        new_pos = pos_torch + 1
+        # Increment position (track on host for simplicity)
+        self.decode_position += 1
+
+        # Update device position tensor
         new_pos_ttnn = ttnn.from_torch(
-            new_pos,
+            torch.tensor([self.decode_position], dtype=torch.int32),
             dtype=ttnn.int32,
             device=self.mesh_device,
             mesh_mapper=self.mesh_mapper,
