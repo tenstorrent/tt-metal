@@ -47,6 +47,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.kernel_size,
         operation_attributes.dilation);
     uint32_t C_out = operation_attributes.output_channels;
+    uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
@@ -73,7 +74,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     */
 
     // If C_out_block is set, use it. Otherwise, use the full number of output channels.
-    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : C_out;
+    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
@@ -82,8 +83,13 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
     TT_FATAL(C_in_num_blocks * C_in_block == C_in, "C_in_num_blocks * C_in_block must equal C_in");
-    uint32_t C_out_num_blocks = tt::div_up(C_out, C_out_block);
-    TT_FATAL(C_out_num_blocks * C_out_block == C_out, "C_out_num_blocks * C_out_block must equal C_out");
+    uint32_t C_out_num_blocks = tt::div_up(padded_C_out, C_out_block);
+    TT_FATAL(
+        C_out_num_blocks * C_out_block == padded_C_out,
+        "C_out_num_blocks * C_out_block must equal padded_C_out ({}). Got C_out_num_blocks={}, C_out_block={}.",
+        padded_C_out,
+        C_out_num_blocks,
+        C_out_block);
 
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
