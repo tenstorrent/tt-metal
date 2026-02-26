@@ -57,15 +57,6 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
-FORCE_INLINE void write_data_to_local_core_with_ack(
-    SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
-    noc_async_write(l1_read_addr, dst_addr, page_size);
-    socket_push_pages(sender_socket, 1);
-    socket_notify_receiver(sender_socket);
-    // Flush here to ensure that NOC has picked up data before we pop pages in receiver socket.
-    noc_async_writes_flushed();
-}
-
 FORCE_INLINE void send_pages_over_socket(
     SocketSenderInterface& sender_socket,
     tt::tt_fabric::WorkerToFabricEdmSender& downstream_fabric_connection,
@@ -75,18 +66,17 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
-    if constexpr (use_fabric_on_sender) {
-        for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection,
-                downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            l1_read_addr += whole_packet_size;
-            dst_addr += whole_packet_size;
-        }
+    for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
+        write_data_to_remote_core_with_ack(
+            downstream_fabric_connection,
+            downstream_data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        l1_read_addr += whole_packet_size;
+        dst_addr += whole_packet_size;
+    }
 
         for (uint32_t i = 0; i < num_whole_fabric_packets_link_1; ++i) {
             write_data_to_remote_core_with_ack(
@@ -109,17 +99,11 @@ FORCE_INLINE void send_pages_over_socket(
                 downstream_bytes_sent_noc_addr,
                 partial_packet_size);
         }
-        socket_push_pages(sender_socket, 1);
-        socket_notify_receiver(sender_socket);
-    } else {
-        DPRINT << "Writing " << sender_page_size << " bytes to local core\n";
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, sender_page_size);
-    }
 }
 
 void kernel_main() {
     // Build Fabric Connections
-    DPRINT << "start of d2d aggregator kernel\n";
+    DPRINT << "Starting D2D exchange multiple sender kernel" << ENDL();
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -172,9 +156,6 @@ void kernel_main() {
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
 
-        DPRINT << "downstream mesh id chip id: " << (uint32_t)downstream_enc.d2d.downstream_mesh_id << " "
-               << (uint32_t)downstream_enc.d2d.downstream_chip_id << "\n";
-
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
@@ -184,21 +165,16 @@ void kernel_main() {
         bool terminated = false;
 
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "D2D_0 reserved downstream page, waiting for " << (uint32_t)num_upstream_sockets
-               << " upstream sockets\n";
 
         // Collect data from all upstream sockets into a single larger page
         // Process num_upstream_sockets pages (one from each worker) for reduce-to-one
-        DPRINT << "looping over upstream sockets to accumulate data\n";
         for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-            DPRINT << "D2D_0 waiting for socket " << (uint32_t)i << "\n";
             // Wait for pages in current upstream socket with termination checks
+            DPRINT << "Waiting for page from upstream socket " << i << ENDL();
             if (!socket_wait_for_pages_with_termination(receiver_sockets[i], 1, termination_semaphore)) {
-                DPRINT << "D2D_0 terminated while waiting for socket " << (uint32_t)i << "\n";
                 terminated = true;
                 break;
             }
-            DPRINT << "D2D_0 received page from socket " << (uint32_t)i << "\n";
 
             auto l1_read_addr = receiver_sockets[i].read_ptr;
             // Calculate offset within the downstream buffer for this socket's data
@@ -210,67 +186,62 @@ void kernel_main() {
             // accumulation phase
             noc_async_write(l1_read_addr, dst_addr, upstream_page_size);
             noc_async_writes_flushed();
-            DPRINT << "Accumulated page from socket " << (uint32_t)i << " to downstream buffer at offset "
-                   << (uint32_t)skt_offset << "\n";
 
             socket_pop_pages(receiver_sockets[i], 1);
             socket_notify_sender(receiver_sockets[i]);
-
-            DPRINT << "Popped page from socket " << (uint32_t)i << "\n";
 
             invalidate_l1_cache();
 
             // Update accumulation offset
             bytes_accumulated += upstream_page_size;
         }
+        DPRINT << "accumulated data\n";
 
         // Check if we should exit due to termination
         if (terminated) {
             break;
         }
+        DPRINT << "didn't break\n";
 
         // Now send the accumulated page once (14,336 bytes total from all 8 workers)
-        DPRINT << "sending accumulated data over socket, total bytes: " << bytes_accumulated << "\n";
-        // If using fabric, send the accumulated data via fabric in chunks
-        uint32_t l1_read_addr = downstream_fifo_l1_addr + sender_socket.write_ptr;
-        uint64_t dst_addr = get_noc_addr(
-            downstream_enc.d2d.downstream_noc_x,
-            downstream_enc.d2d.downstream_noc_y,
-            downstream_fifo_l1_addr + sender_socket.write_ptr);
-        DPRINT << "before sending api\n";
+        if (bytes_accumulated >= sender_page_size) {
+            // If using fabric, send the accumulated data via fabric in chunks
+            if constexpr (use_fabric_on_sender) {
+                uint32_t l1_read_addr = downstream_fifo_l1_addr + sender_socket.write_ptr;
+                uint64_t dst_addr = get_noc_addr(
+                    downstream_enc.d2d.downstream_noc_x,
+                    downstream_enc.d2d.downstream_noc_y,
+                    downstream_fifo_l1_addr + sender_socket.write_ptr);
 
-        DPRINT << "PAGE size: " << (uint32_t)sender_page_size << ",receiver page size: " << (uint32_t)upstream_page_size
-               << "\n";
-        DPRINT << "dst noc x: " << (uint32_t)downstream_enc.d2d.downstream_noc_x
-               << " noc y:" << (uint32_t)downstream_enc.d2d.downstream_noc_y << "\n";
-        send_pages_over_socket(
-            sender_socket,
-            downstream_fabric_connection,
-            downstream_fabric_connection_2,
-            downstream_data_packet_header_addr,
-            downstream_data_packet_header_addr_2,
-            downstream_bytes_sent_noc_addr,
-            l1_read_addr,
-            dst_addr);
-
-        DPRINT << "after sending api\n";
-        // if not using fabric: Data already accumulated in downstream buffer via noc_async_write
-        // Just push the page to the socket
-        // socket_push_pages(sender_socket, 1);
-        // socket_notify_receiver(sender_socket);
-        DPRINT << "Notified receiver after pushing page\n";
+                send_pages_over_socket(
+                    sender_socket,
+                    downstream_fabric_connection,
+                    downstream_fabric_connection_2,
+                    downstream_data_packet_header_addr,
+                    downstream_data_packet_header_addr_2,
+                    downstream_bytes_sent_noc_addr,
+                    l1_read_addr,
+                    dst_addr);
+            }
+            // if not using fabric: Data already accumulated in downstream buffer via noc_async_write
+            // Just push the page to the socket
+            socket_push_pages(sender_socket, 1);
+            socket_notify_receiver(sender_socket);
+            DPRINT << "Pushed accumulated page to downstream, notifying receiver" << ENDL();
+        }
 
         invalidate_l1_cache();
     }
+    DPRINT << "Termination signal received, exiting sender loop" << ENDL();
 
     update_socket_config(sender_socket);
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         update_socket_config(receiver_sockets[i]);
     }
-
+    DPRINT << "before closing fabric connections in sender\n";
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "end of d2d aggregator kernel\n";
+    DPRINT << "end of d2d exchange multiple sender kernel\n";
 }

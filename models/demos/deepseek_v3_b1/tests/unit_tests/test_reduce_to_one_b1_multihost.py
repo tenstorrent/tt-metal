@@ -96,15 +96,17 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
     logger.info(f"Running on Host {my_mesh_id} of {num_procs} total hosts")
 
     # Validate we have exactly 4 hosts
-    if num_procs != 4:
-        pytest.skip(f"This test requires exactly 4 hosts, got {num_procs}")
+    # if num_procs != 4:
+    #    pytest.skip(f"This test requires exactly 4 hosts, got {num_procs}")
 
     # Enable async dispatch
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     # Get pipeline configuration
     pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
-    # assert len(pipeline_config) == num_procs + 1, f"Expected {num_procs + 1} pipeline stages, got {len(pipeline_config)}"
+    assert (
+        len(pipeline_config) == num_procs + 1
+    ), f"Expected {num_procs + 1} pipeline stages, got {len(pipeline_config)}"
 
     # Log pipeline configuration for debugging
     for i, stage in enumerate(pipeline_config):
@@ -145,6 +147,14 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
     token_size_bytes = 64
 
     root_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+    data_per_device = []
+    torch.manual_seed(42)
+    for device_idx in range(8):
+        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        data_per_device.append(data)
+
+    data_all = torch.stack(data_per_device, dim=0).reshape(4, 2, *tensor_shape)
 
     if my_mesh_id == 1:
         print("root coord is :", root_coord)
@@ -250,13 +260,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
         )
 
         # Generate test data (same seed as Host 0)
-        data_per_device = []
-        torch.manual_seed(42)
-        for device_idx in range(8):
-            data = torch.randn(tensor_shape, dtype=torch.bfloat16)
-            data_per_device.append(data)
 
-        data_all = torch.stack(data_per_device, dim=0).reshape(4, 2, *tensor_shape)
         input_tensor = ttnn.from_torch(
             data_all,
             device=mesh_device,
@@ -282,7 +286,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
 
         d2d0_core = d2d0_infra_temp["d2d0_core"]
         logger.info(f"✓ Created D2D_0 infrastructure at core {d2d0_core}")
-
+        dummy_drain_core = ttnn.CoreCoord(10, 9)  # Core to run dummy drain kernel on Host 1
         # Create PipelineBlock - connect D2D_0 core to exit socket
         pipeline_block = PipelineBlock(
             mesh_device=mesh_device,
@@ -291,6 +295,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
             downstream_d2d_socket_fifo_size=embedding_fifo_size,
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
+            entry_node_downstream=ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, dummy_drain_core),
             exit_node_upstream=ttnn.MeshCoreCoord(root_coord, d2d0_core),
         )
 
@@ -319,7 +324,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
                 f"  Exit socket upstream socket active cores: {pipeline_block.exit_socket_interface.upstream_socket.get_active_cores()}"
             )
 
-    elif my_mesh_id == 2:
+    else:
         # HOST 2: Intermediate forwarding stage
         logger.info("Entry → Forward → Exit")
 
@@ -332,23 +337,6 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
             downstream_d2d_socket_page_size=embedding_size_bytes,
         )
         logger.info("✓ Created PipelineBlock for Host 2")
-
-    elif my_mesh_id == 3:
-        # HOST 3: Final forwarding stage with loopback
-        logger.info("Entry → Forward → Exit (loopback to Host 0)")
-
-        pipeline_block = PipelineBlock(
-            mesh_device=mesh_device,
-            pipeline_core_coord=pipeline_core_coord,
-            upstream_d2d_socket_fifo_size=embedding_fifo_size,
-            downstream_d2d_socket_fifo_size=embedding_fifo_size,
-            upstream_d2d_socket_page_size=embedding_size_bytes,
-            downstream_d2d_socket_page_size=embedding_size_bytes,
-        )
-        logger.info("✓ Created PipelineBlock for Host 3")
-
-    else:
-        pytest.fail(f"Unexpected mesh_id: {my_mesh_id}. This test supports only 4 hosts (0-3).")
 
     # if my_mesh_id != 1:
     logger.info(f"\n=== HOST {my_mesh_id}: Running pipeline ===")
@@ -386,19 +374,6 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
 
         logger.info("✓ Reduce-to-one completed")
 
-        """
-        # Signal termination to D2D_0 aggregator
-        termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
-        ttnn.reset_global_semaphore_value(termination_semaphore, 1)
-        ttnn.synchronize_device(mesh_device)
-        logger.info("✓ D2D_0 termination signaled")
-        """
-        ttnn.distributed_context_barrier()
-
-        logger.info(f"\n=== HOST {my_mesh_id}: Terminating PipelineBlock ===")
-        pipeline_block.terminate()
-        logger.info(f"✓ PipelineBlock terminated on Host {my_mesh_id}")
-
     if my_mesh_id == 0:
         logger.info("\n=== HOST 0: Waiting for result from D2H ===")
 
@@ -409,7 +384,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
         pipeline_block.read_output(d2h_output_tensor)
         logger.info("✓ Successfully read from D2H")
 
-        ttnn.distributed_context_barrier()
+        # ttnn.distributed_context_barrier()
 
         # Validate result
         d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
@@ -424,3 +399,14 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
             d2h_result_torch, expected_value, rtol=rtol, atol=atol
         ), f"D2H output mismatch! Expected {expected_value[0, 0]}, got {d2h_result_torch[0, 0]}"
         logger.info("✓ D2H output matches expected value")
+
+    logger.info(f"\n=== HOST {my_mesh_id}: Terminating PipelineBlock ===")
+    # ttnn.distributed_context_barrier()
+    # logger.info(f"✓ All hosts reached barrier before termination")
+    if my_mesh_id == 1:
+        # Signal termination to D2D_0 aggregator
+        termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
+        ttnn.reset_global_semaphore_value(termination_semaphore, 1)
+        logger.info("✓ D2D_0 termination signaled")
+    pipeline_block.terminate()
+    logger.info(f"✓ PipelineBlock terminated on Host {my_mesh_id}")

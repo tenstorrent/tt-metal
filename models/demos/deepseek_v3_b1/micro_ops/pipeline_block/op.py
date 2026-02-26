@@ -54,7 +54,7 @@ class PipelineBlock:
         self.is_pipeline_start = self.my_mesh_id == 0
         pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
         num_procs = int(ttnn.distributed_context_get_size())
-        # assert len(pipeline_config) == num_procs + 1
+        assert len(pipeline_config) == num_procs + 1
 
         if self.is_pipeline_start:
             assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
@@ -85,6 +85,15 @@ class PipelineBlock:
                 upstream_d2d_socket_page_size == d2h_socket_page_size
             ), "Expected upstream D2D Socket Page Size to be equal to D2H Socket Page Size on first pipeline stage"
 
+            print(
+                "initializing h2d socket on ",
+                self.my_mesh_id,
+                " coord ",
+                h2d_device_coord,
+                "device id: ",
+                mesh_device.get_device_id(h2d_device_coord),
+                "\n",
+            )
             self.h2d_socket = ttnn.H2DSocket(
                 mesh_device,
                 ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
@@ -119,7 +128,7 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
             )
-            """
+
             self.entry_socket_interface = SocketInterface(
                 upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
                 upstream_d2d_socket_fifo_size,
@@ -130,7 +139,6 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
-            """
 
         else:
             self.entry_socket_interface = SocketInterface(
@@ -145,42 +153,47 @@ class PipelineBlock:
                 sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
-            if self.my_mesh_id != 3:
-                self.exit_socket_interface = SocketInterface(
-                    downstream_d2d_socket_page_size,
-                    downstream_d2d_socket_fifo_size,
-                    downstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-                    ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-                    upstream_core_coord=exit_node_upstream,
-                    upstream_socket=self.entry_socket_interface.get_downstream_socket()
-                    if not exit_node_upstream
-                    else None,
-                    sender_mesh=MeshWrapper(mesh_device),
-                    receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
-                )
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+                upstream_core_coord=exit_node_upstream,
+                upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
+            )
 
     def run(self):
         if self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
-            # self.entry_socket_interface.run()
+            self.entry_socket_interface.run()
         else:
-            if self.my_mesh_id != 3:
-                self.exit_socket_interface.run()
+            self.exit_socket_interface.run()
             self.entry_socket_interface.run()
 
     def terminate(self):
         # Multi-Process barrier here that all outstanding requests issued to pipeline block
         # are completed by all stages before termination signal is sent
+        print("terminating for ", self.my_mesh_id, "\n")
+        print("before barrier ", self.my_mesh_id, "\n")
         ttnn.distributed_context_barrier()
         if self.is_pipeline_start:
+            print("is pipeline start ", self.my_mesh_id, "\n")
             self.host_io.terminate(False)
+            print("host io terminated ", self.my_mesh_id, "\n")
             self.entry_socket_interface.terminate(False)
+            print("entry socket interface terminated ", self.my_mesh_id, "\n")
             self.exit_socket_interface.terminate(True)
+            print("exit socket interface terminated ", self.my_mesh_id, "\n")
         else:
+            print("is not pipeline start ", self.my_mesh_id, "\n")
             self.entry_socket_interface.terminate(False)
+            print("entry socket interface terminated ", self.my_mesh_id, "\n")
             self.exit_socket_interface.terminate(True)
+            print("exit socket interface terminated ", self.my_mesh_id, "\n")
 
     def is_first_pipeline_stage(self):
         return self.is_pipeline_start
