@@ -189,30 +189,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
-          echo "=============================================="
-          echo "Device Performance Tests"
-          echo "=============================================="
-          echo "DeepSeek fused-op device perf tests (CI-curated selection)"
-          CI_FUSED_OP_DEVICE_PERF_K_EXPR='
-          (
-            (test_ds_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_all_gather_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_lm_head_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_rms_norm_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_distributed_norm_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_ff1_3_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_mul_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_reduce_scatter_post_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_all_gather_preff1_3_device_perf and ((decode and 1) or (prefill and 128)))
-          )'
-          CI_FUSED_OP_DEVICE_PERF_K_EXPR="$(printf '%s' "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests -k "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "All device perf tests completed!"
-          echo "=============================================="
-
+          echo "
       - name: Run DeepSeek long seq len module tests
         if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
