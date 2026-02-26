@@ -432,12 +432,16 @@ void MetalContext::teardown() {
     // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
     // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
     // when context is re-initialized).
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
+    // Hold mutex to prevent races with concurrent readers
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_.clear();
+        l1_bank_offset_map_.clear();
+        dram_bank_to_noc_xy_.clear();
+        l1_bank_to_noc_xy_.clear();
+        worker_logical_col_to_virtual_col_.clear();
+        worker_logical_row_to_virtual_row_.clear();
+    }
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
@@ -527,17 +531,21 @@ void MetalContext::reinitialize_for_real_hardware() {
 
     // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
     // must be cleared after switching to the new cluster configuration.
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
+    // Hold mutex to prevent races with concurrent readers
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_.clear();
+        l1_bank_offset_map_.clear();
+        dram_bank_to_noc_xy_.clear();
+        l1_bank_to_noc_xy_.clear();
+        worker_logical_col_to_virtual_col_.clear();
+        worker_logical_row_to_virtual_row_.clear();
 
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+        dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+        l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+        dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+        l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    }
     worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
     worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
     for (ChipId device_id : cluster_->all_chip_ids()) {
@@ -823,6 +831,7 @@ void MetalContext::set_custom_fabric_topology(
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
     custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
+    // set_fabric_config will acquire control_plane_mutex_ where needed for thread safety
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -831,8 +840,12 @@ void MetalContext::set_default_fabric_topology() {
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the system mesh and control plane, since they were initialized with custom parameters.
-    system_mesh_.reset();
-    control_plane_.reset();
+    // Hold mutex when modifying control_plane_ and system_mesh_ for thread safety
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        system_mesh_.reset();
+        control_plane_.reset();
+    }
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
@@ -938,11 +951,13 @@ void MetalContext::set_fabric_config(
     this->fabric_router_config_ = router_config;
 
     // Reinitialize control plane with updated fabric settings
+    // Hold mutex when modifying control_plane_ and system_mesh_ for thread safety
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (control_plane_ != nullptr) {
         log_info(
             tt::LogMetal,
             "Fabric config changed from {} to {}, reinitializing control plane",
-            this->get_control_plane().get_fabric_config(),
+            control_plane_->get_fabric_config(),
             this->fabric_config_);
         system_mesh_.reset();
         this->initialize_control_plane_impl();
@@ -1392,6 +1407,9 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
+    // Hold lock while reading bank tables to prevent races with table generation
+    std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);

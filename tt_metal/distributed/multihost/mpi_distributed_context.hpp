@@ -49,7 +49,9 @@ public:
 
 private:
     mutable MPI_Request req_{};
-    bool done_{};
+    mutable std::mutex req_mutex_;
+    // atomic_flag is guaranteed lock-free on all platforms
+    mutable std::atomic_flag done_ = ATOMIC_FLAG_INIT;
 };
 
 // ---------------------------------------------------------------------

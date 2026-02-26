@@ -355,6 +355,10 @@ private:
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
+
+    // Mutex to protect routing tables during initialization and concurrent access
+    // Use shared_mutex for reader-writer pattern: multiple readers, exclusive writer
+    mutable std::shared_mutex routing_tables_mutex_;
     // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
     // to the physical channel id
     std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
@@ -506,6 +510,7 @@ private:
     // Cache for faster asic_id to fabric_node_id lookup
     // Valid for the lifetime of the physical_system_descriptor_; cleared when fabric context is reset
     mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
+    mutable std::mutex asic_id_to_fabric_node_cache_mutex_;
 
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;

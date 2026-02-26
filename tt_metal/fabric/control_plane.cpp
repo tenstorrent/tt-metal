@@ -462,16 +462,15 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
 void ControlPlane::initialize_distributed_contexts() {
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*global_context->size() == 1) {
-        {
-            std::unique_lock lock(global_bindings_mutex_);
-            global_bindings_initialized_.test_and_set(std::memory_order_release);
-        }
         host_local_context_ = global_context;
         std::transform(
             local_mesh_binding_.mesh_ids.begin(),
             local_mesh_binding_.mesh_ids.end(),
             std::inserter(distributed_contexts_, distributed_contexts_.end()),
             [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+        // Set flag after all data is written and while still holding the lock
+        std::unique_lock lock(global_bindings_mutex_);
+        global_bindings_initialized_.test_and_set(std::memory_order_release);
         return;
     }
 
@@ -520,10 +519,13 @@ void ControlPlane::initialize_distributed_contexts() {
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
-    // Check cache first for faster lookup
-    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
-    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
-        return cache_it->second;
+    // Check cache first for faster lookup (under lock for thread safety)
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+        if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+            return cache_it->second;
+        }
     }
 
     const auto& cluster = this->cluster_.get();
@@ -532,8 +534,11 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
         if (unique_id == asic_id) {
             FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-            // Cache the result for future lookups
-            asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            // Cache the result for future lookups (under lock for thread safety)
+            {
+                std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+                asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            }
             return fabric_node_id;
         }
     }
@@ -948,6 +953,7 @@ void ControlPlane::validate_mesh_connections() const {
 }
 
 void ControlPlane::log_available_fabric_node_ids() const {
+    std::shared_lock lock(routing_tables_mutex_);
     std::string ids;
     for (const auto& [fabric_node_id, _] : this->router_port_directions_to_physical_eth_chan_map_) {
         if (!ids.empty()) {
@@ -968,6 +974,8 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const {
+    // Shared lock for reading routing tables
+    std::shared_lock lock(routing_tables_mutex_);
     auto it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
     if (it == this->router_port_directions_to_physical_eth_chan_map_.end()) [[unlikely]] {
         log_error(
@@ -1325,6 +1333,8 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
+    // Exclusive lock for modifying routing tables during initialization
+    std::unique_lock lock(routing_tables_mutex_);
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -1697,6 +1707,7 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
 
 std::vector<chan_id_t> ControlPlane::get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const {
     std::vector<chan_id_t> channels;
+    std::shared_lock lock(routing_tables_mutex_);
     auto it = this->exit_node_directions_.find(fabric_node_id);
     if (it == this->exit_node_directions_.end()) {
         return channels;
@@ -1710,6 +1721,7 @@ std::vector<chan_id_t> ControlPlane::get_intermesh_facing_eth_chans(FabricNodeId
 
 std::vector<chan_id_t> ControlPlane::get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const {
     std::vector<chan_id_t> channels;
+    std::shared_lock lock(routing_tables_mutex_);
     if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
         return channels;
     }
@@ -1860,6 +1872,7 @@ std::unordered_map<MeshId, std::vector<ChipId>> ControlPlane::get_chip_neighbors
 size_t ControlPlane::get_num_active_fabric_routers(FabricNodeId fabric_node_id) const {
     // Return the number of active fabric routers on the chip
     // Not always all the available FABRIC_ROUTER cores given by Cluster, since some may be disabled
+    std::shared_lock lock(routing_tables_mutex_);
     size_t num_routers = 0;
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
@@ -1870,6 +1883,7 @@ size_t ControlPlane::get_num_active_fabric_routers(FabricNodeId fabric_node_id) 
 
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
+    std::shared_lock lock(routing_tables_mutex_);
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
         if (routing_direction == direction) {
@@ -2432,7 +2446,10 @@ std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() con
 
 void ControlPlane::clear_fabric_context() {
     this->fabric_context_.reset(nullptr);
-    asic_id_to_fabric_node_cache_.clear();
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        asic_id_to_fabric_node_cache_.clear();
+    }
 }
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
@@ -2829,6 +2846,9 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         // No need to collect from other hosts when running a single process
         return;
     }
+
+    // Protect router_port_directions_to_physical_eth_chan_map_ during MPI merge operations
+    std::unique_lock<std::shared_mutex> lock(routing_tables_mutex_);
 
     // Create RouterPortDirectionsData from local data
     RouterPortDirectionsData local_data;

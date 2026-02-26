@@ -23,7 +23,10 @@ const ContextPtr& SingleHostContext::get_current_world() {
     // Fast path: check atomic flag without acquiring mutex
     // std::atomic_flag::test() returns true if the flag is set (C++20)
     if (current_world_initialized_.test(std::memory_order_acquire)) {
-        // current_world_ is guaranteed to be initialized
+        // current_world_ is guaranteed to be initialized, but we need to
+        // synchronize with the write to current_world_. Use an acquire fence
+        // to ensure we see the fully initialized shared_ptr.
+        std::atomic_thread_fence(std::memory_order_acquire);
         return current_world_;
     }
 

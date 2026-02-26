@@ -77,6 +77,8 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    // NOTE: DeviceManager is not internally synchronized. Access should only occur during
+    // single-threaded initialization/teardown phases or through thread-safe APIs on Device.
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
