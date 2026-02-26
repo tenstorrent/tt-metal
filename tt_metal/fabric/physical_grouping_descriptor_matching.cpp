@@ -29,6 +29,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <map>
 
+#include "tt_metal/fabric/topology_solver_internal.hpp"
+
 #include <google/protobuf/text_format.h>
 
 using namespace tt::tt_fabric;
