@@ -163,8 +163,8 @@ class TextBlock(LightweightModule):
     def forward_decode(
         self,
         x: ttnn.Tensor,
-        cos: ttnn.Tensor,
-        sin: ttnn.Tensor,
+        rot_mats: List[ttnn.Tensor],
+        transformation_mat: ttnn.Tensor,
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
     ) -> ttnn.Tensor:
@@ -173,8 +173,8 @@ class TextBlock(LightweightModule):
 
         Args:
             x: Input tensor of shape [1, 1, 1, hidden_dim]
-            cos: RoPE cosine values for current position
-            sin: RoPE sine values for current position
+            rot_mats: List of [cos, sin] rotation matrices
+            transformation_mat: RoPE transformation matrix for decode
             kv_cache: (k_cache, v_cache) pre-allocated tensors
             current_pos: Current decode position tensor
 
@@ -184,7 +184,7 @@ class TextBlock(LightweightModule):
         # Attention block with residual
         residual = x
         x = self.attn_norm(x)
-        attn_out = self.self_attn.forward_decode(x, cos, sin, kv_cache, current_pos)
+        attn_out = self.self_attn.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos)
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
