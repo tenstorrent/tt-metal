@@ -197,6 +197,8 @@ class PI0SimulationEnv:
         seed=42,
         use_gemma_tokenizer=False,
         replan_interval=5,
+        use_delta_actions=True,
+        max_velocity=0.5,
     ):
         """
         Initialize simulation environment and PI0 model.
@@ -212,11 +214,15 @@ class PI0SimulationEnv:
             seed: Random seed for reproducibility (default 42)
             use_gemma_tokenizer: Try to use official Gemma tokenizer (requires HF auth)
             replan_interval: How many actions to execute before re-planning (default 5)
+            use_delta_actions: Interpret actions as position deltas instead of absolute (default True, reduces oscillation)
+            max_velocity: Maximum joint velocity in rad/s (default 0.5, lower = smoother but slower)
         """
         # Set random seeds for reproducibility
         self.seed = seed
         self.use_gemma_tokenizer = use_gemma_tokenizer
         self.replan_interval = replan_interval
+        self.use_delta_actions = use_delta_actions
+        self.max_velocity = max_velocity
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
@@ -547,19 +553,24 @@ class PI0SimulationEnv:
 
         return images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn, state_ttnn
 
-    def apply_actions(self, actions, step=0):
+    def apply_actions(self, actions, step=0, buffer_idx=0):
         """
         Apply predicted actions to Franka Panda robot in simulation.
 
-        Uses receding horizon control: only apply the first action
-        from the predicted action horizon.
+        Uses action buffering: applies actions from the predicted horizon
+        before re-planning, reducing computation and providing smoother control.
 
         Args:
             actions: Tensor [1, action_horizon, 32] - model predicts 32-dim actions
             step: Current simulation step (for demo mode)
+            buffer_idx: Index into action horizon to use (for buffered execution)
         """
-        # Use only the first action (receding horizon control)
-        action_step = actions[0, 0].float().cpu().numpy()  # [32,]
+        # Use action from buffer at buffer_idx (limited by action horizon)
+        if actions is None:
+            return  # Safety check
+
+        buffer_idx = min(buffer_idx, actions.shape[1] - 1)  # Clamp to action_horizon
+        action_step = actions[0, buffer_idx].float().cpu().numpy()  # [32,] - Use correct index!
 
         # Use only the first 7 dimensions for the 7-DOF Franka Panda
         # (Model was trained on 32-dim actions, we map first 7 to our robot)
@@ -567,7 +578,8 @@ class PI0SimulationEnv:
 
         # Print actions if verbose mode enabled (before scaling)
         if self.verbose_actions and step % 50 == 0:
-            print(f"\n   Predicted actions (first 7): {action_step}")
+            print(f"\n   Buffer index: {buffer_idx} (using action #{buffer_idx} from horizon)")
+            print(f"   Predicted actions (first 7): {action_step}")
             print(f"   Action range: [{action_step.min():.3f}, {action_step.max():.3f}]")
             print(f"   Action mean: {action_step.mean():.3f}, std: {action_step.std():.3f}")
 
@@ -575,35 +587,67 @@ class PI0SimulationEnv:
         if self.demo_mode:
             action_step = self._get_demo_motion(step)
         else:
-            # FIXED: Scale normalized actions to actual joint ranges
-            # PI0 outputs normalized actions (roughly [-1, 1]), scale them to joint limits
-            # Option 1: Scale to full joint range (more aggressive)
-            scaled_actions = []
-            for i, joint_idx in enumerate(self.controllable_joints):
-                if i < len(action_step):
-                    joint_info = p.getJointInfo(self.robot_id, joint_idx)
-                    lower_limit = joint_info[8]
-                    upper_limit = joint_info[9]
+            # Two modes: Delta (incremental) vs Absolute positioning
+            if self.use_delta_actions:
+                # DELTA MODE: Treat actions as position changes (reduces oscillation)
+                scaled_actions = []
+                current_positions = []
 
-                    # Normalize action from [-1, 1] to [lower_limit, upper_limit]
-                    # Assuming PI0 outputs are roughly in [-1, 1] range
-                    if lower_limit < upper_limit:
-                        # Scale from normalized space to joint space
-                        mid = (lower_limit + upper_limit) / 2.0
-                        range_half = (upper_limit - lower_limit) / 2.0
-                        scaled_action = mid + action_step[i] * range_half
-                    else:
-                        # Fallback: scale to Franka Panda typical range
-                        scaled_action = action_step[i] * 2.5  # Scale up by factor
+                for i, joint_idx in enumerate(self.controllable_joints):
+                    if i < len(action_step):
+                        # Get current joint position
+                        current_pos = p.getJointState(self.robot_id, joint_idx)[0]
+                        current_positions.append(current_pos)
 
-                    scaled_actions.append(scaled_action)
+                        # Scale action as a delta (smaller scale factor for smoother motion)
+                        delta = action_step[i] * 0.3  # 0.3 rad max change per step
 
-            action_step = np.array(scaled_actions)
+                        # New target = current + delta
+                        new_pos = current_pos + delta
 
-            # Print scaled actions if verbose
-            if self.verbose_actions and step % 50 == 0:
-                print(f"   Scaled actions: {action_step}")
-                print(f"   Scaled range: [{action_step.min():.3f}, {action_step.max():.3f}]")
+                        # Clamp to joint limits
+                        joint_info = p.getJointInfo(self.robot_id, joint_idx)
+                        lower_limit = joint_info[8]
+                        upper_limit = joint_info[9]
+                        if lower_limit < upper_limit:
+                            new_pos = np.clip(new_pos, lower_limit, upper_limit)
+                        else:
+                            new_pos = np.clip(new_pos, -2.87, 2.87)
+
+                        scaled_actions.append(new_pos)
+
+                action_step = np.array(scaled_actions)
+
+                # Print delta actions if verbose
+                if self.verbose_actions and step % 50 == 0:
+                    print(f"   Current positions: {np.array(current_positions)}")
+                    print(f"   Target positions:  {action_step}")
+                    print(f"   Delta: {action_step - np.array(current_positions)}")
+            else:
+                # ABSOLUTE MODE: Original behavior - scale to full joint range
+                scaled_actions = []
+                for i, joint_idx in enumerate(self.controllable_joints):
+                    if i < len(action_step):
+                        joint_info = p.getJointInfo(self.robot_id, joint_idx)
+                        lower_limit = joint_info[8]
+                        upper_limit = joint_info[9]
+
+                        # Normalize action from [-1, 1] to [lower_limit, upper_limit]
+                        if lower_limit < upper_limit:
+                            mid = (lower_limit + upper_limit) / 2.0
+                            range_half = (upper_limit - lower_limit) / 2.0
+                            scaled_action = mid + action_step[i] * range_half
+                        else:
+                            scaled_action = action_step[i] * 2.5
+
+                        scaled_actions.append(scaled_action)
+
+                action_step = np.array(scaled_actions)
+
+                # Print scaled actions if verbose
+                if self.verbose_actions and step % 50 == 0:
+                    print(f"   Scaled actions (absolute): {action_step}")
+                    print(f"   Scaled range: [{action_step.min():.3f}, {action_step.max():.3f}]")
 
         # Apply actions to robot joints
         for i, joint_idx in enumerate(self.controllable_joints):
@@ -619,14 +663,14 @@ class PI0SimulationEnv:
                 else:
                     target_pos = np.clip(action_step[i], -2.87, 2.87)
 
-                # Apply position control
+                # Apply position control with configurable max velocity
                 p.setJointMotorControl2(
                     self.robot_id,
                     joint_idx,
                     p.POSITION_CONTROL,
                     targetPosition=target_pos,
                     force=87,  # Franka Panda max force
-                    maxVelocity=1.0,
+                    maxVelocity=self.max_velocity,  # Configurable for smoother motion
                 )
 
     def _get_demo_motion(self, step):
@@ -678,6 +722,11 @@ class PI0SimulationEnv:
         print(f"   Robot DOF: 7 (using first 7 of {self.config.action_dim} predicted actions)")
         print(f"   State: 14-dim (7 pos + 7 vel), padded to {self.config.state_dim}")
         print(f"   Action horizon: {self.config.action_horizon}")
+        print(
+            f"   Re-plan interval: {self.replan_interval} (execute {self.replan_interval} actions before re-planning)"
+        )
+        print(f"   Action mode: {'✅ Delta (incremental)' if self.use_delta_actions else 'Absolute positioning'}")
+        print(f"   Max velocity: {self.max_velocity} rad/s")
         print(f"   Random seed: {self.seed}")
 
         # Detect which tokenizer is actually being used
@@ -714,43 +763,72 @@ class PI0SimulationEnv:
         print("✅ Warm-up complete! Starting control loop...\n")
         time.sleep(1.0)
 
+        # Initialize action buffer
+        self.action_buffer = None
+        self.action_buffer_idx = 0
+
         for step in range(num_steps):
             loop_start = time.time()
 
-            # 1. Capture observations
-            cap_start = time.time()
-            images, state = self.capture_observations()
-            self.capture_times.append((time.time() - cap_start) * 1000)
+            # Determine if we need to re-plan (run inference)
+            need_replan = (step % self.replan_interval == 0) or (self.action_buffer is None)
 
-            # 2. Preprocess for TTNN
-            prep_start = time.time()
-            images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn, state_ttnn = self.preprocess_for_ttnn(
-                images, state, task_prompt
-            )
-            self.preprocess_times.append((time.time() - prep_start) * 1000)
+            if need_replan:
+                # 1. Capture observations
+                cap_start = time.time()
+                images, state = self.capture_observations()
+                self.capture_times.append((time.time() - cap_start) * 1000)
 
-            # 3. Run inference
-            inf_start = time.time()
-            with torch.no_grad():
-                actions_ttnn = self.model.sample_actions(
-                    images=images_ttnn,
-                    img_masks=img_masks,
-                    lang_tokens=lang_tokens_ttnn,
-                    lang_masks=lang_masks_ttnn,
-                    state=state_ttnn,
+                # 2. Preprocess for TTNN
+                prep_start = time.time()
+                images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn, state_ttnn = self.preprocess_for_ttnn(
+                    images, state, task_prompt
                 )
-            ttnn.synchronize_device(self.device)
-            inf_time = (time.time() - inf_start) * 1000
-            self.inference_times.append(inf_time)
+                self.preprocess_times.append((time.time() - prep_start) * 1000)
 
-            # Convert to torch for application
-            if isinstance(actions_ttnn, ttnn.Tensor):
-                actions = ttnn.to_torch(actions_ttnn)
+                # 3. Run inference
+                inf_start = time.time()
+                with torch.no_grad():
+                    actions_ttnn = self.model.sample_actions(
+                        images=images_ttnn,
+                        img_masks=img_masks,
+                        lang_tokens=lang_tokens_ttnn,
+                        lang_masks=lang_masks_ttnn,
+                        state=state_ttnn,
+                    )
+                ttnn.synchronize_device(self.device)
+                inf_time = (time.time() - inf_start) * 1000
+                self.inference_times.append(inf_time)
+
+                # Convert to torch for application
+                if isinstance(actions_ttnn, ttnn.Tensor):
+                    actions = ttnn.to_torch(actions_ttnn)
+                else:
+                    actions = actions_ttnn
+
+                # Store actions in buffer (shape: [1, action_horizon, action_dim])
+                self.action_buffer = actions
+                self.action_buffer_idx = 0
+
+                if step % 50 == 0 and step > 0:
+                    print(f"   🔄 Re-planning at step {step} (new action buffer)")
             else:
-                actions = actions_ttnn
+                # Use buffered actions (no inference needed)
+                # Still capture images for video, but don't run model
+                if self.record_video:
+                    cap_start = time.time()
+                    _, _ = self.capture_observations()
+                    self.capture_times.append((time.time() - cap_start) * 1000)
 
-            # 4. Apply actions to robot
-            self.apply_actions(actions, step=step)
+                # Increment buffer index
+                self.action_buffer_idx += 1
+
+                # No preprocessing or inference time for buffered steps
+                self.preprocess_times.append(0.0)
+                self.inference_times.append(0.0)
+
+            # 4. Apply actions to robot (from buffer at correct index)
+            self.apply_actions(self.action_buffer, step=step, buffer_idx=self.action_buffer_idx)
 
             # 5. Step simulation
             p.stepSimulation()
@@ -764,11 +842,24 @@ class PI0SimulationEnv:
 
             # Print progress
             if step % 50 == 0:
+                # Calculate averages (excluding zero inference times from buffered steps)
                 avg_cap = np.mean(self.capture_times)
-                avg_prep = np.mean(self.preprocess_times)
-                avg_inf = np.mean(self.inference_times)
+                avg_prep = (
+                    np.mean([t for t in self.preprocess_times if t > 0])
+                    if any(t > 0 for t in self.preprocess_times)
+                    else 0
+                )
+                avg_inf = (
+                    np.mean([t for t in self.inference_times if t > 0])
+                    if any(t > 0 for t in self.inference_times)
+                    else 0
+                )
                 avg_loop = np.mean(self.loop_times)
                 hz = 1000.0 / avg_loop if avg_loop > 0 else 0
+
+                # Calculate how many actual inference calls vs buffered actions
+                num_inferences = sum(1 for t in self.inference_times if t > 0)
+                num_buffered = len(self.inference_times) - num_inferences
 
                 print(
                     f"Step {step:4d} | "
@@ -776,7 +867,8 @@ class PI0SimulationEnv:
                     f"Prep: {avg_prep:.1f}ms | "
                     f"Inf: {avg_inf:.1f}ms | "
                     f"Loop: {avg_loop:.1f}ms | "
-                    f"Freq: {hz:.1f} Hz"
+                    f"Freq: {hz:.1f} Hz | "
+                    f"Inferences: {num_inferences}/{len(self.inference_times)}"
                 )
 
             # Optional: Add a small sleep to maintain real-time sync
@@ -869,8 +961,35 @@ def main():
         action="store_true",
         help="Use official Gemma tokenizer (requires HuggingFace authentication)",
     )
+    parser.add_argument(
+        "--replan-interval",
+        type=int,
+        default=5,
+        help="Number of actions to execute before re-planning (default: 5, set to 1 for original behavior)",
+    )
+    parser.add_argument(
+        "--use-delta-actions",
+        action="store_true",
+        default=True,
+        help="Interpret actions as position deltas instead of absolute positions (default: True, reduces oscillation)",
+    )
+    parser.add_argument(
+        "--use-absolute-actions",
+        action="store_true",
+        help="Use absolute position control instead of delta (overrides --use-delta-actions)",
+    )
+    parser.add_argument(
+        "--max-velocity",
+        type=float,
+        default=0.5,
+        help="Maximum joint velocity in rad/s (default: 0.5, lower = smoother but slower, higher = faster but may overshoot)",
+    )
 
     args = parser.parse_args()
+
+    # Handle action mode flags
+    if args.use_absolute_actions:
+        args.use_delta_actions = False
 
     # Determine checkpoint path
     if args.checkpoint:
@@ -900,6 +1019,9 @@ def main():
         verbose_actions=args.verbose_actions,
         seed=args.seed,
         use_gemma_tokenizer=args.use_gemma_tokenizer,
+        replan_interval=args.replan_interval,
+        use_delta_actions=args.use_delta_actions,
+        max_velocity=args.max_velocity,
     )
 
     try:
