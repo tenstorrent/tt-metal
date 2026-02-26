@@ -758,8 +758,8 @@ void DevicePrintImpl::print_buffer_data(
                 auto* string_info = elf_entry_ptr->get_string_info(header->info_id);
                 if (string_info != nullptr) {
                     // Format message
-                    std::span<const std::byte> payload_bytes(
-                        reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
+                    auto payload_bytes =
+                        std::as_bytes(std::span(data).subspan(word_index)).subspan(0, header->message_payload);
                     auto formatted_message = format_message(*string_info, payload_bytes);
 
                     // Find if we have something buffered from before
