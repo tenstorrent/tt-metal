@@ -360,24 +360,21 @@ class TextAttention(LightweightModule):
     def forward_decode(
         self,
         x: ttnn.Tensor,
-        cos: ttnn.Tensor,
-        sin: ttnn.Tensor,
+        rot_mats: List[ttnn.Tensor],
+        transformation_mat: ttnn.Tensor,
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass with KV cache update.
 
-        Uses paged_update_cache and scaled_dot_product_attention_decode
-        for efficient autoregressive generation.
-
-        Note: Uses PyTorch RoPE for decode mode to avoid HEIGHT_SHARDED requirement.
-        Prefill mode uses TTNN-native RoPE for better performance.
+        Uses TTNN-native RoPE, paged_update_cache, and scaled_dot_product_attention_decode
+        for efficient autoregressive generation with tracing support.
 
         Args:
             x: Input tensor of shape [1, 1, 1, hidden_dim] (single token)
-            cos: RoPE cosine values
-            sin: RoPE sine values
+            rot_mats: List of [cos, sin] rotation matrices (HEIGHT_SHARDED)
+            transformation_mat: RoPE transformation matrix
             kv_cache: Tuple of (k_cache, v_cache) pre-allocated tensors
                       Shape: [batch, num_kv_heads, max_seq_len, head_dim]
             current_pos: Current decode position tensor [batch]
@@ -426,42 +423,13 @@ class TextAttention(LightweightModule):
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
         k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
 
-        # Apply RoPE using PyTorch (for decode mode to avoid HEIGHT_SHARDED requirement)
-        q_torch = ttnn.to_torch(q)
-        k_torch = ttnn.to_torch(k)
-        cos_torch = ttnn.to_torch(cos)
-        sin_torch = ttnn.to_torch(sin)
+        # Ensure bfloat16 for rotary_embedding_llama
+        if q.dtype != ttnn.bfloat16:
+            q = ttnn.typecast(q, dtype=ttnn.bfloat16)
+        if k.dtype != ttnn.bfloat16:
+            k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        q_torch = self._apply_rotary_emb_torch(q_torch, cos_torch, sin_torch)
-        k_torch = self._apply_rotary_emb_torch(k_torch, cos_torch, sin_torch)
-
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-
-        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
-
-        q = ttnn.from_torch(
-            q_torch,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        k = ttnn.from_torch(
-            k_torch,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-
-        # Get KV cache references
-        k_cache, v_cache = kv_cache
-
-        # Transpose Q, K, V for decode SDPA: [B, H, S, d] -> [S, B, H, d]
+        # Transpose for decode format: [B, H, S, d] -> [S, B, H, d]
         q = ttnn.transpose(q, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
         q = ttnn.transpose(q, 1, 2)  # [S, H, B, d] -> [S, B, H, d]
         k = ttnn.transpose(k, 0, 2)
@@ -469,15 +437,70 @@ class TextAttention(LightweightModule):
         v = ttnn.transpose(v, 0, 2)
         v = ttnn.transpose(v, 1, 2)
 
-        # Update KV cache at current position
+        # Convert Q and K to HEIGHT_SHARDED for decode RoPE
+        # Q shape: [1, 1, num_heads, head_dim] -> shard per head
+        # K shape: [1, 1, num_kv_heads, head_dim] -> shard per head
+        core_grid = ttnn.CoreCoord(8, 8)
+        q_shard_grid = ttnn.num_cores_to_corerangeset(self.num_heads, core_grid, row_wise=True)
+        k_shard_grid = ttnn.num_cores_to_corerangeset(self.num_kv_heads, core_grid, row_wise=True)
+
+        q_shard_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=q_shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        k_shard_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=k_shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        q = ttnn.to_memory_config(q, q_shard_config)
+        k = ttnn.to_memory_config(k, k_shard_config)
+
+        # Apply RoPE using TTNN-native op (decode mode)
+        q = ttnn.experimental.rotary_embedding_llama(
+            q,
+            rot_mats[0],  # cos
+            rot_mats[1],  # sin
+            transformation_mat,
+            is_decode_mode=True,
+        )
+
+        k = ttnn.experimental.rotary_embedding_llama(
+            k,
+            rot_mats[0],  # cos
+            rot_mats[1],  # sin
+            transformation_mat,
+            is_decode_mode=True,
+        )
+
+        # V also needs to be sharded for paged_update_cache
+        v_shard_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=k_shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        v = ttnn.to_memory_config(v, v_shard_config)
+
+        # Get KV cache references
+        k_cache, v_cache = kv_cache
+
+        # Update KV cache at current position (K and V are already HEIGHT_SHARDED)
         ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=None)
         ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=None)
 
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Convert to bfloat8_b for SDPA
-        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+        # Convert Q back to interleaved for SDPA (keep bfloat16 for GQA decode)
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
 
         # Scaled dot-product attention decode
         # Uses the full KV cache up to current_pos

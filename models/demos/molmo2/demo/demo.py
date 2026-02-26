@@ -629,7 +629,7 @@ class Molmo2Generator:
         use_trace: bool = False,
     ) -> Tuple[str, dict]:
         """
-        Run full inference (prefill-only for now, decode not yet fully optimized).
+        Run full inference with autoregressive generation.
 
         Args:
             pixel_values: Preprocessed image tensor
@@ -659,30 +659,63 @@ class Molmo2Generator:
             use_trace=use_trace,
         )
 
-        # Get first prediction (prefill-only mode)
+        # Get first prediction from prefill
         logits_torch = ttnn.to_torch(logits).squeeze()
         if logits_torch.dim() == 2:
             next_token_logits = logits_torch[-1, :]
         else:
             next_token_logits = logits_torch[0, -1, :]
 
-        top_token = torch.argmax(next_token_logits).item()
-        top_word = self.tokenizer.decode([top_token])
+        next_token = torch.argmax(next_token_logits).item()
+        generated_tokens = [next_token]
+
+        # Autoregressive generation
+        decode_times = []
+        eos_token_id = self.tokenizer.eos_token_id
+
+        for i in range(max_new_tokens - 1):
+            # Check for EOS
+            if next_token == eos_token_id:
+                break
+
+            # Run decode step
+            logits, decode_time = self.run_decode_step(next_token, use_trace=use_trace)
+            decode_times.append(decode_time)
+
+            # Get next token
+            logits_torch = ttnn.to_torch(logits).squeeze()
+            if logits_torch.dim() >= 2:
+                next_token_logits = logits_torch[-1, :]
+            else:
+                next_token_logits = logits_torch
+
+            next_token = torch.argmax(next_token_logits).item()
+            generated_tokens.append(next_token)
+
+        # Decode generated tokens
+        output_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+        # Calculate metrics
+        total_decode_time = sum(decode_times) if decode_times else 0.0
+        avg_decode_time = total_decode_time / len(decode_times) if decode_times else 0.0
+        total_time = prefill_time + total_decode_time
+        tokens_per_sec = len(generated_tokens) * 1000.0 / total_time if total_time > 0 else 0
 
         perf_metrics = {
             "prefill_time_ms": prefill_time,
-            "avg_decode_time_ms": 0.0,
-            "total_decode_time_ms": 0.0,
+            "avg_decode_time_ms": avg_decode_time,
+            "total_decode_time_ms": total_decode_time,
             "input_tokens": input_ids.shape[1],
-            "generated_tokens": 1,
-            "tokens_per_sec": 1000.0 / prefill_time if prefill_time > 0 else 0,
-            "output_text": top_word,
+            "generated_tokens": len(generated_tokens),
+            "tokens_per_sec": tokens_per_sec,
+            "output_text": output_text,
         }
 
         logger.info(f"Input tokens: {input_ids.shape[1]}")
-        logger.info(f"Top prediction: '{top_word}' (token {top_token})")
+        logger.info(f"Generated {len(generated_tokens)} tokens")
+        logger.info(f"Output: '{output_text}'")
 
-        return top_word, perf_metrics
+        return output_text, perf_metrics
 
 
 def run_demo(
