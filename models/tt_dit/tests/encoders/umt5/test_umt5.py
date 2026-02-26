@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
 import time
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parents[6]))
 
 import pytest
 import torch
@@ -18,14 +14,55 @@ from transformers.models.umt5.modeling_umt5 import UMT5EncoderModel
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_dit.encoders.t5.model_t5 import RelativePositionEmbeddings as TT_UMT5RelativePositionEmbeddings
-from models.tt_dit.encoders.t5.model_t5 import TokenEmbeddings as TT_UMT5TokenEmbeddings
-from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config
-from models.tt_dit.encoders.umt5.model_umt5 import UMT5Encoder as TT_UMT5Encoder
-from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils import cache
-from models.tt_dit.utils.check import assert_quality
+
+from ....encoders.t5.model_t5 import RelativePositionEmbeddings as TT_UMT5RelativePositionEmbeddings
+from ....encoders.t5.model_t5 import TokenEmbeddings as TT_UMT5TokenEmbeddings
+from ....encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config
+from ....encoders.umt5.model_umt5 import UMT5Encoder as TT_UMT5Encoder
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
+from ....utils import cache
+from ....utils.check import assert_quality
+
+# Shared device configuration for UMT5 tests to reduce code duplication and ensure we are using consistent device configurations.
+
+
+def umt5_device_config(func):
+    """Decorator to apply standard UMT5 device/mesh parametrization to tests."""
+    func = pytest.mark.parametrize(
+        "dit_unit_test",
+        [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+    )(func)
+    func = pytest.mark.parametrize(
+        "mesh_device, num_links",
+        [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
+        ids=["t3k", "wh_glx", "bh_glx"],
+        indirect=["mesh_device", "num_links"],
+    )(func)
+    func = pytest.mark.parametrize(
+        "device_params",
+        [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        indirect=True,
+    )(func)
+    return func
+
+
+@pytest.fixture
+def num_links(request):
+    return request.param
+
+
+@pytest.fixture
+def parallel_config_and_ccl_manager(mesh_device, num_links):
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+    )
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=num_links,
+        topology=ttnn.Topology.Linear,
+    )
+    return parallel_config, ccl_manager
 
 
 def get_random_weights_model() -> UMT5EncoderModel:
@@ -43,35 +80,16 @@ def get_random_weights_model() -> UMT5EncoderModel:
     return UMT5EncoderModel(hf_config)
 
 
-@pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
-    "mesh_device, num_links",
-    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
-    ids=["t3k", "wh_glx", "bh_glx"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@umt5_device_config
 def test_umt5_embeddings(
     *,
     mesh_device: ttnn.Device,
-    num_links: int,
+    parallel_config_and_ccl_manager: tuple,
     dit_unit_test: bool,
 ) -> None:
-    parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-    )
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=num_links,
-        topology=ttnn.Topology.Linear,
-    )
+    torch.manual_seed(0)
+
+    parallel_config, ccl_manager = parallel_config_and_ccl_manager
 
     if dit_unit_test:
         hf_model = get_random_weights_model()
@@ -95,7 +113,6 @@ def test_umt5_embeddings(
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
     max_prompt_length = 512
-    torch.manual_seed(0)
     tokens = torch.randint(hf_model.config.vocab_size, [1, max_prompt_length])
 
     tt_prompt = ttnn.from_torch(
@@ -166,42 +183,20 @@ def test_umt5_embeddings(
     logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")
 
-    assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=(1 - 1e-5), relative_rmse=0.005)
-    assert_quality(hf_position_bias, tt_position_bias_torch, pcc=(1 - 1e-5), relative_rmse=0.005)
+    assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=(1.0 - 1e-5), relative_rmse=0.005)
+    assert_quality(hf_position_bias, tt_position_bias_torch, pcc=(1.0 - 1e-5), relative_rmse=0.005)
 
 
-@pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
-    "mesh_device, num_links",
-    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
-    ids=["t3k", "wh_glx", "bh_glx"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@umt5_device_config
 def test_umt5_encoder(
     *,
     mesh_device: ttnn.Device,
-    num_links: int,
+    parallel_config_and_ccl_manager: tuple,
     dit_unit_test: bool,
 ) -> None:
     torch.manual_seed(0)
 
-    parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-    )
-
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=num_links,
-        topology=ttnn.Topology.Linear,
-    )
+    parallel_config, ccl_manager = parallel_config_and_ccl_manager
 
     model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
@@ -212,18 +207,6 @@ def test_umt5_encoder(
             model_name_checkpoint, subfolder="text_encoder", local_files_only=False
         )
     hf_model.eval()
-
-    logger.info("=== HuggingFace UMT5 Config ===")
-    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
-    logger.info(f"hidden_size: {hf_model.config.d_model}")
-    logger.info(f"intermediate_size: {hf_model.config.d_ff}")
-    logger.info(f"d_kv: {hf_model.config.d_kv}")
-    logger.info(f"num_attention_heads: {hf_model.config.num_heads}")
-    logger.info(f"num_hidden_layers: {hf_model.config.num_layers}")
-    logger.info(f"relative_attention_num_buckets: {hf_model.config.relative_attention_num_buckets}")
-    logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
-    logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
-    logger.info(f"num_decoder_layers all: {hf_model.config}")
 
     max_prompt_length = 512
 
@@ -274,7 +257,6 @@ def test_umt5_encoder(
     )
 
     tt_encoder = TT_UMT5Encoder(config, mesh_device, ccl_manager, parallel_config)
-    # tt_encoder.load_torch_state_dict(hf_model.state_dict())
     cache.load_model(
         tt_encoder,
         model_name=model_name_checkpoint,
@@ -284,8 +266,7 @@ def test_umt5_encoder(
         get_torch_state_dict=lambda: hf_model.state_dict(),
     )
 
-    # time TT model inference only
-    # with warmup
+    # warmup
     tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)
     benchmark_profiler = BenchmarkProfiler()
     num_runs = 10
@@ -300,6 +281,10 @@ def test_umt5_encoder(
     # # convert mesh tensor to torch tensor for pcc
     # # since weights are replicated, can get the tensor from any single device
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
-    tt_execution_time_b = benchmark_profiler.get_duration_average("tt_umt5_encoder")
-    logger.info(f"TT encoder execution time benchmark: {tt_execution_time_b:.4f} seconds")
+    tt_execution_time = benchmark_profiler.get_duration_average("tt_umt5_encoder")
+    logger.info(f"TT encoder execution time benchmark: {tt_execution_time:.4f} seconds")
     assert_quality(hf_outputs, tt_output_torch, pcc=0.99)
+    expected_execution_time = 0.1
+    assert (
+        tt_execution_time < expected_execution_time
+    ), f"TT Encoder execution time {tt_execution_time:.4f} seconds is greater than expected {expected_execution_time} seconds"
