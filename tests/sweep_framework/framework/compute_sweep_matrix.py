@@ -148,12 +148,13 @@ def compute_lead_models_matrix(modules, batch_size):
         # The VectorExportSource will automatically load mesh-variant JSONs
         base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
 
-        # For Galaxy runners (multi-chip), run all modules as a single batch
+        # For Galaxy runners (multi-chip), split into 4 parallel jobs
         # For single-chip runners, use the standard batch size
         is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
         if is_galaxy:
-            # Single batch with all modules
-            runner_batches = [",".join(base_modules)] if base_modules else []
+            galaxy_jobs = 4
+            galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
+            runner_batches = chunk_modules(base_modules, galaxy_batch_size)
         else:
             # Standard batching for single-chip
             runner_batches = chunk_modules(base_modules, batch_size)
