@@ -212,12 +212,16 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
-void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) { wait_for_cores_idle(); }
+void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
+    auto lock = lock_api_function_();
+    wait_for_cores_idle();
+}
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
+    auto lock = lock_api_function_();
     wait_for_cores_idle();
     for (const auto& device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
@@ -244,6 +248,7 @@ void SDMeshCommandQueue::enqueue_trace(const MeshTraceId&, bool) { TT_THROW("Not
 void SDMeshCommandQueue::enable_asynchronous_slow_dispatch() { asynchronous_slow_dispatch_enabled_ = true; }
 
 void SDMeshCommandQueue::disable_asynchronous_slow_dispatch() {
+    auto lock = lock_api_function_();
     wait_for_cores_idle();
     asynchronous_slow_dispatch_enabled_ = false;
 }
