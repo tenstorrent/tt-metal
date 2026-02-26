@@ -162,4 +162,104 @@ TEST_F(MeshDispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
     }
 }
 
+// Tests that all data movement kernels on a core must have the same noc_mode
+TEST_F(MeshDispatchFixture, TensixFailOnMismatchedNocModeOnCore) {
+    for (const auto& device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::Program program = CreateProgram();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        CoreCoord compute_grid = device->compute_with_storage_grid_size();
+        EXPECT_THROW(
+            {
+                tt_metal::CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                    CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                    DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC});
+                tt_metal::CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                    CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                    DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::RISCV_1_default,
+                        .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC});
+            },
+            std::exception);
+    }
+}
+
+// Tests that in dedicated NOC mode, no two data movement kernels can use the same NOC index
+TEST_F(MeshDispatchFixture, TensixFailOnDedicatedNocSameNocIndex) {
+    for (const auto& device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::Program program = CreateProgram();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        CoreCoord compute_grid = device->compute_with_storage_grid_size();
+        EXPECT_THROW(
+            {
+                tt_metal::CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                    CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                    DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::NOC_0,
+                        .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC});
+                tt_metal::CreateKernel(
+                    program_,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                    CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                    DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::NOC_0,
+                        .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC});
+            },
+            std::exception);
+    }
+}
+
+// Tests that dedicated NOC mode with different NOC indices is allowed
+TEST_F(MeshDispatchFixture, TensixPassOnDedicatedNocDifferentNocIndex) {
+    for (const auto& device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::Program program = CreateProgram();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        CoreCoord compute_grid = device->compute_with_storage_grid_size();
+        EXPECT_NO_THROW({
+            tt_metal::CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC});
+            tt_metal::CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
+                DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::NOC_1,
+                    .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC});
+        });
+    }
+}
+
 }  // namespace tt::tt_metal
