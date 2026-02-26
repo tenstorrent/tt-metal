@@ -232,5 +232,137 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     logger.info("=" * 70)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.requires_grid_size((13, 10))
+def test_shared_expert_real_weights(bh_2d_mesh_device, get_model_decoder_weight):
+    """Test shared expert on 4x2 mesh with HuggingFace model weights; per-device PCC validation."""
+    num_devices = 8
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip(
+            f"Test requires {num_devices} devices, mesh has "
+            f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    device_grid = submesh.compute_with_storage_grid_size()
+    if device_grid.x < 13 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
+
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    k_parallel = cfg.k_parallel
+    n_parallel = cfg.n_parallel
+    K_down = 256
+    K_gate = 7168
+    N = 7168
+    M = 1
+    layer_idx = 3
+
+    # Step 1: Load real shared-expert weights on device + torch for golden via fixture
+    bundle = get_model_decoder_weight(
+        layer_idx,
+        "shared_expert",
+        submesh,
+    )
+    ttnn_gate_up_weights = bundle.weights.shared_gate_proj.fused_tensor
+    ttnn_down_weights = bundle.weights.shared_down_proj
+    torch_gate, torch_up, torch_down = bundle.torch_gate, bundle.torch_up, bundle.torch_down
+    assert torch_gate.shape == (K_gate, K_down * num_devices), f"gate shape {torch_gate.shape}"
+    assert torch_up.shape == (K_gate, K_down * num_devices), f"up shape {torch_up.shape}"
+    assert torch_down.shape == (K_down * num_devices, N), f"down shape {torch_down.shape}"
+
+    # Step 3: Activation, bias, output tensors (replicated to all devices)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(DownProj.MCAST_GATHER_CORE, DownProj.MCAST_GATHER_CORE)])
+    a_tile = ttnn.Tile([M, 32])
+    out_tile = ttnn.Tile([M, 32])
+
+    torch.manual_seed(42)
+    torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
+    torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
+
+    act_shard_spec = ttnn.ShardSpec(sender_core_grid, (M, K_gate), ttnn.ShardOrientation.ROW_MAJOR)
+    act_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, act_shard_spec)
+    ttnn_activation = ttnn.from_torch(
+        torch_activation,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=act_mem,
+        tile=a_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    bias_shard_spec = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
+    bias_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bias_shard_spec)
+    ttnn_bias = ttnn.from_torch(
+        torch_bias,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=bias_mem,
+        tile=out_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    output_shard_spec = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, N), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=output_mem,
+        tile=out_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Step 4: Run SharedExpertOp on mesh
+    ttnn_result = SharedExpertOp.op(
+        ttnn_activation,
+        ttnn_gate_up_weights,
+        ttnn_down_weights,
+        ttnn_bias,
+        ttnn_output,
+        k_parallel,
+        n_parallel,
+    )
+
+    # Step 5: Per-device PCC validation
+    concat_result = ttnn.to_torch(
+        ttnn_result,
+        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+    )
+    # ConcatMeshToTensor stacks on dim=0: shape (num_devices, M, N) or (num_devices, N) depending on layout
+    if concat_result.dim() == 2:
+        per_device_outputs = [concat_result[i] for i in range(num_devices)]
+    else:
+        per_device_outputs = [concat_result[i].squeeze(0) for i in range(num_devices)]
+
+    act_float = torch_activation.float()
+    bias_float = torch_bias.float()
+    pcc_threshold = 0.97
+    for device_idx in range(num_devices):
+        gate_shard = torch_gate[:, device_idx * K_down : (device_idx + 1) * K_down]
+        up_shard = torch_up[:, device_idx * K_down : (device_idx + 1) * K_down]
+        down_shard = torch_down[device_idx * K_down : (device_idx + 1) * K_down, :]
+        golden = SharedExpertOp.golden(
+            act_float,
+            gate_shard.float(),
+            up_shard.float(),
+            down_shard.float(),
+            bias_float,
+        ).bfloat16()
+        out_device = per_device_outputs[device_idx]
+        if out_device.dim() == 3:
+            out_device = out_device.squeeze(0)
+        passing, pcc_message = comp_pcc(golden, out_device, pcc_threshold)
+        assert passing, f"Device {device_idx} PCC check failed: {pcc_message}"
+    logger.info("test_shared_expert_real_weights PASSED")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
