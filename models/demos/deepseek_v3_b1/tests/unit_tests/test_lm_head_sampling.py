@@ -2429,7 +2429,7 @@ def test_persistent_mode(mesh_device, use_fp32):
             )
 
         if my_mesh_id == 0:
-            for i in range(5):
+            for i in range(100):
                 logger.info(f"Writing token to PipelineBlock for P{my_mesh_id} iteration {i}")
                 torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
                 torch_token[0, 0] = 0

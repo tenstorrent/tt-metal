@@ -431,7 +431,6 @@ struct Sampling {
 
             // Phase 2: final-core intra-device reduction across all active cores.
             if constexpr (IsFinalCore) {
-                PacketHeaderPool::reset();
                 DPRINT << "NCRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
                        << get_named_compile_time_arg_val("mesh_col") << "): Waiting for intra-device reduction (expect "
                        << CTArgs::expected_remote_incs << " incs)" << ENDL();
@@ -535,6 +534,7 @@ struct Sampling {
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
             size_t arg_idx = 0;
+            PacketHeaderPool::reset();
             if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
                 DPRINT << "BRISC mesh=(" << get_named_compile_time_arg_val("mesh_row") << ","
                        << get_named_compile_time_arg_val("mesh_col") << "): sending to socket (D2H)" << ENDL();
