@@ -8,7 +8,15 @@ training_config:
   gradient_accumulation_steps: 2
   use_clip_grad_norm: false
   model_config: "configs/model_configs/llama3_gpt2s_size.yaml"
-  optimizer_config: "configs/optimizer_configs/adamw.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
 
 device_config:
   enable_ddp: false

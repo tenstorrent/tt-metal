@@ -70,10 +70,7 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
-    auto config_dir = std::filesystem::path(config_name).parent_path();
-    auto tt_train_root = config_dir.parent_path().parent_path();
-    auto optimizer_config_path = (tt_train_root / config.optimizer_config).string();
-    OptimizerConfig optimizer_config = parse_optimizer_config(YAML::LoadFile(optimizer_config_path));
+    OptimizerConfig optimizer_config = parse_optimizer_config(yaml_config["training_config"]["optimizer"]);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {

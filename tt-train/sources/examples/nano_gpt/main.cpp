@@ -155,7 +155,6 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     uint32_t gradient_accumulation_steps = 1;
     std::string model_config;
-    std::string optimizer_config;
     std::string data_path;
     std::string scheduler_type = "identity";
     std::string tokenizer_type = "char";
@@ -175,7 +174,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_config = training_config["model_config"].as<std::string>("");
-    config.optimizer_config = training_config["optimizer_config"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
@@ -374,9 +372,7 @@ int main(int argc, char **argv) {
         (training_config_path.parent_path().parent_path() / training_config.model_config).string();
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
 
-    std::string optimizer_config_path =
-        (training_config_path.parent_path().parent_path() / training_config.optimizer_config).string();
-    OptimizerConfig optimizer_config = parse_optimizer_config(YAML::LoadFile(optimizer_config_path));
+    OptimizerConfig optimizer_config = parse_optimizer_config(yaml_config["training_config"]["optimizer"]);
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {

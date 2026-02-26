@@ -30,11 +30,8 @@ Training hyperparameters and optimization settings.
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
 ### Optimizer
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `optimizer_config` | str | — | Path to optimizer config YAML (e.g. `"configs/optimizer_configs/adamw.yaml"`) |
 
-Optimizer hyperparameters (type, lr, weight_decay, etc.) are specified in the optimizer config YAML file. See [Optimizer Configuration](#optimizer-configuration-optimizer_configs) below.
+Optimizer is configured inline under `training_config.optimizer`. See [Optimizer Configuration](#optimizer-configuration) below for all available types and parameters.
 
 ### Gradient Clipping Parameters
 | Parameter | Type | Default | Description |
@@ -52,7 +49,15 @@ training_config:
   gradient_accumulation_steps: 8
   num_epochs: 1
   max_steps: 5000
-  optimizer_config: "configs/optimizer_configs/adamw.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
@@ -213,27 +218,25 @@ The main executable accepts these command line arguments:
 tt-train/configs/
 ├── training_configs/          # Training configuration files
 ├── model_configs/            # Model architecture configurations
-├── optimizer_configs/        # Optimizer configuration files
 ├── multihost_configs/        # MultiHost execution configurations (if separated)
 └── README.md                 # This file
 ```
 
-## Optimizer Configuration (`optimizer_configs/`)
+## Optimizer Configuration
 
-Each optimizer is fully specified by its own YAML file. The training config
-references it via `optimizer_config`.
+The optimizer is configured inline under `training_config.optimizer`.
 
-### Available Optimizer Configs
+### Available Optimizer Types
 
-| File | Type | Description |
-|------|------|-------------|
-| `adamw.yaml` | AdamW | Fused AdamW — version with bf16 state (default, recommended). Supports stochastic rounding. |
-| `adamw_full_precision.yaml` | AdamWFullPrecision | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
-| `moreh_adamw.yaml` | MorehAdamW | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
-| `adamw_composite.yaml` | AdamWComposite | Composite AdamW built from individual TTNN ops. Supports Kahan summation. |
-| `sgd.yaml` | SGD | Fused SGD — version with bf16 state (default, recommended). |
-| `sgd_composite.yaml` | SGDComposite | Composite SGD built from individual TTNN ops. |
-| `no_op.yaml` | NoOp | No-op optimizer (no parameter updates). |
+| Type | Description |
+|------|-------------|
+| `AdamW` | Fused AdamW — bf16 state, single custom kernel per step (default, recommended). Supports stochastic rounding. |
+| `AdamWFullPrecision` | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
+| `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
+| `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
+| `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |
+| `SGDComposite` | SGD built from individual TTNN ops (no custom kernel). |
+| `NoOp` | No-op optimizer (no parameter updates). |
 
 ### AdamW Parameters
 
@@ -263,15 +266,16 @@ references it via `optimizer_config`.
 ### Example
 
 ```yaml
-# configs/optimizer_configs/adamw.yaml
-type: AdamW
-lr: 0.0003
-beta1: 0.9
-beta2: 0.999
-epsilon: 1.0e-8
-weight_decay: 0.01
-amsgrad: false
-stochastic_rounding: false
+training_config:
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
 ```
 
 ## Configuration Loading
@@ -303,7 +307,15 @@ training_config:
   gradient_accumulation_steps: 8
   num_epochs: 1
   max_steps: 5000
-  optimizer_config: "configs/optimizer_configs/adamw.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"

@@ -24,7 +24,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.optimizer_config = training_config["optimizer_config"].as<std::string>("");
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");

@@ -88,35 +88,34 @@ class TrainingConfig:
 
 
 class OptimizerConfig:
-    """Configuration parsed from an optimizer YAML file.
+    """Optimizer configuration parsed from the ``optimizer`` section of a training config.
 
-    Each optimizer config YAML (e.g. adamw.yaml, sgd.yaml) specifies a
-    ``type`` field and the relevant hyperparameters.  This class loads
-    that YAML and exposes the values as attributes.
+    The training config YAML contains an inline ``optimizer`` block::
+
+        training_config:
+          optimizer:
+            type: AdamW
+            lr: 0.0003
+            ...
     """
 
-    def __init__(self, yaml_config: Union[dict, str]):
+    def __init__(self, yaml_config: dict):
         """Initialize optimizer configuration.
 
         Args:
             yaml_config: Top-level YAML config dict (must contain
-                ``training_config.optimizer_config`` pointing to the
-                optimizer YAML file), **or** the optimizer YAML dict
-                itself (detected by the presence of a ``type`` key).
+                ``training_config.optimizer``), **or** the optimizer
+                dict itself (detected by the presence of a ``type`` key).
         """
-        if isinstance(yaml_config, str):
-            cfg = load_config(yaml_config)
-        elif "type" in yaml_config:
+        if "type" in yaml_config:
             cfg = yaml_config
         else:
             tc = yaml_config.get("training_config", {})
-            optimizer_config_path = tc.get("optimizer_config")
-            if optimizer_config_path is None:
+            cfg = tc.get("optimizer")
+            if cfg is None:
                 raise ValueError(
-                    "training_config must specify 'optimizer_config' path "
-                    "(e.g. 'configs/optimizer_configs/adamw.yaml')"
+                    "training_config must contain an 'optimizer' section"
                 )
-            cfg = load_config(optimizer_config_path, f"{get_tt_metal_home()}/tt-train/")
 
         self.type = cfg.get("type", "AdamW")
         self.lr = float(cfg.get("lr", 3e-4))
