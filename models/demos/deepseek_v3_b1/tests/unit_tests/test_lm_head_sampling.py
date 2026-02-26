@@ -58,6 +58,8 @@ def _is_lm_head_sampling_perf_enabled():
 def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters
 ):
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:

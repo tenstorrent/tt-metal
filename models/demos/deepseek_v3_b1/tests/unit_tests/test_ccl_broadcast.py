@@ -17,6 +17,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -75,6 +76,8 @@ def test_ccl_broadcast_dual_axis(
     num_iters,
     num_warmup_iter,
 ):
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
