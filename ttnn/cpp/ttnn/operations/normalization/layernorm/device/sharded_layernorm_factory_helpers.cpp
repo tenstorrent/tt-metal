@@ -530,7 +530,8 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
 
     if (is_post_all_gather) {
-        sizes.stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        // Post-all-gather stats tile size can be BF16 or FP32 depending on stats dtype.
+        sizes.stats_cb_size = post_all_gather_stats_block_tiles * stats_tile_size;
         sizes.stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
 
@@ -1050,8 +1051,8 @@ void add_cb_descriptors(
         stats_cb_desc.core_ranges = core_ranges.sender_cores;
         stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_7,
-            .data_format = cb_config.cb_data_format,
-            .page_size = cb_config.single_tile_size});
+            .data_format = cb_config.stats_data_format,
+            .page_size = cb_config.stats_tile_size});
         stats_cb_desc.buffer = cb_config.stats_buffer;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 

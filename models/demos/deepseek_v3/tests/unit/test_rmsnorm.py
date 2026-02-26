@@ -61,7 +61,7 @@ def test_rmsnorm_pre_all_gather_single_device(device):
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -149,7 +149,7 @@ def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_pa
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -200,7 +200,7 @@ def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_pa
             tt_inp,
             compute_kernel_config=kernel_config,
             program_config=program_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
         )
         return tt_stats
 
@@ -251,7 +251,7 @@ def test_rmsnorm_post_all_gather(device):
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -298,19 +298,19 @@ def test_rmsnorm_post_all_gather(device):
         use_height_and_width_as_shard_shape=True,
     )
 
+    # Use create_sharded_norm_config to generate program config
+    program_config = create_sharded_norm_config(
+        grid=grid,
+        dim=inp_shape[-1],  # 896
+        tile_padded_batch_rows=inp_shape[-2],  # 32
+    )
+
     # Create L1 width-sharded config for stats - (1, 1, 32, 256) on single core
     # Matches model: core_grid=ttnn.CoreGrid(y=1, x=1)
     stats_mem_config = ttnn.create_sharded_memory_config(
         shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * n_devices],  # (1, 1, 32, 256)
         core_grid=ttnn.CoreGrid(y=1, x=1),
         strategy=ttnn.ShardStrategy.WIDTH,
-    )
-
-    # Use create_sharded_norm_config to generate program config
-    program_config = create_sharded_norm_config(
-        grid=grid,
-        dim=inp_shape[-1],  # 896
-        tile_padded_batch_rows=inp_shape[-2],  # 32
     )
 
     # Prepare input - shape (1, 1, 32, 896), L1 WIDTH_SHARDED
@@ -401,7 +401,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -472,7 +472,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
             tt_inp,
             compute_kernel_config=kernel_config,
             program_config=program_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
         )
 
         # Step 2: All-gather stats along cluster_axis=1

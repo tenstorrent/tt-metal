@@ -16,6 +16,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 #include <optional>
 #include <bit>
@@ -275,6 +276,12 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    tt::DataFormat stats_data_format = tt::DataFormat::Float16_b;
+    uint32_t stats_tile_size = bfloat16_tile_size;
+    if (stats.has_value()) {
+        stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
+        stats_tile_size = tt::tile_size(stats_data_format);
+    }
 
     // tensor shape
     const auto& shape = a.padded_shape();
@@ -338,6 +345,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .gamma_single_tile_size = gamma_single_tile_size,
         .beta_single_tile_size = beta_single_tile_size,
         .bfloat16_tile_size = bfloat16_tile_size,
+        .stats_tile_size = stats_tile_size,
         .reciprocal_CB_size_bytes = reciprocal_CB_size_bytes,
         .num_rows_per_all_to_all_worker = workers.num_rows_per_all_to_all_worker,
         .num_blocks_first_stage = workers.num_blocks_first_stage,
@@ -564,6 +572,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.out_data_format = out_data_format;
     cb_config.gamma_cb_data_format = gamma_cb_data_format;
     cb_config.beta_cb_data_format = beta_cb_data_format;
+    cb_config.stats_data_format = stats_data_format;
     cb_config.reciprocal_cb_data_format = reciprocal_cb_data_format;
     cb_config.in_single_tile_size = in_single_tile_size;
     cb_config.single_tile_size = single_tile_size;
@@ -571,6 +580,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.gamma_single_tile_size = gamma_single_tile_size;
     cb_config.beta_single_tile_size = beta_single_tile_size;
     cb_config.bfloat16_tile_size = bfloat16_tile_size;
+    cb_config.stats_tile_size = stats_tile_size;
     cb_config.a_buffer = a.buffer();
     cb_config.b_buffer = b.has_value() ? b.value().buffer() : nullptr;
     cb_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;

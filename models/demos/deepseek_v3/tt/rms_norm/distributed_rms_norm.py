@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPreAllGatherConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+    COMPUTE_KERNEL_CONFIG_HIFI4,
     USERS_PER_ROW,
     even_int_div,
     get_state_dicts,
@@ -134,8 +134,8 @@ class DistributedRMSNorm(RMSNormBase):
         return {
             "input_memory_config": memory_config,
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+                dtype=ttnn.float32,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             ),
             "all_gather": AllGatherAsyncConfig(
                 dim=3,
@@ -147,7 +147,7 @@ class DistributedRMSNorm(RMSNormBase):
                 epsilon=hf_config.rms_norm_eps,
                 weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 dtype=ttnn.bfloat16,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             ),
         }
 

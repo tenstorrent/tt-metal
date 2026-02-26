@@ -142,6 +142,7 @@ struct CBSizeParams {
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
+    uint32_t stats_tile_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
     uint32_t num_rows_per_all_to_all_worker = 0;
     uint32_t num_blocks_first_stage = 0;
@@ -314,6 +315,7 @@ struct CBConfig {
     tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat stats_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
     // Tile sizes
@@ -323,6 +325,7 @@ struct CBConfig {
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
+    uint32_t stats_tile_size = 0;
 
     // Buffers
     Buffer* a_buffer = nullptr;

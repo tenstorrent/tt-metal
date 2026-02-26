@@ -160,7 +160,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
         TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
         TT_FATAL(stats.value().layout() == Layout::TILE, "Only tile layout is supported for stats");
-        TT_FATAL(stats.value().dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
+        TT_FATAL(
+            stats.value().dtype() == DataType::BFLOAT16 || stats.value().dtype() == DataType::FLOAT32,
+            "Only bfloat16 or float32 is supported for stats, got: {}",
+            stats.value().dtype());
         TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if (operation_attributes.norm_type == LayerNormType::LAYERNORM) {
@@ -174,11 +177,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    if (operation_attributes.norm_type == LayerNormType::RMSNORM) {
-        TT_FATAL(
-            !operation_attributes.compute_kernel_config.fp32_dest_acc_en,
-            "fp32_dest_acc_en is not supported for RMSNorm");
-    }
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -354,8 +352,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
                     auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
-                    return TensorSpec(
-                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
+                    auto stats_dtype = operation_attributes.dtype.value_or(DataType::BFLOAT16);
+                    return TensorSpec(output_shape, TensorLayout(stats_dtype, PageConfig(Layout::TILE), mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
