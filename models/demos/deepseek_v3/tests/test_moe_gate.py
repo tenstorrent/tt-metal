@@ -15,9 +15,9 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate as NewMoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
-from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 from tests.ttnn.utils_for_testing import comp_pcc
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
@@ -286,9 +286,6 @@ def test_forward_pass(
         tt_topk_indices,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
     )[0].squeeze(0)
-    import pdb
-
-    pdb.set_trace()
 
     # Cleanup
     ttnn.deallocate(tt_input)
@@ -344,7 +341,7 @@ def test_forward_pass(
     "use_synthetic_weights",
     [True, False],  # Test both synthetic and downloaded weights
 )
-def test_forward_pass_new_moe_gate(
+def test_new_forward_pass(
     mode,
     seq_len,
     hf_config,
@@ -358,10 +355,6 @@ def test_forward_pass_new_moe_gate(
     """Test forward pass against reference model."""
 
     batch_size = 1
-    eps = 1e-6
-    scaling_factor = 2.5
-    enable_sigmoid = True
-    mesh_shape = tuple(mesh_device.shape)
 
     # Get state dict from actual model or use synthetic weights
     torch.use_deterministic_algorithms(True)
@@ -392,7 +385,6 @@ def test_forward_pass_new_moe_gate(
     weight_config = get_test_weight_config(
         MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=use_synthetic_weights
     )
-
     # Generate appropriate config using utility function
     model_config = get_model_config(
         MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
@@ -412,149 +404,19 @@ def test_forward_pass_new_moe_gate(
     reference_model.to(torch.bfloat16)
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
-    input_tile = ttnn.Tile((16, 16))
-    output_tile = ttnn.Tile((1, 16))
-
     # Convert input to TTNN
-    # since each input will take 28 cores, and there are only 70 cores in total
-    # each time, we send 2 inputs to each row
-    torch_input = torch.reshape(torch_input, (-1, hf_config.hidden_size))
-    torch_input_list = list(torch.chunk(torch_input, torch_input.shape[0] // (mesh_shape[0] * 2), dim=0))
-    # len(torch_input_list) = 16
-    for i in range(len(torch_input_list)):
-        torch_input_list[i] = torch.reshape(torch_input_list[i], (-1, 16, 16))
-        # torch_input_list[i].shape = (224, 16, 16)
-        # torch_input_list[i] contains 8 tokens
-
-    num_tokens_per_iteration = torch_input_list[0].numel() // hf_config.hidden_size
-    num_tiles_per_device = torch_input_list[0].shape[0] // mesh_shape[0]
-    reshaped_input_shape = torch_input_list[0].shape
-    output_shape = (reshaped_input_shape[0], 1, reshaped_input_shape[2])
-
-    grid = mesh_device.compute_with_storage_grid_size()
-    core_grid = ttnn.num_cores_to_corerangeset(
-        num_tiles_per_device,
-        ttnn.CoreCoord(grid.x, grid.y),
-        row_wise=True,
-    )
-    input_shard_shape = (16, 16)
-    output_shard_shape = (1, 16)
-    # Shard spec: single core
-    input_shard_spec = ttnn.ShardSpec(
-        core_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
-
-    output_shard_spec = ttnn.ShardSpec(
-        core_grid,
-        output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-
-    # create the all-zero bias tensor
-    torch_bias = torch.zeros(torch_input_list[0].shape, dtype=torch.bfloat16)
-    tt_bias = ttnn.from_torch(
-        torch_bias,
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
-        memory_config=input_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        tile=input_tile,
     )
 
-    # note that we have 256 experts, and each core in each device should have the same input_indices tensor(16*16)
-    torch_input_indices = torch.arange(hf_config.n_routed_experts, dtype=torch.int32)
-    torch_input_indices = torch_input_indices.unsqueeze(0).expand(mesh_shape[0] * num_tiles_per_device, -1)
-    torch_input_indices = torch_input_indices.reshape(reshaped_input_shape)
-    torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
-    tt_input_indices = ttnn.from_torch(
-        torch_input_indices,
-        dtype=ttnn.uint16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=input_mem_config,
-        tile=input_tile,
-    )
-
-    tt_topk_weight_list = []
-    tt_topk_indices_list = []
-    for i in range(len(torch_input_list)):
-        tt_input = ttnn.from_torch(
-            torch_input_list[i],
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
-            dtype=ttnn.bfloat16,
-            memory_config=input_mem_config,
-            layout=ttnn.TILE_LAYOUT,
-            tile=input_tile,
-        )
-
-        # Create output tensor sharded on same core
-        torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
-        tt_output = ttnn.from_torch(
-            torch_output,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
-            memory_config=output_mem_config,
-            tile=output_tile,
-        )
-
-        torch_output_indices = torch.zeros(output_shape, dtype=torch.uint16)
-        tt_output_indices = ttnn.from_torch(
-            torch_output_indices,
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
-            memory_config=output_mem_config,
-            tile=output_tile,
-        )
-
-        # TTNN forward pass using utility function
-        tt_topk_weights, tt_topk_indices = DeepseekMoeGateSingleCore.op(
-            tt_input,
-            tt_bias,
-            tt_output,
-            tt_input_indices,
-            tt_output_indices,
-            eps,
-            scaling_factor,
-            enable_sigmoid,
-        )
-
-        final_shard_shape = (1, 16)
-        # Shard spec: single core
-        final_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            final_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-
-        final_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=None,
-        )
-        import pdb
-
-        pdb.set_trace()
-        tt_topk_weights = ttnn.to_layout(tt_topk_weights, ttnn.TILE_LAYOUT, memory_config=final_mem_config)
-        tt_topk_indices = ttnn.to_layout(tt_topk_indices, ttnn.TILE_LAYOUT, memory_config=final_mem_config)
-        tt_topk_weights = ttnn.reshape(tt_topk_weights, (-1, 28, 32), memory_config=output_mem_config)
-        tt_topk_indices = ttnn.reshape(tt_topk_indices, (-1, 28, 32), memory_config=output_mem_config)
-
-        tt_topk_weight_list.append(tt_topk_weights)
-        tt_topk_indices_list.append(tt_topk_indices)
-
-    tt_topk_weights = ttnn.concat(tt_topk_weight_list, dim=1)
-    tt_topk_indices = ttnn.concat(tt_topk_indices_list, dim=1)
+    # TTNN forward pass using utility function
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_topk_weights, tt_topk_indices = run_module_forward(NewMoEGate, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
@@ -571,11 +433,11 @@ def test_forward_pass_new_moe_gate(
     # Convert output back to torch
     tt_topk_weights_torch = ttnn.to_torch(
         tt_topk_weights,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
     )[0].squeeze(0)
     tt_topk_indices_torch = ttnn.to_torch(
         tt_topk_indices,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
     )[0].squeeze(0)
 
     # Cleanup
