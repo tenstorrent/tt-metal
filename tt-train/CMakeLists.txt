@@ -1,4 +1,18 @@
 cmake_minimum_required(VERSION 3.18...4.2)
+include(cmake/compilers.cmake)
+
+# When building as a standalone top-level project, inherit the compiler from
+# tt-metal's CMakeCache.txt for ABI compatibility. This is necessary because
+# build systems like scikit-build-core (used by "pip install -e") set CC/CXX
+# to generic values that don't match tt-metal's compiler.
+#
+# To use a different compiler, disable inheritance:
+#   cmake -DTT_TRAIN_INHERIT_COMPILER=OFF -DCMAKE_C_COMPILER=gcc-12 ...
+option(TT_TRAIN_INHERIT_COMPILER "Inherit compiler from tt-metal's CMakeCache.txt" ON)
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND TT_TRAIN_INHERIT_COMPILER)
+    inherit_compiler_from_tt_metal()
+endif()
 
 project(
     ml-framework-cpp
@@ -6,6 +20,7 @@ project(
         C
         CXX
 )
+CHECK_COMPILERS()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
