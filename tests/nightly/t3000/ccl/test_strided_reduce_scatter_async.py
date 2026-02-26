@@ -713,6 +713,129 @@ def run_reduce_scatter_impl(
             ),
             id="experimental_strided_128x16_4_cores_single_N_block_wide_chunk",
         ),
+        # Partial last M-block cases: slice_Ht_per_core is not a multiple of mm_block_ht.
+        # These are deliberately tiny to isolate the partial-block code path.
+        pytest.param(
+            ReduceScatterTestConfig(
+                # each device has 3 x 2 tiles; 1 core, mm_block_ht=2
+                # slice_Ht_per_core=3 → 1 full block (2 rows) + 1 partial block (1 row)
+                rs_input_shape=[8, 1, 96, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=1,
+                mm_block_ht=2,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_partial_M_block_1core_ht3_block2",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # each device has 6 x 2 tiles; 2 cores → slice_Ht_per_core=3, mm_block_ht=2
+                # same partial pattern as above but split across 2 MM cores
+                rs_input_shape=[8, 1, 192, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=2,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_partial_M_block_2cores_ht3_block2",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # each device has 6 x 2 tiles; 1 core, mm_block_ht=4
+                # slice_Ht_per_core=6 → 1 full block (4 rows) + 1 partial block (2 rows)
+                rs_input_shape=[8, 1, 192, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=1,
+                mm_block_ht=4,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_partial_M_block_1core_ht6_block4",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[2, 1, 10240, 5120],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=8,
+                mm_block_ht=8,
+                mm_block_wt=8,
+                mm_N_full_block_wt=20,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_large_input_shape_8_cores_20_N_blocks_1_chunk",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[2, 1, 9472, 5120],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=8,
+                mm_block_ht=8,
+                mm_block_wt=8,
+                mm_N_full_block_wt=20,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_large_input_shape_8_cores_8_N_blocks_1_chunk",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -814,11 +937,12 @@ def test_strided_reduce_scatter_async(
     #
     # Constraints:
     #   slice_Ht (16) % mm_cores_y == 0
-    #   (slice_Ht / mm_cores_y) % mm_block_ht == 0
     #   slice_Wt (8) % mm_N_full_block_wt == 0
+    #   NOTE: slice_Ht_per_core does NOT need to be divisible by mm_block_ht;
+    #         the last M-block per core may be partial.
     #
     # Derived values:
-    #   mm_M_unit_blocks_per_core = (16 / mm_cores_y) / mm_block_ht
+    #   mm_M_unit_blocks_per_core = ceil((16 / mm_cores_y) / mm_block_ht)
     #   N_blocks_per_slice = 8 / mm_N_full_block_wt
     #   chunk_width_in_tiles = chunk_width_in_mm_blocks * mm_block_wt
     #   chunks_per_N_block = ceil(mm_N_full_block_wt / chunk_width_in_tiles)
@@ -846,6 +970,12 @@ def test_strided_reduce_scatter_async(
         (1, 4, 3, 8, 1),
         # Chunk wider than N-block: chunk_w=16 > N_block=8, clamped to single chunk of effective_w=8
         (1, 8, 2, 8, 8),
+        # Partial last M-block: 1 core, slice_Ht_per_core=16, mm_block_ht=3 → 5 full + 1 partial (1 row)
+        (1, 3, 2, 4, 1),
+        # Partial last M-block: 2 cores, slice_Ht_per_core=8, mm_block_ht=3 → 2 full + 1 partial (2 rows)
+        (2, 3, 2, 4, 1),
+        # Partial last M-block: 4 cores, slice_Ht_per_core=4, mm_block_ht=3 → 1 full + 1 partial (1 row)
+        (4, 3, 2, 4, 1),
     ],
     ids=[
         "finest_granularity",
@@ -859,6 +989,9 @@ def test_strided_reduce_scatter_async(
         "partial_last_chunk",
         "non_power_of_2_block_wt",
         "chunk_wider_than_N_block",
+        "partial_M_block_1core",
+        "partial_M_block_2cores",
+        "partial_M_block_4cores",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep(
@@ -909,8 +1042,9 @@ def test_strided_reduce_scatter_blocking_sweep(
     #
     # Constraints:
     #   slice_Ht (128) % mm_cores_y == 0
-    #   (slice_Ht / mm_cores_y) % mm_block_ht == 0
     #   slice_Wt (16) % mm_N_full_block_wt == 0
+    #   NOTE: slice_Ht_per_core does NOT need to be divisible by mm_block_ht;
+    #         the last M-block per core may be partial.
     "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
     [
         # Coarsest: single M-block (128 rows), single N-block, single chunk
@@ -935,6 +1069,12 @@ def test_strided_reduce_scatter_blocking_sweep(
         (8, 16, 2, 16, 1),
         # Chunk wider than N-block: chunk_w=32 > N_block=16, clamped to single chunk of effective_w=16
         (1, 16, 2, 16, 16),
+        # Partial last M-block: 8 cores, slice_Ht_per_core=16, mm_block_ht=6 → 2 full + 1 partial (4 rows)
+        (8, 6, 2, 8, 1),
+        # Partial last M-block: 4 cores, slice_Ht_per_core=32, mm_block_ht=5 → 6 full + 1 partial (2 rows)
+        (4, 5, 2, 4, 1),
+        # Partial last M-block: 1 core, slice_Ht_per_core=128, mm_block_ht=6 → 21 full + 1 partial (2 rows)
+        (1, 6, 2, 8, 1),
     ],
     ids=[
         "coarsest_single_block",
@@ -948,6 +1088,9 @@ def test_strided_reduce_scatter_blocking_sweep(
         "non_power_of_2_block_wt",
         "asymmetric_tall_narrow",
         "chunk_wider_than_N_block",
+        "partial_M_block_8cores",
+        "partial_M_block_4cores",
+        "partial_M_block_1core",
     ],
 )
 # @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
