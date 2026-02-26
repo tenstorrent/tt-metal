@@ -328,6 +328,9 @@ private:
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
+    uint32_t max_dram_banks_{};
+    tt_xy_pair translated_pcie_core_;
+
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
 
@@ -547,6 +550,9 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
+
+    uint32_t get_max_dram_banks() const { return max_dram_banks_; }
+    tt_xy_pair get_translated_pcie_core() const { return translated_pcie_core_; }
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }

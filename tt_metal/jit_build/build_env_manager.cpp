@@ -94,8 +94,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
     }
 
-    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
+    CoreCoord pcie_core = MetalContext::instance().hal().get_translated_pcie_core();
 
     device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
     device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));

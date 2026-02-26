@@ -380,6 +380,9 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
         }
     };
 
+    this->max_dram_banks_ = 12;
+    this->translated_pcie_core_ = {0, 3};
+
     this->max_pinned_memory_count_ = 12;
     this->total_pinned_memory_size_ =
         4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);

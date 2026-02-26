@@ -478,6 +478,9 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
 
     this->noc_y_id_translate_table_ = {};
 
+    this->max_dram_banks_ = 2;
+    this->translated_pcie_core_ = {19, 24};
+
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
 }
 
