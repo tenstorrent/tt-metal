@@ -165,7 +165,13 @@
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
-  timeout: 15
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
   merge_gate: false
   ttsim: false  # SDPA tests require device
 
