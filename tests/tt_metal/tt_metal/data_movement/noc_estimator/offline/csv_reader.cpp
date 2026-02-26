@@ -127,6 +127,11 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
             point.loopback = (loopback_lower == "true");
         }
 
+        it = column_map_.find(COL_NOC_INDEX);
+        if (it != column_map_.end() && it->second < tokens.size()) {
+            point.noc_index = stoul(tokens[it->second]);
+        }
+
         it = column_map_.find(COL_ARCH);
         if (it != column_map_.end() && it->second < tokens.size()) {
             std::string arch_lower = to_lower(tokens[it->second]);
@@ -148,8 +153,11 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         it = column_map_.find(COL_MEMORY);
         if (it != column_map_.end() && it->second < tokens.size()) {
             std::string mem_lower = to_lower(tokens[it->second]);
-            if (mem_lower == "dram") {
-                point.memory = common::MemoryType::DRAM;
+            // Handle both "dram_interleaved" and "dram interleaved" formats
+            if (mem_lower == "dram_interleaved" || mem_lower == "dram interleaved") {
+                point.memory = common::MemoryType::DRAM_INTERLEAVED;
+            } else if (mem_lower == "dram_sharded" || mem_lower == "dram sharded") {
+                point.memory = common::MemoryType::DRAM_SHARDED;
             }
         }
 

@@ -16,7 +16,7 @@ enum class Architecture { WORMHOLE_B0 = 2, BLACKHOLE = 3 };
 
 enum class NocMechanism { UNICAST, MULTICAST, MULTICAST_LINKED };
 
-enum class MemoryType { L1, DRAM };
+enum class MemoryType { L1, DRAM_INTERLEAVED, DRAM_SHARDED };
 
 enum class NocPattern {
     ONE_FROM_ONE,
@@ -49,6 +49,7 @@ constexpr uint32_t DEFAULT_NUM_SUBORDINATES = 1;
 constexpr bool DEFAULT_SAME_AXIS = false;
 constexpr bool DEFAULT_STATEFUL = false;
 constexpr bool DEFAULT_LOOPBACK = false;
+constexpr uint32_t DEFAULT_NOC_INDEX = 0;
 
 // Key for grouping data points (all parameters except transaction_size)
 struct GroupKey {
@@ -61,6 +62,7 @@ struct GroupKey {
     bool same_axis;
     bool stateful;
     bool loopback;
+    uint32_t noc_index;
 
     // Operators are needed for std::map containers
     bool operator<(const GroupKey& other) const {
@@ -88,21 +90,24 @@ struct GroupKey {
         if (stateful != other.stateful) {
             return stateful < other.stateful;
         }
-        return loopback < other.loopback;
+        if (loopback != other.loopback) {
+            return loopback < other.loopback;
+        }
+        return noc_index < other.noc_index;
     }
 
     bool operator==(const GroupKey& other) const {
         return mechanism == other.mechanism && pattern == other.pattern && memory == other.memory &&
                arch == other.arch && num_transactions == other.num_transactions &&
                num_subordinates == other.num_subordinates && same_axis == other.same_axis &&
-               stateful == other.stateful && loopback == other.loopback;
+               stateful == other.stateful && loopback == other.loopback && noc_index == other.noc_index;
     }
 
     // Check if non-numeric fields match (for interpolation)
     bool matches_non_numeric(const GroupKey& other) const {
         return mechanism == other.mechanism && pattern == other.pattern && memory == other.memory &&
                arch == other.arch && same_axis == other.same_axis && stateful == other.stateful &&
-               loopback == other.loopback;
+               loopback == other.loopback && noc_index == other.noc_index;
     }
 };
 

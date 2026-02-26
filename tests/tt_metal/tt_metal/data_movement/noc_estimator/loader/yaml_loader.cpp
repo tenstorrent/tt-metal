@@ -39,7 +39,8 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
                 .num_subordinates = get_or_default<uint32_t>(key_node, "num_subordinates", DEFAULT_NUM_SUBORDINATES),
                 .same_axis = get_or_default<bool>(key_node, "same_axis", DEFAULT_SAME_AXIS),
                 .stateful = get_or_default<bool>(key_node, "stateful", DEFAULT_STATEFUL),
-                .loopback = get_or_default<bool>(key_node, "loopback", DEFAULT_LOOPBACK)};
+                .loopback = get_or_default<bool>(key_node, "loopback", DEFAULT_LOOPBACK),
+                .noc_index = get_or_default<uint32_t>(key_node, "noc_index", DEFAULT_NOC_INDEX)};
 
             common::LatencyData latency_data;
             latency_data.latencies = entry["latencies"].as<std::vector<double>>();

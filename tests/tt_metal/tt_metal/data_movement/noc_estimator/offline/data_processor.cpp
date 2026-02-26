@@ -19,6 +19,7 @@ std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std
             .same_axis = point.same_axis,
             .stateful = point.stateful,
             .loopback = point.loopback,
+            .noc_index = point.noc_index,
         };
 
         groups[key].push_back(point);

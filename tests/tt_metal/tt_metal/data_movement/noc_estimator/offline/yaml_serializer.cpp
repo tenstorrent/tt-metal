@@ -45,6 +45,9 @@ bool save_latency_data_to_yaml(
         if (key.loopback != DEFAULT_LOOPBACK) {
             out << YAML::Key << "loopback" << YAML::Value << key.loopback;
         }
+        if (key.noc_index != DEFAULT_NOC_INDEX) {
+            out << YAML::Key << "noc_index" << YAML::Value << key.noc_index;
+        }
         if (static_cast<int>(key.arch) != DEFAULT_ARCH) {
             out << YAML::Key << "arch" << YAML::Value << static_cast<int>(key.arch);
         }
