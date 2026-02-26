@@ -197,6 +197,7 @@ void run_single_core_cumsum(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
