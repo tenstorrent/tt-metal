@@ -1,91 +1,153 @@
 # Informer Time-Series Forecasting (TTNN)
 
 ## Platforms
-- Wormhole (n150, n300)
+- Wormhole (`n150`, `n300`)
 - Blackhole
 
 ## Overview
-Informer is a transformer-based model for long-sequence time-series forecasting with ProbSparse attention, distilling, and a generative decoder. This directory provides a TTNN implementation with a PyTorch reference and end-to-end demos.
+This demo provides a TTNN implementation of Informer for long-sequence time-series forecasting, with:
+- ProbSparse attention
+- Distilling encoder blocks
+- Generative decoder inference
+- HF checkpoint compatibility (`InformerForPrediction`)
+- Streaming inference API for long contexts
 
-## Directory Structure
-```
+## Directory Layout
+```text
 informer/
 ├── README.md
-├── __init__.py
+├── PERF.md
+├── conftest.py
+├── requirements.txt
+├── scripts/
+│   └── prepare_assets.py
 ├── demo/
-│   ├── demo_informer_inference.py
-│   ├── demo_informer_pytorch.py
-│   └── ETTh1.csv                # Optional local dataset copy
+│   └── demo.py
 ├── reference/
-│   ├── __init__.py
-│   └── torch_informer.py
+│   ├── torch_reference.py
+│   └── eval_utils.py
 ├── tests/
-│   ├── __init__.py
-│   ├── test_end_to_end.py
-│   └── test_ttnn_informer.py
+│   ├── pcc/
+│   │   ├── test_embeddings.py
+│   │   ├── test_attention.py
+│   │   ├── test_layers.py
+│   │   └── test_e2e_model.py
+│   └── perf/
+│       ├── perf_common.py
+│       ├── test_perf.py
+│       └── test_accuracy_hf.py
 └── tt/
-    ├── __init__.py
-    └── ttnn_informer.py
+    ├── config.py
+    ├── ops.py
+    ├── embeddings.py
+    ├── attention.py
+    ├── transformer.py
+    ├── model.py
+    ├── hf_runtime.py
+    ├── hf_common.py
+    └── state_io.py
 ```
 
 ## Setup
-1) Build TT-Metal and create the repo venv:
 ```bash
 ./build_metal.sh
 ./create_venv.sh
 source python_env/bin/activate
+pip install -r models/demos/informer/requirements.txt
 ```
 
-2) (Optional) Download ETTh1:
+## Assets
+Prepare local ETTh1 assets and checkpoint:
 ```bash
-curl -L -o models/demos/informer/demo/ETTh1.csv \
-    https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh1.csv
+python models/demos/informer/scripts/prepare_assets.py
+```
+Generated files:
+- `models/demos/informer/.assets/ETTh1.csv`
+- `models/demos/informer/.assets/etth1_ttnn.pt`
+
+Optional explicit HF cache pre-download:
+```bash
+huggingface-cli download huggingface/informer-tourism-monthly --repo-type model
+huggingface-cli download monash_tsf --repo-type dataset
 ```
 
-## Quick Start
-### 1) TTNN Smoke Test
+## Run Demo
+HF dataset path:
 ```bash
-python -m models.demos.informer.demo.demo_informer_inference smoke \
-    --batch 2 --seq-len 96 --label-len 48 --pred-len 24 --features 7
+python models/demos/informer/demo/demo.py \
+  --hf-model-id huggingface/informer-tourism-monthly \
+  --hf-dataset monash_tsf --hf-dataset-config tourism_monthly \
+  --hf-split test --hf-freq M --hf-max-series 128
 ```
 
-### 2) Benchmark (Latency/Throughput)
+CSV path (ETTh1-style):
 ```bash
-python -m models.demos.informer.demo.demo_informer_inference benchmark \
-    --batch-sizes 1,2,4,8,16 --warmup 5 --iters 20
+python models/demos/informer/demo/demo.py \
+  --hf-model-id huggingface/informer-tourism-monthly \
+  --csv /absolute/path/ETTh1.csv --csv-freq H
 ```
 
-### 3) Train a Torch Checkpoint (ETTh1)
+Pytest demo entrypoint:
 ```bash
-python -m models.demos.informer.demo.demo_informer_pytorch train \
-    --dataset models/demos/informer/demo/ETTh1.csv \
-    --output /tmp/etth1_torch.pt \
-    --steps 200 --batch-size 8 --d-model 64 --n-heads 2 --d-ff 256
+pytest models/demos/informer/demo/demo.py::test_demo -v -s
 ```
 
-### 4) Evaluate TTNN vs Torch + Ground Truth
+## Test Commands
+Run full Informer suite:
 ```bash
-python -m models.demos.informer.demo.demo_informer_inference eval \
-    --dataset models/demos/informer/demo/ETTh1.csv \
-    --checkpoint /tmp/etth1_torch.pt \
-    --time-features calendar --normalize
+pytest models/demos/informer/tests/pcc models/demos/informer/tests/perf -v -s
 ```
 
-### 5) Torch-Only Ground Truth Evaluation
+Run by objective:
 ```bash
-python -m models.demos.informer.demo.demo_informer_pytorch eval \
-    --dataset models/demos/informer/demo/ETTh1.csv \
-    --checkpoint /tmp/etth1_torch.pt \
-    --time-features calendar --normalize
+# Core throughput/latency and summary metrics
+pytest models/demos/informer/tests/perf/test_perf.py::TestInformerPerformance -v -s
+
+# Advanced capability checks (long sequence, streaming, high-dimensional, cache path)
+pytest models/demos/informer/tests/perf/test_perf.py::TestInformerAdvancedCapabilities -v -s
+
+# Real-data ETTh1 and HF checkpoint accuracy
+pytest models/demos/informer/tests/perf/test_accuracy_hf.py -v -s
+```
+
+## Measured Performance (Wormhole n300, 2026-02-26)
+
+| Metric | Value | Source |
+|---|---:|---|
+| Throughput (`batch=8`) | `1584.9 seq/s` | `test_perf.py::TestInformerPerformance::test_benchmark_summary` |
+| Latency (`batch=1`) | `4.01 ms` | `test_perf.py::TestInformerPerformance::test_benchmark_summary` |
+| Correlation (TTNN vs torch ref) | `0.9964` | `test_perf.py::TestInformerPerformance::test_benchmark_summary` |
+| MSE (TTNN vs torch ref) | `0.000106` | `test_perf.py::TestInformerPerformance::test_benchmark_summary` |
+| MAE (TTNN vs torch ref) | `0.008176` | `test_perf.py::TestInformerPerformance::test_benchmark_summary` |
+
+Additional details and benchmark context are in [PERF.md](PERF.md).
+
+## Streaming Inference Example
+```python
+from models.demos.informer.tt.config import InformerConfig
+from models.demos.informer.tt.model import create_informer
+
+cfg = InformerConfig(
+    enc_in=7,
+    dec_in=7,
+    c_out=7,
+    seq_len=336,
+    label_len=168,
+    pred_len=96,
+    d_model=64,
+    n_heads=2,
+    d_ff=256,
+    e_layers=2,
+    d_layers=1,
+    time_feature_dim=4,
+    dtype="bfloat16",
+)
+
+model = create_informer(cfg, device=device)
+out = model.stream_forecast(past_values, past_time, future_time, chunk_size=128)
+model.release_trace()
 ```
 
 ## Notes
-- `d_model` and `head_dim` must be multiples of 32 for TTNN tile matmul.
-- `demo_informer_inference eval` uses checkpoint normalization stats if present; `--normalize` computes stats from the training split when the checkpoint does not include them.
-- ProbSparse top-k selection can introduce small divergence vs the torch reference for long sequences.
-
-## References
-- Informer paper (AAAI 2021): https://arxiv.org/abs/2012.07436
-- HuggingFace Informer: https://huggingface.co/docs/transformers/en/model_doc/informer
-- Original repo: https://github.com/zhouhaoyi/Informer2020
-- ETT dataset: https://github.com/zhouhaoyi/ETDataset
+- `d_model` should be a multiple of `32` for best TTNN tiling behavior.
+- ProbSparse currently uses selected-query sparse routing over full keys; there is no dedicated sparse-only kernel path yet.
