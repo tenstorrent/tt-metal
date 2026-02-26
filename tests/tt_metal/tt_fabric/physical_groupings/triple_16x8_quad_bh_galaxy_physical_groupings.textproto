@@ -67,6 +67,25 @@ groupings {
   name: "tray_2"
   preset_type: TRAY_2
   instances: [
+    { id: 0 asic_location: ASIC_LOCATION_8 },
+    { id: 1 asic_location: ASIC_LOCATION_7 },
+    { id: 2 asic_location: ASIC_LOCATION_6 },
+    { id: 3 asic_location: ASIC_LOCATION_5 },
+    { id: 4 asic_location: ASIC_LOCATION_4 },
+    { id: 5 asic_location: ASIC_LOCATION_3 },
+    { id: 6 asic_location: ASIC_LOCATION_2 },
+    { id: 7 asic_location: ASIC_LOCATION_1 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# TRAY_3: Top right corner is ASIC_LOCATION_1
+groupings {
+  name: "tray_3"
+  preset_type: TRAY_3
+  instances: [
     { id: 0 asic_location: ASIC_LOCATION_1 },
     { id: 1 asic_location: ASIC_LOCATION_2 },
     { id: 2 asic_location: ASIC_LOCATION_3 },
