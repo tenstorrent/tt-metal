@@ -139,8 +139,11 @@ void kernel_main() {
 
 #ifdef FUSE_MM_OP_SIGNALER
                 // Wait for matmul to finish writing the output blocks for this chunk.
-                // The last chunk may be narrower, so compute the effective width in mm blocks.
-                uint32_t effective_chunk_width_in_mm_blocks = effective_chunk_width_in_tiles / mm_block_wt;
+                // The last chunk may be narrower than one mm_block (when mm_N_full_block_wt is not
+                // divisible by mm_block_wt). Use ceiling division so a partial chunk still waits
+                // for the 1 MM signal that covers it, rather than truncating to 0 and racing.
+                uint32_t effective_chunk_width_in_mm_blocks =
+                    (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += effective_chunk_width_in_mm_blocks;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
