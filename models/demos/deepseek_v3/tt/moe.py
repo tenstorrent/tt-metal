@@ -496,13 +496,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 tt_dispatch_input_expert_indices_tensor,
                 tt_dispatch_input_expert_scores_tensor,
                 cfg["expert_mapping_tensors"],
-                cluster_axis=cluster_axis,  # 0
-                num_links=4,
-                drain_sync_tilizer_core=None,
-                worker_mode=ttnn.WorkerMode.DIRECT,
-                dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
                 output_tensors=tt_dispatch_preallocated_output_tensors,
-                cross_device_semaphore=dispatch_global_semaphore,
+                **ccl.populate_all_to_all_dispatch_metadata_args(cfg["all_to_all_dispatch_metadata"]),
             )
 
             (
@@ -529,20 +524,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 tt_compute_output_dense_expert_activation,
                 tt_compute_ouput_dense_e_t,
                 tt_compute_output_token_counts,
-                hidden_size,
-                batch,
-                seq,
-                select_experts_k,
-                experts,
-                cluster_axis,
-                topology=ttnn.Topology.Ring,
-                num_links=4,
-                token_parallel_core_dim=combine_token_parallel_core_dim,
-                data_parallel_core_dim=combine_data_parallel_core_dim,
-                worker_cores=list(ttnn.corerange_to_cores(combine_worker_cores)),
-                mux_core_range_set=combine_mux_cores,
                 output_tensor=tt_preallocated_combine_output,
-                optional_cross_device_semaphore=combine_global_semaphore,
+                **ccl.populate_selective_reduce_combine_args(cfg["selective_reduce_combine"]),
             )
 
         else:
