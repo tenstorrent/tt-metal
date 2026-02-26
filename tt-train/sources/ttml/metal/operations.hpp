@@ -15,6 +15,7 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
+#include "ops/softmax_backward/softmax_backward.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd_fused/sgd_fused.hpp"
