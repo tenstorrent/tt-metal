@@ -255,23 +255,18 @@ enum class DataFormat : std::uint8_t {
     Int32 = 8,
     Int8 = 14,
     Int16 = 9,
-    Uint8 = 17,    // Unsigned INT with 8-bit magnitude
-    Uint16 = 130,  // Unsigned INT with 16-bit magnitude
-    // Special-case encodings used only for MXFP4 2x-packed Src Reg Storage :
-    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp
-    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp
+    UInt8 = 17,  // Unsigned INT with 8-bit magnitude
     Int4 = 23,
-    Uint4 = 25,
+    UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
-    Int8_2x = 26,
-    Uint8_2x = 28,
-
-    Lf8 = 10,
-    UInt8 = 30,
-    UInt16 = 9,
-    UInt32 = 24,
-    testMan7 = 0x82,  // intermediate format for testing: 7bit mantissa (6+hidden)
-    testMan2 = 0x8A,  // intermediate format for testing: 2bit mantissa (2+hidden)
+    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp this is supported in Quasar only
+                      // (not supported in Trinity)
+    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp this is supported in Quasar only
+                      // (not supported in Trinity)
+    Int8_2x =
+        26,  // store INT8 in Src Regs as 2x-Packed INT8;   this is supported in Trinity only (not supported in Quasar)
+    UInt8_2x =
+        28,  // store UINT8 in Src Regs as 2x Packed UINT8; this is supported in Trinity only (not supported in Quasar)
 
     automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
     Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
