@@ -110,6 +110,7 @@ FORCE_INLINE void send_pages_over_socket(
                 partial_packet_size);
         }
         socket_push_pages(sender_socket, 1);
+        socket_notify_receiver(sender_socket);
     } else {
         DPRINT << "Writing " << sender_page_size << " bytes to local core\n";
         write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, sender_page_size);

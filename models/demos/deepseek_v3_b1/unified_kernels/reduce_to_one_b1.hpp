@@ -286,6 +286,7 @@ struct ReduceToOneB1 {
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                 fabric_sender.open();
 
+                DPRINT << "AFTER OPENING FABRIC connection\n";
                 // Forward worker packets
                 uint32_t slot_base = packet_buffer_addr;
                 for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
@@ -294,18 +295,21 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                    DPRINT << "BEFORE Semaphore wait\n";
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
                     semaphore_dec(worker_sem_ptr);
+                    DPRINT << "AFTER Semaphore wait\n";
 
                     fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
                         worker_payload_addr, CTArgs::payload_size_bytes);
                     fabric_sender.send_payload_flush_blocking_from_address(
                         worker_header_addr, packet_header_size_bytes);
+                    DPRINT << "AFTER Sending worker data\n";
 
                     slot_base += CTArgs::slot_size_bytes;
                 }
-
+                DPRINT << "before fabric close and barrier\n";
                 fabric_sender.close();
                 noc_async_write_barrier();
                 DPRINT << "end of reduce to one op\n";
@@ -330,8 +334,8 @@ struct ReduceToOneB1 {
 
                 // Always write to output tensor via NOC
                 DPRINT << "write to output tensor\n";
-                // noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
-                // noc_async_write_barrier();
+                noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
+                noc_async_write_barrier();
 
                 // Send to D2H socket if enabled (socket_config_addr != 0)
                 if (args.socket_config_addr != 0) {
