@@ -107,9 +107,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
             auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
-            num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
+            num_read_per_barrier = tt::tt_metal::merge_num_sticks_to_read(
                 num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
-            num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+            num_sticks_per_core_read = num_sticks_per_core_pad32 / num_read_per_barrier;
         }
 
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
@@ -176,15 +176,15 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;
-    uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
         auto num_sticks_per_core_pad32 = num_input_pages + ((32 - num_input_pages % 32) % 32);
-        num_sticks_per_core_read =
+        const uint32_t num_read_per_barrier =
             tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
-        num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
     }
 
-    return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
+    return std::make_tuple(cb_page_size, 0, misalignment);
+}
 }
 
 }  // namespace
