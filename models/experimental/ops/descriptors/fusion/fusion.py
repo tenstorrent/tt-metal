@@ -19,7 +19,7 @@ Usage (branching tree):
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 import ttnn
 
@@ -33,19 +33,20 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
 
 
 # =============================================================================
-# Address-Patching Build Cache
+# Fusion Build Cache
 # =============================================================================
 
 # Caches the entire built FusedOp keyed by structural hash of input ops.
-# On cache hit, skips all of _build_fused_descriptor and
-# OpGraphBuilder._build_internal, only patching RT args and
-# CB buffer pointers via C++ helpers.
-_PATCH_CACHE: Dict[tuple, "_CacheEntry"] = {}
+# On cache hit, skips the full build (codegen, CB allocation, barrier setup)
+# and updates only the ProgramDescriptor's RT args and CB buffer pointers
+# from the fresh source ops.  generic_op then copies these into the cached
+# Program via override_runtime_arguments.
+_BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 
 @dataclass
 class _CacheEntry:
-    """Metadata for patching a cached FusedOp on cache hit."""
+    """Cached build result plus metadata for updating the ProgramDescriptor on cache hit."""
 
     fused_op: "FusedOp"
     # Per fused kernel: ordered list of (op_idx, kernel_idx_in_op)
@@ -87,7 +88,7 @@ def _cache_key_and_ops(items):
     return tuple(h(op.descriptor) for op in ops), ops
 
 
-def _setup_cache_entry(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
+def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
     """Record metadata from a freshly-built FusedOp for future cache hits.
 
     Extracts the role_map (which phase kernels map to each fused kernel),
@@ -205,10 +206,12 @@ def _setup_cache_entry(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phas
     )
 
 
-def _patch_cached(entry: _CacheEntry, ops: List[OpDescriptor]) -> "FusedOp":
-    """Patch a cached FusedOp with new tensor addresses from fresh ops.
+def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "FusedOp":
+    """Update a cached FusedOp's ProgramDescriptor from fresh source ops.
 
-    Uses C++ helpers for efficient RT arg rebuilding (~50us total).
+    Rebuilds RT args and CB buffer pointers so that generic_op's
+    override_runtime_arguments copies the correct values into the
+    cached Program.  Uses C++ helpers (~50us total).
     """
     fused = entry.fused_op
     desc = fused.descriptor
@@ -271,8 +274,8 @@ def _recompute_rebind(spec_entries: List[Tuple[int, int, int]], ops: List[OpDesc
 
 
 def clear_build_cache() -> None:
-    """Clear the patch cache."""
-    _PATCH_CACHE.clear()
+    """Clear the fusion build cache."""
+    _BUILD_CACHE.clear()
 
 
 # =============================================================================
@@ -299,7 +302,6 @@ class FusedOp:
         "op",
         "semaphores",
         "kernel_labels",
-        "_io_tensors",
     )
 
     def __init__(
@@ -311,7 +313,6 @@ class FusedOp:
         self.op = op
         self.semaphores = semaphores
         self.kernel_labels = kernel_labels
-        self._io_tensors: Optional[List[Any]] = None  # cached for launch()
 
     @property
     def descriptor(self):
@@ -331,9 +332,8 @@ class FusedOp:
         Returns:
             self.output_tensors (tuple of output tensors)
         """
-        if self._io_tensors is None:
-            self._io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn.generic_op(self._io_tensors, self.descriptor)
+        io_tensors = list(self.input_tensors) + list(self.output_tensors)
+        ttnn.generic_op(io_tensors, self.descriptor)
         return self.output_tensors
 
     def dump_kernel_sources(self, output_dir: str) -> None:
@@ -472,11 +472,11 @@ class Sequential:
                 compiles from disk instead of in-memory strings.  Existing
                 files are NOT overwritten — delete them to force regeneration.
         """
-        # Try patch cache first (fast path: ~50us)
+        # Try build cache first (fast path: ~50us)
         key, ops = _cache_key_and_ops(self._items)
-        entry = _PATCH_CACHE.get(key)
+        entry = _BUILD_CACHE.get(key)
         if entry is not None:
-            result = _patch_cached(entry, ops)
+            result = _update_cached_descriptor(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
             return result
@@ -491,7 +491,7 @@ class Sequential:
 
         # Record cache entry for future hits
         if len(ops) > 1:
-            _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
+            _BUILD_CACHE[key] = _cache_build_result(fused, ops, r.kernel_phase_map)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -545,11 +545,11 @@ class Parallel:
                 compiles from disk instead of in-memory strings.  Existing
                 files are NOT overwritten — delete them to force regeneration.
         """
-        # Try patch cache first (fast path)
+        # Try build cache first (fast path)
         key, ops = _cache_key_and_ops(self._items)
-        entry = _PATCH_CACHE.get(key)
+        entry = _BUILD_CACHE.get(key)
         if entry is not None:
-            result = _patch_cached(entry, ops)
+            result = _update_cached_descriptor(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
             return result
@@ -564,7 +564,7 @@ class Parallel:
 
         # Record cache entry for future hits
         if len(ops) > 1:
-            _PATCH_CACHE[key] = _setup_cache_entry(fused, ops, r.kernel_phase_map)
+            _BUILD_CACHE[key] = _cache_build_result(fused, ops, r.kernel_phase_map)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
