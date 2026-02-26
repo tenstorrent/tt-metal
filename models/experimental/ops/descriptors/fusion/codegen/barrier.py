@@ -6,8 +6,8 @@
 Barrier C++ infrastructure generation for fused kernels.
 
 Generates the ``namespace barrier { }`` block for each RISC type (BRISC,
-NCRISC, compute). Uses per-RISC template strings and dict lookups to
-produce identical output from a single unified generator.
+NCRISC, compute). NCRISC/compute use per-RISC template strings; BRISC
+(coordinator) uses generation functions parameterized by ``has_compute``.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -122,31 +122,11 @@ __attribute__((noinline)) void rebind_cbs(
 # =============================================================================
 
 _PHASE_STATE = {
-    "riscv_0": (
-        "    uint32_t done;\n"
-        "    volatile tt_l1_ptr uint32_t* compute_done;\n"
-        "    volatile tt_l1_ptr uint32_t* writer_done;"
-    ),
     "riscv_1": ("    uint32_t done;\n" "    volatile tt_l1_ptr uint32_t* writer_done;"),
     "compute": ("    uint32_t done;\n" "    volatile tt_l1_ptr uint32_t* compute_done;"),
 }
 
 _PHASE_WAIT = {
-    "riscv_0": (
-        "    FORCE_INLINE void wait() {\n"
-        '        DeviceZoneScopedN("barrier-wait");\n'
-        "        done++;\n"
-        "        {\n"
-        '            DeviceZoneScopedN("barrier-noc-drain");\n'
-        "            noc_async_full_barrier();\n"
-        "        }\n"
-        "        {\n"
-        '            DeviceZoneScopedN("barrier-sem-wait");\n'
-        "            noc_semaphore_wait_min(compute_done, done);\n"
-        "            noc_semaphore_wait_min(writer_done, done);\n"
-        "        }\n"
-        "    }"
-    ),
     "riscv_1": (
         "    FORCE_INLINE void wait() {\n"
         '        DeviceZoneScopedN("barrier-wait");\n'
@@ -168,16 +148,6 @@ _PHASE_WAIT = {
 }
 
 _INIT_BODY = {
-    "riscv_0": (
-        "    phase::done = 0;\n"
-        "    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
-        "        get_arg_val<uint32_t>(rt_offset));\n"
-        "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
-        "        get_arg_val<uint32_t>(rt_offset + 1));\n"
-        "    // Reset L1 semaphores for re-execution (stale values cause premature barrier pass)\n"
-        "    *phase::compute_done = 0;\n"
-        "    *phase::writer_done = 0;"
-    ),
     "riscv_1": (
         "    phase::done = 0;\n"
         "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
@@ -428,6 +398,65 @@ def _emit_follower_reset(
     return lines
 
 
+def _coordinator_phase_state(has_compute: bool) -> str:
+    """Generate phase state variables for BRISC (coordinator)."""
+    lines = ["    uint32_t done;"]
+    if has_compute:
+        lines.append("    volatile tt_l1_ptr uint32_t* compute_done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
+    return "\n".join(lines)
+
+
+def _coordinator_phase_wait(has_compute: bool) -> str:
+    """Generate phase::wait() for BRISC — waits for whichever roles exist."""
+    lines = [
+        "    FORCE_INLINE void wait() {",
+        '        DeviceZoneScopedN("barrier-wait");',
+        "        done++;",
+        "        {",
+        '            DeviceZoneScopedN("barrier-noc-drain");',
+        "            noc_async_full_barrier();",
+        "        }",
+        "        {",
+        '            DeviceZoneScopedN("barrier-sem-wait");',
+    ]
+    if has_compute:
+        lines.append("            noc_semaphore_wait_min(compute_done, done);")
+    lines.extend(
+        [
+            "            noc_semaphore_wait_min(writer_done, done);",
+            "        }",
+            "    }",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _coordinator_init_body(has_compute: bool) -> str:
+    """Generate BRISC init — reads semaphore pointers from sequential RT arg offsets."""
+    lines = ["    phase::done = 0;"]
+    offset = 0
+    if has_compute:
+        lines.extend(
+            [
+                "    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(",
+                f"        get_arg_val<uint32_t>(rt_offset + {offset}));",
+            ]
+        )
+        offset += 1
+    lines.extend(
+        [
+            "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(",
+            f"        get_arg_val<uint32_t>(rt_offset + {offset}));",
+            "    // NOTE: Do NOT reset *compute_done or *writer_done here.",
+            "    // Each RISC resets its own semaphore in its own init().",
+            "    // Resetting here races with fast compute/writer signaling",
+            "    // (e.g. no-op phase 0 where compute signals immediately).",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _generate_barrier_namespace(
     risc_type: str,
     multi_barrier: MultiBarrierSpec,
@@ -435,12 +464,16 @@ def _generate_barrier_namespace(
     sources: List[Tuple[int, str]],
     per_phase_cb_slots: List[List[int]],
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
+    has_compute: bool = True,
 ) -> List[str]:
     """Generate ``namespace barrier { }`` for any RISC type.
 
     Produces identical output to the former per-RISC generators. Structure:
     preamble -> CB reset/resync function -> phase CB arrays -> segment
     namespaces -> phase namespace (state + wait + reset) -> init -> close.
+
+    When ``has_compute`` is False, the BRISC barrier skips the
+    ``compute_done`` semaphore wait (no compute kernel to signal it).
     """
     is_coordinator = risc_type == "riscv_0"
     num_segments = len(multi_barrier.segments)
@@ -472,14 +505,17 @@ def _generate_barrier_namespace(
         lines.extend(_emit_rebind_slot_arrays(dispatch))
 
     # Segment namespaces
+    # Barrier RT args = [compute_done? writer_done, seg0_arrive, seg0_release, ...]
+    num_phase_sems = int(has_compute) + 1  # [compute_done?] + writer_done
+    seg_base_offset = num_phase_sems
     if is_coordinator:
         for seg_idx in range(num_segments):
             lines.extend(
                 _MULTICAST_SEGMENT_TEMPLATE.format(
                     seg_idx=seg_idx,
                     s=f"seg{seg_idx}",
-                    arrive_offset=2 + seg_idx * 2,
-                    release_offset=3 + seg_idx * 2,
+                    arrive_offset=seg_base_offset + seg_idx * 2,
+                    release_offset=seg_base_offset + 1 + seg_idx * 2,
                 ).split("\n")
             )
             lines.append("")
@@ -495,9 +531,15 @@ def _generate_barrier_namespace(
 
     # Phase namespace: state variables + wait() + reset()
     lines.append("namespace phase {")
-    lines.extend(_PHASE_STATE[risc_type].split("\n"))
+    if is_coordinator:
+        lines.extend(_coordinator_phase_state(has_compute).split("\n"))
+    else:
+        lines.extend(_PHASE_STATE[risc_type].split("\n"))
     lines.append("")
-    lines.extend(_PHASE_WAIT[risc_type].split("\n"))
+    if is_coordinator:
+        lines.extend(_coordinator_phase_wait(has_compute).split("\n"))
+    else:
+        lines.extend(_PHASE_WAIT[risc_type].split("\n"))
     lines.append("")
     if is_coordinator:
         lines.extend(_emit_coordinator_reset(dispatch, op_semaphore_info or []))
@@ -508,7 +550,10 @@ def _generate_barrier_namespace(
 
     # init()
     lines.append("FORCE_INLINE void init() {")
-    lines.extend(_INIT_BODY[risc_type].split("\n"))
+    if is_coordinator:
+        lines.extend(_coordinator_init_body(has_compute).split("\n"))
+    else:
+        lines.extend(_INIT_BODY[risc_type].split("\n"))
     for seg_idx in range(num_segments):
         lines.append(f"    segment_{seg_idx}::init();")
     lines.append("}")

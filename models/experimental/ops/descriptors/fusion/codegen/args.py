@@ -186,6 +186,35 @@ def _concatenate_common_runtime_args(
     return common_args
 
 
+def _compute_common_rt_arg_offsets(
+    phase_kernels: List[Dict[str, Any]],
+    kernel_type: str,
+) -> Optional[Dict[int, int]]:
+    """Compute per-phase cumulative offsets for common runtime args.
+
+    Returns None if no phase has common runtime args, otherwise a dict
+    mapping phase_idx -> starting offset in the concatenated common args array.
+    """
+    offsets: Dict[int, int] = {}
+    cumulative = 0
+    any_common = False
+
+    for i, pk in enumerate(phase_kernels):
+        offsets[i] = cumulative
+        kernel = pk.get(kernel_type)
+        if kernel is None:
+            continue
+        try:
+            n = len(list(kernel.common_runtime_args))
+            if n > 0:
+                any_common = True
+                cumulative += n
+        except (AttributeError, TypeError):
+            pass
+
+    return offsets if any_common else None
+
+
 # =============================================================================
 # Named Compile-Time Arg Merging
 # =============================================================================
