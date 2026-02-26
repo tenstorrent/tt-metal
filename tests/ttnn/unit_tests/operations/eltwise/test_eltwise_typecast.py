@@ -541,42 +541,6 @@ def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
     assert torch.equal(npu_result, expected)
 
 
-# def test_typecast_legacy_sharded_l1_alignment_violation(device):
-#     """Violates is_valid_for_sharded_optimized_typecast condition 4: shard_width * datum_size % L1_alignment != 0.
-
-#     Uses ROW_MAJOR WIDTH_SHARDED with shard_width=4 and bfloat16 (2 bytes).
-#     4 * 2 = 8 bytes, which is not a multiple of L1 alignment (16 bytes).
-#     Uses bfloat16 -> uint16 (same tile size) so only condition 4 is violated.
-#     shard = [256, 4]: 256 * 4 = 1024 elements, 1024 * 2 = 2048 bytes = tile_size, so condition 5 is satisfied.
-#     """
-#     torch.manual_seed(0)
-#     shape = [1, 1, 256, 32]
-
-#     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-#     shard_shape = [256, 4]  # 8 cores, width 32 / 8 = 4
-
-#     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-#     mem_config = ttnn.MemoryConfig(
-#         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
-#     )
-
-#     # torch_input = torch.randn(shape, dtype=torch.bfloat16)
-#     torch_input = torch.zeros(shape, dtype=torch.bfloat16)
-
-#     cpu_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-#     cpu_output = ttnn.typecast(cpu_input, dtype=ttnn.uint16)
-#     cpu_reference = ttnn.to_torch(cpu_output)
-
-#     input_tensor = ttnn.from_torch(
-#         torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
-#     )
-#     output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.uint16)
-#     assert output_tensor.dtype == ttnn.uint16
-
-#     npu_result = ttnn.to_torch(output_tensor)
-#     assert torch.equal(cpu_reference, npu_result)
-
-
 def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     """Violates is_valid_for_sharded_optimized_typecast condition 5: shard_size_in_bytes % tile_size != 0.
 
