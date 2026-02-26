@@ -205,12 +205,7 @@ void kernel_main() {
             auto out_page_start = l1_read_addr + output * out_page_size;
             auto tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
             noc_async_write(out_page_start, tensor_page_addr, out_page_size);
-
-            if constexpr (unicast) {
-                writer.send(out_page_start, tensor_page_addr);
-            } else {
-                writer.send(out_page_start, tensor_page_addr);
-            }
+            writer.send(out_page_start, tensor_page_addr);
         }
         page_id += outputs_per_cb_page;
 
