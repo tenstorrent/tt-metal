@@ -6,7 +6,7 @@ Coverage:
 - TT (TTNN): Swin-B backbone + pixel decoder + transformer decoder + heads
 
 ## Platform
-- Tested on Wormhole (N300) only.
+- Tested on Wormhole (N300) single chip (unit mesh / `device_id=0`; not data-parallel).
 
 ## Prerequisites
 - Follow `INSTALLING.md` at repo root to build TT-Metal/TT-NN and Python bindings.
@@ -59,6 +59,8 @@ python -m models.experimental.maskformer_swin.demo.runner \
   --output-dir generated/maskformer_swin/stage1_baseline/demo_outputs
 ```
 
+Note: `--device` is a reporting label; the runner currently opens `device_id=0` (single chip). Perf dumps include the detected `cluster_type` and actual `mesh_device_ids`/`mesh_num_devices`.
+
 The `demo_outputs/` folder contains:
 - `semantic_overlay.png` (semantic segmentation overlay)
 - `panoptic_segmentation.png` + `panoptic_segments.json` (colored segments + labels/scores/areas)
@@ -99,6 +101,14 @@ python -m models.experimental.maskformer_swin.demo.runner \
 PYTHONPATH=$(pwd) pytest models/experimental/maskformer_swin/tests/pcc/test_maskformer_swin.py -q
 ```
 
+## Ideal end-to-end perf (trace + 2CQ)
+
+For "ideal" end-to-end perf (trace replay + 2 command queues), run:
+
+```bash
+PYTHONPATH=$(pwd) pytest models/experimental/maskformer_swin/tests/perf/test_perf_e2e_maskformer_swin.py -q
+```
+
 ## Generate perf sheet (device ops CSV)
 
 This generates the per-op device perf sheet CSV via `tools/tracy/profile_this.py`.
@@ -131,7 +141,7 @@ The extracted CSV is written to:
 - Repro command is saved at:
   - `generated/maskformer_swin/stage3_opt/perf_sheet/command.txt`
 
-## Measured performance (N300)
+## Measured performance (N300, single chip)
 
 Measured on **N300** with a single 320x320 image (`models/sample_data/demo.jpeg`). See the raw runner dumps under:
 - `generated/maskformer_swin/stage1_baseline/perf.json`
@@ -139,9 +149,9 @@ Measured on **N300** with a single 320x320 image (`models/sample_data/demo.jpeg`
 - `generated/maskformer_swin/stage3_opt/perf.json`
 
 Summary (mean latency over 5 runs; includes full TT forward + explicit device synchronize in the timed loop):
-- Stage 1: `1354.33 ms`
-- Stage 2: `1295.94 ms` (4.31% faster vs stage1)
-- Stage 3: `1149.33 ms` (15.14% faster vs stage1, 11.31% faster vs stage2)
+- Stage 1: `1069.62 ms`
+- Stage 2: `934.30 ms` (12.65% faster vs stage1)
+- Stage 3: `904.63 ms` (15.43% faster vs stage1, 3.18% faster vs stage2)
 
 640x640 stage1 sanity (single run):
 - `generated/maskformer_swin/stage1_640_sanity/perf_640.json`
