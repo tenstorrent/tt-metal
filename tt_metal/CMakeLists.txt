@@ -92,6 +92,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/queue_id.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
     api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
@@ -122,6 +124,14 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
     api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/experimental/udm/mesh_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
+    api/tt-metalium/experimental/udm/mesh_kernel.hpp
+    api/tt-metalium/experimental/udm/mesh_program.hpp
+    api/tt-metalium/experimental/udm/mesh_semaphore.hpp
+    api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_utils.hpp
 )
 target_sources(
     tt_metal
@@ -203,6 +213,7 @@ target_sources(
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_prefetch.hpp
             impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             ${COMPUTE_KERNEL_API}
@@ -251,7 +262,6 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
-        Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -267,6 +277,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
+        Reflect::Reflect
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
@@ -314,7 +325,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
-add_subdirectory(experimental/udm)
+add_subdirectory(impl/experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

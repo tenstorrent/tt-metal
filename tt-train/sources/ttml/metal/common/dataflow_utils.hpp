@@ -98,6 +98,21 @@ void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
     cb_push_back(cb_id, onetile);
 }
 
+// Zero-fills already-reserved tile slots in a CB (e.g. tail padding so compute always sees block_size tiles).
+inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, uint32_t num_slots, uint32_t tile_size) {
+    if (num_slots == 0) {
+        return;
+    }
+    uint32_t l1_base = get_write_ptr(cb_id) + start_slot * tile_size;
+    const uint32_t num_u32_per_tile = tile_size / sizeof(uint32_t);
+    for (uint32_t s = 0; s < num_slots; ++s) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + s * tile_size);
+        for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
+            ptr[i] = 0;
+        }
+    }
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {

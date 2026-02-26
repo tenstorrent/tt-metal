@@ -24,14 +24,14 @@ def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "encoder": 19.0,
+            "encoder": 0.1,
             "denoising": 800.0,
             "vae": 9.0,
             "total": 850.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 0.1,
             "denoising": 163.0,
             "vae": 18.2,
             "total": 192.0,
@@ -39,14 +39,14 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 15.0,
+                "encoder": 0.1,
                 "denoising": 185.0,
                 "vae": 8.0,
                 "total": 208.0,
             }
         else:
             expected_metrics = {
-                "encoder": 15.0,
+                "encoder": 0.1,
                 "denoising": 440.0,
                 "vae": 8.0,
                 "total": 463.0,
@@ -55,7 +55,7 @@ def t2v_metrics(mesh_device, height):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 27.0,
+            "encoder": 0.06,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -63,7 +63,7 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (1, 8) and height == 480:
         assert is_blackhole(), "1x8 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 23.0,
+            "encoder": 0.08,
             "denoising": 426.6,
             "vae": 10.0,
             "total": 449.3,
@@ -94,7 +94,8 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # FSDP is needed for 2x2 with encoder now on device
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
@@ -203,7 +204,7 @@ def test_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         with torch.no_grad():
-            result = pipeline(
+            pipeline(
                 prompt=prompts[0],
                 image_prompt=image_prompt,
                 height=height,
@@ -214,7 +215,30 @@ def test_pipeline_performance(
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
-    # Check output
+    # Performance measurement runs
+    logger.info("Running performance measurement iterations...")
+    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
+
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+
+        # Run pipeline with different prompt
+        prompt_idx = (i + 1) % len(prompts)
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                result = pipeline(
+                    prompt=prompts[prompt_idx],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                )
+
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+        # Check output
     if hasattr(result, "frames"):
         frames = result.frames
     else:
@@ -234,34 +258,11 @@ def test_pipeline_performance(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
+        if not is_ci_env:
+            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
-
-    # Performance measurement runs
-    logger.info("Running performance measurement iterations...")
-    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
-
-    for i in range(num_perf_runs):
-        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
-
-        # Run pipeline with different prompt
-        prompt_idx = (i + 1) % len(prompts)
-        with benchmark_profiler("run", iteration=i):
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts[prompt_idx],
-                    image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                )
-
-        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]

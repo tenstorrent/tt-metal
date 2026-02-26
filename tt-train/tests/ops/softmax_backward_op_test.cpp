@@ -72,11 +72,23 @@ xt::xarray<float> reference_softmax_backward(const xt::xarray<float>& y, const x
     return y * (grad - dot);
 }
 
+// Converts float xtensor to bfloat16 so from_xtensor<bfloat16, BFLOAT16> is used; that path does
+// tilization on host (to_layout TILE then to_device), avoiding device tilize.
+static xt::xarray<bfloat16> to_bf16_xtensor(const xt::xarray<float>& src) {
+    xt::xarray<bfloat16> out = xt::empty<bfloat16>(src.shape());
+    for (size_t i = 0; i < src.size(); ++i) {
+        out.data()[i] = bfloat16(src.data()[i]);
+    }
+    return out;
+}
+
 ttnn::Tensor to_device_tensor(
     const xt::xarray<float>& host_tensor, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     switch (dtype) {
-        case ttnn::DataType::BFLOAT16:
-            return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(host_tensor, device);
+        case ttnn::DataType::BFLOAT16: {
+            auto bf16_host = to_bf16_xtensor(host_tensor);
+            return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(bf16_host, device);
+        }
         case ttnn::DataType::FLOAT32:
             return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(host_tensor, device);
         default: TT_THROW("Unsupported dtype in softmax backward test");
@@ -171,8 +183,8 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
         .h = 32,
         .w = 32,
         .dim = 3,
-        .atol = 2.5e-2F,
-        .rtol = 2.5e-2F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
         .grad_min = -10.0F,
         .grad_max = 10.0F,
     };
@@ -222,11 +234,11 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
     run_softmax_backward_case(test_case, GetParam(), s_device, sub_core_grids);
 }
 
-TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LongRows) {
+TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("long-row shape");
     constexpr std::array<SoftmaxBackwardCase, 2> cases = {{
-        {"long_rows_streaming_300_tiles", 1, 5, 32, 300 * 32 + 3, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"long_rows_streaming_639_tiles", 1, 1, 32, 639 * 32, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
+        {"long_rows_streaming_300_tiles", 1, 5, 32, 300 * 32, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"long_rows_streaming_639_tiles", 1, 1, 32, 639 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
@@ -234,7 +246,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LongRows) {
     }
 }
 
-TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyShortRows) {
+TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("many-short-rows shape");
     constexpr SoftmaxBackwardCase test_case{
         .name = "many_short_rows_non_streaming_5_tiles",
@@ -243,8 +255,8 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyShortRows) {
         .h = 6400,
         .w = 5 * 32,
         .dim = -1,
-        .atol = 6e-2F,
-        .rtol = 6e-2F,
+        .atol = 2.5e-2F,
+        .rtol = 2.5e-2F,
         .grad_min = -10.0F,
         .grad_max = 10.0F,
     };
@@ -255,12 +267,12 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyShortRows) {
 // Type B - first face is full, second face is empty
 // Type C - first face is full, second face must be padded
 
-TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_Padding_NonStreaming) {
+TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_NonStreaming) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("padded non-streaming shape");
     constexpr std::array<SoftmaxBackwardCase, 3> cases = {{
-        {"padded_non_streaming_type_a", 1, 1, 128, 14 * 32 + 2, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"padded_non_streaming_type_b", 2, 1, 256, 14 * 32 + 16, 3, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"padded_non_streaming_type_c", 2, 1, 128, 14 * 32 + 18, 3, 6e-2F, 6e-2F, -10.0F, 10.0F},
+        {"padded_non_streaming_type_a", 1, 1, 128, 14 * 32 + 2, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"padded_non_streaming_type_b", 2, 1, 256, 14 * 32 + 16, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"padded_non_streaming_type_c", 2, 1, 128, 14 * 32 + 18, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
@@ -268,12 +280,12 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_Padding_NonStreaming) {
     }
 }
 
-TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_Padding_Streaming) {
+TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_Streaming) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("padded streaming shape");
     constexpr std::array<SoftmaxBackwardCase, 3> cases = {{
-        {"padded_streaming_type_a", 1, 5, 32, 300 * 32 + 3, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"padded_streaming_type_b", 7, 1, 64, 300 * 32 + 16, 3, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"padded_streaming_type_c", 3, 1, 32, 300 * 32 + 19, 3, 6e-2F, 6e-2F, -10.0F, 10.0F},
+        {"padded_streaming_type_a", 1, 5, 32, 300 * 32 + 3, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"padded_streaming_type_b", 7, 1, 64, 300 * 32 + 16, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"padded_streaming_type_c", 3, 1, 32, 300 * 32 + 19, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
@@ -281,14 +293,14 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_Padding_Streaming) {
     }
 }
 
-TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_WidthBoundaryStreamingSwitch) {
+TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamingSwitch) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("boundary shape");
     constexpr std::array<SoftmaxBackwardCase, 5> cases = {{
-        {"boundary_63_tiles", 1, 2, 32, 63 * 32, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"boundary_64_tiles", 1, 3, 32, 64 * 32, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"boundary_65_tiles", 1, 4, 32, 65 * 32, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"boundary_127_tiles", 1, 1, 32, 127 * 32, -1, 6e-2F, 6e-2F, -10.0F, 10.0F},
-        {"boundary_128_tiles", 3, 1, 32, 128 * 32, -1, 7e-2F, 7e-2F, -10.0F, 10.0F},
+        {"boundary_63_tiles", 1, 2, 32, 63 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"boundary_64_tiles", 1, 3, 32, 64 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"boundary_65_tiles", 1, 4, 32, 65 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"boundary_127_tiles", 1, 1, 32, 127 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"boundary_128_tiles", 3, 1, 32, 128 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);

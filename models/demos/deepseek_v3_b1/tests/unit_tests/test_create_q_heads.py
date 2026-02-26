@@ -43,6 +43,7 @@ Per-receiver data layout (8 heads per receiver):
         ((1, 512), (2, 64), None),  # Auto NOC routing - selects best single NOC
     ],
 )
+@pytest.mark.requires_grid_size((12, 8))
 def test_create_q_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     """Test TTNN create Q heads operation from 12x8 cores to 4x2 cores"""
     # Qnope: 8 columns x 8 rows (cols 0-7)
@@ -51,11 +52,6 @@ def test_create_q_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     qrope_grid = ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7))
     # Receiver: 4 columns x 2 rows at (0-3, 1-2)
     receiver_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 2))
-
-    # Check device grid size
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 12 or device_grid.y < 8:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 12x8 sender grid")
 
     # Calculate dimensions
     qnope_rows = qnope_grid.end.y - qnope_grid.start.y + 1  # 8

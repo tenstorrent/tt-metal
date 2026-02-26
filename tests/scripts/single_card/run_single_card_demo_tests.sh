@@ -93,6 +93,13 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
+run_phi3_func() {
+  phi3=microsoft/Phi-3-mini-128k-instruct
+  phi3_cache=$TT_CACHE_HOME/$phi3
+  HF_MODEL=$phi3 TT_CACHE_PATH=$phi3_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
+  echo "LOG_METAL: Phi-3-Mini-128K-Instruct test completed"
+}
+
 run_phi4_func() {
   HF_MODEL=microsoft/phi-4 $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
 }
@@ -197,6 +204,7 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
@@ -228,7 +236,7 @@ run_efficientnet_b0_func(){
 
 run_stable_diffusion_func() {
 
-  $PYTEST_CMD --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
+  $PYTEST_CMD --timeout 600 --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
 
 }
 

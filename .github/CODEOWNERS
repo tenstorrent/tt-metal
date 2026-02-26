@@ -107,7 +107,8 @@ tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tensto
 tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
-tt_metal/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
+tt_metal/impl/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 
 # metal misc
@@ -118,7 +119,7 @@ tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-dev
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
-tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/codeowner-bypass
+tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins @tenstorrent/codeowner-bypass
 
 # metal tests
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/codeowner-bypass
@@ -177,6 +178,8 @@ ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelT
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
@@ -243,6 +246,8 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @te
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
 tests/sweep_framework/ @stevendae @bbradelTT @ntarafdar @pavlejosipovic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
@@ -405,7 +410,7 @@ tt-train/sources/ttml/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT @tenstorren
 # optimizers
 tt-train/sources/ttml/optimizers/** @zbaczewskiTT @tenstorrent/codeowner-bypass
 # tests
-tt-train/tests/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @athompsonTT @abustamanteTT @tenstorrent/codeowner-bypass
+tt-train/tests/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @abustamanteTT @tenstorrent/codeowner-bypass
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
