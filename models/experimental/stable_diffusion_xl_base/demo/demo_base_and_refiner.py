@@ -285,6 +285,13 @@ def run_demo_inference(
     ],
     ids=["default_additional_parameters"],
 )
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+    ],
+    ids=["1024x1024"],
+)
 def test_demo_base_and_refiner(
     validate_fabric_compatibility,
     mesh_device,
