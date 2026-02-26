@@ -2967,15 +2967,13 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     }
 }
 
-TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
-    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/triple_8x16_cluster_psd.textproto";
+TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings_real.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
 
-    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
-    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
     // Try finding any for BH_galaxy_hosts
@@ -2987,7 +2985,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
         auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: BH_galaxy_hosts grouping should map to triple-16x8 PSD";
+            << "Expected validation to pass: BH_galaxy_hosts grouping should map to mock cluster PSD";
     }
 
     {
@@ -2998,7 +2996,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
         auto asic_ids = pgd.find_any_in_psd(mesh_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: 8x16_Mesh grouping should map to triple-16x8 PSD";
+            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
     }
 
     {
@@ -3015,7 +3013,7 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
 
         // Test and see how it goes
         EXPECT_EQ(asic_ids.size(), 3u)
-            << "Expected validation to pass: 16x8_Mesh grouping should map to triple-16x8 PSD";
+            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
     }
 
     {
@@ -3027,8 +3025,8 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple16x8PsdWithT
 
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
-        EXPECT_EQ(asic_ids.size(), 24u)
-            << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to triple-16x8 PSD (12 mappings each)";
+        EXPECT_EQ(asic_ids.size(), 24u) << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to mock "
+                                           "cluster PSD (12 mappings each)";
     }
 }
 
