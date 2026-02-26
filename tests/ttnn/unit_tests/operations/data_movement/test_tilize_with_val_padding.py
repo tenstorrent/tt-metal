@@ -258,8 +258,5 @@ def test_tilize_with_val_padding_nd_sharded(
     )
 
     output_torch_tensor = ttnn_output_tensor.cpu().to_torch_with_padded_shape()  # ttnn.to_torch(ttnn_output_tensor)
-    print(input_torch_tensor.shape)
-    print(output_torch_tensor.shape)
     expected_torch_tensor = pytorch_tilize_with_val_padding(input_torch_tensor, output_padded_shape, pad_value)
-    print(expected_torch_tensor.shape)
     assert_equal(expected_torch_tensor, output_torch_tensor)
