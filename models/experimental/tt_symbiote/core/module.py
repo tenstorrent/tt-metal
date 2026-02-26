@@ -218,6 +218,22 @@ class TTNNModule:
     def override_children_module_names(self):
         set_module_name_recursively(self, self.module_name)
 
+    def named_children(self):
+        """Returns an iterator over immediate children modules, yielding both the name of the module as well as the module itself."""
+        for name, child in self.__dict__.items():
+            if name in ["_fallback_torch_layer", "torch_layer"]:
+                continue
+            if isinstance(child, (torch.nn.Module, TTNNModule)):
+                yield name, child
+            elif isinstance(child, dict):
+                for k, v in child.items():
+                    if isinstance(v, (torch.nn.Module, TTNNModule)):
+                        yield f"{name}[{k}]", v
+            elif isinstance(child, (list, tuple)):
+                for i, v in enumerate(child):
+                    if isinstance(v, (torch.nn.Module, TTNNModule)):
+                        yield f"{name}[{i}]", v
+
 
 def deallocate_weights_after(func):
     """Decorator to deallocate weights after forward pass."""
