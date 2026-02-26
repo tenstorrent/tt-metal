@@ -112,6 +112,10 @@ def load_model(
     logger.info("Cache does not exist. Loading PyTorch state dict.")
     tt_model.load_torch_state_dict(get_torch_state_dict())
 
+    # If distributed, ensure that all processes have completed the check whether cache_dir exists,
+    # before any rank might proceed to create that dir to save.
+    ttnn.distributed_context_barrier()
+
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)

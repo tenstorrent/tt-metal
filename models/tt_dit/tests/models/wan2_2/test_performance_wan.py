@@ -270,8 +270,11 @@ def test_pipeline_performance(
     frames = frames[0]
     try:
         if not is_ci_env:
-            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 
