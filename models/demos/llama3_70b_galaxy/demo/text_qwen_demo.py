@@ -1046,10 +1046,9 @@ def test_qwen_demo_text(
 
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
-    all_iter_times = []
     for i in range(1, iteration):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
-        all_iter_times.append(profiler.get_duration(f"inference_decode_time_{i}"))
+
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
