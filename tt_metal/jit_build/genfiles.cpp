@@ -426,13 +426,21 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         options.dst_full_sync_en ? "Full" : "Half");
 }
 
-void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
+void emit_math_fidelity_descriptor(std::ostream& out, const tt_hlk_desc& desc) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
-        "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
+        "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n",
+        static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()));
+}
+
+// Separated from math_fidelity_descriptor to allow for separate emission of approx mode descriptors
+// This is because we are calling SFPU operations through defines, and we need to be able to pass approx mode for some
+// operations
+void emit_approx_mode_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
+    fmt::format_to(
+        std::ostreambuf_iterator<char>(out),
         "constexpr bool APPROX_BOOL = {};\n"
         "constexpr ckernel::ApproximationMode APPROX = ckernel::use_approximate_enum<APPROX_BOOL>();\n",
-        static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()),
         desc.get_hlk_math_approx_mode());
 }
 
@@ -450,9 +458,10 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
 
     out << "#pragma once\n\n"
-           "#if defined(UCK_CHLKC_MATH)\n"
            "#include \"llk_defs.h\"\n";
-    emit_math_scalar_descriptors(out, desc);
+    emit_approx_mode_descriptors(out, desc);
+    out << "\n#if defined(UCK_CHLKC_MATH)\n";
+    emit_math_fidelity_descriptor(out, desc);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
