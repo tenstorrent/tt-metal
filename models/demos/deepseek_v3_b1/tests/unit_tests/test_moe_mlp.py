@@ -413,12 +413,10 @@ def extract_routed_expert_output(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
-def test_moe_fused(device, use_hardcoded_expert_index):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.requires_grid_size((13, 10))
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
@@ -496,9 +494,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed")
+    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # Read back routed expert results
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
@@ -562,7 +561,9 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.requires_grid_size((13, 10))
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -579,10 +580,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
-    device_grid = submesh.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
-
     M = 1
     K = 7168
 
@@ -598,6 +595,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -615,9 +613,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
@@ -719,6 +717,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         # ReduceToOne parameters
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
@@ -726,7 +725,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed")
+    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Read gate scores/indices from device (needed for per-device golden)
@@ -809,12 +808,10 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 # ============================================================================
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
-def test_mlp(device):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.requires_grid_size((13, 10))
+def test_mlp(device, reconfig_moe_cbs):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
@@ -886,9 +883,10 @@ def test_mlp(device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)
@@ -931,7 +929,9 @@ def test_mlp(device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_mlp_with_reduce(bh_2d_mesh_device):
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.requires_grid_size((13, 10))
+def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
@@ -949,10 +949,6 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
-    device_grid = submesh.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
-
     M = 1
     K = 7168
 
@@ -966,6 +962,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -983,9 +980,9 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
@@ -1081,13 +1078,14 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights

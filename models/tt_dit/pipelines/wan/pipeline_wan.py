@@ -18,7 +18,7 @@ from diffusers.models import AutoencoderKLWan
 from diffusers.models import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import AutoTokenizer, UMT5EncoderModel
@@ -26,9 +26,10 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
-from ...parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
@@ -123,6 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         mesh_device,
         parallel_config,
         vae_parallel_config,
+        encoder_parallel_config,
         num_links,
         *,
         checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
@@ -144,8 +146,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )
         self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
-        self.scheduler = scheduler or FlowMatchEulerDiscreteScheduler.from_pretrained(
-            checkpoint_name, subfolder="scheduler", trust_remote_code=True
+        self.scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
+            checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
             checkpoint_name, subfolder="transformer", trust_remote_code=True
@@ -165,14 +167,75 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
 
+        # See what options we have for topology. We should consider reusing CCL managers
+        self.encoder_ccl_manager = self.vae_ccl_manager
+
         self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
+        self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
-        if not self.dynamic_load:
-            self._load_transformer1()
-            self._load_transformer2()
+
+        # Load TT text encoder
+        umt5_config = UMT5Config(
+            vocab_size=self.text_encoder.config.vocab_size,
+            embed_dim=self.text_encoder.config.d_model,
+            ff_dim=self.text_encoder.config.d_ff,
+            kv_dim=self.text_encoder.config.d_kv,
+            num_heads=self.text_encoder.config.num_heads,
+            num_hidden_layers=self.text_encoder.config.num_layers,
+            max_prompt_length=512,  # TODO: Consider removing
+            layer_norm_eps=self.text_encoder.config.layer_norm_epsilon,
+            relative_attention_num_buckets=self.text_encoder.config.relative_attention_num_buckets,
+            relative_attention_max_distance=self.text_encoder.config.relative_attention_max_distance,
+        )
+
+        self.tt_umt5_encoder = UMT5Encoder(
+            config=umt5_config,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.encoder_ccl_manager,
+            parallel_config=self.encoder_parallel_config,
+        )
+
+        self.transformer = WanTransformer3DModel(
+            patch_size=self.torch_transformer.config.patch_size,
+            num_heads=self.torch_transformer.config.num_attention_heads,
+            dim=self.torch_transformer.config.num_attention_heads * self.torch_transformer.config.attention_head_dim,
+            in_channels=self.torch_transformer.config.in_channels,
+            out_channels=self.torch_transformer.config.out_channels,
+            text_dim=self.torch_transformer.config.text_dim,
+            freq_dim=self.torch_transformer.config.freq_dim,
+            ffn_dim=self.torch_transformer.config.ffn_dim,
+            cross_attn_norm=self.torch_transformer.config.cross_attn_norm,
+            eps=self.torch_transformer.config.eps,
+            rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.dit_ccl_manager,
+            parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
+            model_type=self.model_type,
+        )
+
+        self.transformer_2 = WanTransformer3DModel(
+            patch_size=self.torch_transformer_2.config.patch_size,
+            num_heads=self.torch_transformer_2.config.num_attention_heads,
+            dim=self.torch_transformer_2.config.num_attention_heads
+            * self.torch_transformer_2.config.attention_head_dim,
+            in_channels=self.torch_transformer_2.config.in_channels,
+            out_channels=self.torch_transformer_2.config.out_channels,
+            text_dim=self.torch_transformer_2.config.text_dim,
+            freq_dim=self.torch_transformer_2.config.freq_dim,
+            ffn_dim=self.torch_transformer_2.config.ffn_dim,
+            cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
+            eps=self.torch_transformer_2.config.eps,
+            rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.dit_ccl_manager,
+            parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
+            model_type=self.model_type,
+        )
 
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
@@ -188,15 +251,20 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        cache.load_model(
-            self.tt_vae,
-            model_name=checkpoint_name.rsplit("/", 1)[-1],
-            subfolder="vae",
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            dtype="bf16",
-            get_torch_state_dict=lambda: self.vae.state_dict(),
-        )
+        if self.dynamic_load:
+            # setup models that cannot be loaded together with the corresponding model.
+            # The module loading utility will take care of the necessary unloading.
+            # This is the best dynamic loading strategy across all supported device configurations.
+            self.tt_umt5_encoder.set_unload_set(self.transformer_2)
+            self.transformer.set_unload_set(self.transformer_2)
+            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+
+        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
+        # Cache warmup: Load in reverse order of use to ensure the first models stay loaded before call.
+        self._prepare_transformer2()
+        self._prepare_transformer1()
+        self._prepare_text_encoder()
+        self._prepare_vae()
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -226,7 +294,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "num_links": 2,
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Linear,
-                "is_fsdp": False,
+                "is_fsdp": True,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
             device_configs[(1, 8)] = {
@@ -242,7 +310,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "tp_axis": 0,
                 "num_links": 2,
                 "dynamic_load": False,
-                "topology": ttnn.Topology.Linear,
+                "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
             }
             config = device_configs[tuple(mesh_device.shape)]
@@ -284,11 +352,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_axis=sp_axis,
             ),
         )
+        encoder_parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
+        )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
             boundary_ratio=0.875,
             scheduler=scheduler,
@@ -298,26 +370,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name=checkpoint_name,
         )
 
-    def _load_transformer1(self):
-        self.transformer = WanTransformer3DModel(
-            patch_size=self.torch_transformer.config.patch_size,
-            num_heads=self.torch_transformer.config.num_attention_heads,
-            dim=self.torch_transformer.config.num_attention_heads * self.torch_transformer.config.attention_head_dim,
-            in_channels=self.torch_transformer.config.in_channels,
-            out_channels=self.torch_transformer.config.out_channels,
-            text_dim=self.torch_transformer.config.text_dim,
-            freq_dim=self.torch_transformer.config.freq_dim,
-            ffn_dim=self.torch_transformer.config.ffn_dim,
-            cross_attn_norm=self.torch_transformer.config.cross_attn_norm,
-            eps=self.torch_transformer.config.eps,
-            rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
+    def _prepare_text_encoder(self):
+        cache.load_model(
+            self.tt_umt5_encoder,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
 
+    def _prepare_transformer1(self):
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -327,27 +390,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
 
-    def _load_transformer2(self):
-        self.transformer_2 = WanTransformer3DModel(
-            patch_size=self.torch_transformer_2.config.patch_size,
-            num_heads=self.torch_transformer_2.config.num_attention_heads,
-            dim=self.torch_transformer_2.config.num_attention_heads
-            * self.torch_transformer_2.config.attention_head_dim,
-            in_channels=self.torch_transformer_2.config.in_channels,
-            out_channels=self.torch_transformer_2.config.out_channels,
-            text_dim=self.torch_transformer_2.config.text_dim,
-            freq_dim=self.torch_transformer_2.config.freq_dim,
-            ffn_dim=self.torch_transformer_2.config.ffn_dim,
-            cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
-            eps=self.torch_transformer_2.config.eps,
-            rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
-        )
-
+    def _prepare_transformer2(self):
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -357,22 +400,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 
+    def _prepare_vae(self):
+        cache.load_model(
+            self.tt_vae,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.vae.state_dict(),
+        )
+
     def _get_t5_prompt_embeds(
         self,
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
-        max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        max_sequence_length: int = 512,
     ):
-        # device = device or self._execution_device
-        device = "cpu"
-        dtype = dtype or self.text_encoder.dtype
-
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
         batch_size = len(prompt)
 
+        # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
+        # TODO: investigate
         text_inputs = self.tokenizer(
             prompt,
             padding="max_length",
@@ -385,22 +434,40 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
-        prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+        # Shard on batch dimension. On non TP axis
+        dims = [None, None]
+        DP_axis = 1 - self.parallel_config.tensor_parallel.mesh_axis
+        dims[DP_axis] = 0
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
+        tt_prompt = ttnn.from_torch(
+            text_input_ids,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=mesh_mapper,
+        )
 
-        # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
-        # TODO: investigate
-        prompt_embeds = torch.stack(
-            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+        tt_mask = ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=mesh_mapper,
+        )
+
+        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
+
+        # use the mask to zero out the padding tokens.
+        prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
+
+        prompt_embeds = self.encoder_ccl_manager.all_gather(
+            prompt_embeds, dim=0, mesh_axis=DP_axis, use_hyperparams=True
         )
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
-
-        return prompt_embeds
+        prompt_embeds = ttnn.repeat(prompt_embeds, (1, num_videos_per_prompt, 1))
+        prompt_embeds_1BLP = ttnn.view(prompt_embeds, (1, batch_size * num_videos_per_prompt, seq_len, -1))
+        return prompt_embeds_1BLP
 
     def encode_prompt(
         self,
@@ -410,12 +477,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         num_videos_per_prompt: int = 1,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        max_sequence_length: int = 512,
     ):
         r"""
-        Encodes the prompt into text encoder hidden states.
+        Batch encodes the prompt and negative prompt into text encoder hidden states..
 
         Args:
             prompt (`str` or `List[str]`, *optional*):
@@ -435,28 +500,21 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
-            device: (`torch.device`, *optional*):
-                torch device
-            dtype: (`torch.dtype`, *optional*):
-                torch dtype
         """
-        # device = device or self._execution_device
-        device = "cpu"
-
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
 
+        # Setup batching variables
+        all_input_prompts = []
+        pos_prompt_end_idx = 0
+        neg_prompt_end_idx = 0
+
         if prompt_embeds is None:
-            prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
+            all_input_prompts += prompt
+            pos_prompt_end_idx = batch_size * num_videos_per_prompt
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
             negative_prompt = negative_prompt or ""
@@ -474,13 +532,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     " the batch size of `prompt`."
                 )
 
-            negative_prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=negative_prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
+            all_input_prompts += negative_prompt
+            neg_prompt_end_idx = pos_prompt_end_idx + batch_size * num_videos_per_prompt
+
+        # Add data to pad for size of device on mesh axis to ensure proper shadding on batch dimension.
+        total_prompts = len(all_input_prompts)
+        num_devices = self.mesh_device.shape[1 - self.parallel_config.tensor_parallel.mesh_axis]
+
+        # Pad batch list of prompts to ensure proper sharding on batch dimension.
+        all_input_prompts += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
+        all_prompt_embeds = self._get_t5_prompt_embeds(
+            prompt=all_input_prompts,
+            num_videos_per_prompt=num_videos_per_prompt,
+            max_sequence_length=max_sequence_length,
+        )
+
+        # When CFG is enabled, we should be able to leave the shards on device.
+        prompt_embeds = all_prompt_embeds[:, :pos_prompt_end_idx] if pos_prompt_end_idx > 0 else prompt_embeds
+        negative_prompt_embeds = (
+            all_prompt_embeds[:, pos_prompt_end_idx:neg_prompt_end_idx]
+            if neg_prompt_end_idx > 0
+            else negative_prompt_embeds
+        )
 
         return prompt_embeds, negative_prompt_embeds
 
@@ -729,20 +802,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             batch_size = prompt_embeds.shape[0]
 
         # 3. Encode input prompt
-        if profiler:
-            profiler.start("encoder", profiler_iteration)
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
-            num_videos_per_prompt=num_videos_per_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            max_sequence_length=max_sequence_length,
-            device=device,
-        )
-        if profiler:
-            profiler.end("encoder", profiler_iteration)
+        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
+            self._prepare_text_encoder()
+            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                num_videos_per_prompt=num_videos_per_prompt,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                max_sequence_length=max_sequence_length,
+            )
 
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -795,23 +865,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self._current_timestep = t
 
                 if boundary_timestep is None or t >= boundary_timestep:
-                    if self.dynamic_load:
-                        if hasattr(self, "transformer_2"):
-                            del self.transformer_2
-                        if not hasattr(self, "transformer"):
-                            self._load_transformer1()
+                    self._prepare_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
-                    if self.dynamic_load:
-                        if hasattr(self, "transformer"):
-                            # Offload transformer1 to make space for transformer2
-                            del self.transformer
-                        if not hasattr(self, "transformer_2"):
-                            self._load_transformer2()
+                    self._prepare_transformer2()
                     current_model = self.transformer_2
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
@@ -823,7 +884,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     if cond_latents is not None:
                         cond_latents, _ = current_model.preprocess_spatial_input_host(cond_latents)
 
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.prepare_rope_features(latents)
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
                         "rope_sin_1HND": rope_sin_1HND,
@@ -927,11 +988,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
             )
-            if profiler:
-                profiler.start("vae", profiler_iteration)
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
-            if profiler:
-                profiler.end("vae", profiler_iteration)
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
+                self._prepare_vae()
+                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
