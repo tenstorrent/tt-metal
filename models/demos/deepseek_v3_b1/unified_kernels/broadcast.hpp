@@ -132,6 +132,7 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
+                        // static_assert(noc_mode == DM_DYNAMIC_NOC);
                         DPRINT << "BRISC: Creating receiver socket" << ENDL();
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         DPRINT << "BRISC: Setting receiver socket page size" << ENDL();

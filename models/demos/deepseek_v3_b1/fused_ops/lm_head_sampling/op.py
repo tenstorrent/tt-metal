@@ -28,7 +28,6 @@ CB Layout:
 import math
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -109,9 +108,11 @@ class LMHeadSampling:
         max_score = torch.max(scores_f32)
         tied_mask = scores_f32 == max_score
         selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
+        topk_count = min(10, scores_f32.numel())
+        topk_scores, topk_positions = torch.topk(scores_f32, k=topk_count, largest=True, sorted=True)
+        topk_indices = indices_i64[topk_positions]
+        topk_pairs = [(int(idx.item()), float(score.item())) for idx, score in zip(topk_indices, topk_scores)]
 
-        logger.info(f"max score: {max_score}")
-        logger.info(f"selected index: {selected_index}")
         return selected_index.reshape(1, 1)
 
     @staticmethod

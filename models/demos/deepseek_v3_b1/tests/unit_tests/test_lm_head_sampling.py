@@ -57,9 +57,7 @@ def _is_lm_head_sampling_perf_enabled():
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
-    bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters
-):
+def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters):
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -352,7 +350,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_single_device(
+def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
     seed,
@@ -515,7 +513,7 @@ def test_lm_head_sampling_fused_argmax_single_device(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_single_device_d2h(
+def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
     seed,
@@ -699,7 +697,7 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
+def test_multidevice(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,
@@ -922,7 +920,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
+def test_d2h(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,
@@ -1164,7 +1162,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
+def test_d2d_to_d2h_pipeline(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,
@@ -1479,7 +1477,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_h2d_d2d_to_d2d_to_d2h_pipeline(
+def test_4stage_galaxy_1_iteration(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,
@@ -2170,6 +2168,7 @@ def test_persistent_mode(mesh_device, use_fp32):
     activation_dim = 7168
     activation_page_size_bytes = activation_dim * 2  # bf16
     activation_fifo_size = activation_page_size_bytes * 4
+    iterations = 100
 
     # Stage-local constants used by LMHead stage (P2)
     M = 1
@@ -2186,26 +2185,37 @@ def test_persistent_mode(mesh_device, use_fp32):
     lmhead_input_core = ttnn.CoreCoord(10, 9)
 
     # Deterministic payload/weights across processes.
-    torch.manual_seed(5449)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
+    # Build one-hot embeddings and matching vocab rows to maximize winner-vs-rest score gaps.
+    torch_a = torch.zeros((M, K), dtype=torch.bfloat16)
+    torch_gamma = torch.ones((M, K), dtype=torch.bfloat16)
+    row_indices = torch.arange(iterations, dtype=torch.int64) % K
+    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
+    torch_embedding_table[torch.arange(iterations), row_indices] = 1
+    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
+    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
+    torch_b[torch.arange(K), winner_per_row] = 1
     torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
-        torch_a.float(),
-        torch_gamma.float(),
-        torch_b.float().unsqueeze(0),
-        indices=torch_indices_flat,
-        k=1,
-        p=1.0,
-    ).to(torch.uint32)
+    torch_expected_indices = torch.stack(
+        [
+            LMHeadSampling.golden(
+                torch_embedding_table[iteration : iteration + 1].float(),
+                torch_gamma.float(),
+                torch_b.float().unsqueeze(0),
+                indices=torch_indices_flat,
+                k=1,
+                p=1.0,
+            ).to(torch.uint32)
+            for iteration in range(iterations)
+        ],
+        dim=0,
+    )
 
     pipeline_block = None
     try:
         if my_mesh_id == 0:
             # P1: token->embedding(H2D), forwards activation to P2, loopback receives token from P4->P1.
             embedding_tensor = ttnn.from_torch(
-                torch_a.reshape(1, 1, 1, K),
+                torch_embedding_table.reshape(iterations, 1, 1, K),
                 dtype=ttnn_dtype_from_torch_dtype(torch.bfloat16),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -2429,10 +2439,9 @@ def test_persistent_mode(mesh_device, use_fp32):
             )
 
         if my_mesh_id == 0:
-            for i in range(100):
-                logger.info(f"Writing token to PipelineBlock for P{my_mesh_id} iteration {i}")
+            for iteration in range(iterations):
                 torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
-                torch_token[0, 0] = 0
+                torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
                 output_tensor = ttnn.from_torch(
@@ -2440,17 +2449,15 @@ def test_persistent_mode(mesh_device, use_fp32):
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
-                logger.info(f"Writing token to PipelineBlock for P{my_mesh_id}")
                 pipeline_block.write_token(token_tensor)
-                logger.info(f"Reading output from PipelineBlock for P{my_mesh_id}")
                 pipeline_block.read_output(output_tensor)
-                logger.info(f"Converting output to torch for P{my_mesh_id}")
                 got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                logger.info(f"Got token: {got}")
-                logger.info(f"Expected token: {torch_expected_idx}")
+                expected_idx = torch_expected_indices[iteration]
+
+                logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
                 assert torch.equal(
-                    got, torch_expected_idx
-                ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
+                    got, expected_idx
+                ), f"PipelineBlock 4-stage token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
 
         logger.info(f"Barrier for P{my_mesh_id}")
         ttnn.distributed_context_barrier()

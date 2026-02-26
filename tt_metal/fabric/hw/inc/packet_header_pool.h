@@ -109,11 +109,6 @@ public:
         }
         return header_table[route_id].second;
     }
-
-    FORCE_INLINE static void reset() {
-        current_offset_ = risc_pool_start;
-        route_id_ = 0;
-    }
 };
 
 uint32_t PacketHeaderPool::current_offset_ = PacketHeaderPool::risc_pool_start;
