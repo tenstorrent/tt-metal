@@ -20,7 +20,11 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
 
+#ifdef BATCHED_CB_ACCESS
     constexpr uint32_t batch_size = 2;
+#else
+    constexpr uint32_t batch_size = 1;
+#endif
 
 #ifdef STRIDED_L1_ACCESS
     // Strided access: each core writes only to its local L1 bank.
