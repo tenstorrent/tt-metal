@@ -38,11 +38,10 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
         # [1, 1, H, W] of mask
         # [1, 4, H, W] of masked image latents
         # These are concatenated together over channel dimension to form the latent input to the unet of shape [1, 9, H, W]
-        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
-        self.tt_latents_shape = [B, C, H, W]
-
-        B, C, H, W = 1, self.num_channels_image_latents, 128, 128
-        self.tt_image_latents_shape = [B, C, H, W]
+        self.tt_latents_shape = self.get_latents_shape(1, self.num_in_channels_unet, self.height, self.width)
+        self.tt_image_latents_shape = self.get_latents_shape(
+            1, self.num_channels_image_latents, self.height, self.width
+        )
 
     def generate_input_tensors(
         self,
@@ -68,7 +67,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
         self._prepare_timesteps(timesteps, sigmas)
 
         num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
-        height = width = 1024
         assert (
             num_channels_image_latents == self.num_channels_image_latents
         ), f"num_channels_latents is {num_channels_image_latents}, but it should be {self.num_channels_image_latents}"
@@ -82,8 +80,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self,
             torch_image.shape[0],
             num_channels_image_latents,
-            height,
-            width,
+            self.height,
+            self.width,
             self.cpu_device,
             all_prompt_embeds_torch.dtype,
             torch_image,
@@ -113,8 +111,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             torch_mask,
             torch_masked_image,
             torch_image.shape[0],
-            height,
-            width,
+            self.height,
+            self.width,
             all_prompt_embeds_torch.dtype,
             self.cpu_device,
             None,
@@ -135,8 +133,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             text_encoder_projection_dim == 1280
         ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
 
-        original_size = (height, width)
-        target_size = (height, width)
+        original_size = (self.height, self.width)
+        target_size = (self.height, self.width)
         crops_coords_top_left = self.pipeline_config.crop_coords_top_left
 
         add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(

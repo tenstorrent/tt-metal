@@ -139,8 +139,8 @@ class TtSDXLPipeline(LightweightModule):
         # Hardcoded input tensor parameters
 
         # Latents tensor shape
-        height, width = self.pipeline_config.image_resolution
-        self.tt_latents_shape = self.get_latents_shape(1, self.num_in_channels_unet, height, width)
+        self.height, self.width = self.pipeline_config.image_resolution
+        self.tt_latents_shape = self.get_latents_shape(1, self.num_in_channels_unet, self.height, self.width)
 
     def get_latents_shape(self, batch_size, num_channels_latents, height, width):
         """

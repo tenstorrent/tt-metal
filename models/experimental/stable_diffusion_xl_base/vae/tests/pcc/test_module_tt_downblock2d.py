@@ -22,14 +22,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1024, 1024), (1, 128, 512, 512), 1, 0.998),
         ((1024, 1024), (1, 256, 256, 256), 2, 0.999),
         ((1024, 1024), (1, 512, 128, 128), 3, 0.999),
+        # 512x512 image resolution
+        ((512, 512), (1, 128, 512, 512), 0, 0.999),
+        ((512, 512), (1, 128, 256, 256), 1, 0.998),
+        ((512, 512), (1, 256, 128, 128), 2, 0.999),
+        ((512, 512), (1, 512, 64, 64), 3, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_downblock2d(device, image_resolution, block_id, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
