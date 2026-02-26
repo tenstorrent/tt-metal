@@ -55,7 +55,7 @@ def create_fabric_router_config(max_payload_size):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(7168),
         }
     ],
@@ -240,7 +240,7 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(7168),
         }
     ],
@@ -449,7 +449,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(7168),
         }
     ],
@@ -526,3 +526,23 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
         logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
 
     pipeline_block.terminate()
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(7168),
+        }
+    ],
+    indirect=True,
+)
+def test_torus_y_mesh_device(mesh_device, device_params):
+    print(f"Opened Mesh Device with ID: {mesh_device.get_system_mesh_id()}")
+    ttnn.distributed_context_barrier()

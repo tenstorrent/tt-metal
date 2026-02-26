@@ -797,3 +797,278 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
     logger.info("Fused MoE with reduce test PASSED!")
+
+
+# ============================================================================
+# Test: Fused MoE with CCL broadcast on 4x2 mesh
+# ============================================================================
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True])
+def test_moe_fused_with_bcast(bh_2d_mesh_device, use_hardcoded_expert_index):
+    """
+    Test fused MoE with CCL broadcast on 4x2 mesh.
+
+    The broadcast writes input data into CB 25 from the fabric before the MoE pipeline begins.
+    Sender device broadcasts its input to all other devices, then each device runs the full
+    fused MoE (routed + shared expert).
+    """
+    num_devices = 8
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip(
+            f"Test requires {num_devices} devices, mesh has "
+            f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh.shape}")
+
+    device_grid = submesh.compute_with_storage_grid_size()
+    if device_grid.x < 13 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
+
+    M = 1
+    K = 7168
+
+    logger.info(f"Testing fused MoE with broadcast: K={K}")
+
+    # ── Create MoE tensors (replicated across mesh) ──
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    r = create_routed_expert_tensors(submesh, use_hardcoded_expert_index, mesh_mapper=mesh_mapper)
+    mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
+    s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
+
+    # ── Broadcast tensors ──
+    tile_1x32 = ttnn.Tile([1, 32])
+    input_shard_spec = r["ttnn_residual_mcast_src"].memory_config().shard_spec
+    input_core_grid = input_shard_spec.grid
+    bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
+    bcast_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bcast_shard_spec)
+
+    # bcast_input_tensor: source data (packet staging CB 46)
+    bcast_input_tensor = ttnn.from_torch(
+        r["torch_input"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=bcast_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # bcast_intermediate_tensor: broadcast destination (replaces CB 25 backing)
+    bcast_intermediate_tensor = ttnn.from_torch(
+        torch.zeros((M, K), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=bcast_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # 3 global semaphores for broadcast sync
+    device_grid = submesh.compute_with_storage_grid_size()
+    num_cores = device_grid.x * device_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid, row_wise=True)
+    ttnn.synchronize_device(submesh)
+    bcast_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(3)]
+    ttnn.synchronize_device(submesh)
+
+    bcast_sender_coord = (0, 0)
+
+    # ── ReduceToOne tensors and semaphores ──
+    root_coord = (1, 1)
+
+    reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
+    reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
+
+    final_output_total_width = r["final_output_total_width"]
+    final_output_mem_config = r["final_output_mem_config"]
+
+    # 3 intermediate tensors for 3 reduction rounds
+    reduce_intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        reduce_intermediate_tensors.append(intermediate_tensor)
+
+    # Reduce output tensor
+    compute_grid = submesh.compute_with_storage_grid_size()
+    reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+    reduce_output_shard_spec = ttnn.ShardSpec(
+        reduce_output_shard_grid,
+        (1, final_output_total_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    reduce_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, reduce_output_shard_spec
+    )
+    reduce_output_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+    reduce_output_tensor = ttnn.from_torch(
+        reduce_output_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+
+    # 4 global semaphores for reduce synchronization
+    ttnn.synchronize_device(submesh)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh)
+    logger.info("Created reduce tensors and semaphores")
+
+    # ── Run fused MoE op with broadcast + reduce ──
+    num_iterations = 100
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
+        r["ttnn_rmsnorm_output"],
+        r["ttnn_mcast_output"],
+        r["ttnn_gate_mm_weights"],
+        r["ttnn_gate_mm_output"],
+        r["ttnn_gate_input"],
+        r["ttnn_gate_bias"],
+        r["ttnn_gate_indices"],
+        r["gate_output_scores_tensor"],
+        r["gate_output_indices_tensor"],
+        r["expert_index_tensor"],
+        r["expert_scale_tensor"],
+        r["gate_proj_weights"],
+        r["gate_proj_output"],
+        r["up_proj_weights"],
+        r["up_proj_mm_out_tensor"],
+        r["fused_output_tensor"],
+        r["down_proj_gather_output_tensor"],
+        r["down_proj_mcast_output_tensor"],
+        r["down_proj_weights"],
+        r["down_proj_output"],
+        s["ttnn_output_mcast_dst"],  # fused_add_tensor (shared expert output)
+        r["final_output_tensor"],
+        r["gate_proj_in1_buf_tensor"],
+        r["down_proj_in1_buf_tensor"],
+        r["mul_scalar_buf_tensor"],
+        # RMSNorm gamma
+        rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
+        # Shared expert tensors
+        shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
+        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
+        shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
+        shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
+        shared_down_weights_tensor=s["ttnn_down_weights"],
+        shared_output_tensor=s["ttnn_output"],
+        # Shared expert tensor-backed CB tensors
+        shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
+        shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
+        shared_gu_out_tensor=s["ttnn_gu_out"],
+        shared_intermed_tensor=s["ttnn_intermed"],
+        shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
+        shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
+        shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
+        shared_k_parallel=s["k_parallel"],
+        shared_n_parallel=s["n_parallel"],
+        use_hardcoded_expert_index=use_hardcoded_expert_index,
+        num_iterations=num_iterations,
+        # ReduceToOne parameters
+        reduce_intermediate_tensors=reduce_intermediate_tensors,
+        reduce_output_tensor=reduce_output_tensor,
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        # Broadcast parameters
+        bcast_input_tensor=bcast_input_tensor,
+        bcast_intermediate_tensor=bcast_intermediate_tensor,
+        bcast_semaphores=bcast_semaphores,
+        bcast_sender_coord=bcast_sender_coord,
+    )
+    ttnn.synchronize_device(submesh)
+    logger.info(f"Fused MoE with broadcast + reduce: {num_iterations} iterations completed")
+
+    # ── Verify results ──
+    device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # Compute expected output for each device, then sum
+    K_down = s["K_down"]
+    expected_final_outputs = []
+    for device_idx in range(num_devices):
+        chip_id = device_idx
+
+        if use_hardcoded_expert_index:
+            actual_expert_idx = chip_id
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+        else:
+            actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+
+        shared_gate_shard = s["torch_gate_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_up_shard = s["torch_up_weights"][:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_down_shard = s["torch_down_weights"][device_idx * K_down : (device_idx + 1) * K_down, :]
+
+        _, _, torch_expected_final = MoeOp.golden(
+            r["torch_input"],
+            r["torch_gate_mm_weights"],
+            r["torch_bias"],
+            shared_gate_weights=shared_gate_shard,
+            shared_up_weights=shared_up_shard,
+            shared_down_weights=shared_down_shard,
+            gate_proj_weights_dict=r["expert_weights_dict"],
+            up_proj_weights_dict=r["up_proj_weights_dict"],
+            down_proj_weights_dict=r["down_proj_weights_dict"],
+            eps=r["gate_eps"],
+            scaling_factor=r["gate_scaling_factor"],
+            use_hardcoded_expert_index=True,
+            hardcoded_expert_index=actual_expert_idx,
+            explicit_expert_scale=actual_expert_scale,
+            rmsnorm_gamma=r["torch_rmsnorm_gamma"],
+            rmsnorm_epsilon=1e-6,
+        )
+        expected_final_outputs.append(torch_expected_final)
+        logger.info(
+            f"Device {device_idx}: expert_idx={actual_expert_idx}, "
+            f"expert_scale={actual_expert_scale:.4f}, "
+            f"output range=[{torch_expected_final.min():.4f}, {torch_expected_final.max():.4f}]"
+        )
+
+    # Expected reduce output = sum of all per-device outputs
+    expected_reduce_output = sum(expected_final_outputs)
+
+    # Get actual reduce output from ROOT1 device
+    reduce_output_torch = ttnn.to_torch(
+        ttnn_result_reduce,
+        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+    )
+
+    # ROOT1 is at root_coord -> device_idx
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
+    reduce_output_root = reduce_output_torch[root_device_idx]
+
+    # Extract valid portion (remove per-core padding)
+    reduce_output_valid = extract_routed_expert_output(
+        reduce_output_root.unsqueeze(0),
+        r["num_gate_proj_cores"],
+        r["final_output_width_per_core"],
+        r["per_core_down_proj_N"],
+    )
+
+    # Verify reduce output
+    passing, pcc_output = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
+    logger.info(f"Reduce output PCC: {pcc_output}")
+    assert passing, f"Reduce output PCC check failed: {pcc_output}"
+
+    logger.info("Fused MoE with broadcast + reduce test PASSED!")
