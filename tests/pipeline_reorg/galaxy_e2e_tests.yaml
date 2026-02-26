@@ -96,10 +96,12 @@
 - name: BH Galaxy DeepSeek V3 B1 unit tests
   cmd: |
     export TT_METAL_SLOW_DISPATCH_MODE=1
+    export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     pytest --timeout 600 -m "not skip_post_commit" \
       models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py \
-      models/demos/deepseek_v3_b1/tests/unit_tests/pre_sdpa.py \
-      models/demos/deepseek_v3_b1/tests/unit_tests/post_sdpa.py
+      models/demos/deepseek_v3_b1/tests/unit_tests/test_pre_sdpa.py \
+      models/demos/deepseek_v3_b1/tests/unit_tests/test_post_sdpa.py \
+      models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_routed_expert.py
   skus:
     bh_galaxy:
       timeout: 40
