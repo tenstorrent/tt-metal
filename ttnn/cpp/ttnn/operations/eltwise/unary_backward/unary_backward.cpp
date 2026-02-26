@@ -24,7 +24,6 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
@@ -1611,13 +1610,23 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
             grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
         result.push_back(input_grad);
     } else {
-        // Delegate to fused polynomial kernel (fixes GitHub issue #35971).
-        // The previous composite erfc+exp implementation suffered from catastrophic
-        // cancellation (Max ULP = 32,460). The fused kernel uses piecewise polynomial
-        // approximation achieving Max ULP = 1 and 33% fewer compute cycles.
-        Tensor output = ttnn::operations::experimental::GeluBackwardOperation::invoke(
-            grad, input, approximate, output_mem_config, input_grad);
-        result.push_back(output);
+        float kAlpha = M_SQRT1_2;
+        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
+        Tensor cdf = ttnn::multiply(
+            (ttnn::add(
+                ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)),
+                1,
+                std::nullopt,
+                output_memory_config)),
+            0.5);
+        Tensor pdf = ttnn::multiply(
+            ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config),
+            kBeta,
+            std::nullopt,
+            output_memory_config);
+        ttnn::multiply(
+            grad, ttnn::add(cdf, ttnn::multiply(input, pdf)), std::nullopt, output_memory_config, input_grad);
+        result.push_back(input_grad);
     }
 
     return result;

@@ -1,8 +1,8 @@
-# ttnn.gelu_bw() severe ULP errors: 10.69% of BF16 values have ULP > 1000, Max ULP = 32,460
+# ttnn.experimental.gelu_bw() severe ULP errors: 10.69% of BF16 values have ULP > 1000, Max ULP = 32,460
 
 ### Component / Area
 
-TTNN / Eltwise Operations / Unary Backward / GELU Backward
+TTNN / Experimental / Unary Backward / GELU Backward (fused kernel)
 
 ### Issue Type (optional)
 
@@ -10,7 +10,7 @@ Bad Outputs
 
 ### Observed
 
-`ttnn.gelu_bw()` has severe accuracy issues affecting approximately 50% of the BF16 input range:
+`ttnn.experimental.gelu_bw()` has severe accuracy issues affecting approximately 50% of the BF16 input range:
 
 1. **Wrong sign bug** at x ≈ -3.7: derivative should be negative but returns positive
 2. **High ULP errors** in deep negative (x < -5) and large positive (x > 5) regions
@@ -127,7 +127,7 @@ grad_tensor = ttnn.from_torch(
     layout=ttnn.TILE_LAYOUT, device=device
 )
 
-result = ttnn.gelu_bw(grad_tensor, input_tensor, approximate="none")
+result = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="none")
 actual = ttnn.to_torch(result[0])[0, 0, 0, 0].item()
 
 # Reference calculation
