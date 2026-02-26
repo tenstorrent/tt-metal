@@ -1188,6 +1188,7 @@ class MasterConfigLoader:
                 traced_machine_info_list = []
                 traced_config_names = []
                 config_ids = []  # Unique IDs to prevent hash collisions
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
                 end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
                 dim0_list = [] if operation_name == "transpose" else None
@@ -1376,6 +1377,7 @@ class MasterConfigLoader:
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
                     if (operation_name == "permute" or operation_name == "ttnn::permute") and "dims" in cfg:
                         dims_list.append(cfg["dims"])
                     if operation_name == "untilize_with_unpadding" and "end_shape" in cfg:
@@ -1582,6 +1584,7 @@ class MasterConfigLoader:
                     "storage_type",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                     "config_id",  # Unique ID to prevent hash collisions
                 ]
                 param_lists = [
@@ -1593,6 +1596,7 @@ class MasterConfigLoader:
                     storage_types,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,  # Database config_hash for direct correlation
                     config_ids,  # Add unique config IDs
                 ]
 
@@ -2041,6 +2045,7 @@ class MasterConfigLoader:
                 # This ensures that even if two configs have identical parameters,
                 # they generate different test vectors if they come from different traced configs
                 config_ids = []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for idx, cfg in enumerate(paired_configs):
                     # Handle both tensor-tensor and tensor-scalar operations
@@ -2064,6 +2069,7 @@ class MasterConfigLoader:
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     # Add unique config ID to ensure unique hashes
                     config_ids.append(f"config_{idx}")
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
 
                     # Add scalar value if present (will be None for tensor-tensor ops)
                     scalars.append(cfg.get("scalar", None))
@@ -2082,6 +2088,7 @@ class MasterConfigLoader:
                     "scalar",  # For tensor-scalar operations (None for tensor-tensor)
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                     "config_id",  # Unique ID to prevent hash collisions
                     # NOTE: traced_config_name is metadata only, not passed to run()
                     # "traced_config_name",
@@ -2098,6 +2105,7 @@ class MasterConfigLoader:
                     scalars,  # Add scalar values
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,  # Database config_hash for direct correlation
                     config_ids,  # Add unique config IDs
                     # traced_config_names,
                 ]
@@ -2161,7 +2169,11 @@ class MasterConfigLoader:
                     continue
 
                 # Parse all tensor configs (actual count may be less than tensor_count if optional)
-                parsed_config = {"traced_source": source, "traced_machine_info": machine_info}
+                parsed_config = {
+                    "traced_source": source,
+                    "traced_machine_info": machine_info,
+                    "config_hash": config_hash,
+                }
                 actual_tensor_count = len(tensor_configs)
                 parse_failed = False
 
@@ -2180,8 +2192,8 @@ class MasterConfigLoader:
                 if not parse_failed:
                     # Verify we have all required fields for the actual tensors parsed
                     expected_fields = (
-                        actual_tensor_count * 4 + 2
-                    )  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info
+                        actual_tensor_count * 4 + 3
+                    )  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info + config_hash
                     if len(parsed_config) == expected_fields:
                         paired_configs.append(parsed_config)
 
@@ -2250,6 +2262,7 @@ class MasterConfigLoader:
                 traced_machine_info_list = []
                 traced_config_names = []
                 config_ids = []  # Unique IDs to prevent hash collisions
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for idx, cfg in enumerate(paired_configs):
                     # Determine actual tensor count in this config (may be less than expected for optional tensors)
@@ -2278,6 +2291,7 @@ class MasterConfigLoader:
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -2297,6 +2311,8 @@ class MasterConfigLoader:
                 param_lists.append(traced_source_list)
                 param_names.append("traced_machine_info")
                 param_lists.append(traced_machine_info_list)
+                param_names.append("config_hash")  # Database config_hash for direct correlation
+                param_lists.append(config_hash_list)
                 param_names.append("config_id")  # Unique ID to prevent hash collisions
                 param_lists.append(config_ids)
 
@@ -2375,6 +2391,7 @@ class MasterConfigLoader:
             config_tensors_in_dram_list = []
             traced_source_list = []
             traced_machine_info_list = []
+            config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
             for config, source, machine_info, config_hash in configs:
                 params = self._extract_conv2d_parameters(config)
@@ -2411,12 +2428,14 @@ class MasterConfigLoader:
                     traced_source_list.append(source)
                     # Track machine_info for traceability
                     traced_machine_info_list.append(machine_info)
+                    # Track config_hash for direct correlation with ttnn_ops.ttnn_configuration
+                    config_hash_list.append(config_hash)
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, traced_machine_info, and config_id to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, traced_machine_info, config_hash, and config_id to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
                 config_ids = [f"config_{idx}" for idx in range(len(input_specs_list))]
                 paired_configs = list(
@@ -2428,11 +2447,12 @@ class MasterConfigLoader:
                         config_tensors_in_dram_list,
                         traced_source_list,
                         traced_machine_info_list,
+                        config_hash_list,
                         config_ids,
                     )
                 )
                 return {
-                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info,config_id": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info,config_hash,config_id": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -2499,7 +2519,7 @@ class MasterConfigLoader:
                 # Build parameter dict
                 param_names = [
                     "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
+                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_hash"
                 ]
                 param_lists = [
                     [
@@ -2519,6 +2539,7 @@ class MasterConfigLoader:
                             cfg["has_bias"],
                             cfg["traced_source"],
                             cfg["traced_machine_info"],
+                            cfg.get("config_hash"),  # Database config_hash for direct correlation
                         )
                         for cfg in paired_configs
                     ]
@@ -2542,16 +2563,18 @@ class MasterConfigLoader:
             # Clean operation name (remove namespace prefix if present)
             clean_op_name = operation_name.replace("ttnn::", "")
 
-            # First extract parameters from each config, tracking sources and machine_info
+            # First extract parameters from each config, tracking sources, machine_info, and config_hash
             extracted_params = []
             extracted_sources = []
             extracted_machine_infos = []
+            extracted_config_hashes = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
             for config, source, machine_info, config_hash in configs:
                 params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
                 if params:
                     extracted_params.append(params)
                     extracted_sources.append(source)
                     extracted_machine_infos.append(machine_info)
+                    extracted_config_hashes.append(config_hash)
 
             # Then transform the extracted parameters
             if extracted_params:
@@ -2613,17 +2636,18 @@ class MasterConfigLoader:
                                     cfg["output_memory_config"],
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                             )
 
                         # Return as comma-separated parameter name with tuple list (like linear)
-                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         return {param_name: param_tuples}
 
                     elif clean_op_name == "linear":
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_id"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2643,6 +2667,7 @@ class MasterConfigLoader:
                                     cfg["has_bias"],
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -2668,7 +2693,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2680,6 +2705,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2731,7 +2757,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2755,6 +2781,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2768,7 +2795,7 @@ class MasterConfigLoader:
                     ):
                         # Build parameter tuples including scalar parameters
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2792,6 +2819,7 @@ class MasterConfigLoader:
                                     cfg.get("is_causal"),  # Scalar parameter
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2801,7 +2829,7 @@ class MasterConfigLoader:
                     # For paged_update_cache (4 tensor inputs)
                     elif clean_op_name == "experimental::paged_update_cache" or clean_op_name == "paged_update_cache":
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2822,6 +2850,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2834,7 +2863,7 @@ class MasterConfigLoader:
                         or clean_op_name == "ttnn::scale_mask_softmax_in_place"
                     ):
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,mask_shape,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,mask_shape,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2851,6 +2880,7 @@ class MasterConfigLoader:
                                     cfg.get("scalar"),  # Scale value
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -2861,7 +2891,7 @@ class MasterConfigLoader:
                     # For update_cache (2 tensor inputs + 2 scalars)
                     elif clean_op_name == "update_cache" or clean_op_name == "ttnn::update_cache":
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2877,6 +2907,7 @@ class MasterConfigLoader:
                                     cfg.get("scalar"),  # Dict with update_index and batch_offset
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -3044,6 +3075,7 @@ class MasterConfigLoader:
                     "output_memory_config",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg.get("input_shape") for cfg in paired_configs],
@@ -3057,6 +3089,7 @@ class MasterConfigLoader:
                     [cfg.get("output_memory_config") for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
                     [cfg.get("traced_machine_info") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -3318,6 +3351,7 @@ class MasterConfigLoader:
                     "num_kv_heads",
                     "output_memory_config",
                     "traced_source",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -3328,6 +3362,7 @@ class MasterConfigLoader:
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -3433,6 +3468,7 @@ class MasterConfigLoader:
                     "num_kv_heads",
                     "output_memory_config",
                     "traced_source",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -3443,6 +3479,7 @@ class MasterConfigLoader:
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -3532,6 +3569,7 @@ class MasterConfigLoader:
                             "transpose_k_heads": transpose_k_heads,
                             "traced_source": source or "unknown",
                             "traced_machine_info": machine_info or {},
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(paired_config)
                     else:
@@ -3557,6 +3595,7 @@ class MasterConfigLoader:
             transpose_k_heads_list = []
             traced_source_list = []
             traced_machine_info_list = []
+            config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
             for cfg in paired_configs:
                 input_shape_list.append(cfg["input_shape"])
@@ -3570,6 +3609,7 @@ class MasterConfigLoader:
                 transpose_k_heads_list.append(cfg["transpose_k_heads"])
                 traced_source_list.append(cfg["traced_source"])
                 traced_machine_info_list.append(cfg["traced_machine_info"])
+                config_hash_list.append(cfg.get("config_hash"))
 
             if all_cases:
                 # For all_cases, Cartesian product (but for model_traced, it's typically 1:1)
@@ -3591,6 +3631,7 @@ class MasterConfigLoader:
                     "transpose_k_heads",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     input_shape_list,
@@ -3603,6 +3644,7 @@ class MasterConfigLoader:
                     transpose_k_heads_list,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,
                 ]
 
                 # Create tuples of exact configurations (prevents Cartesian product)
@@ -3749,6 +3791,7 @@ class MasterConfigLoader:
                 scale_list = []
                 traced_source_list = []
                 traced_machine_info_list = []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for cfg in paired_configs:
                     input_shapes.append(cfg["input_shape"])
@@ -3766,6 +3809,7 @@ class MasterConfigLoader:
                     scale_list.append(cfg["scale"])
                     traced_source_list.append(cfg["traced_source"])
                     traced_machine_info_list.append(cfg["traced_machine_info"])
+                    config_hash_list.append(cfg.get("config_hash"))
 
                 param_names = [
                     "input_shape",
@@ -3783,6 +3827,7 @@ class MasterConfigLoader:
                     "scale",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     input_shapes,
@@ -3800,6 +3845,7 @@ class MasterConfigLoader:
                     scale_list,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,
                 ]
 
                 exact_configs = list(zip(*param_lists))
@@ -4004,6 +4050,7 @@ class MasterConfigLoader:
                 share_cache_list = []
                 batch_offset_list = []
                 traced_source_list, traced_machine_info_list = [], []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for cfg in paired_configs:
                     input_shapes.append(cfg["input_shape"])
@@ -4027,6 +4074,7 @@ class MasterConfigLoader:
                     batch_offset_list.append(cfg.get("batch_offset", 0))
                     traced_source_list.append(cfg["traced_source"])
                     traced_machine_info_list.append(cfg["traced_machine_info"])
+                    config_hash_list.append(cfg.get("config_hash"))
 
                 param_names = [
                     "input_shape",
@@ -4050,6 +4098,7 @@ class MasterConfigLoader:
                     "batch_offset",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
 
                 exact_configs = list(
@@ -4075,6 +4124,7 @@ class MasterConfigLoader:
                         batch_offset_list,
                         traced_source_list,
                         traced_machine_info_list,
+                        config_hash_list,
                     )
                 )
 

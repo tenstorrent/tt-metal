@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api.h"
+#include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_api.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

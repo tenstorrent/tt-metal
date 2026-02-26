@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -82,6 +83,7 @@ class RopeSingleCore:
         cos_tensor,
         sin_tensor,
         trans_mat_tensor,
+        position_ids_tensor,
         output_tensor,
         fp32_dest_acc_en=False,
     ):
@@ -106,12 +108,12 @@ class RopeSingleCore:
         shard_spec = input_tensor.memory_config().shard_spec
         shard_shape = shard_spec.shape
 
-        # Calculate dimensions in tiles
-        # With tiny tiles: shard_shape[0] = n_heads, shard_shape[1] = head_dim
-        head_dim_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt)
-
         # Get core grid from shard spec
         core_grid = shard_spec.grid
+
+        # Calculate dimensions in tiles
+        # With tiny tiles: shard_shape[0] = n_heads, shard_shape[1] = head_dim
+        head_dim_per_core_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt) (64 // 32 = 2)
 
         # Calculate tile sizes
         # For tiny tiles, the tile height matches the shard height (num_q_heads_per_core)
@@ -121,7 +123,7 @@ class RopeSingleCore:
         tile_size = tile.get_tile_size(data_format)
 
         # Number of tiles for intermediate buffers
-        num_interm_tiles = head_dim_t  # Intermediate buffers sized for one head row
+        num_interm_tiles = head_dim_per_core_t  # Intermediate buffers sized for one head row
 
         # CB indices (matching C++ implementation)
         input_cb = 0  # c_0
@@ -143,11 +145,31 @@ class RopeSingleCore:
         # CB 0: Input (sharded tensor)
         input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
 
-        # CB 1: Cos (sharded tensor)
-        cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cos_cb, cos_tensor)
+        # CB 1: Cos (same tile format as input for broadcast compatibility)
+        cos_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_cb,
+            data_format=data_format,
+            page_size=tile_size,
+            tile=tile_descriptor,
+        )
+        cos_cb_descriptor = ttnn.CBDescriptor(
+            total_size=head_dim_per_core_t * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[cos_format],
+        )
 
-        # CB 2: Sin (sharded tensor)
-        sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sin_cb, sin_tensor)
+        # CB 2: Sin (same tile format as input for broadcast compatibility)
+        sin_format = ttnn.CBFormatDescriptor(
+            buffer_index=sin_cb,
+            data_format=data_format,
+            page_size=tile_size,
+            tile=tile_descriptor,
+        )
+        sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=head_dim_per_core_t * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[sin_format],
+        )
 
         # CB 3: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
@@ -199,13 +221,26 @@ class RopeSingleCore:
         # ========================================================================
 
         # Named compile-time args for NCRISC
+        num_cores = core_grid.num_cores()
+        total_Wt = head_dim_per_core_t * num_cores
+
         ncrisc_named_compile_time_args = [
             ("in_cb", input_cb),
+            ("cos_tensor_address", cos_tensor.buffer_address()),
+            ("sin_tensor_address", sin_tensor.buffer_address()),
+            ("position_ids_tensor_address", position_ids_tensor.buffer_address()),
             ("cos_cb", cos_cb),
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
-            ("Wt", head_dim_t),
+            ("cos_sin_page_size", tile_size),
+            ("Wt", head_dim_per_core_t),
+            ("Ht", 1),
+            ("total_Wt", total_Wt),
         ]
+
+        # Per-core start_tile_offset: each core reads its width slice from DRAM
+        all_cores = ttnn.corerange_to_cores(core_grid)
+        start_tile_offset_core_values = [(core, idx * head_dim_per_core_t) for idx, core in enumerate(all_cores)]
 
         # Named compile-time args for BRISC (empty - no-op)
         brisc_named_compile_time_args = []
@@ -220,7 +255,8 @@ class RopeSingleCore:
             ("cos_interm_cb", cos_interm_cb),
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", output_cb),
-            ("Wt", head_dim_t),
+            ("Wt", head_dim_per_core_t),
+            ("Ht", 1),
         ]
 
         # Unified kernel descriptor
@@ -231,7 +267,7 @@ class RopeSingleCore:
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
@@ -244,13 +280,20 @@ class RopeSingleCore:
                     other_value=0,
                 ),
             ],
+            per_core_compile_time_descriptors=[
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="start_tile_offset",
+                    core_values=start_tile_offset_core_values,
+                    other_value=0,
+                ),
+            ],
         )
 
         # ========================================================================
         # Program Descriptor
         # ========================================================================
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 input_cb_descriptor,
                 cos_cb_descriptor,

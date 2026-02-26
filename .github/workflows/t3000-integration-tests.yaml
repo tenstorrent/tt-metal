@@ -13,9 +13,9 @@ on:
           - tteager
           - trace stress
           - falcon40b
-          - llama3.2-vision
-          - n300 mesh llama3.2-vision
-          - llama3.2-90b-vision
+          # - llama3.2-vision # Tier 3 models
+          # - n300 mesh llama3.2-vision # Tier 3 models
+          # - llama3.2-90b-vision # Tier 3 models
           - llama3
           - llama3 accuracy
           - llama3_70n90b accuracy
@@ -74,4 +74,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
       model: ${{ inputs.model || 'all' }}

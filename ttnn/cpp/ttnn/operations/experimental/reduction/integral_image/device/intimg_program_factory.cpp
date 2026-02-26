@@ -25,7 +25,6 @@ enum class IntImgCB : uint32_t {
     CUMSUM_STAGE_0,
     CUMSUM_STAGE_1,
     CUMSUM_STAGE_2,
-    CUMSUM_STAGE_3,
     OUTPUT,
     AXIS_2_BUFFER,  // memoizing last tile (for the "deeper" block) for propagation along axis 2
     AXIS_3_BUFFER,  // memoizing upper 32 tiles for propagation along axis 3
@@ -49,7 +48,7 @@ KernelHandle create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
     const std::vector<uint32_t>& runtime_args = {}) {
     auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
 

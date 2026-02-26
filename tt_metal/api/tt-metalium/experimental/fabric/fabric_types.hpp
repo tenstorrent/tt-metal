@@ -9,7 +9,6 @@
 #include <ostream>
 #include <optional>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <fmt/format.h>
 
@@ -96,6 +95,9 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
+// Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
+constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
+
 /**
  * @brief Represents a fabric node identifier combining mesh ID and chip ID
  */
@@ -112,6 +114,7 @@ bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id);
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 }  // namespace tt::tt_fabric

@@ -398,6 +398,11 @@ def train():
 
     # initialize device
     device_config = DeviceConfig(yaml_config)
+    ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
+        ttml.autograd.DistributedConfig(
+            enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp
+        )
+    )
     # no need to initialize device if #devices=1
     if device_config.total_devices() > 1:
         initialize_device(yaml_config)

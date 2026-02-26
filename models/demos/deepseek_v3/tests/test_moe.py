@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -31,6 +31,11 @@ def reference_model(hf_config):
     return DeepseekV3MoE(hf_config).eval()
 
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -39,27 +44,16 @@ def reference_model(hf_config):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "topk_fallback",
-    [
-        True,
-    ],
-)
-@pytest.mark.parametrize(
     "mode,num_tokens",
     [
         ("decode", 128),
-    ]
-    + [
-        ("prefill", seq_len)
-        if seq_len == 128
-        else pytest.param(
-            "prefill",
-            seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-            ),
-        )
-        for seq_len in PREFILL_SEQ_LENS
+        ("prefill", _prefill_seq_len),
+    ],
+)
+@pytest.mark.parametrize(
+    "topk_fallback",
+    [
+        True,
     ],
 )
 def test_forward_pass(
@@ -91,7 +85,14 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoE,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function

@@ -27,6 +27,7 @@ from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tt.common import Mode
 
 
 def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -765,6 +766,8 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
         state_dict=state_dict,
         weight_cache_path=topology_aware_cache_path(dtype),
         layer_num=0,
+        dtype=dtype,
+        model_config=model_config,
     )
 
     # Create input
@@ -776,7 +779,7 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     reference_output = reference_model(torch_input)
 
     # Run TT model
-    input_mem_config = model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+    input_mem_config = model_args.get_mlp_input_mem_config(Mode(mode), None)
 
     tt_input = ttnn.from_torch(
         torch_input,

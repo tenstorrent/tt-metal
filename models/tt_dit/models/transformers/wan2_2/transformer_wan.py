@@ -1,0 +1,638 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
+from loguru import logger
+
+import ttnn
+
+from ....layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
+from ....layers.feedforward import ParallelFeedForward
+from ....layers.linear import Linear
+from ....layers.module import Module, ModuleList, Parameter
+from ....layers.normalization import DistributedLayerNorm
+from ....parallel.config import DiTParallelConfig
+from ....parallel.manager import CCLManager
+from ....utils.mochi import get_rot_transformation_mat
+from ....utils.padding import pad_vision_seq_parallel
+from ....utils.substate import pop_substate, rename_substate
+from ....utils.tensor import bf16_tensor, float32_tensor, from_torch
+from .attention_wan import WanAttention
+
+
+class WanTransformerBlock(Module):
+    def __init__(
+        self,
+        *,
+        dim: int,
+        ffn_dim: int,
+        num_heads: int,
+        cross_attention_norm: bool = True,
+        eps: float = 1e-6,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.dim = dim
+        self.ffn_dim = ffn_dim
+        self.num_heads = num_heads
+        self.cross_attention_norm = cross_attention_norm
+        self.eps = eps
+
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+
+        self.norm1 = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        self.attn1 = WanAttention(
+            dim=dim,
+            num_heads=num_heads,
+            eps=eps,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=True,
+        )
+
+        self.attn2 = WanAttention(
+            dim=dim,
+            num_heads=num_heads,
+            eps=eps,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=False,
+        )
+
+        self.norm2 = (
+            DistributedLayerNorm(
+                dim,
+                norm_eps=eps,
+                norm_elementwise_affine=True,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            if cross_attention_norm
+            else None
+        )
+
+        self.ffn = ParallelFeedForward(
+            dim,
+            inner_dim=ffn_dim,
+            activation_fn="gelu",
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=ccl_manager,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+        )
+
+        self.norm3 = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        self.scale_shift_table = Parameter(
+            total_shape=[1, 1, 6, dim],
+            mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
+            device=mesh_device,
+            dtype=ttnn.float32,
+        )
+
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "ffn.net.0.proj", "ffn.ff1")
+        rename_substate(state, "ffn.net.2", "ffn.ff2")
+
+        if "scale_shift_table" in state:
+            state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
+
+    def forward(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        temb_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        spatial_1BND: fractured N on SP, fractured D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP
+        temb_1BTD: replicated on SP, fractured D on TP
+        N: logical sequence length of the spatial input
+        rope_cos_BANH: fractured N on SP, A (num_heads) on TP
+        rope_sin_BANH: fractured N on SP, A (num_heads) on TP
+        trans_mat: replicated on SP, replicated D on TP
+
+        Outputs:
+        spatial_1BND: fractured N on SP, fractured D on TP
+        """
+
+        assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
+
+        shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
+        shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
+            shifted_temb_1BTD, 6, dim=2
+        )
+
+        # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
+        gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
+        c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
+
+        spatial_normed_1BND = self.norm1(
+            spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
+        )
+
+        # Self attention on spatial with fused residual addcmul
+        # Fuses: spatial_1BND = spatial_1BND + to_out(attn_output) * gate_msa_1B1D
+        spatial_1BND = self.attn1(
+            spatial_1BND=spatial_normed_1BND,
+            N=N,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            addcmul_residual=spatial_1BND,
+            addcmul_gate=gate_msa_1B1D,
+        )
+
+        # Cross attention on prompt
+        spatial_normed_1BND = self.norm2(spatial_1BND)
+
+        attn_output_1BND = self.attn2(
+            spatial_1BND=spatial_normed_1BND,
+            N=N,
+            prompt_1BLP=prompt_1BLP,
+        )
+        spatial_1BND = spatial_1BND + attn_output_1BND
+
+        # Feed Forward
+        spatial_normed_1BND = self.norm3(
+            spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
+        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
+        spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+
+        # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+        # NOTE: higher precision compute config in addcmul may be needed for correctness
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
+
+        return spatial_1BND
+
+
+class WanTransformer3DModel(Module):
+    def __init__(
+        self,
+        *,
+        patch_size: tuple = (1, 2, 2),
+        num_heads: int = 40,
+        dim: int = 5120,
+        in_channels: int = 16,
+        out_channels: int = 16,
+        text_dim: int = 4096,
+        freq_dim: int = 256,
+        ffn_dim: int = 13824,
+        num_layers: int = 40,
+        cross_attn_norm: bool = True,
+        eps: float = 1e-6,
+        rope_max_seq_len: int = 1024,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = True,
+        model_type: str = "t2v",
+    ) -> None:
+        super().__init__()
+
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+        self.is_fsdp = is_fsdp
+        self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        self.model_type = model_type
+        self.cached_rope_features = {}
+
+        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        if model_type == "i2v":
+            in_channels = 36
+        else:
+            assert in_channels == 16, "in_channels must be 16 for t2v"
+
+        self.patch_size = patch_size
+        self.dim = dim
+
+        self.out_channels = out_channels
+
+        # NOTE: Fallback
+        self.rope = TorchWanRotaryPosEmbed(
+            dim // num_heads,
+            patch_size,
+            rope_max_seq_len,
+        )
+
+        self.patch_embedding = WanPatchEmbed(
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=dim,
+            mesh_device=mesh_device,
+            tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+        )
+
+        self.condition_embedder = WanTimeTextImageEmbedding(
+            dim=dim,
+            time_freq_dim=freq_dim,
+            time_proj_dim=dim * 6,
+            text_embed_dim=text_dim,
+            mesh_device=self.mesh_device,
+            tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=ccl_manager,
+        )
+
+        self.blocks = ModuleList(
+            WanTransformerBlock(
+                dim=dim,
+                ffn_dim=ffn_dim,
+                num_heads=num_heads,
+                cross_attention_norm=cross_attn_norm,
+                eps=eps,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+            )
+            for i in range(num_layers)
+        )
+
+        self.norm_out = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        self.proj_out = Linear(
+            dim,
+            patch_size[0] * patch_size[1] * patch_size[2] * self.out_channels,
+            bias=True,
+            mesh_device=mesh_device,
+        )
+
+        self.scale_shift_table = Parameter(
+            total_shape=[1, 2, dim],
+            device=mesh_device,
+            mesh_axes=[None, None, parallel_config.tensor_parallel.mesh_axis],
+            dtype=ttnn.float32,
+        )
+
+        self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().save(directory, prefix=prefix)
+
+        directory = Path(directory)
+
+        # Torch fallbacks
+        torch.save(self.rope.state_dict(), directory / f"{prefix}rope.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+
+        directory = Path(directory)
+
+        # Torch fallbacks
+        self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Torch fallbacks
+        self.rope.load_state_dict(pop_substate(state, "rope"))
+
+    def get_rope_features(self, hidden_states):
+        if tuple(hidden_states.shape) not in self.cached_rope_features:
+            rope_features = self.prepare_rope_features(hidden_states)
+            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
+        return self.cached_rope_features[tuple(hidden_states.shape)]
+
+    def prepare_rope_features(self, hidden_states):
+        """
+        Given video input, compute RoPE features.
+        Return tensors on device.
+        """
+        logger.info(f"Preparing rope features for shape {hidden_states.shape}")
+        rope_cos, rope_sin = self.rope(hidden_states)
+
+        # Convert to TT tensors with proper sharding
+        rope_cos_1HND = rope_cos.permute(0, 2, 1, 3)
+        rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
+
+        rope_cos_1HND = pad_vision_seq_parallel(
+            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
+        )
+        rope_sin_1HND = pad_vision_seq_parallel(
+            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
+        )
+
+        trans_mat = get_rot_transformation_mat()
+
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tt_rope_cos_1HND = from_torch(
+            rope_cos_1HND,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            mesh_axes=[..., sp_axis, None],
+        )
+        tt_rope_sin_1HND = from_torch(
+            rope_sin_1HND,
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            mesh_axes=[..., sp_axis, None],
+        )
+        tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
+
+        logger.info(f"TT rope cos shape: {tt_rope_cos_1HND.shape}")
+        logger.info(f"TT rope sin shape: {tt_rope_sin_1HND.shape}")
+        logger.info(f"TT trans mat shape: {tt_trans_mat.shape}")
+
+        return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def prepare_text_conditioning(self, encoder_hidden_states):
+        tt_prompt_1BLP = self.condition_embedder.forward_text(encoder_hidden_states)
+
+        logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
+        return tt_prompt_1BLP
+
+    def prepare_timestep_conditioning(self, timestep):
+        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
+        # TODO: Cleanup and move out of prepare_timestep_conditioning.
+        timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
+        tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
+        tt_timestep_proj_1BTD = ttnn.reshape(tt_timestep_proj_1BTD, list(tt_timestep_proj_1BTD.shape)[:-2] + [6, -1])
+
+        logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
+        logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
+        return tt_temb_11BD, tt_timestep_proj_1BTD
+
+    def prepare_conditioning(self, timestep, encoder_hidden_states):
+        """
+        Given torch inputs, execute the combined timestep and text embedding.
+        Return tensors on device.
+        """
+        assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
+        tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
+
+        logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
+        logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
+        logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
+        return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
+
+    def preprocess_spatial_input_host(self, spatial):
+        B, C, F, H, W = spatial.shape
+        logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
+        assert B == 1, "Batch size must be 1"
+        pF, pH, pW = self.patch_size
+        patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
+        N = patch_F * patch_H * patch_W
+
+        # Patchify video input
+        spatial = spatial.reshape(B, C, patch_F, pF, patch_H, pH, patch_W, pW)
+        spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
+        logger.info(f"spatial input after patchifying: {spatial.shape}")
+
+        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
+        logger.info(f"spatial input after padding: {spatial.shape}")
+
+        return spatial, N
+
+    def preprocess_spatial_input(self, spatial):
+        spatial, N = self.preprocess_spatial_input_host(spatial)
+        spatial = bf16_tensor(
+            spatial, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=-2
+        )
+        logger.info(f"TT spatial shape: {spatial.shape}")
+        return spatial, N
+
+    def postprocess_spatial_output_host(self, spatial_1BND, F, H, W, N):
+        """
+        This is the reverse of preprocess_spatial_input
+        Input is of shape: 1 B (patch_F patch_H patch_W) (pF pH pW C)
+        returns shape: B C F H W
+        """
+        assert len(spatial_1BND.shape) == 4
+        assert spatial_1BND.shape[0] == 1
+        B = spatial_1BND.shape[1]
+        pF, pH, pW = self.patch_size
+        patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
+        logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
+        spatial_BND = spatial_1BND.squeeze(0)
+
+        spatial_BND = spatial_BND[:, :N]  # Slice out sequence-parallel padding tokens
+        logger.info(f"Spatial output after slicing: {spatial_BND.shape}")
+
+        spatial_patches = spatial_BND.reshape(B, patch_F, patch_H, patch_W, pF, pH, pW, self.out_channels)
+        logger.info(f"Spatial output after reshaping: {spatial_patches.shape}")
+
+        spatial_BCFHW = spatial_patches.permute(0, 7, 1, 4, 2, 5, 3, 6).reshape(B, self.out_channels, F, H, W)
+        logger.info(f"Spatial output after permuting: {spatial_BCFHW.shape}")
+        return spatial_BCFHW
+
+    def postprocess_spatial_output(self, spatial_1BND, F, H, W, N):
+        """
+        This is the reverse of preprocess_spatial_input
+        Input is of shape: 1 B (patch_F patch_H patch_W) (pF pH pW C)
+        returns shape: B C F H W
+        """
+        assert len(spatial_1BND.shape) == 4
+        assert spatial_1BND.shape[0] == 1
+        # Gather sequence-parallel output
+        spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+            spatial_1BND, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+        )
+
+        spatial_1BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0])
+
+        spatial_BCFHW = self.postprocess_spatial_output_host(spatial_1BND, F, H, W, N)
+        return spatial_BCFHW
+
+    def forward(
+        self,
+        spatial: torch.Tensor,
+        prompt: ttnn.Tensor,
+        timestep: torch.Tensor,
+        y: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Inputs are all torch tensors
+            y is an optional argument for image-to-video generation.
+            We assume that preprocessing has already been done for y and y has the same shape as spatial.
+        Output is torch tensor
+        """
+
+        if self.model_type == "i2v":
+            assert y is not None, "y must be provided for image-to-video generation"
+
+        B, C, F, H, W = spatial.shape
+        pF, pH, pW = self.patch_size
+        patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
+        N = patch_F * patch_H * patch_W
+
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(spatial)
+
+        temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
+
+        # Concatenate spatial and y along the channel dimension
+        if self.model_type == "i2v":
+            print(spatial.shape, y.shape)
+            spatial = torch.cat([spatial, y], dim=1)
+
+        spatial_1BNI, N = self.preprocess_spatial_input(spatial)
+
+        spatial_1BND = self.patch_embedding(spatial_1BNI)
+
+        for idx, block in enumerate(self.blocks):
+            spatial_1BND = block(
+                spatial_1BND=spatial_1BND,
+                prompt_1BLP=prompt_1BLP,
+                temb_1BTD=timestep_proj_1BTD,
+                N=N,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
+            )
+
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
+        proj_out_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        )
+
+        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
+
+        return spatial_out
+
+    def inner_step(self, spatial_1BNI_torch, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep_torch):
+        """
+        Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
+            - prompt_1BLP
+            - rope_cos_1HND
+            - rope_sin_1HND
+            - trans_mat
+            - N
+
+        Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
+        Spatial output is an fp32 ttnn.Tensor on device with same layout.
+        """
+
+        # Push spatial input to device
+        spatial_1BNI = bf16_tensor(
+            spatial_1BNI_torch,
+            device=self.mesh_device,
+            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
+            shard_dim=-2,
+        )
+        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep_torch)
+
+        spatial_1BND = self.patch_embedding(spatial_1BNI)
+
+        for idx, block in enumerate(self.blocks):
+            spatial_1BND = block(
+                spatial_1BND=spatial_1BND,
+                prompt_1BLP=prompt_1BLP,
+                temb_1BTD=timestep_proj_1BTD,
+                N=N,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
+            )
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
+        proj_out_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        )
+
+        # Gather fp32 spatial output across sequence parallel devices (remains on device)
+        spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+            proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+        )
+
+        return spatial_1BNI
+
+    @staticmethod
+    def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+        """Move a ttnn device tensor to a torch host tensor."""
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])

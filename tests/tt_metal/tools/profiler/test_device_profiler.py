@@ -300,7 +300,9 @@ def test_full_buffer():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_full_buffer", setupAutoExtract=True
+    )
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -327,7 +329,7 @@ def test_device_api_debugger_non_dropping():
     testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
     clear_profiler_runtime_artifacts()
 
-    envVars = "TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1 "
+    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
 
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
     assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
@@ -1146,7 +1148,9 @@ def test_timestamped_events():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
+    )
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(

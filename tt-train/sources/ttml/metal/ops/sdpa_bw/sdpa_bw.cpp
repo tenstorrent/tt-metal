@@ -19,16 +19,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const float dropout_probability) {
-    // TODO(vmelnykov): #34531 - Add validation for mask_type - currently only Arbitrary is supported
-    // Causal mask support will be added in a future PR
-
     // Call KV kernel to compute grad_K and grad_V
     auto [grad_K, grad_V] = ttnn::prim::ttml_sdpa_kv_bw(
-        grad_output, attn_output, query, key, value, attn_mask, intermediates, dropout_probability);
+        grad_output, attn_output, query, key, value, mask_type, attn_mask, intermediates, dropout_probability);
 
     // Call Q kernel to compute grad_Q
     auto grad_Q = ttnn::prim::ttml_sdpa_q_bw(
-        grad_output, attn_output, query, key, value, attn_mask, intermediates, dropout_probability);
+        grad_output, attn_output, query, key, value, mask_type, attn_mask, intermediates, dropout_probability);
 
     return {grad_Q, grad_K, grad_V};
 }

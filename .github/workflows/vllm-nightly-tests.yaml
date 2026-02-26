@@ -17,9 +17,11 @@ on:
           - meta-llama/Llama-3.1-8B-Instruct
           - meta-llama/Llama-3.3-70B-Instruct
           - Qwen/Qwen2.5-VL-72B-Instruct
+          - Qwen/Qwen3-VL-32B-Instruct
           - google/gemma-3-27b-it
           - openai/gpt-oss-120b
           - models/vllm_test_utils/t3000_multiproc_test
+          - models/vllm_test_utils/no_op_test
       platform:
         required: false
         type: choice

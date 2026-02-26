@@ -162,6 +162,8 @@ class RunTimeOptions {
 
     bool enable_llk_asserts = false;
 
+    bool disable_sfploadmacro = false;
+
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
@@ -186,7 +188,7 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
-    bool experimental_device_debug_dump_enabled = false;
+    bool experimental_noc_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -267,6 +269,12 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    // Enable channel trimming resource usage capture
+    bool enable_channel_trimming_capture = false;
+
+    // Path to channel trimming profile YAML for import-driven router construction
+    std::string fabric_trimming_profile_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -334,8 +342,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
-    // Return a hash of which watcher features are enabled
-    uint32_t get_watcher_hash() const;
+    // Return a hash string of which watcher features are enabled
+    std::string get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -383,6 +391,8 @@ public:
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -531,8 +541,8 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
-    void set_experimental_device_debug_dump_enabled(bool enabled);
-    bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
+    void set_experimental_noc_debug_dump_enabled(bool enabled);
+    bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
@@ -592,6 +602,8 @@ public:
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
+    void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
     // Temporary API until all multi-device workloads are ported to run on fabric.
     // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
     // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
@@ -639,6 +651,15 @@ public:
     void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
         fabric_profiling_settings.enable_rx_ch_fwd = enable;
     }
+
+    // If true, enables channel trimming resource usage capture on fabric routers
+    bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
+    void set_enable_channel_trimming_capture(bool enable) { enable_channel_trimming_capture = enable; }
+
+    // Channel trimming profile import path
+    bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
+    const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
+    void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

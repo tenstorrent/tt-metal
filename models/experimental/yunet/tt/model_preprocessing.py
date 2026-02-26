@@ -29,7 +29,7 @@ def preprocess_image(image, target_size=YUNET_INPUT_SIZE):
 
     Args:
         image: BGR image from cv2.imread
-        target_size: Target size (default 320)
+        target_size: Target size (default 640)
 
     Returns:
         torch.Tensor in NHWC format, bfloat16

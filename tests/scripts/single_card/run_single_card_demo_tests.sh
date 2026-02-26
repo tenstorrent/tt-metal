@@ -23,7 +23,7 @@ echo "[CONFIG] PYTEST_CMD=${PYTEST_CMD}"
 
 run_falcon7b_func() {
 
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  $PYTEST_CMD --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -31,7 +31,7 @@ run_mistral7b_func() {
 
   mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=$TT_CACHE_HOME/$mistral7b
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
 
 }
 
@@ -39,7 +39,7 @@ run_qwen7b_func() {
 
   qwen7b=Qwen/Qwen2-7B-Instruct
   qwen_cache=$TT_CACHE_HOME/$qwen7b
-  HF_MODEL=$qwen7b TT_CACHE_PATH=$qwen_cache MESH_DEVICE=N300 $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+  HF_MODEL=$qwen7b TT_CACHE_PATH=$qwen_cache MESH_DEVICE=N300 $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
 
 }
 
@@ -58,13 +58,13 @@ run_qwen25_vl_perfunc() {
   qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b $PYTEST_CMD -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b $PYTEST_CMD models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
   for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
-    HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path $PYTEST_CMD models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 
@@ -75,10 +75,10 @@ run_qwen25_vl_perfunc() {
 
 run_ds_r1_qwen_func() {
   ds_r1_qwen_14b=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
-  HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+  HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 $PYTEST_CMD --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
 
   ds_r1_qwen_1_5b=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 $PYTEST_CMD models/experimental/tt_transformers_v2/ds_r1_qwen.py
+  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 $PYTEST_CMD --timeout 600 models/experimental/tt_transformers_v2/ds_r1_qwen.py
 }
 
 run_gemma3_func() {
@@ -91,6 +91,13 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
+}
+
+run_phi3_func() {
+  phi3=microsoft/Phi-3-mini-128k-instruct
+  phi3_cache=$TT_CACHE_HOME/$phi3
+  HF_MODEL=$phi3 TT_CACHE_PATH=$phi3_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
+  echo "LOG_METAL: Phi-3-Mini-128K-Instruct test completed"
 }
 
 run_phi4_func() {
@@ -143,7 +150,7 @@ run_llama3_func() {
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     cache_path=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
+    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
@@ -197,6 +204,7 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
@@ -228,7 +236,7 @@ run_efficientnet_b0_func(){
 
 run_stable_diffusion_func() {
 
-  $PYTEST_CMD --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
+  $PYTEST_CMD --timeout 600 --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
 
 }
 
@@ -238,9 +246,9 @@ run_mistral7b_perf() {
   mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=$TT_CACHE_HOME/$mistral7b
   # Run Mistral-7B-v0.3 for N150
-  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
   # Run Mistral-7B-v0.3 for N300
-  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
 
 }
 
@@ -260,13 +268,13 @@ run_llama3_perf() {
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
   for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
     cache_path=$TT_CACHE_HOME/$hf_model
-    MESH_DEVICE=N150 HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    MESH_DEVICE=N150 HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Llama3 tests for $hf_model completed on N150"
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     cache_path=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
@@ -279,13 +287,13 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  $PYTEST_CMD --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
 
 }
 
 run_mamba_perf() {
 
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
+  $PYTEST_CMD --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
 
 }
 

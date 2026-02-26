@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);  // inner block size in tiles

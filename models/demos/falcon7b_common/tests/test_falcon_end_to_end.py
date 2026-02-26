@@ -11,7 +11,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from models.common.utility_functions import is_e75, profiler, tt_tensors_to_torch_tensors
+from models.common.utility_functions import profiler, tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -330,9 +330,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     expected_v_cache_pcc,
     model_version,
 ):
-    if is_e75(mesh_device) and batch == 32:
-        pytest.skip("Falcon batch 32 is unsupported on E75")
-
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 

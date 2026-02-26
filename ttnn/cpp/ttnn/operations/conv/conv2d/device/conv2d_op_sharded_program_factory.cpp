@@ -1177,16 +1177,15 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         uint32_t core_index = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                std::vector<uint32_t> reader_rt_args{core_index};
+                uint32_t reader_remaining_tiles_to_push = 0;
                 if (enable_activation_reuse) {
-                    uint32_t reader_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
                     } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
-                    reader_rt_args.push_back(reader_remaining_tiles_to_push);
                 }
+                std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
                 core_index++;
             }

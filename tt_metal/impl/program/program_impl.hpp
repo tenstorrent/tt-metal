@@ -10,7 +10,6 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "impl/dispatch/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -19,7 +18,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
-#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -53,19 +52,6 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -83,9 +69,12 @@ void assemble_device_commands(
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    // kernel_ids are ordered by dispatch class
+    // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
+    // RTA/CRTA layout for each kernel
+    std::vector<uint32_t> rta_sizes;
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
@@ -96,7 +85,7 @@ struct KernelGroup {
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
-        uint32_t local_cb_mask,
+        uint64_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
@@ -107,8 +96,6 @@ struct KernelGroup {
 // Contains the program's worker memory map
 struct ProgramConfig {
     uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
     uint32_t sem_offset;
     uint32_t sem_size;
     uint32_t cb_offset;
@@ -137,9 +124,6 @@ struct ProgramOffsetsState {
     uint32_t offset = 0;
     // Unique RTA offset.
     uint32_t rta_offset = 0;
-    // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;
@@ -202,6 +186,11 @@ public:
 
     ~ProgramImpl() noexcept;
 
+    // CB mask width derived from kernel_config_msg_t::local_cb_mask type
+    using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
+        FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
+    static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
+
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;
@@ -255,8 +244,8 @@ public:
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(CommandQueue* queue);
-    CommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue* queue);
+    HWCommandQueue* get_last_used_command_queue() const;
 
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
 
@@ -286,6 +275,10 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
+    // core require remapper being enabled
+    void finalize_dataflow_buffer_configs();
+
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
@@ -312,7 +305,7 @@ public:
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
 private:
-    CommandQueue* last_used_command_queue_for_testing = nullptr;
+    HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
@@ -355,6 +348,7 @@ private:
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
     uint32_t programmable_core_count_;
+    uint32_t max_cbs_;  // Architecture-specific max CBs
     uint64_t id;  // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
@@ -376,6 +370,7 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
         dataflow_buffer_by_id_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
+    tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
 
@@ -398,6 +393,11 @@ private:
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
+
+    void finalize_single_dfb_config(
+        std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
+        const CoreCoord& core,
+        bool use_remapper);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 

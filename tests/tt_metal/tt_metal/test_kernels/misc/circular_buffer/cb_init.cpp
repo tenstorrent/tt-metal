@@ -7,9 +7,9 @@
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 
-void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t initial_value, uint32_t mask) {
+void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t initial_value, uint64_t mask) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        if (!(mask & (1 << i))) {
+        if (!(mask & (1ULL << i))) {
             continue;  // Skip circular buffers that are not set up
         }
         uint32_t fifo_addr = initial_value + i * 4;
@@ -79,12 +79,17 @@ uint32_t get_clock_lo() {
 
 template <bool read, bool write, bool init_wr_tile_ptr>
 void perform_test(uint32_t initial_value) {
-    uint32_t mask = get_arg_val<uint32_t>(0);
+    // Mask split into 32-bit halves for RISC-V efficiency (setup_local_cb_read_write_interfaces)
+    // mask_high only used on Blackhole (Wormhole uses mask_low only)
+    uint32_t mask_low = get_arg_val<uint32_t>(0);
+    uint32_t mask_high = get_arg_val<uint32_t>(1);
+    uint64_t mask = (static_cast<uint64_t>(mask_high) << 32) | mask_low;
     DPRINT << "Performing test with read: " << static_cast<uint32_t>(read)
            << ", write: " << static_cast<uint32_t>(write)
-           << ", init_wr_tile_ptr: " << static_cast<uint32_t>(init_wr_tile_ptr) << ", mask: " << mask << ENDL();
+           << ", init_wr_tile_ptr: " << static_cast<uint32_t>(init_wr_tile_ptr) << ", mask_low: " << mask_low
+           << ", mask_high: " << mask_high << ENDL();
 
-    uint32_t tt_l1_ptr* cb_l1_base = get_arg_val<uint32_t tt_l1_ptr*>(1);
+    uint32_t tt_l1_ptr* cb_l1_base = get_arg_val<uint32_t tt_l1_ptr*>(2);
 
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS * 4; i++) {
         ((volatile uint32_t*)cb_l1_base)[i] = initial_value + i;
@@ -95,7 +100,12 @@ void perform_test(uint32_t initial_value) {
     }
 
     uint32_t start_time = get_clock_lo();
-    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr>(cb_l1_base, 0, mask);
+    // Initialize CBs 0-31
+    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr, false>(cb_l1_base, 0, mask_low);
+#ifdef ARCH_BLACKHOLE
+    // Initialize CBs 32-63
+    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr, false>(cb_l1_base, 32, mask_high);
+#endif
     uint32_t end_time = get_clock_lo();
     DPRINT << "Time taken for setup: " << (end_time - start_time) << " cycles" << ENDL();
 

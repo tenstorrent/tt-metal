@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -129,7 +128,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
-    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
+    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_cbs_, cb_config.data_format}}));
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {

@@ -8,11 +8,12 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 
-def _out_size(in_size, pad, stride, k):
-    return (in_size + 2 * pad - k) // stride + 1
+def _out_size(in_size, pad, stride, k, dilation):
+    effective_k = (dilation * (k - 1)) + 1
+    return (in_size + 2 * pad - effective_k) // stride + 1
 
 
 ALIGNMENT = 32  # Valid L1 alignment for Wormhole and Blackhole
@@ -68,6 +69,7 @@ def create_conv3d_config(
     H_out_block=1,
     C_out_block=0,
     C_in_block=0,
+    dilation=(1, 1, 1),
     compute_with_storage_grid_size=(1, 1),
 ):
     """Create Conv3d configuration."""
@@ -79,19 +81,22 @@ def create_conv3d_config(
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
+        dilation=dilation,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
 
-def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, padding_mode, device):
+def setup_conv3d_test(
+    input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, dilation=(1, 1, 1)
+):
     """Common setup for Conv3D tests, preparing inputs and ground truth."""
     torch.manual_seed(42)
 
     # Define input dimensions
     N, C, D, H, W = input_shape
-    D_out = _out_size(D, padding[0], stride[0], kernel_size[0])
-    H_out = _out_size(H, padding[1], stride[1], kernel_size[1])
-    W_out = _out_size(W, padding[2], stride[2], kernel_size[2])
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0], dilation[0])
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1], dilation[1])
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2], dilation[2])
 
     # Create input tensor and PyTorch Conv3d module
     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
@@ -102,7 +107,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
-        dilation=(1, 1, 1),
+        dilation=dilation,
         bias=True,
         padding_mode=padding_mode,
     )
@@ -123,9 +128,11 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
+def run_conv3d_test(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1), dilation=(1, 1, 1)
+):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, dilation=dilation
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
@@ -134,7 +141,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
+    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation)
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
@@ -145,6 +152,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
+        dilation=dilation,
         padding_mode=padding_mode,
         config=config,
         compute_kernel_config=kernel_config,
@@ -164,7 +172,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 
 @pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64])
+@pytest.mark.parametrize("C_out", [64, 48])
 @pytest.mark.parametrize("T", [8, 11])
 @pytest.mark.parametrize("H", [10, 13])
 @pytest.mark.parametrize("W", [9, 12])
@@ -172,6 +180,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -189,6 +198,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -206,6 +216,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -234,6 +245,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     ],
     ids=["qwen_exact_with_blocking"],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #29024")
 def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking):
     """Test Conv3d with exact Qwen2.5-VL-3B parameters (issue #35201).
 
@@ -281,3 +293,20 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize("C_out", [48, 80, 112, 33])
+def test_conv3d_non_aligned_output_channels(device, C_out):
+    """Test Conv3d with output channels that are not a multiple of 32 (issue #38126)."""
+    input_shape = (1, 32, 8, 10, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(
+        device,
+        input_shape,
+        C_out,
+        kernel_size=(3, 3, 3),
+        stride=(1, 1, 1),
+        padding=(0, 1, 1),
+        padding_mode="zeros",
+        grid_size=grid_size,
+    )
