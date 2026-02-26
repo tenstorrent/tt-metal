@@ -467,13 +467,12 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/huggingface/hub' }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
     defaults:
       run:
         shell: bash
@@ -481,7 +480,7 @@ jobs:
     name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.arch == 'blackhole' && fromJSON('["in-service", "arch-blackhole", "pipeline-functional"]'))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
