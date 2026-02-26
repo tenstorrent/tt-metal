@@ -736,32 +736,14 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
 }
 
 // =============================================================================
-// EXPERIMENTAL POLYNOMIAL GELU BACKWARD TESTS
+// POLYNOMIAL-SPECIFIC ANALYSIS TESTS
 // =============================================================================
-
-/**
- * Helper function to run experimental GELU backward with polynomial approximation.
- * Uses ttnn::experimental::gelu_bw with approximate="none" (default polynomial path)
- */
-float run_gelu_bw_poly_single(tt::tt_metal::distributed::MeshDevice& device, float input_val, float grad_val = 1.0f) {
-    ttnn::Shape shape({1, 1, 32, 32});
-
-    auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-    auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-
-    // Call experimental gelu_bw with approximate="none" (polynomial approximation)
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
-    return static_cast<float>(output_vec[0]);
-}
 
 class GeluBwPolyTest : public TTNNFixtureWithDevice {};
 
 TEST_F(GeluBwPolyTest, DerivativeAtZero) {
     // GELU'(0) = 0.5
-    float actual = run_gelu_bw_poly_single(*device_, 0.0f);
+    float actual = run_gelu_bw_single(*device_, 0.0f);
     float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(0.0f);
 
     int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
@@ -790,7 +772,7 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
 
     std::cout << "\n[POLY] Polynomial region tests (should have low ULP):\n";
     for (const auto& [input_val, max_expected_ulp] : poly_tests) {
-        float actual = run_gelu_bw_poly_single(*device_, input_val);
+        float actual = run_gelu_bw_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -814,7 +796,7 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
 
     std::cout << "\n[EXP] Exp-based region tests (x in (-13.375, -5], should have low ULP):\n";
     for (const auto& [input_val, max_expected_ulp] : exp_tests) {
-        float actual = run_gelu_bw_poly_single(*device_, input_val);
+        float actual = run_gelu_bw_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -829,7 +811,7 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
 
     std::cout << "\n[SAT] Saturation region tests (x <= -13.375, saturates to 0):\n";
     for (float input_val : saturation_tests) {
-        float actual = run_gelu_bw_poly_single(*device_, input_val);
+        float actual = run_gelu_bw_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -1199,7 +1181,7 @@ TEST_F(GeluBwPolyTest, CompareWithStandard) {
     for (float x : test_values) {
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         float actual_std = run_gelu_bw_single(*device_, x);
-        float actual_poly = run_gelu_bw_poly_single(*device_, x);
+        float actual_poly = run_gelu_bw_single(*device_, x);
 
         int32_t ulp_std = bf16_ulp_bw::ulp_distance_bf16_daz(actual_std, expected);
         int32_t ulp_poly = bf16_ulp_bw::ulp_distance_bf16_daz(actual_poly, expected);
