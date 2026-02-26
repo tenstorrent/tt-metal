@@ -7,7 +7,7 @@ Generate demo.py prompt JSON files from lm-eval tasks to match tti-eval.
 
 Run with the evals venv Python, e.g.:
   ~/.workflow_venvs/.venv_evals_common/bin/python make_lmeval_prompts.py \
-    --task r1_aime24 --out /data/deepseek/prompts/demo_aime24_full.json
+    --task aime24 --out /data/deepseek/prompts/demo_aime24_full.json
 """
 
 from __future__ import annotations
@@ -18,6 +18,24 @@ from pathlib import Path
 from typing import Any
 
 from lm_eval.tasks import TaskManager
+
+TASK_ALIASES = {
+    # Historical/tti-eval naming aliases.
+    "r1_aime24": "aime24",
+}
+
+
+def resolve_task_name(task_name: str, manager: TaskManager) -> str | None:
+    if task_name in manager.task_index:
+        return task_name
+    alias = TASK_ALIASES.get(task_name)
+    if alias and alias in manager.task_index:
+        return alias
+    if task_name.startswith("r1_"):
+        stripped = task_name[len("r1_") :]
+        if stripped in manager.task_index:
+            return stripped
+    return None
 
 
 def _jsonify(value: Any) -> Any:
@@ -34,21 +52,24 @@ def _jsonify(value: Any) -> Any:
         return str(value)
 
 
-def build_items(task_name: str) -> list[dict[str, Any]]:
-    manager = TaskManager()
-    task = manager.load_task_or_group(task_name)[task_name]
+def build_items(task_name: str, manager: TaskManager) -> list[dict[str, Any]]:
+    resolved = resolve_task_name(task_name, manager)
+    if resolved is None:
+        raise SystemExit(f"Unknown lm-eval task '{task_name}'")
+    task = manager.load_task_or_group(resolved)[resolved]
 
     items: list[dict[str, Any]] = []
     for idx, doc in task.doc_iterator():
         prompt = task.doc_to_text(doc)
-        items.append(
-            {
-                "task": task_name,
-                "index": int(idx),
-                "prompt": prompt,
-                "doc": _jsonify(doc),
-            }
-        )
+        item = {
+            "task": resolved,
+            "index": int(idx),
+            "prompt": prompt,
+            "doc": _jsonify(doc),
+        }
+        if resolved != task_name:
+            item["task_alias"] = task_name
+        items.append(item)
     return items
 
 
@@ -70,11 +91,12 @@ def main() -> None:
     args = parser.parse_args()
 
     tasks = args.task
+    manager = TaskManager()
     combine = args.combine or len(tasks) > 1
 
     all_items: list[dict[str, Any]] = []
     for task_name in tasks:
-        items = build_items(task_name)
+        items = build_items(task_name, manager)
         if combine:
             all_items.extend(items)
         else:
