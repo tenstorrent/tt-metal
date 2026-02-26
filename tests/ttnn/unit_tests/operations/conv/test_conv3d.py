@@ -172,7 +172,7 @@ def run_conv3d_test(
 
 @pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64])
+@pytest.mark.parametrize("C_out", [64, 48])
 @pytest.mark.parametrize("T", [8, 11])
 @pytest.mark.parametrize("H", [10, 13])
 @pytest.mark.parametrize("W", [9, 12])
@@ -293,3 +293,20 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize("C_out", [48, 80, 112, 33])
+def test_conv3d_non_aligned_output_channels(device, C_out):
+    """Test Conv3d with output channels that are not a multiple of 32 (issue #38126)."""
+    input_shape = (1, 32, 8, 10, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(
+        device,
+        input_shape,
+        C_out,
+        kernel_size=(3, 3, 3),
+        stride=(1, 1, 1),
+        padding=(0, 1, 1),
+        padding_mode="zeros",
+        grid_size=grid_size,
+    )
