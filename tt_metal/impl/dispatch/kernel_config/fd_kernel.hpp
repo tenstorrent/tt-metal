@@ -116,10 +116,11 @@ public:
         get_dispatch_query_manager_(get_dispatch_query_manager),
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor.num_cqs());
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-            std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor.num_cqs());
+        bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+            CoreType::WORKER, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster);
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+            CoreType::ETH, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster);
     }
     virtual ~FDKernel() = default;
 
