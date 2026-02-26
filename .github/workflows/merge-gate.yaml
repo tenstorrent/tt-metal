@@ -115,8 +115,6 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-      contents: read
-      actions: read
     secrets: inherit
     with:
       build-type: Release
@@ -130,7 +128,6 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
-      use-artifacts-from-run: 22425884273
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
