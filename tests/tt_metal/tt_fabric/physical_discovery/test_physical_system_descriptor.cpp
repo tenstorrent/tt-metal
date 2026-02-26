@@ -15,6 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -30,16 +31,19 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(),
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    // Run discovery again to ensure that state is cleared before re-discovery
+    physical_system_desc.clear();
+    auto new_psd = run_physical_system_discovery(
+        driver_ref,
         distributed_context,
         &tt::tt_metal::MetalContext::instance().hal(),
-        rtoptions,
-        run_discovery);
-    // Run discovery again to ensure that state is cleared before re-discovery
-    physical_system_desc.run_discovery();
+        rtoptions.get_target_device(),
+        true,
+        true);
+    physical_system_desc.merge(std::move(new_psd));
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
     EXPECT_EQ(hostnames.size(), *(distributed_context->size()));
@@ -150,14 +154,9 @@ TEST(PhysicalDiscovery, PrintHostTopology) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(),
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        rtoptions,
-        run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
 
     if (*(distributed_context->rank()) == 0) {
         auto all_hostnames = physical_system_desc.get_all_hostnames();
@@ -187,8 +186,9 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         GTEST_SKIP() << "Splitting a Galaxy into 2x4 Cross-Tray slices is only supported for Blackhole Galaxy Systems.";
     }
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
 
     // Each rank builds its local PCI device ID -> logical ID mapping.
     // UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs.
@@ -240,7 +240,6 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
         tt::stl::Span<std::byte>(
             reinterpret_cast<std::byte*>(all_mappings.data()), all_mappings.size() * sizeof(uint32_t)),
         Rank{0});
-
     if (*distributed_context->rank() == 0) {
         // Reconstruct per-host PCI-to-logical mapping from gathered data.
         std::unordered_map<std::string, std::unordered_map<uint32_t, uint32_t>> host_pcie_to_logical;
@@ -309,8 +308,9 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
     // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as

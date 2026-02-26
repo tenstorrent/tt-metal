@@ -30,10 +30,6 @@ namespace tt {
 enum class TargetDevice: std::uint8_t;
 }
 
-namespace tt::llrt {
-class RunTimeOptions;
-}
-
 namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
 }
@@ -41,6 +37,27 @@ class DistributedContext;
 namespace tt::tt_metal {
 
 class Hal;
+
+// Forward declaration of PhysicalSystemDescriptor class
+class PhysicalSystemDescriptor;
+
+// Forward declarations for discovery functions
+PhysicalSystemDescriptor run_physical_system_discovery(
+    tt::umd::Cluster& cluster,
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+    const Hal* hal,
+    tt::TargetDevice target_device_type,
+    bool run_global_discovery = true,
+    bool run_live_discovery = false);
+
+namespace discovery_impl {
+PhysicalSystemDescriptor run_local_discovery(
+    tt::umd::Cluster& cluster,
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+    const Hal* hal,
+    tt::TargetDevice target_device_type,
+    bool run_live_discovery);
+}  // namespace discovery_impl
 
 // Live Ethernet Link Metrics
 struct EthernetMetrics {
@@ -144,20 +161,16 @@ struct PhysicalConnectivityGraph {
 
 // Top-Level Global System Descriptor Data-Structure.
 
+// Forward declaration for friend access
+namespace discovery_impl {
+class DiscoveryImpl;
+}
+
 class PhysicalSystemDescriptor {
 public:
-    PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const Hal* hal,
-        const tt::llrt::RunTimeOptions& rtoptions,
-        bool run_discovery = true);
-    PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const Hal* hal,
-        tt::TargetDevice target_device_type,
-        bool run_discovery = true);
+    // Minimal constructor - takes only target device type
+    explicit PhysicalSystemDescriptor(tt::TargetDevice target_device_type);
+
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
     PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
@@ -172,7 +185,9 @@ public:
     PhysicalSystemDescriptor& operator=(const PhysicalSystemDescriptor&) = delete;
     PhysicalSystemDescriptor& operator=(PhysicalSystemDescriptor&&) = delete;
 
-    void run_discovery(bool run_global_discovery = true, bool run_live_discovery = true);
+    // Public methods for re-discovery scenarios
+    void clear();
+    void merge(PhysicalSystemDescriptor&& other);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
@@ -215,7 +230,6 @@ public:
     }
 
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
-    LocalEthernetMetrics query_local_ethernet_metrics() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -231,34 +245,28 @@ public:
         return pcie_id_to_asic_location_;
     }
 
-    static const std::unique_ptr<tt::umd::Cluster> null_cluster;
-
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
     YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& file_path = std::nullopt) const;
 
 private:
-    void run_local_discovery(bool run_live_discovery);
-    void run_global_discovery();
-    void clear();
-    void merge(PhysicalSystemDescriptor&& other);
-    void exchange_metadata(bool issue_gather);
-    void generate_cross_host_connections();
-    uint32_t get_chip_id_for_asic(AsicID asic_id) const;
-    void remove_unresolved_nodes();
-    void resolve_hostname_uniqueness();
-    void validate_graphs();
-    void validate_eth_fw_versions(
-        const tt::umd::semver_t& peer_ethernet_firmware_version,
-        const std::string& my_host_name,
-        const std::string& peer_host_name);
+    // Friend declarations for discovery functions to set private members
+    friend PhysicalSystemDescriptor run_physical_system_discovery(
+        tt::umd::Cluster& cluster,
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+        const Hal* hal,
+        tt::TargetDevice target_device_type,
+        bool run_global_discovery,
+        bool run_live_discovery);
 
-    const std::unique_ptr<tt::umd::Cluster>& cluster_;
-    std::unique_ptr<umd::ClusterDescriptor> cluster_desc_ = nullptr;
+    friend PhysicalSystemDescriptor discovery_impl::run_local_discovery(
+        tt::umd::Cluster& cluster,
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+        const Hal* hal,
+        tt::TargetDevice target_device_type,
+        bool run_live_discovery);
 
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    const Hal* hal_;
     tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
@@ -269,6 +277,10 @@ private:
     tt::umd::semver_t ethernet_firmware_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, ASICLocation>> pcie_id_to_asic_location_;
+
+    // Local hostname and rank set by discovery (for my_host_name())
+    std::string local_hostname_;
+    uint32_t local_rank_ = 0;
 };
 
 }  // namespace tt::tt_metal

@@ -55,6 +55,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -462,8 +463,10 @@ void ControlPlane::init_control_plane(
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &this->hal_.get(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd = run_physical_system_discovery(
+        driver_ref, distributed_context, &this->hal_.get(), rtoptions.get_target_device());
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
@@ -561,8 +564,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
         world_size);
 
     // Initialize physical system descriptor
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &this->hal_.get(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd = run_physical_system_discovery(
+        driver_ref, distributed_context, &this->hal_.get(), rtoptions.get_target_device());
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Generate Mesh graph based on physical system descriptor
     // Reliability mode is obtained from MetalContext inside the function

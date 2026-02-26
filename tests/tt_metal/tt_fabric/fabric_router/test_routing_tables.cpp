@@ -19,6 +19,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
@@ -86,8 +87,13 @@ struct RoutingTableGeneratorTestHelper {
         const auto& driver = cluster.get_driver();
         const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-            driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+        auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+        auto psd = run_physical_system_discovery(
+            driver_ref,
+            distributed_context,
+            &tt::tt_metal::MetalContext::instance().hal(),
+            rtoptions.get_target_device());
+        physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         tt::tt_fabric::LocalMeshBinding local_mesh_binding;
         local_mesh_binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
@@ -518,8 +524,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Test that fabric node id 0 maps to a valid ASIC location and tray id
     FabricNodeId fabric_node_id_0(MeshId{0}, 0);
@@ -1278,8 +1286,10 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto psd = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     tt::tt_fabric::LocalMeshBinding local_mesh_binding;
     local_mesh_binding.mesh_ids = {mesh_id};

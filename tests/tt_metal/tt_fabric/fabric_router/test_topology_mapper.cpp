@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
@@ -27,10 +28,9 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        constexpr bool run_discovery = true;
-
-        physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-            cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+        auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+        auto psd = run_physical_system_discovery(driver_ref, distributed_context, &hal, rtoptions.get_target_device());
+        physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     }
 
     void TearDown() override { physical_system_descriptor_.reset(); }
