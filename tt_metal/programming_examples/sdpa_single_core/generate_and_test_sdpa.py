@@ -392,6 +392,116 @@ TEST_IDS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Helper: run SDPA and return metrics (no assertion)
+# ---------------------------------------------------------------------------
+
+
+def _run_and_measure(
+    num_q_chunks,
+    num_k_chunks,
+    data_mode,
+    sq_chunk_t,
+    sk_chunk_t,
+    head_dim_t,
+    subblock_h=SUBBLOCK_H,
+    mm_throttle_level=MM_THROTTLE_LEVEL,
+    exp_approx_mode=EXP_APPROX_MODE,
+    padded_k_tiles=0,
+):
+    """Run SDPA and return (pcc, rmse, max_abs_err) without asserting."""
+    torch.manual_seed(SEED)
+
+    Sq = num_q_chunks * sq_chunk_t * TILE
+    Sk = num_k_chunks * sk_chunk_t * TILE
+    d = head_dim_t * TILE
+    valid_Sk = Sk - padded_k_tiles * TILE
+
+    logger.info(f"Sq={Sq}, Sk={Sk}, valid_Sk={valid_Sk}, d={d}, data={data_mode}, padded_k_tiles={padded_k_tiles}")
+
+    Q, K_valid, V_valid = generate_inputs(data_mode, Sq, valid_Sk, d)
+    if padded_k_tiles > 0:
+        K = F.pad(K_valid, (0, 0, 0, padded_k_tiles * TILE))
+        V = F.pad(V_valid, (0, 0, 0, padded_k_tiles * TILE))
+    else:
+        K, V = K_valid, V_valid
+
+    Q_ref = Q.to(torch.bfloat16).float()
+    K_ref = K_valid.to(torch.bfloat16).float()
+    V_ref = V_valid.to(torch.bfloat16).float()
+
+    scale = 1.0 / (d**0.5)
+    ref_output = (
+        F.scaled_dot_product_attention(
+            Q_ref.unsqueeze(0).unsqueeze(0),
+            K_ref.unsqueeze(0).unsqueeze(0),
+            V_ref.unsqueeze(0).unsqueeze(0),
+            is_causal=False,
+            scale=scale,
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
+
+    tmpdir = tempfile.mkdtemp(prefix="sdpa_pad_test_")
+    try:
+        float32_to_bf16_bytes(Q).tofile(os.path.join(tmpdir, "q.bin"))
+        float32_to_bf16_bytes(K).tofile(os.path.join(tmpdir, "k.bin"))
+        float32_to_bf16_bytes(V).tofile(os.path.join(tmpdir, "v.bin"))
+
+        binary = find_binary()
+        cmd = [
+            binary,
+            "--test",
+            tmpdir,
+            "--Sq_chunk_t",
+            str(sq_chunk_t),
+            "--Sk_chunk_t",
+            str(sk_chunk_t),
+            "--head_dim_t",
+            str(head_dim_t),
+            "--num_q_chunks",
+            str(num_q_chunks),
+            "--num_k_chunks",
+            str(num_k_chunks),
+            "--subblock_h",
+            str(subblock_h),
+            "--mm_throttle_level",
+            str(mm_throttle_level),
+            "--exp_approx_mode",
+            str(int(exp_approx_mode)),
+            "--padded_k_tiles",
+            str(padded_k_tiles),
+        ]
+
+        logger.info(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        logger.info(f"C++ stdout:\n{result.stdout}")
+        if result.stderr:
+            logger.warning(f"C++ stderr:\n{result.stderr}")
+        assert result.returncode == 0, f"C++ binary exited with code {result.returncode}"
+
+        device_output_path = os.path.join(tmpdir, "device_output.bin")
+        assert os.path.isfile(device_output_path), f"Device output not found: {device_output_path}"
+
+        device_raw = np.fromfile(device_output_path, dtype=np.uint16)
+        expected_size = Sq * d
+        assert device_raw.size == expected_size, f"Expected {expected_size} elements, got {device_raw.size}"
+        device_output = bf16_bytes_to_float32(device_raw).reshape(Sq, d)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    diff = (device_output - ref_output).abs()
+    max_abs_err = diff.max().item()
+    rmse = ((device_output - ref_output) ** 2).mean().sqrt().item()
+    pcc = compute_pcc(ref_output, device_output)
+
+    logger.info(f"padded_k_tiles={padded_k_tiles}: PCC={pcc:.6f}  Max Abs Error={max_abs_err:.6f}  RMSE={rmse:.6f}")
+
+    return pcc, rmse, max_abs_err
+
+
 @pytest.mark.parametrize(
     "num_q_chunks, num_k_chunks, data_mode, sk_chunk_t, padded_k_tiles, sq_chunk_t, subblock_h",
     TEST_CASES,
@@ -413,3 +523,89 @@ def test_sdpa_single_core(
         sq_chunk_t=sq_chunk_t,
         subblock_h=subblock_h,
     )
+
+
+# ---------------------------------------------------------------------------
+# Padding impact study (sq_chunk_t=9, sk_chunk_t=16, head_dim_t=4)
+# ---------------------------------------------------------------------------
+
+PAD_STUDY_SQ_CHUNK_T = 9
+PAD_STUDY_SK_CHUNK_T = 16
+PAD_STUDY_HEAD_DIM_T = 4
+PAD_STUDY_NUM_Q_CHUNKS = 1
+PAD_STUDY_NUM_K_CHUNKS = 3
+
+# Sweep from no padding to nearly-full-chunk padding
+PADDING_LEVELS = [0, 1, 2, 4, 8, 12, 15]
+
+
+@pytest.mark.parametrize(
+    "padded_k_tiles",
+    PADDING_LEVELS,
+    ids=[f"pad{p}" for p in PADDING_LEVELS],
+)
+def test_padding_pcc_impact(padded_k_tiles):
+    """Individual PCC check at each padding level (sq9_sk16_hd4)."""
+    pcc, rmse, max_abs_err = _run_and_measure(
+        num_q_chunks=PAD_STUDY_NUM_Q_CHUNKS,
+        num_k_chunks=PAD_STUDY_NUM_K_CHUNKS,
+        data_mode="random",
+        sq_chunk_t=PAD_STUDY_SQ_CHUNK_T,
+        sk_chunk_t=PAD_STUDY_SK_CHUNK_T,
+        head_dim_t=PAD_STUDY_HEAD_DIM_T,
+        padded_k_tiles=padded_k_tiles,
+    )
+    assert pcc > PCC_THRESHOLD, f"PCC {pcc:.6f} below threshold {PCC_THRESHOLD} at padded_k_tiles={padded_k_tiles}"
+
+
+def test_padding_pcc_correlation():
+    """
+    Sweep all padding levels, report a summary table, and compute
+    Pearson correlation between padding amount and PCC.
+
+    Config: sq_chunk_t=9, sk_chunk_t=16, head_dim_t=4,
+            num_q_chunks=1, num_k_chunks=3
+    """
+    results = []
+    for pad in PADDING_LEVELS:
+        pcc, rmse, max_abs_err = _run_and_measure(
+            num_q_chunks=PAD_STUDY_NUM_Q_CHUNKS,
+            num_k_chunks=PAD_STUDY_NUM_K_CHUNKS,
+            data_mode="random",
+            sq_chunk_t=PAD_STUDY_SQ_CHUNK_T,
+            sk_chunk_t=PAD_STUDY_SK_CHUNK_T,
+            head_dim_t=PAD_STUDY_HEAD_DIM_T,
+            padded_k_tiles=pad,
+        )
+        results.append({"pad": pad, "pcc": pcc, "rmse": rmse, "max_abs_err": max_abs_err})
+
+    # --- Summary table ---
+    logger.info("=" * 70)
+    logger.info("Padding PCC Impact Summary (sq_chunk_t=9, sk_chunk_t=16, head_dim_t=4)")
+    logger.info(f"{'Padded tiles':>12} {'PCC':>10} {'RMSE':>12} {'Max Abs Err':>12}")
+    logger.info("-" * 50)
+    for r in results:
+        logger.info(f"{r['pad']:>12} {r['pcc']:>10.6f} {r['rmse']:>12.6f} {r['max_abs_err']:>12.6f}")
+    logger.info("=" * 70)
+
+    # --- Assert all above threshold ---
+    for r in results:
+        assert (
+            r["pcc"] > PCC_THRESHOLD
+        ), f"PCC {r['pcc']:.6f} below threshold {PCC_THRESHOLD} at padded_k_tiles={r['pad']}"
+
+    # --- Pearson correlation: padding amount vs PCC ---
+    pads = torch.tensor([float(r["pad"]) for r in results])
+    pccs = torch.tensor([r["pcc"] for r in results])
+
+    if pads.std() > 0 and pccs.std() > 1e-12:
+        corr = torch.corrcoef(torch.stack([pads, pccs]))[0, 1].item()
+    else:
+        corr = 0.0
+
+    logger.info(f"Pearson correlation (padding vs PCC): {corr:.6f}")
+
+    if corr < -0.5:
+        logger.warning(
+            f"Significant negative correlation ({corr:.4f}) detected: " f"PCC degrades as padding increases."
+        )
