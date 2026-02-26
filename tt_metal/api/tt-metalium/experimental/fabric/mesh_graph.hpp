@@ -27,7 +27,6 @@ class Cluster;
 }  // namespace tt
 namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
-class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 namespace tt::tt_fabric {
 
