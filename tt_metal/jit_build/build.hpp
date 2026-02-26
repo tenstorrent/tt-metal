@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <stdint.h>
+#include <cstdint>
 #include <bitset>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
@@ -17,7 +17,14 @@
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
 namespace tt::tt_metal {
+
+struct JitDeviceConfig;
+class Hal;
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
@@ -50,12 +57,13 @@ public:
     JitBuildEnv();
     void init(
         uint64_t build_key,
-        tt::ARCH arch,
-        uint32_t max_cbs,
+        const JitDeviceConfig& config,
+        const tt::llrt::RunTimeOptions& rtoptions,
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
     uint32_t get_max_cbs() const { return max_cbs_; };
+    const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
@@ -70,6 +78,8 @@ public:
     void set_firmware_binary_root(const std::string& path) { firmware_binary_root_ = path; }
 
 private:
+    const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
+
     tt::ARCH arch_{tt::ARCH::Invalid};
     uint32_t max_cbs_{};
 
@@ -141,7 +151,7 @@ protected:
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
-    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
+    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
 
