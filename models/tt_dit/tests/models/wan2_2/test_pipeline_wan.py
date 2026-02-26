@@ -113,14 +113,10 @@ def test_pipeline_inference(
     # Remove batch dimension
     frames = frames[0]
     try:
-        import os
-
-        if os.environ.get("OMPI_COMM_WORLD_RANK") is not None and os.environ.get("OMPI_COMM_WORLD_RANK") != "0":
-            print(
-                f"In an MPI environment and my rank {os.environ.get('OMPI_COMM_WORLD_RANK')} != 0, skipping video export"
-            )
-        else:
+        if int(ttnn.distributed_context_get_rank()) == 0:
             export_to_video(frames, "wan_output_video.mp4", fps=16)
             print("✓ Saved video to: wan_output_video.mp4")
+        else:
+            print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         print(f"AttributeError: {e}")
