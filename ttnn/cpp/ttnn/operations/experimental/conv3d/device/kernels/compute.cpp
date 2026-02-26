@@ -198,7 +198,12 @@ void kernel_main() {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             // Tilize row-major patches with variable row alignment
                             // Reader produces row pages, which may not be tile aligned
-                            compute_kernel_lib::tilize<cb_vol2col_rm, cb_vol2col_tiled>(
+                            compute_kernel_lib::tilize<
+                                cb_vol2col_rm,
+                                cb_vol2col_tiled,
+                                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
                                 matmul_K_t, matmul_M_t, num_patches);
 
                             // Apply matmul blocks
@@ -260,7 +265,9 @@ void kernel_main() {
                                     cb_matmul_interm_tiled,
                                     cb_matmul_result_rm,
                                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(matmul_M_t);
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::
+                                        NoReconfigure>(matmul_M_t);
                             }
                         }
                     }
