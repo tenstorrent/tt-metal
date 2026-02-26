@@ -284,6 +284,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
+        tp_size = mesh_device.shape[1] if mesh_device else 1
 
         x_dim = x.shape[-1]
         expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
