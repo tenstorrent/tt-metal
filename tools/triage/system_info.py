@@ -8,7 +8,7 @@ Usage:
 
 Description:
     Reports host system information: OS, kernel, machine type, and versions of
-    KMD, UMD, tt-exalens and tt-metalium packages.
+    KMD, UMD and tt-exalens packages.
 
 Owner:
     macimovic

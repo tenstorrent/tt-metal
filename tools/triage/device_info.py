@@ -8,7 +8,7 @@ Usage:
 
 Description:
     Reports per-device hardware information: architecture, board type, unique ID,
-    ARC firmware version, ARC postcode, ASIC ID and harvesting state.
+    ARC firmware version and ARC postcode state.
 
 Owner:
     macimovic
@@ -18,7 +18,6 @@ from dataclasses import dataclass
 
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
-from triage_hw_utils import read_tag
 
 script_config = ScriptConfig()
 
