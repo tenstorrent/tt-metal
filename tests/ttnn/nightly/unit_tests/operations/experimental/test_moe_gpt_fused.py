@@ -5,8 +5,8 @@
 """
 Test for GPT-OSS fused MOE compute kernel (moe_gpt_fused).
 
-Initial version: same matmul + SwiGLU + ring A2A as moe_gpt, but reads
-input from DRAM (not pre-sharded) and writes output to DRAM.
+Input is WIDTH_SHARDED ROW_MAJOR on 3 tilize cores.
+Output is BLOCK_SHARDED ROW_MAJOR on 12 combine cores.
 
 Dimensions:
   H = 2880 (hidden_size) -> 90 tiles
@@ -48,7 +48,8 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     Run the fused MoE GPT test.
 
     In this initial version, all tokens go to all experts (no sparse routing).
-    Input is read from DRAM, output written to DRAM.
+    Input is WIDTH_SHARDED ROW_MAJOR on 3 tilize cores.
+    Output is BLOCK_SHARDED ROW_MAJOR on 12 combine cores.
     """
     logger.info(
         f"Running test_moe_gpt_fused with total_tokens={total_tokens}, H={H}, N={N}, E={E}, "
@@ -81,7 +82,6 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     # --------------------------------------------------------------------------
     # Create input tokens
     # --------------------------------------------------------------------------
-    # All tokens go to all experts in this version
     input_tokens = torch.rand((total_tokens, H), dtype=torch.bfloat16) - 0.5
 
     # Create dummy routing (not used by kernel, but required by API)
@@ -133,14 +133,31 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     )
 
     # --------------------------------------------------------------------------
-    # Create input tensor in DRAM (TILE format)
+    # Create input tensor: WIDTH_SHARDED ROW_MAJOR on 3 tilize cores
+    # Tilize cores at CoreRange({5,0},{5,2}): 3 cores in a row
+    # Shard shape: [32, 960] (total_tokens, H/3)
     # --------------------------------------------------------------------------
-    tt_input = ttnn.from_torch(
-        input_tokens.unsqueeze(0).unsqueeze(0),  # [1, 1, total_tokens, H]
+    num_tilize_cores = 3
+    tilize_core_range = ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 2))
+
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([tilize_core_range]),
+        [total_tokens, H // num_tilize_cores],  # [32, 960]
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    # Create on DRAM first, then reshard to L1
+    tt_input_dram = ttnn.from_torch(
+        input_tokens,
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    tt_input = ttnn.to_memory_config(tt_input_dram, input_mem_config)
+    ttnn.deallocate(tt_input_dram)
+
+    logger.info(f"Input memory: {tt_input.memory_config()}")
 
     # Create dummy expert indices/scores tensors (required by API)
     tt_expert_indices = ttnn.from_torch(
@@ -177,22 +194,21 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     accuracy_metrics = {}
 
     if check_accuracy:
-        # Output is now BLOCK_SHARDED L1 ROW_MAJOR: [E * total_tokens, H] = [128, 2880]
-        # ttnn.to_torch handles desharding automatically
-        tt_output_torch = ttnn.to_torch(tt_outputs[0])  # [E * total_tokens, H]
+        # Output is BLOCK_SHARDED L1 ROW_MAJOR: [E * total_tokens, H] = [128, 2880]
+        tt_output_torch = ttnn.to_torch(tt_outputs[0])
         logger.info(f"Output shape: {tt_output_torch.shape}, memory: {tt_outputs[0].memory_config()}")
 
         # Reshape to [E, total_tokens, H] for per-expert comparison
         tt_output_torch = tt_output_torch.reshape(E, total_tokens, H)
 
         for e in range(E):
-            x = input_tokens.float()  # [total_tokens, H]
-            gate = x @ torch_w0[0, e].float()  # [total_tokens, N]
-            up = x @ torch_w1[0, e].float()  # [total_tokens, N]
+            x = input_tokens.float()
+            gate = x @ torch_w0[0, e].float()
+            up = x @ torch_w1[0, e].float()
             intermediate = swiglu_reference(gate, up)
-            ref_output = (intermediate @ torch_w2[0, e].float()).bfloat16()  # [total_tokens, H]
+            ref_output = (intermediate @ torch_w2[0, e].float()).bfloat16()
 
-            expert_output = tt_output_torch[e, :total_tokens, :]  # [total_tokens, H]
+            expert_output = tt_output_torch[e, :total_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(ref_output, expert_output)
             allclose_passed, allclose_val = comp_allclose(ref_output, expert_output)

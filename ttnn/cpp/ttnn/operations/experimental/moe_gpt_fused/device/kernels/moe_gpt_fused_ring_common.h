@@ -26,7 +26,7 @@
 namespace moe_gpt_fused_ring {
 
 constexpr uint32_t NUM_CORES = 12;
-constexpr uint32_t NUM_GATHER_CORES = 4;
+constexpr uint32_t NUM_GATHER_CORES = 3;
 constexpr uint32_t NUM_COMBINE_CORES = 12;
 constexpr uint32_t COMBINE_WIDTH_SHARD_DIM = 3;
 constexpr uint32_t COMBINE_HEIGHT_SHARD_DIM = 4;
@@ -122,5 +122,9 @@ constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_A = []() con
     }
     return arr;
 }();
+
+// Tilize constants
+constexpr uint32_t TILES_PER_GATHER_CORE = K_TILES / NUM_GATHER_CORES;       // 90/3 = 30
+constexpr uint32_t TILIZE_INPUT_PAGE_SIZE = TILES_PER_GATHER_CORE * 32 * 2;  // 30 * 32 * 2 = 1920 bytes per row
 
 }  // namespace moe_gpt_fused_ring
