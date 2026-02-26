@@ -477,11 +477,18 @@ class WanResidualBlock(Module):
         else:
             self.conv_shortcut = None
 
-        self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
             if (is_blackhole() or dtype == ttnn.float32)
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self.norm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -514,11 +521,11 @@ class WanResidualBlock(Module):
     ) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanResidualBlock expects TILE input, got {x_BTHWC.layout}"
         h_tile_BTHWC = (
-            self.conv_shortcut(x_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+            self.conv_shortcut(x_BTHWC, compute_kernel_config=self.matmul_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_BTHWC)
+        x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -540,7 +547,7 @@ class WanResidualBlock(Module):
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
 
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC)
+        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
