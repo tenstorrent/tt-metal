@@ -38,11 +38,13 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 namespace tt::tt_fabric {
 
 namespace {
-struct ProtoArchitectureHash {
-    std::size_t operator()(const proto::Architecture& arch) const {
-        return static_cast<std::size_t>(static_cast<int>(arch));
+std::optional<tt::ARCH> to_arch(const proto::Architecture arch) {
+    switch (arch) {
+        case proto::Architecture::WORMHOLE_B0: return tt::ARCH::WORMHOLE_B0;
+        case proto::Architecture::BLACKHOLE: return tt::ARCH::BLACKHOLE;
+        default: return std::nullopt;
     }
-};
+}
 }  // namespace
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
@@ -142,36 +144,36 @@ MeshGraph::MeshGraph(
 
 void MeshGraph::add_to_connectivity(
     MeshId src_mesh_id, ChipId src_chip_id, MeshId dest_mesh_id, ChipId dest_chip_id, RoutingDirection port_direction) {
-    TT_ASSERT(
+    TT_FATAL(
         *src_mesh_id < intra_mesh_connectivity_.size(),
         "MeshGraph: Invalid src_mesh_id: {} or unsized intramesh map",
         *src_mesh_id);
-    TT_ASSERT(
+    TT_FATAL(
         *dest_mesh_id < intra_mesh_connectivity_.size(),
         "MeshGraph: Invalid dest_mesh_id: {} or unsized intramesh map",
         *dest_mesh_id);
-    TT_ASSERT(
+    TT_FATAL(
         src_chip_id < intra_mesh_connectivity_[*src_mesh_id].size(),
         "MeshGraph: Invalid src_chip_id: {} or unsized intramesh map",
         src_chip_id);
-    TT_ASSERT(
+    TT_FATAL(
         dest_chip_id < intra_mesh_connectivity_[*dest_mesh_id].size(),
         "MeshGraph: Invalid dest_chip_id: {} or unsized intramesh map",
         dest_chip_id);
 
-    TT_ASSERT(
+    TT_FATAL(
         *src_mesh_id < inter_mesh_connectivity_.size(),
         "MeshGraph: Invalid src_mesh_id: {} or unsized intermesh map",
         *src_mesh_id);
-    TT_ASSERT(
+    TT_FATAL(
         *dest_mesh_id < inter_mesh_connectivity_.size(),
         "MeshGraph: Invalid dest_mesh_id: {} or unsized intermesh map",
         *dest_mesh_id);
-    TT_ASSERT(
+    TT_FATAL(
         src_chip_id < inter_mesh_connectivity_[*src_mesh_id].size(),
         "MeshGraph: Invalid src_chip_id: {} or unsized intermesh map",
         src_chip_id);
-    TT_ASSERT(
+    TT_FATAL(
         dest_chip_id < inter_mesh_connectivity_[*dest_mesh_id].size(),
         "MeshGraph: Invalid dest_chip_id: {} or unsized intermesh map",
         dest_chip_id);
@@ -236,34 +238,46 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
 
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
-    static const std::unordered_map<proto::Architecture, tt::ARCH, ProtoArchitectureHash> proto_arch_to_arch = {
-        {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
-        {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
-    };
-
-    auto arch_it = proto_arch_to_arch.find(mgd.get_arch());
-    if (arch_it == proto_arch_to_arch.end()) {
+    const auto proto_arch = mgd.get_arch();
+    const auto arch = to_arch(proto_arch);
+    if (!arch.has_value()) {
         TT_THROW(
             "MeshGraph: unsupported architecture enum {} in mesh graph descriptor. "
             "Expected one of: WORMHOLE_B0 {}, BLACKHOLE {}.",
-            static_cast<int>(mgd.get_arch()),
+            static_cast<int>(proto_arch),
             static_cast<int>(proto::Architecture::WORMHOLE_B0),
             static_cast<int>(proto::Architecture::BLACKHOLE));
     }
 
     chip_spec_ = ChipSpec{
-        .arch = arch_it->second,
+        .arch = arch.value(),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
         .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
-    // Count total meshes including switches (switches are treated as meshes internally)
-    uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
+    auto all_meshes = mgd.all_meshes();
+    auto all_switches = mgd.all_switches();
+
+    // Internal vector-backed structures are indexed by local_id.
+    // local_id values may be sparse, so size by max_id + 1 rather than by element count.
+    std::uint32_t max_local_mesh_id = 0;
+    bool has_any_mesh_or_switch = false;
+    for (const auto& mesh : all_meshes) {
+        const auto& mesh_instance = mgd.get_instance(mesh);
+        max_local_mesh_id = std::max(max_local_mesh_id, mesh_instance.local_id);
+        has_any_mesh_or_switch = true;
+    }
+    for (const auto& switch_inst : all_switches) {
+        const auto& switch_instance = mgd.get_instance(switch_inst);
+        max_local_mesh_id = std::max(max_local_mesh_id, switch_instance.local_id);
+        has_any_mesh_or_switch = true;
+    }
+    const std::size_t total_mesh_slots = has_any_mesh_or_switch ? (static_cast<std::size_t>(max_local_mesh_id) + 1) : 0;
 
     // Make intramesh connectivity
     // NOTE: Building connectivity based on FabricConfig override (if provided) or MGD's fabric type
-    this->intra_mesh_connectivity_.resize(total_mesh_count);
+    this->intra_mesh_connectivity_.resize(total_mesh_slots);
 
-    this->inter_mesh_connectivity_.resize(total_mesh_count);
+    this->inter_mesh_connectivity_.resize(total_mesh_slots);
 
     // This is to make sure emtpy elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
@@ -334,18 +348,9 @@ void MeshGraph::initialize_from_mgd(
         }
     }
 
-    // Populate mesh_host_ranks_
-    // Populate mesh_host_rank_coord_ranges_
-    // Populate mesh_to_chip_ids_
-    auto all_meshes = mgd.all_meshes();
-    auto all_switches = mgd.all_switches();
-
     // Populate with empty containers
     this->mesh_host_ranks_.clear();
-    for ([[maybe_unused]] const auto& mesh : all_meshes) {
-        this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
-    }
-    for ([[maybe_unused]] const auto& swtch : all_switches) {
+    for (std::size_t i = 0; i < total_mesh_slots; ++i) {
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
@@ -368,8 +373,8 @@ void MeshGraph::initialize_from_mgd(
         }
     }
 
-    // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
-    mesh_edge_ports_to_chip_id_.resize(all_meshes.size() + all_switches.size());
+    // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all mesh slots.
+    mesh_edge_ports_to_chip_id_.resize(total_mesh_slots);
 
     for (const auto& mesh : all_meshes) {
         const auto& mesh_instance = mgd.get_instance(mesh);
@@ -443,6 +448,12 @@ void MeshGraph::initialize_from_mgd(
         }
 
         MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
+
+        TT_FATAL(
+            host_shape[0] > 0 && host_shape[1] > 0,
+            "MeshGraph: Host topology dimensions must be positive, got {}x{}",
+            host_shape[0],
+            host_shape[1]);
 
         // Validate that mesh shape is divisible by host shape before processing
         TT_FATAL(
