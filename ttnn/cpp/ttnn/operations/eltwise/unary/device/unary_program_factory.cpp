@@ -54,17 +54,12 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    // Detect dataflow path early so CB depth can match.
+    // Detect dataflow path: strided L1 when both buffers are L1.
     const uint32_t num_l1_banks = (src_buffer->is_l1() && dst_buffer->is_l1())
                                       ? device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1)
                                       : 0;
     const bool use_strided_l1 = num_l1_banks > 0 && !is_row_major && num_pages >= num_l1_banks;
-    const bool use_trid =
-        !use_strided_l1 && !is_row_major && src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    // TRID pipelining keeps 2 batches of 2 tiles in flight → needs CB depth 4.
-    // All other paths use single-tile or batch=2 with immediate barrier → depth 2 suffices.
-    const uint32_t num_cb_tiles = use_trid ? 4 : 2;
+    constexpr uint32_t num_cb_tiles = 2;
 
     // Set CB page size correctly based on layout (tile size for tile layout, buffer page size for row-major)
     const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
@@ -141,8 +136,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::map<std::string, std::string> dataflow_defines;
     if (use_strided_l1) {
         dataflow_defines["STRIDED_L1_ACCESS"] = "1";
-    } else if (use_trid) {
-        dataflow_defines["TRID_PIPELINED"] = "1";
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
