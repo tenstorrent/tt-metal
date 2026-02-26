@@ -28,7 +28,14 @@ bool is_valid_for_sharded_optimized_typecast(const TypecastParams& args, const T
         return false;
     }
 
-    if (input.buffer()->buffer_type() == BufferType::DRAM) {
+    // Sharded optimized factory requires input buffer to be in L1.
+    if (input.memory_config().buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    // Sharded optimized factory also requires the effective output buffer to be in L1.
+    // If the caller configures a DRAM output, fall back to a non-optimized factory.
+
+    if (args.output_memory_config.buffer_type() == BufferType::DRAM) {
         return false;
     }
 
@@ -114,14 +121,20 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);
-        if (input_tensor.shard_spec().has_value()) {
+        if (is_valid_for_sharded_optimized_typecast(args, tensor_args)) {
             TT_FATAL(
                 !args.sub_core_grids.has_value(),
-                "Typecast operation has sub_core_grids support for non-sharded inputs only");
+                "Typecast operation has no sub_core_grids support for 2D sharded input path");
         }
     }
 
     if (preallocated_output_tensor.has_value()) {
+        TT_FATAL(
+            preallocated_output_tensor.value().logical_shape() == input_tensor.logical_shape(),
+            "Typecast operation requires input and preallocated output logical shapes to match. Input shape: {}, "
+            "Preallocated output shape: {}",
+            input_tensor.logical_shape(),
+            preallocated_output_tensor.value().logical_shape());
         TT_FATAL(
             preallocated_output_tensor.value().layout() == input_tensor.layout(),
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
