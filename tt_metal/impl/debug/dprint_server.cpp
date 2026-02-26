@@ -19,6 +19,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -301,6 +302,15 @@ struct DevicePrintStringInfo {
     std::uint32_t line;
 };
 
+struct FormatPlaceholderInfo {
+    uint32_t arg_id;
+    char type_id;
+    std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
+};
+
+std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_str);
+std::size_t get_argument_size_from_type_id(char type_id);
+
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
     DevicePrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
@@ -315,9 +325,14 @@ protected:
         ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
 
 private:
-    void print_buffer_data(
-        ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
-    std::string format_message(std::string_view format_str, std::span<const std::byte> payload_bytes);
+    struct ParsedStringInfo {
+        std::string_view format_string;
+        std::string_view file;
+        uint32_t line = 0;
+        std::vector<FormatPlaceholderInfo> placeholders;
+        std::vector<char> argument_types;
+        uint32_t arguments_size = 0;
+    };
 
     struct ElfFileCacheEntry {
         uint32_t ref_count;
@@ -328,6 +343,42 @@ private:
         uint64_t format_strings_address;
         DevicePrintStringInfo* string_info_ptr = nullptr;
         size_t string_info_size = 0;
+        std::vector<ParsedStringInfo> parsed_string_info;
+
+        ParsedStringInfo* get_string_info(uint32_t info_id) {
+            if (info_id >= string_info_size) {
+                return nullptr;
+            }
+            auto& parsed_info = parsed_string_info[info_id];
+            if (parsed_info.format_string.empty()) {
+                // This entry has not been parsed yet, so parse it now and cache the result.
+                const DevicePrintStringInfo& info = string_info_ptr[info_id];
+                if (info.format_string_ptr >= format_strings_address &&
+                    info.format_string_ptr < format_strings_address + format_strings_bytes.size()) {
+                    const char* format_string = reinterpret_cast<const char*>(
+                        format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
+                    parsed_info.format_string = format_string;
+                    parsed_info.placeholders = parse_format_string(format_string);
+                    uint32_t max_arg_id = 0;
+                    for (const auto& placeholder : parsed_info.placeholders) {
+                        max_arg_id = std::max(max_arg_id, placeholder.arg_id);
+                    }
+                    parsed_info.argument_types.resize(max_arg_id + 1);
+                    for (const auto& placeholder : parsed_info.placeholders) {
+                        parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
+                        parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
+                    }
+                }
+                if (info.file >= format_strings_address &&
+                    info.file < format_strings_address + format_strings_bytes.size()) {
+                    const char* file = reinterpret_cast<const char*>(
+                        format_strings_bytes.data() + (info.file - format_strings_address));
+                    parsed_info.file = file;
+                }
+                parsed_info.line = info.line;
+            }
+            return &parsed_info;
+        }
 
         void load_elf(const std::filesystem::path& elf_path) {
             try {
@@ -337,6 +388,7 @@ private:
                 format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
                 string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
                 string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
+                parsed_string_info.resize(string_info_size);
             } catch (...) {
                 // Failed to load ELF file
                 log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path.string());
@@ -356,6 +408,10 @@ private:
 
     std::map<std::string, ElfFileCacheEntry> elf_cache_;
     std::map<RiscKey, RiscData, RiscKeyComparator> risc_data_;
+
+    void print_buffer_data(
+        ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
+    std::string format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes);
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -399,12 +455,6 @@ bool DPrintImpl::core_has_outstanding_prints(
 }
 
 // DEVICE_PRINT implementations — single shared buffer per core.
-
-struct FormatPlaceholderInfo {
-    uint32_t arg_id;
-    char type_id;
-    std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
-};
 
 // TODO: Add more types here
 using ArgumentValue =
@@ -493,79 +543,80 @@ std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_s
     return placeholders;
 }
 
+template <typename T>
+T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t& offset) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (offset + sizeof(T) > payload_bytes.size()) {
+        TT_THROW("Payload does not contain enough bytes to read type");
+    }
+    T value;
+    std::memcpy(&value, payload_bytes.data() + offset, sizeof(T));
+    offset += sizeof(T);
+    return value;
+}
+
+ArgumentValue read_argument_from_payload(char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) {
+    switch (type_id) {
+        case 'b':  // int8_t
+            return read_value_from_payload<int8_t>(payload_bytes, offset);
+        case 'B':  // uint8_t
+            return read_value_from_payload<uint8_t>(payload_bytes, offset);
+        case 'h':  // int16_t
+            return read_value_from_payload<int16_t>(payload_bytes, offset);
+        case 'H':  // uint16_t
+            return read_value_from_payload<uint16_t>(payload_bytes, offset);
+        case 'i':  // int32_t
+            return read_value_from_payload<int32_t>(payload_bytes, offset);
+        case 'I':  // uint32_t
+            return read_value_from_payload<uint32_t>(payload_bytes, offset);
+        case 'q':  // int64_t
+            return read_value_from_payload<int64_t>(payload_bytes, offset);
+        case 'Q':  // uint64_t
+            return read_value_from_payload<uint64_t>(payload_bytes, offset);
+        case 'f':  // float
+            return read_value_from_payload<float>(payload_bytes, offset);
+        case 'd':  // double
+            return read_value_from_payload<double>(payload_bytes, offset);
+        case '?':  // bool
+            return read_value_from_payload<bool>(payload_bytes, offset);
+        default: TT_THROW("Unsupported type_id in format placeholder: {}", type_id);
+    }
+}
+
+std::size_t get_argument_size_from_type_id(char type_id) {
+    static std::byte empty_bytes[16];
+    std::size_t offset = 0;
+    read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
+    return offset;
+}
+
 std::vector<ArgumentValue> read_arguments_from_payload(
-    std::string_view format_str, std::span<const std::byte> payload_bytes) {
-    auto placeholders = parse_format_string(format_str);
-    uint32_t max_arg_id = 0;
-    for (const auto& placeholder : placeholders) {
-        max_arg_id = std::max(max_arg_id, placeholder.arg_id);
-    }
-    std::vector<char> argument_types(max_arg_id + 1);
-    for (const auto& placeholder : placeholders) {
-        argument_types[placeholder.arg_id] = placeholder.type_id;
-    }
+    std::span<char> argument_types, std::span<const std::byte> payload_bytes) {
     std::vector<ArgumentValue> arguments;
     std::size_t payload_offset = 0;
 
     arguments.reserve(argument_types.size());
     for (char argument_type : argument_types) {
-        switch (argument_type) {
-            case 'b':  // int8_t
-                arguments.push_back(*reinterpret_cast<const int8_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(int8_t);
-                break;
-            case 'B':  // uint8_t
-                arguments.push_back(*reinterpret_cast<const uint8_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(uint8_t);
-                break;
-            case 'h':  // int16_t
-                arguments.push_back(*reinterpret_cast<const int16_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(int16_t);
-                break;
-            case 'H':  // uint16_t
-                arguments.push_back(*reinterpret_cast<const uint16_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(uint16_t);
-                break;
-            case 'i':  // int32_t
-                arguments.push_back(*reinterpret_cast<const int32_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(int32_t);
-                break;
-            case 'I':  // uint32_t
-                arguments.push_back(*reinterpret_cast<const uint32_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(uint32_t);
-                break;
-            case 'q':  // int64_t
-                arguments.push_back(*reinterpret_cast<const int64_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(int64_t);
-                break;
-            case 'Q':  // uint64_t
-                arguments.push_back(*reinterpret_cast<const uint64_t*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(uint64_t);
-                break;
-            case 'f':  // float
-                arguments.push_back(*reinterpret_cast<const float*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(float);
-                break;
-            case 'd':  // double
-                arguments.push_back(*reinterpret_cast<const double*>(payload_bytes.data() + payload_offset));
-                payload_offset += sizeof(double);
-                break;
-            case '?':  // bool
-                arguments.push_back(*reinterpret_cast<const uint8_t*>(payload_bytes.data() + payload_offset) != 0);
-                payload_offset += sizeof(uint8_t);
-                break;
-            // Add more cases here for other supported types.
-            default: TT_THROW("Unsupported type_id in format placeholder: {}", argument_type);
-        }
+        arguments.push_back(read_argument_from_payload(argument_type, payload_bytes, payload_offset));
     }
 
     return arguments;
 }
 
-std::string DevicePrintImpl::format_message(std::string_view format_str, std::span<const std::byte> payload_bytes) {
+std::string DevicePrintImpl::format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes) {
     // Iterate over format_str and replace {} with format of payload values.
     std::stringstream result;
-    auto argument_values = read_arguments_from_payload(format_str, payload_bytes);
+    auto format_str = string_info.format_string;
+    if (string_info.arguments_size > payload_bytes.size()) {
+        log_warning(
+            tt::LogMetal,
+            "Payload size {} is smaller than expected arguments size {} for format string '{}'",
+            payload_bytes.size(),
+            string_info.arguments_size,
+            format_str);
+        return {};
+    }
+    auto argument_values = read_arguments_from_payload(string_info.argument_types, payload_bytes);
 
     for (size_t i = 0; i < format_str.size(); i++) {
         if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
@@ -704,85 +755,65 @@ void DevicePrintImpl::print_buffer_data(
 
             // Check if we found elf file for this print message.
             if (elf_entry_ptr != nullptr) {
-                if (elf_entry_ptr->string_info_ptr != nullptr && elf_entry_ptr->string_info_size > header->info_id) {
-                    const DevicePrintStringInfo& info = elf_entry_ptr->string_info_ptr[header->info_id];
-                    if (info.format_string_ptr >= elf_entry_ptr->format_strings_address &&
-                        info.format_string_ptr <
-                            elf_entry_ptr->format_strings_address + elf_entry_ptr->format_strings_bytes.size()) {
-                        const char* format_string = reinterpret_cast<const char*>(
-                            elf_entry_ptr->format_strings_bytes.data() +
-                            (info.format_string_ptr - elf_entry_ptr->format_strings_address));
-                        std::string_view format_str(format_string);
-                        std::string_view file_str;
-                        if (info.file >= elf_entry_ptr->format_strings_address &&
-                            info.file <
-                                elf_entry_ptr->format_strings_address + elf_entry_ptr->format_strings_bytes.size()) {
-                            const char* file_string = reinterpret_cast<const char*>(
-                                elf_entry_ptr->format_strings_bytes.data() +
-                                (info.file - elf_entry_ptr->format_strings_address));
-                            file_str = std::string_view(file_string);
-                        }
+                auto* string_info = elf_entry_ptr->get_string_info(header->info_id);
+                if (string_info != nullptr) {
+                    // Format message
+                    std::span<const std::byte> payload_bytes(
+                        reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
+                    auto formatted_message = format_message(*string_info, payload_bytes);
 
-                        // Format message
-                        std::span<const std::byte> payload_bytes(
-                            reinterpret_cast<const std::byte*>(data.data() + word_index), header->message_payload);
-                        auto formatted_message = format_message(format_str, payload_bytes);
+                    // Find if we have something buffered from before
+                    if (!risc_data.message_buffer.empty()) {
+                        // We have something in the buffer, prepend it to the current message and clear the buffer.
+                        formatted_message = risc_data.message_buffer + formatted_message;
+                        risc_data.message_buffer.clear();
+                    }
 
-                        // Find if we have something buffered from before
-                        if (!risc_data.message_buffer.empty()) {
-                            // We have something in the buffer, prepend it to the current message and clear the buffer.
-                            formatted_message = risc_data.message_buffer + formatted_message;
-                            risc_data.message_buffer.clear();
-                        }
+                    // Check if we hit new line
+                    auto newline_pos = formatted_message.find('\n');
 
-                        // Check if we hit new line
-                        auto newline_pos = formatted_message.find('\n');
-
-                        if (newline_pos != std::string::npos) {
-                            // We will do message printing. Check if we have generated line prefix for this risc before,
-                            // if not generate one.
-                            std::string line_prefix;
-                            if (!risc_data.line_prefix.has_value()) {
-                                // Compute line prefix based on RTOptions
-                                const bool prepend_device_core_risc =
-                                    tt::tt_metal::MetalContext::instance()
-                                        .rtoptions()
-                                        .get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
-                                if (prepend_device_core_risc) {
-                                    const string& device_id_str = to_string(device_id);
-                                    const string& core_coord_str = logical_core.coord.str();
-                                    const string& risc_name =
-                                        GetRiscName(device_id, logical_core, header->risc_id, true);
-                                    line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
-                                }
-                                risc_data.line_prefix = line_prefix;
-                            } else {
-                                line_prefix = risc_data.line_prefix.value();
+                    if (newline_pos != std::string::npos) {
+                        // We will do message printing. Check if we have generated line prefix for this risc before,
+                        // if not generate one.
+                        std::string line_prefix;
+                        if (!risc_data.line_prefix.has_value()) {
+                            // Compute line prefix based on RTOptions
+                            const bool prepend_device_core_risc =
+                                tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+                                    tt::llrt::RunTimeDebugFeatureDprint);
+                            if (prepend_device_core_risc) {
+                                const string& device_id_str = to_string(device_id);
+                                const string& core_coord_str = logical_core.coord.str();
+                                const string& risc_name = GetRiscName(device_id, logical_core, header->risc_id, true);
+                                line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
                             }
-
-                            // Are we printing the whole string, or we need to split it into multiple lines because of
-                            // multiple new lines in the message or because we want to prepend line prefix to each line?
-                            ostream* output_stream = get_output_stream(risc_key);
-                            if (newline_pos == formatted_message.size() - 1) {
-                                *output_stream << line_prefix << formatted_message << flush;
-                            } else {
-                                std::size_t newline_start = 0;
-                                std::string_view full_message_view = formatted_message;
-                                while (newline_pos != std::string::npos) {
-                                    std::string_view line =
-                                        full_message_view.substr(newline_start, newline_pos - newline_start);
-                                    *output_stream << line_prefix << line << std::endl;
-                                    newline_start = newline_pos + 1;
-                                    newline_pos = full_message_view.find('\n', newline_start);
-                                }
-                                if (newline_start < full_message_view.size()) {
-                                    risc_data.message_buffer = formatted_message.substr(newline_start);
-                                }
-                            }
+                            risc_data.line_prefix = line_prefix;
                         } else {
-                            // We don't have a complete line yet, buffer the message for next time.
-                            risc_data.message_buffer = formatted_message;
+                            line_prefix = risc_data.line_prefix.value();
                         }
+
+                        // Are we printing the whole string, or we need to split it into multiple lines because of
+                        // multiple new lines in the message or because we want to prepend line prefix to each line?
+                        ostream* output_stream = get_output_stream(risc_key);
+                        if (newline_pos == formatted_message.size() - 1) {
+                            *output_stream << line_prefix << formatted_message << flush;
+                        } else {
+                            std::size_t newline_start = 0;
+                            std::string_view full_message_view = formatted_message;
+                            while (newline_pos != std::string::npos) {
+                                std::string_view line =
+                                    full_message_view.substr(newline_start, newline_pos - newline_start);
+                                *output_stream << line_prefix << line << std::endl;
+                                newline_start = newline_pos + 1;
+                                newline_pos = full_message_view.find('\n', newline_start);
+                            }
+                            if (newline_start < full_message_view.size()) {
+                                risc_data.message_buffer = formatted_message.substr(newline_start);
+                            }
+                        }
+                    } else {
+                        // We don't have a complete line yet, buffer the message for next time.
+                        risc_data.message_buffer = formatted_message;
                     }
                 }
             }
