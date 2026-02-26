@@ -14,7 +14,6 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "firmware_initializer.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
-#include "umd/device/types/cluster_descriptor_types.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
