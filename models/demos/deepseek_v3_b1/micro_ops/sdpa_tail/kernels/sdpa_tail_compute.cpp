@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr int vector_mode = VectorMode::RC_custom;
 
     binary_op_init_common(cb_l1, cb_l1, cb_l_out);
-    exp_tile_init<use_approximate_enum<EXP_APPROX_MODE>(), false>();
+    exp_tile_init<use_approximate_enum<EXP_APPROX_MODE, true, true>(), false>();
 
     sdpa_tail<
         use_approximate_enum<EXP_APPROX_MODE>(),

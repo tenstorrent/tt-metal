@@ -41,7 +41,7 @@ void calc_numeric_stable(
     cb_push_back(cb_max, 1);
 
     // calculate x-max(x)
-    exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true>()>();
+    exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>();
     reconfig_data_format_srcb(cb_max);
     cb_wait_front(cb_max, 1);
     sub_bcast_cols_init_short(cb_in, cb_max);
@@ -52,7 +52,7 @@ void calc_numeric_stable(
         }
         cb_reserve_back(cb_out, ndst);
         for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true>()>(wt8);  // exp on DST[0]
+            exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>(wt8);  // exp on DST[0]
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -131,7 +131,7 @@ void kernel_main() {
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
 #ifndef NUMERIC_STABLE
-        exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true>()>();
+        exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>();
 #endif
 
 #ifdef CAUSAL_MASK
@@ -160,7 +160,7 @@ void kernel_main() {
             cb_reserve_back(cb_x, ndst);
 #ifndef NUMERIC_STABLE
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true>()>(wt8);  // exp on DST[0]
+                exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>(wt8);  // exp on DST[0]
             }
 #endif
             tile_regs_commit();
@@ -198,7 +198,7 @@ void kernel_main() {
         pack_reconfig_data_format(cb_exps);
         copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
-        exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true>()>();
+        exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>();
 #endif
         if (mask_padded_data) {
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
@@ -219,7 +219,7 @@ void kernel_main() {
                 cb_reserve_back(cb_x, ndst);
 #ifndef NUMERIC_STABLE
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true>()>(wt8);  // exp on DST[0]
+                    exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>(wt8);  // exp on DST[0]
                 }
 #endif
                 tile_regs_commit();
@@ -253,7 +253,7 @@ void kernel_main() {
 
                 cb_reserve_back(cb_exps, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true>()>(wt8);  // exp on DST[0]
+                    exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>(wt8);  // exp on DST[0]
                 }
                 tile_regs_commit();
                 tile_regs_wait();

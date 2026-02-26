@@ -254,8 +254,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0))};
         case UnaryOpType::EXP:
             return {
-                fmt::format("exp_tile_init<ckernel::use_approximate_enum<{}, true>()>();", (uint32_t)param0),
-                fmt::format("exp_tile<ckernel::use_approximate_enum<{1}, true>()>({0});", idst, (uint32_t)param0)};
+                fmt::format("exp_tile_init<ckernel::use_approximate_enum<{}, true, true>()>();", (uint32_t)param0),
+                fmt::format(
+                    "exp_tile<ckernel::use_approximate_enum<{1}, true, true>()>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::SIGMOID: {
             uint32_t param1 = (uint32_t)params[1];
             TT_FATAL(

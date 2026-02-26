@@ -207,7 +207,7 @@ void kernel_main() {
     constexpr int vector_mode = VectorMode::RC_custom;
 
     binary_op_init_common(cb_local_l, cb_local_l, cb_l_out);
-    exp_tile_init<use_approximate_enum<EXP_APPROX_MODE>()>();
+    exp_tile_init<use_approximate_enum<EXP_APPROX_MODE, true, true>()>();
 
     // Runtime args: device indices for position lookup (when position_enabled)
     bool local_valid = true;

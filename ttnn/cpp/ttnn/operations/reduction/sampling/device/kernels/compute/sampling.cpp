@@ -57,7 +57,7 @@ void sub_exp_block_bcast_cols_inplace() {
     // Postcondition: in1_cb has rows produced
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<ckernel::ApproximationMode::Approximate>();
+    exp_tile_init<ckernel::ApproximationMode::FastApproximateClamped>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
 
@@ -68,7 +68,7 @@ void sub_exp_block_bcast_cols_inplace() {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile<ckernel::ApproximationMode::Precise>(j);
+                exp_tile<ckernel::ApproximationMode::FastApproximateClamped>(j);
             }
             tile_regs_commit();
             cb_pop_front(in0_cb, dst_tiles);

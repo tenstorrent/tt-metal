@@ -54,7 +54,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
     }
     v_endif;
 
-    if constexpr (APPROX_MODE == ApproximationMode::FastApproximate) {
+    if constexpr (APPROX_MODE != ApproximationMode::FastApproximate) {
         sfpi::vInt exp = sfpi::exexp(in);
         v_if(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
             // If input is infinity, return infinity

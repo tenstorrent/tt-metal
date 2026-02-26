@@ -511,8 +511,10 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
 template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, stable_sort>(
-        idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<
+          ckernel::ApproximationMode::Approximate,
+          DST_ACCUM_MODE,
+          stable_sort>(idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
 // topK merge
@@ -548,7 +550,11 @@ ALWI void topk_local_sort(
 // clang-format on
 template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, stable_sort>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<
+          ckernel::ApproximationMode::Approximate,
+          DST_ACCUM_MODE,
+          idir,
+          stable_sort>(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -586,8 +592,9 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 // clang-format on
 template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, stable_sort>(
-        idst, idir, m_iter, k, logk, skip_second)));
+    MATH(
+        (llk_math_eltwise_unary_sfpu_topk_rebuild<ckernel::ApproximationMode::Approximate, DST_ACCUM_MODE, stable_sort>(
+            idst, idir, m_iter, k, logk, skip_second)));
 }
 
 /**
@@ -634,7 +641,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
  */
 template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 ALWI void max_reduce_with_indices_init() {
-    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true, layout>()));
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<ckernel::ApproximationMode::Approximate, layout>()));
 }
 
 // clang-format off
@@ -668,7 +675,8 @@ ALWI void sfpu_reduce(uint32_t idst) {
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
-    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
+    MATH((llk_math_eltwise_unary_sfpu_reduce<ckernel::ApproximationMode::Approximate, pool_type, reduce_dim, format>(
+        idst, VectorMode::RC_custom)));
 }
 
 /**
@@ -688,7 +696,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<ckernel::ApproximationMode::Approximate, pool_type, format>()));
 }
 
 // clang-format off

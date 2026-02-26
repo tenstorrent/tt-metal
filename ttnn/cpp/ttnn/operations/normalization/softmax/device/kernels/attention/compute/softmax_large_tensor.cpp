@@ -206,7 +206,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
 #else
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
-    exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true>()>();
+    exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>();
     uint32_t loop = 0;
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         if (cb_length_t - cur_blk < blk) {
@@ -226,7 +226,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
 #endif
         cb_pop_front(cb_in, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true>()>(cur_dst);  // exp on DST[0]
+            exp_tile<ckernel::use_approximate_enum<EXP_APPROX, true, true>()>(cur_dst);  // exp on DST[0]
         }
         tile_regs_wait();
         tile_regs_commit();

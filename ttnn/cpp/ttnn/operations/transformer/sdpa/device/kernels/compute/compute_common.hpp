@@ -986,7 +986,7 @@ void correction_block(
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         acquire_dst();
         copy_tile_to_dst_init_short(cb_worker_max);
-        exp_tile_init<EXP_APPROX_MODE, false>();
+        exp_tile_init<ckernel::use_approximate_enum<EXP_APPROX_MODE>()>();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
