@@ -1001,7 +1001,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
@@ -1033,6 +1032,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 },
                 dtype=self.tt_vae.dtype,
             )
+
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=self.vae_use_cache)
 
