@@ -5,6 +5,7 @@
 #include "accumulation_common.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
+#include <tt-metalium/experimental/tensor/details/mesh_tensor_backdoor.hpp>
 namespace ttnn::operations::reduction::accumulation::common {
 
 Tensor preprocess_input_tensor(
@@ -124,7 +125,8 @@ Tensor accumulation_invoke(
         // TODO(#37807):
         // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
         // or pass in optional_out as a reference.
-        optional_out->tensor_attributes = wip_tensor.tensor_attributes;
+        using namespace tt::tt_metal::do_not_use;
+        do_not_use_update_mesh_tensor_storage(optional_out->device_tensor(), wip_tensor.device_tensor().get_storage());
     }
     return wip_tensor;
 }
