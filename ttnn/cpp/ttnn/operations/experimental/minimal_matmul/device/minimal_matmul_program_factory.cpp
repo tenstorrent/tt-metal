@@ -380,6 +380,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
+
+        // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
+        if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
+            defines["TERNARY_B_IS_FLOAT32"] = "1";
+        }
     }
 
     if (fuse_op) {
@@ -596,6 +601,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             "fused_act_dst_id",
             output_tensors[0].dtype());
     }
+
     compute_defines.merge(compute_activation_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
