@@ -119,7 +119,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "1x8sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
-        "bh_quad_4x32_sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
