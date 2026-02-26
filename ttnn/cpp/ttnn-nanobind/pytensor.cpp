@@ -208,9 +208,13 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // Previous impl only copied if data needed transformation. Instead *always* copy
-        // because the HostBuffer will be returned directly to the other python frameworks
-        // wrapped in an ndarray
+        // No modifications needed; directly return buffer.
+        // Ownership is safe: the HostBuffer shallow copy in convert_tt_tensor_to_framework_tensor
+        // increments the MemoryPin ref count, and the nb::capsule ensures the data stays alive
+        // as long as the Python ndarray exists.
+        if (logical_matches_physical(tensor_spec)) {
+            return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
+        }
 
         auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
