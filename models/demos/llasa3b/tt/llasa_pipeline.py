@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.llasa3b.tt.llasa_model import LlasaTransformer
 from models.demos.llasa3b.tt.llasa_utils import XCODEC2_TOKENS_PER_SECOND, extract_speech_ids, format_llasa_chat
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model, sample_host
 from models.tt_transformers.tt.generator import Generator
@@ -30,12 +31,6 @@ def prepare_llasa_generator(mesh_device, optimizations, batch_size=1, max_seq_le
 
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
 
-    def setup_llasa_args(args):
-        # Isolated Llasa-3B performance optimizations
-        args.lm_head_math_fidelity = ttnn.MathFidelity.LoFi
-        args.skip_lm_head_all_reduce = True
-        args.skip_lm_head_all_gather = True
-
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device,
         instruct=False,  # Llasa is not an instruct model
@@ -44,8 +39,13 @@ def prepare_llasa_generator(mesh_device, optimizations, batch_size=1, max_seq_le
         max_seq_len=max_seq_len,
         paged_attention_config=paged_attention_config,
         dtype=ttnn.bfloat8_b,
-        setup_args_cb=setup_llasa_args,
     )
+
+    # Upgrade base Transformer to LlasaTransformer for large-vocab decode support.
+    # This overrides ttnn_decode_forward, process_output_decode, and forward
+    # to handle Llasa's 193,800-token vocabulary without L1 buffer clashes.
+    model.__class__ = LlasaTransformer
+    model._apply_llasa_patches()
 
     tokenizer = model_args.tokenizer
     generator = Generator([model], [model_args], mesh_device, tokenizer=tokenizer)
