@@ -1912,6 +1912,12 @@ void sdpa_inner_loop_step(
 
     cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
 
+    // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
+    // reader can start fetching the next Q chunk during Phase 2.
+    if (is_last_iter) {
+        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+    }
+
     // Pop mask after all rows processed (must match writer's generate_mask push)
     if constexpr (use_padded_mask) {
         if (is_last_iter) {
@@ -2205,9 +2211,7 @@ void sdpa_standard_v2(
             // }
             call_step(std::false_type{}, is_last, is_first);
         }
-
-        // Pop Q after all K chunks for this Q chunk
-        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+        // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
     }
 }
 
