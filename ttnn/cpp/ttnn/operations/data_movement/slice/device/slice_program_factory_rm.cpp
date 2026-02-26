@@ -29,7 +29,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
-    uint32_t max_read_size) {
+    uint32_t max_read_size,
+    uint32_t max_num_read_per_barrier) {
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -110,6 +111,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                 num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+            // Cap num_read_per_barrier so CB fits in L1
+            if (num_read_per_barrier > max_num_read_per_barrier) {
+                num_read_per_barrier = max_num_read_per_barrier;
+                num_sticks_per_core_read = (num_sticks_per_core_pad32 + num_read_per_barrier - 1) / num_read_per_barrier;
+            }
         }
 
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
@@ -182,6 +188,21 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
         num_sticks_per_core_read =
             tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
         num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+        // Cap num_read_per_barrier so that the total CB allocation fits in L1.
+        // CB is allocated as: num_read_per_barrier * 2 * cb_page_size (double-buffered).
+        // When merge_num_sticks_to_read coalesces small sticks aggressively,
+        // num_read_per_barrier can grow large enough to exceed L1 capacity.
+        uint32_t l1_size = ::hal::get_l1_size();
+        uint32_t max_cb_size = l1_size / 2;  // Conservative: use at most half of L1 for slice CB
+        if (cb_page_size > 0) {
+            uint32_t max_num_read_per_barrier = max_cb_size / (2 * cb_page_size);
+            if (max_num_read_per_barrier == 0) {
+                max_num_read_per_barrier = 1;
+            }
+            if (num_read_per_barrier > max_num_read_per_barrier) {
+                num_read_per_barrier = max_num_read_per_barrier;
+            }
+        }
     }
 
     return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
@@ -243,6 +264,14 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
     auto all_cores_vec = corerange_to_cores(all_cores);
+    // Compute max_num_read_per_barrier to keep CB within L1 budget
+    uint32_t l1_size = ::hal::get_l1_size();
+    uint32_t max_cb_size = l1_size / 2;
+    uint32_t max_num_read_per_barrier = (cb_page_size > 0) ? max_cb_size / (2 * cb_page_size) : 1;
+    if (max_num_read_per_barrier == 0) {
+        max_num_read_per_barrier = 1;
+    }
+
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
         input,
         output,
@@ -253,7 +282,8 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE,
+        max_num_read_per_barrier);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores_vec[i], all_runtime_args[i].first);
@@ -286,6 +316,14 @@ void SliceRmProgramFactory::override_runtime_arguments(
     UpdateCircularBufferPageSize(cached_program.program, cached_program.shared_variables.cb_src0, 0, cb_page_size);
 
     auto all_cores_vec = corerange_to_cores(all_cores);
+    // Compute max_num_read_per_barrier to keep CB within L1 budget
+    uint32_t l1_size = ::hal::get_l1_size();
+    uint32_t max_cb_size = l1_size / 2;
+    uint32_t max_num_read_per_barrier = (cb_page_size > 0) ? max_cb_size / (2 * cb_page_size) : 1;
+    if (max_num_read_per_barrier == 0) {
+        max_num_read_per_barrier = 1;
+    }
+
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
         src_tensor,
         output,
@@ -296,7 +334,8 @@ void SliceRmProgramFactory::override_runtime_arguments(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE,
+        max_num_read_per_barrier);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         auto& reader_runtime_args = GetRuntimeArgs(
