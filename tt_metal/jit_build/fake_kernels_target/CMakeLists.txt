@@ -17,6 +17,19 @@ file(
     "${CMAKE_SOURCE_DIR}/tt_metal/fabric/impl/kernels/*.cc"
 )
 
+file(
+    GLOB_RECURSE ALL_TT_METAL_PROGRAMMING_EXAMPLE_FILES
+    "${CMAKE_SOURCE_DIR}/tt_metal/programming_examples/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tt_metal/programming_examples/*.cc"
+)
+
+set(TT_METAL_PROGRAMMING_EXAMPLE_KERNELS "")
+foreach(file ${ALL_TT_METAL_PROGRAMMING_EXAMPLE_FILES})
+    if(file MATCHES ".*/kernels/")
+        list(APPEND TT_METAL_PROGRAMMING_EXAMPLE_KERNELS ${file})
+    endif()
+endforeach()
+
 # First find all cpp/cc files under the operations directory
 file(
     GLOB_RECURSE ALL_TTNN_FILES
@@ -38,6 +51,7 @@ list(
     ${TT_METAL_KERNELS}
     ${TT_METAL_DISPATCH_KERNELS}
     ${TT_METAL_FABRIC_KERNELS}
+    ${TT_METAL_PROGRAMMING_EXAMPLE_KERNELS}
     ${TTNN_OPERATION_KERNELS}
 )
 
