@@ -71,24 +71,24 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
                         // can shift right by this to get number of tiles.
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
-    uint32_t num_sticks_in_row = 1;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t size_of_valid_data_in_last_stick_in_row = unpadded_row_size_bytes;
+    uint32_t num_pages_in_row = 1;
+    uint32_t page_size = unpadded_row_size_bytes;
+    uint32_t size_of_valid_data_in_last_page_in_row = unpadded_row_size_bytes;
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
-        num_sticks_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
-        stick_size = a.element_size() * shard_width;
-        size_of_valid_data_in_last_stick_in_row = unpadded_row_size_bytes - (num_sticks_in_row - 1) * stick_size;
+        num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
+        page_size = a.element_size() * shard_width;
+        size_of_valid_data_in_last_page_in_row = unpadded_row_size_bytes - (num_pages_in_row - 1) * page_size;
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
         shift_bits,
         unpadded_row_size_bytes,
         elem_size,
-        num_sticks_in_row,
-        stick_size,
-        size_of_valid_data_in_last_stick_in_row};
+        num_pages_in_row,
+        page_size,
+        size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
@@ -158,7 +158,7 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
         uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
-            start_page_id += el.data_row_count() * num_sticks_in_row;
+            start_page_id += el.data_row_count() * num_pages_in_row;
             if (compare_assignments(ref_el, el)) {
                 count_repeated++;
             } else {
