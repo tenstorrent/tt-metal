@@ -45,7 +45,7 @@ ExecuteFusedPersistentMoeDecodeDeviceOperation::SingleCore::create(
     auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
 
     // Double buffered L1 for weights and indices
-    uint32_t num_weight_tiles = 256; 
+    uint32_t num_weight_tiles = 32; // Fit within 1.5MB L1 capacity limit 
     
     // w1_experts (c_in1)
     uint32_t cb_w1_index = tt::CB::c_in1;

@@ -77,7 +77,7 @@ void kernel_main() {
             uint32_t w1_rem = w1_expert_tiles;
             uint32_t w1_off = 0;
             while (w1_rem > 0) {
-                uint32_t chunk = w1_rem > 256 ? 256 : w1_rem;
+                uint32_t chunk = w1_rem > 32 ? 32 : w1_rem;
                 cb_reserve_back(cb_id_w1, chunk);
                 uint32_t l1 = get_write_ptr(cb_id_w1);
                 for (uint32_t t = 0; t < chunk; t++) {
@@ -94,7 +94,7 @@ void kernel_main() {
             uint32_t w3_rem = w3_expert_tiles;
             uint32_t w3_off = 0;
             while (w3_rem > 0) {
-                uint32_t chunk = w3_rem > 256 ? 256 : w3_rem;
+                uint32_t chunk = w3_rem > 32 ? 32 : w3_rem;
                 cb_reserve_back(cb_id_w3, chunk);
                 uint32_t l1 = get_write_ptr(cb_id_w3);
                 for (uint32_t t = 0; t < chunk; t++) {
@@ -111,7 +111,7 @@ void kernel_main() {
             uint32_t w2_rem = w2_expert_tiles;
             uint32_t w2_off = 0;
             while (w2_rem > 0) {
-                uint32_t chunk = w2_rem > 256 ? 256 : w2_rem;
+                uint32_t chunk = w2_rem > 32 ? 32 : w2_rem;
                 cb_reserve_back(cb_id_w2, chunk);
                 uint32_t l1 = get_write_ptr(cb_id_w2);
                 for (uint32_t t = 0; t < chunk; t++) {
