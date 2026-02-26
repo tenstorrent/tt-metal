@@ -188,50 +188,101 @@ class MoE(SharedStateAddOn, AbstractModule):
                 ),
             )
 
-            # Construct the config
-            return {
-                "mesh_device": MeshDeviceStub(mesh_device.shape),
-                "num_devices": mesh_device.get_num_devices(),
-                "num_experts_per_device": num_experts_per_device,
-                "hidden_size": hf_config.hidden_size,
-                "num_experts_per_tok": hf_config.num_experts_per_tok,
-                "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
-                "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
-                "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
-                "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
-                "input_memory_config": input_output_memory_config,
-                "output_memory_config": input_output_memory_config,
-                "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "optimized_sum_experts_output_memory_config": optimized_sum_experts_output_memory_config,
-                "sum_experts_output_memory_config": memory_config,
-                "optimized_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=input_output_memory_config,
-                ),
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=input_output_memory_config,
-                ),
-                "revert_tp": AllGatherAsyncConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dim=-1,  # Last dimension
-                    # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
-                    #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
-                    #     core_grid=ttnn.CoreGrid(y=7, x=8),
-                    #     strategy=ttnn.ShardStrategy.WIDTH,
-                    # ),
-                    memory_config=memory_config,
-                    cluster_axis=1,
-                ),
-            }
+            # TODO: (GR)
+            is_quad_ring = True
+
+            # optimized ops only functional for quad torus
+            if is_quad_ring:
+                # Construct the config
+                return {
+                    "mesh_device": MeshDeviceStub(mesh_device.shape),
+                    "num_devices": mesh_device.get_num_devices(),
+                    "num_experts_per_device": num_experts_per_device,
+                    "hidden_size": hf_config.hidden_size,
+                    "num_experts_per_tok": hf_config.num_experts_per_tok,
+                    "num_dispatch_devices": mesh_device.shape[0],
+                    "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                    "all_to_all_dispatch_output_memory_config": memory_config,
+                    "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+                    "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                    "all_to_all_combine_output_memory_config": memory_config,
+                    "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
+                    "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+                    "input_memory_config": input_output_memory_config,
+                    "output_memory_config": input_output_memory_config,
+                    "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+                    "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                    "optimized_sum_experts_output_memory_config": optimized_sum_experts_output_memory_config,
+                    "sum_experts_output_memory_config": memory_config,
+                    "optimized_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
+                        cluster_axis=1,
+                        dim=3,
+                        memory_config=input_output_memory_config,
+                    ),
+                    "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                        cluster_axis=1,
+                        dim=3,
+                        memory_config=input_output_memory_config,
+                    ),
+                    "revert_tp": AllGatherAsyncConfig(
+                        mesh_device=MeshDeviceStub(mesh_device.shape),
+                        dim=-1,  # Last dimension
+                        # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
+                        #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
+                        #     core_grid=ttnn.CoreGrid(y=7, x=8),
+                        #     strategy=ttnn.ShardStrategy.WIDTH,
+                        # ),
+                        memory_config=memory_config,
+                        cluster_axis=1,
+                    ),
+                }
+
+            else:
+                # Construct the config
+                return {
+                    "mesh_device": MeshDeviceStub(mesh_device.shape),
+                    "num_devices": mesh_device.get_num_devices(),
+                    "num_experts_per_device": num_experts_per_device,
+                    "hidden_size": hf_config.hidden_size,
+                    "num_experts_per_tok": hf_config.num_experts_per_tok,
+                    "num_dispatch_devices": mesh_device.shape[0],
+                    "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                    "all_to_all_dispatch_output_memory_config": memory_config,
+                    "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+                    "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                    "all_to_all_combine_output_memory_config": memory_config,
+                    "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
+                    "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+                    "input_memory_config": input_output_memory_config,
+                    "output_memory_config": input_output_memory_config,
+                    "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+                    "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                    "optimized_sum_experts_output_memory_config": optimized_sum_experts_output_memory_config,
+                    "sum_experts_output_memory_config": memory_config,
+                    "optimized_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
+                        cluster_axis=1,
+                        dim=3,
+                        memory_config=input_output_memory_config,
+                    ),
+                    "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                        cluster_axis=1,
+                        dim=3,
+                        memory_config=input_output_memory_config,
+                    ),
+                    "revert_tp": AllGatherAsyncConfig(
+                        mesh_device=MeshDeviceStub(mesh_device.shape),
+                        dim=-1,  # Last dimension
+                        # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
+                        #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
+                        #     core_grid=ttnn.CoreGrid(y=7, x=8),
+                        #     strategy=ttnn.ShardStrategy.WIDTH,
+                        # ),
+                        memory_config=memory_config,
+                        cluster_axis=1,
+                    ),
+                }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
             # Construct the config
@@ -423,55 +474,127 @@ class MoE(SharedStateAddOn, AbstractModule):
             shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
         )
 
-        topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_indices_rm = ttnn.reshape(
-            topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
+        # TODO: (GR)
+        is_quad_ring = True
+
+        if is_quad_ring:
+            preallocated_combine_output = ttnn.moreh_full(
+                shape=[cfg["num_experts_per_tok"], batch_size_per_device, cfg["hidden_size"]],
+                fill_value=0,
+                device=cfg["mesh_device"],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            (
+                tt_dispatch_output_sparse_buffer,
+                tt_dispatch_output_expert_indices,
+                tt_dispatch_output_expert_scores,
+            ) = ttnn.experimental.all_to_all_dispatch_metadata(
+                x_rm,
+                tt_dispatch_input_expert_indices_tensor,
+                tt_dispatch_input_expert_scores_tensor,
+                cfg["expert_mapping_tensors"],
+                cluster_axis=cluster_axis,  # 0
+                num_links=4,
+                drain_sync_tilizer_core=None,
+                worker_mode=ttnn.WorkerMode.DIRECT,
+                dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+                output_tensors=tt_dispatch_preallocated_output_tensors,
+                cross_device_semaphore=dispatch_global_semaphore,
+            )
+
+            (
+                tt_compute_output_token_counts,
+                tt_compute_output_dense_expert_activation,
+                tt_compute_ouput_dense_e_t,
+                _,  # tile layout output of selective tilize (same buffer as output)
+                tt_compute_output,
+            ) = ttnn.experimental.moe_compute(
+                tt_dispatch_output_sparse_buffer,
+                tt_dispatch_output_expert_indices,
+                tt_dispatch_output_expert_scores,
+                tt_expert_mapping,
+                tt_w0_w1,
+                tt_w2,
+                layer_id=layer_id,
+                output_height_shard_dim=compute_output_height_shard_dim,
+                output_width_shard_dim=compute_output_width_shard_dim,
+                cluster_axis=cluster_axis,
+            )
+
+            tt_combine_output = ttnn.experimental.selective_reduce_combine(
+                tt_compute_output,
+                tt_compute_output_dense_expert_activation,
+                tt_compute_ouput_dense_e_t,
+                tt_compute_output_token_counts,
+                hidden_size,
+                batch,
+                seq,
+                select_experts_k,
+                experts,
+                cluster_axis,
+                topology=ttnn.Topology.Ring,
+                num_links=4,
+                token_parallel_core_dim=combine_token_parallel_core_dim,
+                data_parallel_core_dim=combine_data_parallel_core_dim,
+                worker_cores=list(ttnn.corerange_to_cores(combine_worker_cores)),
+                mux_core_range_set=combine_mux_cores,
+                output_tensor=tt_preallocated_combine_output,
+                optional_cross_device_semaphore=combine_global_semaphore,
+            )
+
+        else:
+            topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+            topk_experts_indices_rm = ttnn.reshape(
+                topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
+            )
+
+            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+                x_rm,
+                topk_experts_indices_rm,
+                cfg["expert_mapping_tensors"],
+                **cfg["all_to_all_dispatch"],
+            )
+
+            post_all_to_all_dispatch_output = ttnn.reshape(
+                all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
+            )
+            post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
+            # repeat remap_topk_mask for the num_tokens known at runtime
+
+            remap_topk_mask = ttnn.repeat(
+                cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1))
+            )  # TODO: move to static path
+
+            _, sparsity_t = ttnn.moe_expert_token_remap(
+                remap_topk_mask,
+                cfg["expert_mapping_tensors"],
+                all_to_all_dispatch_metadata_tensors,
+                reduction_size=cfg["sparsity_block_size"],
+            )
+
+            experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
+            ttnn.deallocate(post_all_to_all_dispatch_output)
+
+            experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+            experts_output = ttnn.reshape(
+                experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
+            )
+
+            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+                experts_output,
+                all_to_all_dispatch_metadata_tensors,
+                cfg["expert_mapping_tensors"],
+                **cfg["all_to_all_combine"],
+            )
+
+        tt_tilized_compute_output = ttnn.to_layout(
+            tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
         )
 
-        all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
-            x_rm,
-            topk_experts_indices_rm,
-            cfg["expert_mapping_tensors"],
-            **cfg["all_to_all_dispatch"],
-        )
-
-        post_all_to_all_dispatch_output = ttnn.reshape(
-            all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
-        )
-        post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-        # repeat remap_topk_mask for the num_tokens known at runtime
-
-        remap_topk_mask = ttnn.repeat(
-            cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1))
-        )  # TODO: move to static path
-
-        _, sparsity_t = ttnn.moe_expert_token_remap(
-            remap_topk_mask,
-            cfg["expert_mapping_tensors"],
-            all_to_all_dispatch_metadata_tensors,
-            reduction_size=cfg["sparsity_block_size"],
-        )
-
-        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
-        ttnn.deallocate(post_all_to_all_dispatch_output)
-
-        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-        experts_output = ttnn.reshape(
-            experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
-        )
-
-        all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
-            experts_output,
-            all_to_all_dispatch_metadata_tensors,
-            cfg["expert_mapping_tensors"],
-            **cfg["all_to_all_combine"],
-        )
-
-        post_combine_output_tensor = ttnn.reshape(
-            all_to_all_combine_output_tensors,
-            shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
-        )
-        post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
 
         post_combine_output_tensor = ttnn.mul(
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]

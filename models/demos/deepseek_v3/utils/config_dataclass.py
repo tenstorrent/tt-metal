@@ -325,6 +325,27 @@ class AllToAllDispatchConfig(OpConfigBase):
 
 
 @dataclass
+class AllToAllDispatchMetadataConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch_metadata op"""
+
+    cluster_axis: int | None = None
+    num_links: int | None = 4
+    worker_mode: ttnn.WorkerMode.DIRECT
+    dispatch_algorithm: ttnn.DispatchAlgorithm
+    output_tensors: list[ttnn.Tensor] | None = None
+    cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class MoEComputeConfig(OpConfigBase):
+    """Common parameters for a ttnn.moe_compute op"""
+
+    output_height_shard_dim: int
+    output_width_shard_dim: int
+    cluster_axix: int | None = None
+
+
+@dataclass
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
@@ -332,6 +353,26 @@ class AllToAllCombineConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
     topology: ttnn.Topology = optimal_topology
+
+
+@dataclass
+class SelectiveReduceCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.selective_reduce_combine op"""
+
+    hidden_size: int
+    batch: int
+    seq: int
+    select_experts_k: int
+    experts: int
+    axis: int | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 4
+    token_parallel_core_dim: int
+    data_parallel_core_dim: int
+    worker_cores: list[ttnn.CoreCoord]
+    mux_core_range_set: ttnn.CoreRangeset
+    output_tensor: ttnn.Tensor | None = None
+    optional_cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
