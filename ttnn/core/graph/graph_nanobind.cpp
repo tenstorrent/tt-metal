@@ -19,10 +19,12 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn::graph {
 
 using IGraphProcessor = tt::tt_metal::IGraphProcessor;
+using GraphTracker = tt::tt_metal::GraphTracker;
 
 void py_graph_module_types(nb::module_& m) {
     nb::enum_<IGraphProcessor::RunMode>(m, "RunMode", R"doc(
@@ -322,6 +324,45 @@ void py_graph_module(nb::module_& m) {
         )doc",
         nb::arg("trace"),
         nb::arg("interleaved_storage_cores"));
+
+    m.def(
+        "is_graph_capture_active",
+        [] { return GraphTracker::instance().is_enabled(); },
+        R"doc(is_graph_capture_active() -> bool
+
+        Check if a graph capture session is currently active.
+
+        Returns:
+            True if begin_graph_capture() was called and capture is in progress.
+        )doc");
+
+    m.def(
+        "track_function_start",
+        [](const std::string& function_name) {
+            GraphTracker::instance().track_function_start(std::string_view(function_name));
+        },
+        R"doc(track_function_start(function_name: str) -> None
+
+        Emit a function_start node into the active graph capture.
+
+        This is used by Python-level operation decorators to wrap high-level
+        operations (e.g. ttnn.fold, ttnn.conv2d) so that the graph trace
+        correctly nests their internal C++ sub-operations.
+
+        Args:
+            function_name: The operation name (e.g. "ttnn.fold")
+        )doc",
+        nb::arg("function_name"));
+
+    m.def(
+        "track_function_end",
+        [] { GraphTracker::instance().track_function_end(); },
+        R"doc(track_function_end() -> None
+
+        Emit a function_end node into the active graph capture.
+
+        Must be paired with a prior track_function_start() call.
+        )doc");
 
     m.def(
         "enable_stack_traces",

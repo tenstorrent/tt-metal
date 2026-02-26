@@ -270,14 +270,34 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
 
+    // Compute max_size_per_bank: the maximum allocation footprint per bank for this
+    // buffer.  For interleaved layouts we use the real bank count from the allocator
+    // (important for L1_SMALL which has fewer banks than L1).  For sharded layouts
+    // we use the per-core page spread which matches the allocator's distribution for
+    // all standard shard specs.
+    uint32_t num_pages = buffer->num_pages();
+    uint32_t page_sz = buffer->page_size();
+    uint32_t max_size_per_bank;
+    if (tt::tt_metal::is_sharded(buffer->buffer_layout())) {
+        uint32_t nc = buffer->num_cores().value_or(1);
+        uint32_t pages_per_core = nc > 0 ? (num_pages + nc - 1) / nc : num_pages;
+        max_size_per_bank = pages_per_core * page_sz;
+    } else {
+        uint32_t num_banks = buffer->device()->allocator()->get_num_banks(buffer->buffer_type());
+        uint32_t pages_per_bank = num_banks > 0 ? (num_pages + num_banks - 1) / num_banks : num_pages;
+        max_size_per_bank = pages_per_bank * page_sz;
+    }
+
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
         {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
-        {kDeviceId, std::to_string(buffer->device()->id())}};
+        {kDeviceId, std::to_string(buffer->device()->id())},
+        {kMaxSizePerBank, std::to_string(max_size_per_bank)}};
     {
         graph.push_back(Vertex{
             .counter = counter,
@@ -300,7 +320,9 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
+        {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
@@ -506,6 +528,14 @@ void GraphProcessor::track_function_end_impl() {
         graph[current_op_id.top()].connections.push_back(counter);
     }
     last_finished_op_id = counter;
+
+    // Snapshot live buffer state after each top-level operation completes
+    if (stacking_level == 1 && !captured_mesh_devices.empty()) {
+        per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
+        if (capture_buffer_pages_) {
+            per_op_buffer_pages_[function_start_id] = ttnn::reports::get_buffer_pages(captured_mesh_devices);
+        }
+    }
 }
 
 void GraphProcessor::track_function_end() {
@@ -638,6 +668,7 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
+        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kDeviceId, std::to_string(buffer->device()->id())}};
 
@@ -702,6 +733,8 @@ void GraphProcessor::begin_capture(RunMode mode) {
     tensor_id_to_counter.clear();
     captured_device_info.clear();
     captured_mesh_devices.clear();
+    per_op_buffers_.clear();
+    per_op_buffer_pages_.clear();
 
     // Clear timing stacks
     while (!function_start_times.empty()) {
@@ -811,6 +844,46 @@ nlohmann::json GraphProcessor::get_report() const {
         report["buffer_pages"] = buffer_pages_json;
     }
 
+    // Per-operation buffer snapshots from get_buffers() (matches old insert_buffers behavior)
+    if (!per_op_buffers_.empty()) {
+        nlohmann::json per_op_json = nlohmann::json::object();
+        for (const auto& [op_counter, buffers] : per_op_buffers_) {
+            nlohmann::json bufs_json = nlohmann::json::array();
+            for (const auto& buf : buffers) {
+                bufs_json.push_back(
+                    {{"device_id", buf.device_id},
+                     {"address", buf.address},
+                     {"max_size_per_bank", buf.max_size_per_bank},
+                     {"buffer_type", static_cast<int>(buf.buffer_type)},
+                     {"buffer_layout", static_cast<int>(buf.buffer_layout)}});
+            }
+            per_op_json[std::to_string(op_counter)] = std::move(bufs_json);
+        }
+        report["per_operation_buffers"] = std::move(per_op_json);
+    }
+
+    // Per-operation buffer page snapshots (new field, backward compatible)
+    if (!per_op_buffer_pages_.empty()) {
+        nlohmann::json per_op_json = nlohmann::json::object();
+        for (const auto& [op_counter, pages] : per_op_buffer_pages_) {
+            nlohmann::json pages_json = nlohmann::json::array();
+            for (const auto& page : pages) {
+                pages_json.push_back(
+                    {{"device_id", page.device_id},
+                     {"address", page.address},
+                     {"core_y", page.core_y},
+                     {"core_x", page.core_x},
+                     {"bank_id", page.bank_id},
+                     {"page_index", page.page_index},
+                     {"page_address", page.page_address},
+                     {"page_size", page.page_size},
+                     {"buffer_type", static_cast<int>(page.buffer_type)}});
+            }
+            per_op_json[std::to_string(op_counter)] = std::move(pages_json);
+        }
+        report["per_operation_buffer_pages"] = std::move(per_op_json);
+    }
+
     return report;
 }
 
@@ -916,6 +989,46 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
                  {"buffer_type", static_cast<int>(page.buffer_type)}});
         }
         report["buffer_pages"] = buffer_pages_json;
+    }
+
+    // Per-operation buffer snapshots from get_buffers()
+    if (!processor->per_op_buffers_.empty()) {
+        nlohmann::json per_op_json = nlohmann::json::object();
+        for (const auto& [op_counter, buffers] : processor->per_op_buffers_) {
+            nlohmann::json bufs_json = nlohmann::json::array();
+            for (const auto& buf : buffers) {
+                bufs_json.push_back(
+                    {{"device_id", buf.device_id},
+                     {"address", buf.address},
+                     {"max_size_per_bank", buf.max_size_per_bank},
+                     {"buffer_type", static_cast<int>(buf.buffer_type)},
+                     {"buffer_layout", static_cast<int>(buf.buffer_layout)}});
+            }
+            per_op_json[std::to_string(op_counter)] = std::move(bufs_json);
+        }
+        report["per_operation_buffers"] = std::move(per_op_json);
+    }
+
+    // Per-operation buffer page snapshots (new field, backward compatible)
+    if (!processor->per_op_buffer_pages_.empty()) {
+        nlohmann::json per_op_json = nlohmann::json::object();
+        for (const auto& [op_counter, pages] : processor->per_op_buffer_pages_) {
+            nlohmann::json pages_json = nlohmann::json::array();
+            for (const auto& page : pages) {
+                pages_json.push_back(
+                    {{"device_id", page.device_id},
+                     {"address", page.address},
+                     {"core_y", page.core_y},
+                     {"core_x", page.core_x},
+                     {"bank_id", page.bank_id},
+                     {"page_index", page.page_index},
+                     {"page_address", page.page_address},
+                     {"page_size", page.page_size},
+                     {"buffer_type", static_cast<int>(page.buffer_type)}});
+            }
+            per_op_json[std::to_string(op_counter)] = std::move(pages_json);
+        }
+        report["per_operation_buffer_pages"] = std::move(per_op_json);
     }
 
     // Write to file

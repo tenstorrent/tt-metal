@@ -435,6 +435,13 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
+        capturing = ttnn.graph.is_graph_capture_active()
+        if capturing:
+            input_tids = ttnn.graph._collect_tensor_ids(function_args) + ttnn.graph._collect_tensor_ids(
+                tuple(function_kwargs.values())
+            )
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+
         try:
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
@@ -444,8 +451,40 @@ class FastOperation:
         except TypeError as e:
             enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
             if enhanced_msg:
+                if capturing:
+                    ttnn.graph.track_function_end()
+                    ttnn.graph._python_io_data.append(
+                        {
+                            "name": self.python_fully_qualified_name,
+                            "input_tensor_ids": input_tids,
+                            "output_tensor_ids": [],
+                        }
+                    )
                 raise TypeError(enhanced_msg) from e
+            if capturing:
+                ttnn.graph.track_function_end()
+                ttnn.graph._python_io_data.append(
+                    {"name": self.python_fully_qualified_name, "input_tensor_ids": input_tids, "output_tensor_ids": []}
+                )
             raise
+        except BaseException:
+            if capturing:
+                ttnn.graph.track_function_end()
+                ttnn.graph._python_io_data.append(
+                    {"name": self.python_fully_qualified_name, "input_tensor_ids": input_tids, "output_tensor_ids": []}
+                )
+            raise
+
+        if capturing:
+            output_tids = ttnn.graph._collect_tensor_ids(result)
+            ttnn.graph.track_function_end()
+            ttnn.graph._python_io_data.append(
+                {
+                    "name": self.python_fully_qualified_name,
+                    "input_tensor_ids": input_tids,
+                    "output_tensor_ids": output_tids,
+                }
+            )
 
         return result
 
@@ -709,13 +748,36 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        capturing = ttnn.graph.is_graph_capture_active()
+        if capturing:
+            input_tids = ttnn.graph._collect_tensor_ids(function_args) + ttnn.graph._collect_tensor_ids(
+                tuple(function_kwargs.values())
+            )
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
         try:
             if not OPERATION_CALL_STACK:
                 ttnn._ttnn.fetch_and_increment_python_operation_id()
             OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
+        except BaseException:
+            if capturing:
+                ttnn.graph.track_function_end()
+                ttnn.graph._python_io_data.append(
+                    {"name": self.python_fully_qualified_name, "input_tensor_ids": input_tids, "output_tensor_ids": []}
+                )
+            raise
         finally:
             OPERATION_CALL_STACK.pop()
+        if capturing:
+            output_tids = ttnn.graph._collect_tensor_ids(output)
+            ttnn.graph.track_function_end()
+            ttnn.graph._python_io_data.append(
+                {
+                    "name": self.python_fully_qualified_name,
+                    "input_tensor_ids": input_tids,
+                    "output_tensor_ids": output_tids,
+                }
+            )
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)

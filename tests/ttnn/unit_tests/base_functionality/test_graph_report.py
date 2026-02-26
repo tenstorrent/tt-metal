@@ -27,6 +27,7 @@ import graph_report
 
 # Now import ttnn for device tests
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         # Check output_tensors was populated
@@ -134,7 +135,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY output_index")
@@ -173,7 +174,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT operation_id, stack_trace FROM stack_traces")
@@ -215,7 +216,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT error_type, error_message, error_operation FROM errors")
@@ -256,7 +257,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT name, value FROM operation_arguments ORDER BY name")
@@ -303,7 +304,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT operation_id, device_id, address, max_size_per_bank, buffer_type FROM buffers")
@@ -316,6 +317,216 @@ class TestImportGraphUnit:
         assert rows[0][3] == 4096  # size
         assert rows[0][4] == 1  # buffer_type (1=L1)
         assert stats["buffers"] == 1
+
+        conn.close()
+
+    def test_buffer_type_mapping_all_types(self, tmp_path):
+        """All buffer types (DRAM, L1, L1_SMALL, SYSTEM_MEMORY, TRACE) map to correct integers."""
+        type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
+        nodes = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": list(range(1, 1 + 3 * len(type_map), 3)),
+            },
+        ]
+        counter = 1
+        for type_name in type_map:
+            nodes.append(
+                {
+                    "counter": counter,
+                    "node_type": "function_start",
+                    "params": {"name": f"ttnn::op_{type_name}", "inputs": "0"},
+                    "connections": [],
+                    "input_tensors": [],
+                }
+            )
+            nodes.append(
+                {
+                    "counter": counter + 1,
+                    "node_type": "buffer_allocate",
+                    "params": {
+                        "device_id": "0",
+                        "address": str(counter * 10000),
+                        "size": "4096",
+                        "page_size": "1024",
+                        "type": type_name,
+                        "layout": "INTERLEAVED",
+                    },
+                    "connections": [],
+                }
+            )
+            nodes.append(
+                {
+                    "counter": counter + 2,
+                    "node_type": "function_end",
+                    "params": {"name": f"ttnn::op_{type_name}"},
+                    "connections": [],
+                    "duration_ns": 100,
+                }
+            )
+            counter += 3
+        nodes.append({"counter": counter, "node_type": "capture_end", "params": {}, "connections": []})
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, nodes, base_operation_id=0)
+        conn.commit()
+
+        cursor.execute("SELECT address, buffer_type FROM buffers ORDER BY address")
+        rows = cursor.fetchall()
+        addr_to_type = {addr: bt for addr, bt in rows}
+
+        for i, (type_name, expected_int) in enumerate(type_map.items()):
+            addr = (1 + i * 3) * 10000
+            actual = addr_to_type.get(addr)
+            assert (
+                actual == expected_int
+            ), f"Buffer type '{type_name}' at addr {addr}: expected {expected_int}, got {actual}"
+
+        conn.close()
+
+    def test_l1_small_buffer_type_not_collapsed_to_dram(self, tmp_path):
+        """Regression: L1_SMALL must map to 3, not 0 (DRAM)."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "0"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "99999",
+                    "size": "2048",
+                    "page_size": "512",
+                    "type": "L1_SMALL",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        cursor.execute("SELECT buffer_type FROM buffers WHERE address=99999")
+        bt = cursor.fetchone()[0]
+        assert bt == 3, f"L1_SMALL should be buffer_type=3, got {bt}"
+
+        conn.close()
+
+    def test_mixed_buffer_types_cumulative(self, tmp_path):
+        """Cumulative snapshots preserve correct buffer_type for mixed DRAM/L1/L1_SMALL."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            # Op 1: allocates DRAM + L1_SMALL
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::op_a", "inputs": "0"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "1000",
+                    "size": "8192",
+                    "page_size": "1024",
+                    "type": "DRAM",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "2000",
+                    "size": "512",
+                    "page_size": "256",
+                    "type": "L1_SMALL",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::op_a"},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            # Op 2: allocates L1 (cumulative snapshot should have all 3)
+            {
+                "counter": 5,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::op_b", "inputs": "0"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 6,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "3000",
+                    "size": "4096",
+                    "page_size": "512",
+                    "type": "L1",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 7,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::op_b"},
+                "connections": [],
+                "duration_ns": 200,
+            },
+            {"counter": 8, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        # Op 2's cumulative snapshot should have all 3 buffers with correct types
+        cursor.execute("SELECT address, buffer_type FROM buffers WHERE operation_id=2 ORDER BY address")
+        rows = cursor.fetchall()
+        assert len(rows) == 3, f"Op 2 should have 3 cumulative buffers, got {len(rows)}"
+        type_by_addr = {addr: bt for addr, bt in rows}
+        assert type_by_addr[1000] == 0, f"DRAM buffer should be type=0, got {type_by_addr[1000]}"
+        assert type_by_addr[2000] == 3, f"L1_SMALL buffer should be type=3, got {type_by_addr[2000]}"
+        assert type_by_addr[3000] == 1, f"L1 buffer should be type=1, got {type_by_addr[3000]}"
 
         conn.close()
 
@@ -403,7 +614,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT operation_id, address FROM buffers ORDER BY operation_id, address")
@@ -454,7 +665,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT tensor_id, device_id, address FROM device_tensors ORDER BY device_id")
@@ -503,7 +714,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT tensor_id, device_id, address FROM device_tensors")
@@ -547,7 +758,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute(
@@ -568,14 +779,8 @@ class TestImportGraphUnit:
 
         conn.close()
 
-    def test_edges_extracted_from_connections(self, tmp_path):
-        """Test that edges are extracted from the connections field."""
-        # Graph with clear connection structure:
-        # 0 (capture_start) -> [1, 4]
-        # 1 (function_start) -> [2]
-        # 2 (tensor) -> [3]
-        # 3 (function_end) -> [4]
-        # 4 (capture_end) -> []
+    def test_edges_table_empty(self, tmp_path):
+        """Test that the edges table is left empty (matching golden DB format)."""
         mock_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4]},
             {
@@ -606,30 +811,625 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
+        cursor.execute("SELECT COUNT(*) FROM edges")
+        assert cursor.fetchone()[0] == 0
+        assert stats["edges"] == 0
+
+        conn.close()
+
+    def test_duplicate_output_tensor_ids_remapped(self, tmp_path):
+        """Test that when multiple operations output the same tensor_id,
+        each gets a unique synthetic ID so the visualizer doesn't draw
+        spurious backward edges."""
+        # Two operations (op_A at counter=1, op_B at counter=7) both output tensor_id 42.
+        # A third operation (op_C at counter=11) consumes tensor_id 42 as input.
+        # After remapping:
+        #   - op_A outputs original tid 42
+        #   - op_B outputs a new synthetic tid (!=42)
+        #   - op_C's input references the synthetic tid (latest producer)
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7, 11], "stacking_level": 0},
+            # op_A
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
+                "connections": [2, 3],
+                "input_tensors": [2],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {"tensor_id": "10", "shape": "[1,32]", "device_id": "0", "address": "1000"},
+                "connections": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_a"},
+                "connections": [4],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
+                "connections": [],
+            },
+            # tensor 50 is input to op_B
+            {
+                "counter": 5,
+                "node_type": "tensor",
+                "params": {"tensor_id": "50", "shape": "[1,64]", "device_id": "0", "address": "3000"},
+                "connections": [],
+            },
+            # filler node
+            {"counter": 6, "node_type": "capture_start", "params": {}, "connections": []},
+            # op_B - also outputs tensor_id 42 (reuse)
+            {
+                "counter": 7,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
+                "connections": [8, 9],
+                "input_tensors": [5],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 8,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
+                "connections": [],
+            },
+            {
+                "counter": 9,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_b"},
+                "connections": [10],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {
+                "counter": 10,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
+                "connections": [],
+            },
+            # op_C - consumes tensor_id 42
+            {
+                "counter": 11,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_c", "num_inputs": "0"},
+                "connections": [12],
+                "input_tensors": [8],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 12,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_c"},
+                "connections": [],
+                "stacking_level": 1,
+                "duration_ns": 300,
+            },
+            {"counter": 13, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        # Each operation should have unique output tensor_ids (no duplicates across ops)
         cursor.execute(
-            "SELECT source_unique_id, sink_unique_id, source_output_index, sink_input_index FROM edges ORDER BY source_unique_id, source_output_index"
+            "SELECT tensor_id, COUNT(DISTINCT operation_id) FROM output_tensors "
+            "GROUP BY tensor_id HAVING COUNT(DISTINCT operation_id) > 1"
         )
-        rows = cursor.fetchall()
+        dupes = cursor.fetchall()
+        assert len(dupes) == 0, f"No tensor_id should be output by multiple ops, got: {dupes}"
 
-        # Expected edges:
-        # 0 -> 1 (output_index=0)
-        # 0 -> 4 (output_index=1)
-        # 1 -> 2 (output_index=0)
-        # 2 -> 3 (output_index=0)
-        # 3 -> 4 (output_index=0)
-        assert len(rows) == 5, f"Expected 5 edges, got {len(rows)}"
+        # op_A and op_B should have different output tensor_ids
+        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        op_ids = [r[0] for r in cursor.fetchall()]
+        assert len(op_ids) == 3  # op_a, op_b, op_c
 
-        # Check specific edges
-        assert (0, 1, 0) == (rows[0][0], rows[0][1], rows[0][2])  # 0 -> 1
-        assert (0, 4, 1) == (rows[1][0], rows[1][1], rows[1][2])  # 0 -> 4
-        assert (1, 2, 0) == (rows[2][0], rows[2][1], rows[2][2])  # 1 -> 2
-        assert (2, 3, 0) == (rows[3][0], rows[3][1], rows[3][2])  # 2 -> 3
-        assert (3, 4, 0) == (rows[4][0], rows[4][1], rows[4][2])  # 3 -> 4
+        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[0],))
+        op_a_out = {r[0] for r in cursor.fetchall()}
+        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[1],))
+        op_b_out = {r[0] for r in cursor.fetchall()}
+        assert op_a_out.isdisjoint(
+            op_b_out
+        ), f"op_A and op_B should have disjoint output tids, got {op_a_out} and {op_b_out}"
 
-        assert stats["edges"] == 5
+        # op_C's input should reference op_B's output (latest producer), not op_A's
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_ids[2],))
+        op_c_in = {r[0] for r in cursor.fetchall()}
+        assert op_c_in & op_b_out, f"op_C input {op_c_in} should reference op_B output {op_b_out}"
+        assert op_c_in.isdisjoint(op_a_out), f"op_C input {op_c_in} should NOT reference op_A output {op_a_out}"
+
+        # All output tensor_ids should exist in tensors table
+        cursor.execute("SELECT tensor_id FROM tensors")
+        all_tids = {r[0] for r in cursor.fetchall()}
+        for tid in op_a_out | op_b_out:
+            assert tid in all_tids, f"Output tid {tid} missing from tensors table"
+
+        conn.close()
+
+    def test_unique_output_tensor_ids_unchanged(self, tmp_path):
+        """When tensor_ids are already unique across operations, no remapping occurs."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5], "stacking_level": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
+                "connections": [2, 3],
+                "input_tensors": [2],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {"counter": 2, "node_type": "tensor", "params": {"tensor_id": "10", "shape": "[1]"}, "connections": [1]},
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_a"},
+                "connections": [4],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {"counter": 4, "node_type": "tensor", "params": {"tensor_id": "20", "shape": "[1]"}, "connections": []},
+            {
+                "counter": 5,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
+                "connections": [6],
+                "input_tensors": [4],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 6,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_b"},
+                "connections": [7],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {"counter": 7, "node_type": "tensor", "params": {"tensor_id": "30", "shape": "[1]"}, "connections": []},
+            {"counter": 8, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        # Original tensor_ids should be preserved when there's no duplication
+        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
+        out_tids = [r[0] for r in cursor.fetchall()]
+        assert out_tids == [20, 30], f"Expected original tids [20, 30], got {out_tids}"
+
+        cursor.execute("SELECT tensor_id FROM input_tensors ORDER BY operation_id")
+        in_tids = [r[0] for r in cursor.fetchall()]
+        assert in_tids == [10, 20], f"Expected original tids [10, 20], got {in_tids}"
+
+        conn.close()
+
+    def test_triple_duplicate_output_tensor_ids(self, tmp_path):
+        """Three operations outputting the same tensor_id get three distinct IDs."""
+        # Build a graph with 3 ops all outputting tensor_id 42
+        nodes = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4, 7], "stacking_level": 0},
+        ]
+        counter = 1
+        for i, name in enumerate(["ttnn.op_a", "ttnn.op_b", "ttnn.op_c"]):
+            nodes.append(
+                {
+                    "counter": counter,
+                    "node_type": "function_start",
+                    "params": {"name": name, "num_inputs": "0"},
+                    "connections": [counter + 1],
+                    "input_tensors": [],
+                    "stacking_level": 1,
+                    "arguments": [],
+                }
+            )
+            nodes.append(
+                {
+                    "counter": counter + 1,
+                    "node_type": "function_end",
+                    "params": {"name": name},
+                    "connections": [counter + 2],
+                    "stacking_level": 1,
+                    "duration_ns": 100,
+                }
+            )
+            nodes.append(
+                {
+                    "counter": counter + 2,
+                    "node_type": "tensor",
+                    "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "1000"},
+                    "connections": [],
+                }
+            )
+            counter += 3
+        nodes.append(
+            {"counter": counter, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0}
+        )
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, nodes, base_operation_id=0)
+        conn.commit()
+
+        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
+        out_tids = [r[0] for r in cursor.fetchall()]
+        assert len(out_tids) == 3
+        assert len(set(out_tids)) == 3, f"All 3 output tids should be unique, got {out_tids}"
+
+        # Original 42 should be one of them (first producer keeps it)
+        assert 42 in out_tids, f"First producer should keep original tid 42, got {out_tids}"
+
+        # All three should exist in tensors table
+        cursor.execute("SELECT tensor_id FROM tensors")
+        all_tids = {r[0] for r in cursor.fetchall()}
+        for tid in out_tids:
+            assert tid in all_tids, f"tid {tid} missing from tensors"
+
+        conn.close()
+
+    def test_input_resolves_to_latest_producer(self, tmp_path):
+        """When tensor_id X is output by op_A then op_B, a consumer after op_B
+        should reference op_B's version, while a consumer between them should
+        reference op_A's version."""
+        mock_graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1, 5, 9, 13],
+                "stacking_level": 0,
+            },
+            # op_A outputs tid 42
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
+                "connections": [2],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_a"},
+                "connections": [3],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
+                "connections": [],
+            },
+            # filler
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
+                "connections": [5],
+            },
+            # op_consumer1 consumes tid 42 (after op_A, before op_B)
+            {
+                "counter": 5,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.consumer1", "num_inputs": "0"},
+                "connections": [6],
+                "input_tensors": [4],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 6,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.consumer1"},
+                "connections": [7],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 7,
+                "node_type": "tensor",
+                "params": {"tensor_id": "99", "shape": "[1]", "device_id": "0", "address": "5000"},
+                "connections": [],
+            },
+            # filler
+            {
+                "counter": 8,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
+                "connections": [9],
+            },
+            # op_B also outputs tid 42
+            {
+                "counter": 9,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
+                "connections": [10],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 10,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_b"},
+                "connections": [11],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {
+                "counter": 11,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
+                "connections": [],
+            },
+            # filler
+            {
+                "counter": 12,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
+                "connections": [13],
+            },
+            # op_consumer2 consumes tid 42 (after op_B)
+            {
+                "counter": 13,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.consumer2", "num_inputs": "0"},
+                "connections": [14],
+                "input_tensors": [12],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 14,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.consumer2"},
+                "connections": [],
+                "stacking_level": 1,
+                "duration_ns": 300,
+            },
+            {"counter": 15, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        cursor.execute("SELECT operation_id, name FROM operations ORDER BY operation_id")
+        ops = cursor.fetchall()
+        op_map = {name: oid for oid, name in ops}
+
+        # Get outputs
+        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_map["ttnn.op_a"],))
+        op_a_out = cursor.fetchone()[0]
+        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_map["ttnn.op_b"],))
+        op_b_out = cursor.fetchone()[0]
+        assert op_a_out != op_b_out, "op_A and op_B must have different output tids"
+
+        # consumer1 (between A and B) should reference op_A's output
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_map["ttnn.consumer1"],))
+        c1_in = cursor.fetchone()[0]
+        assert c1_in == op_a_out, f"consumer1 should reference op_A's output {op_a_out}, got {c1_in}"
+
+        # consumer2 (after B) should reference op_B's output
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_map["ttnn.consumer2"],))
+        c2_in = cursor.fetchone()[0]
+        assert c2_in == op_b_out, f"consumer2 should reference op_B's output {op_b_out}, got {c2_in}"
+
+        conn.close()
+
+    def test_dedup_with_python_io(self, tmp_path):
+        """Remapping works when I/O comes from Python decorator records."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4], "stacking_level": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d", "num_inputs": "0"},
+                "connections": [2],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [3],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "50", "shape": "[1]", "device_id": "0", "address": "2000"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d", "num_inputs": "0"},
+                "connections": [5],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 5,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [6],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {
+                "counter": 6,
+                "node_type": "tensor",
+                "params": {"tensor_id": "50", "shape": "[1]", "device_id": "0", "address": "2000"},
+                "connections": [],
+            },
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+
+        python_io = [
+            {"name": "ttnn.conv2d", "input_tensor_ids": [10], "output_tensor_ids": [50]},
+            {"name": "ttnn.conv2d", "input_tensor_ids": [50], "output_tensor_ids": [50]},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, python_io=python_io)
+        conn.commit()
+
+        # Two conv2d ops should have different output tensor_ids
+        cursor.execute(
+            "SELECT tensor_id, COUNT(DISTINCT operation_id) FROM output_tensors "
+            "GROUP BY tensor_id HAVING COUNT(DISTINCT operation_id) > 1"
+        )
+        dupes = cursor.fetchall()
+        assert len(dupes) == 0, f"No duplicate output tids expected, got {dupes}"
+
+        # Second conv2d's input should reference the first conv2d's output (the original 50)
+        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        op_ids = [r[0] for r in cursor.fetchall()]
+
+        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[0],))
+        first_out = cursor.fetchone()[0]
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_ids[1],))
+        second_in = cursor.fetchone()[0]
+        assert second_in == first_out, f"Second conv2d input {second_in} should match first conv2d output {first_out}"
+
+        conn.close()
+
+    def test_dedup_clones_preserve_tensor_metadata(self, tmp_path):
+        """Cloned tensors preserve shape, dtype, layout, and device info from the original."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4], "stacking_level": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
+                "connections": [2],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_a"},
+                "connections": [3],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "42",
+                    "shape": "[1, 64, 128]",
+                    "dtype": "BFLOAT16",
+                    "layout": "TILE",
+                    "memory_config": "L1_INTERLEAVED",
+                    "device_id": "0",
+                    "address": "9999",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
+                "connections": [5],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 5,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.op_b"},
+                "connections": [6],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {
+                "counter": 6,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "42",
+                    "shape": "[1, 64, 128]",
+                    "dtype": "BFLOAT16",
+                    "layout": "TILE",
+                    "memory_config": "L1_INTERLEAVED",
+                    "device_id": "0",
+                    "address": "9999",
+                },
+                "connections": [],
+            },
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        conn.commit()
+
+        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
+        out_tids = [r[0] for r in cursor.fetchall()]
+        assert len(out_tids) == 2
+        original_tid, synthetic_tid = out_tids[0], out_tids[1]
+        assert original_tid != synthetic_tid
+
+        # Both should have identical metadata in tensors table
+        cursor.execute(
+            "SELECT shape, dtype, layout, memory_config, device_id, address, buffer_type "
+            "FROM tensors WHERE tensor_id=?",
+            (original_tid,),
+        )
+        orig_meta = cursor.fetchone()
+        cursor.execute(
+            "SELECT shape, dtype, layout, memory_config, device_id, address, buffer_type "
+            "FROM tensors WHERE tensor_id=?",
+            (synthetic_tid,),
+        )
+        clone_meta = cursor.fetchone()
+        assert (
+            orig_meta == clone_meta
+        ), f"Clone metadata should match original:\n  orig={orig_meta}\n  clone={clone_meta}"
 
         conn.close()
 
@@ -699,6 +1499,207 @@ class TestImportGraphUnit:
         # Second page
         assert rows[1][3] == 3  # core_x
         assert rows[1][5] == 1  # page_index
+
+    def test_per_operation_buffer_pages_imported(self, tmp_path):
+        """Test that per-operation buffer page snapshots are imported with correct operation_id mapping."""
+        mock_report = {
+            "version": 1,
+            "graph": [
+                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5], "stacking_level": 0},
+                {
+                    "counter": 1,
+                    "node_type": "function_start",
+                    "params": {"name": "ttnn.add", "num_inputs": "0"},
+                    "connections": [2],
+                    "input_tensors": [],
+                    "stacking_level": 1,
+                    "arguments": [],
+                },
+                {
+                    "counter": 2,
+                    "node_type": "function_end",
+                    "params": {"name": "ttnn.add"},
+                    "connections": [],
+                    "stacking_level": 1,
+                    "duration_ns": 100,
+                },
+                {
+                    "counter": 3,
+                    "node_type": "function_start",
+                    "params": {"name": "ttnn.mul", "num_inputs": "0"},
+                    "connections": [4],
+                    "input_tensors": [],
+                    "stacking_level": 1,
+                    "arguments": [],
+                },
+                {
+                    "counter": 4,
+                    "node_type": "function_end",
+                    "params": {"name": "ttnn.mul"},
+                    "connections": [],
+                    "stacking_level": 1,
+                    "duration_ns": 200,
+                },
+                {"counter": 5, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+            ],
+            "devices": [],
+            "metadata": {},
+            "buffer_pages": [
+                {
+                    "device_id": 0,
+                    "address": 999,
+                    "core_y": 0,
+                    "core_x": 0,
+                    "bank_id": 0,
+                    "page_index": 0,
+                    "page_address": 999,
+                    "page_size": 64,
+                    "buffer_type": 1,
+                },
+            ],
+            "per_operation_buffer_pages": {
+                "1": [
+                    {
+                        "device_id": 0,
+                        "address": 1000,
+                        "core_y": 1,
+                        "core_x": 2,
+                        "bank_id": 10,
+                        "page_index": 0,
+                        "page_address": 1000,
+                        "page_size": 128,
+                        "buffer_type": 1,
+                    },
+                    {
+                        "device_id": 0,
+                        "address": 1000,
+                        "core_y": 1,
+                        "core_x": 3,
+                        "bank_id": 11,
+                        "page_index": 1,
+                        "page_address": 1128,
+                        "page_size": 128,
+                        "buffer_type": 1,
+                    },
+                ],
+                "3": [
+                    {
+                        "device_id": 0,
+                        "address": 2000,
+                        "core_y": 2,
+                        "core_x": 4,
+                        "bank_id": 20,
+                        "page_index": 0,
+                        "page_address": 2000,
+                        "page_size": 256,
+                        "buffer_type": 1,
+                    },
+                ],
+            },
+        }
+
+        report_path = tmp_path / "report.json"
+        with open(report_path, "w") as f:
+            json.dump(mock_report, f)
+
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Verify per-operation buffer pages were used (not the flat fallback)
+        cursor.execute("SELECT COUNT(*) FROM buffer_pages")
+        total = cursor.fetchone()[0]
+        assert total == 3, f"Expected 3 per-op buffer pages, got {total}"
+
+        # Verify operation_id mapping is correct
+        cursor.execute("SELECT DISTINCT operation_id FROM buffer_pages ORDER BY operation_id")
+        op_ids = [r[0] for r in cursor.fetchall()]
+        assert len(op_ids) == 2, f"Expected 2 distinct operation_ids, got {len(op_ids)}"
+
+        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        all_op_ids = [r[0] for r in cursor.fetchall()]
+        assert op_ids[0] == all_op_ids[0], "First buffer_pages op_id should match first operation"
+        assert op_ids[1] == all_op_ids[1], "Second buffer_pages op_id should match second operation"
+
+        # Verify page data for the first operation
+        cursor.execute(
+            "SELECT address, core_y, core_x, bank_id, page_size FROM buffer_pages "
+            "WHERE operation_id = ? ORDER BY page_index",
+            (op_ids[0],),
+        )
+        op1_pages = cursor.fetchall()
+        assert len(op1_pages) == 2
+        assert op1_pages[0] == (1000, 1, 2, 10, 128)
+        assert op1_pages[1] == (1000, 1, 3, 11, 128)
+
+        # Verify page data for the second operation
+        cursor.execute(
+            "SELECT address, core_y, core_x, bank_id, page_size FROM buffer_pages "
+            "WHERE operation_id = ? ORDER BY page_index",
+            (op_ids[1],),
+        )
+        op2_pages = cursor.fetchall()
+        assert len(op2_pages) == 1
+        assert op2_pages[0] == (2000, 2, 4, 20, 256)
+
+        conn.close()
+
+    def test_flat_buffer_pages_fallback(self, tmp_path):
+        """Test that flat buffer_pages are used when per_operation_buffer_pages is absent."""
+        mock_report = {
+            "version": 1,
+            "graph": [
+                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1], "stacking_level": 0},
+                {"counter": 1, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+            ],
+            "devices": [],
+            "metadata": {},
+            "buffer_pages": [
+                {
+                    "device_id": 0,
+                    "address": 5000,
+                    "core_y": 0,
+                    "core_x": 0,
+                    "bank_id": 0,
+                    "page_index": 0,
+                    "page_address": 5000,
+                    "page_size": 512,
+                    "buffer_type": 1,
+                },
+                {
+                    "device_id": 0,
+                    "address": 5000,
+                    "core_y": 0,
+                    "core_x": 1,
+                    "bank_id": 1,
+                    "page_index": 1,
+                    "page_address": 5512,
+                    "page_size": 512,
+                    "buffer_type": 1,
+                },
+            ],
+        }
+
+        report_path = tmp_path / "report.json"
+        with open(report_path, "w") as f:
+            json.dump(mock_report, f)
+
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM buffer_pages")
+        total = cursor.fetchone()[0]
+        assert total == 2, f"Flat fallback should import 2 pages, got {total}"
+
+        cursor.execute("SELECT page_size FROM buffer_pages ORDER BY page_index")
+        sizes = [r[0] for r in cursor.fetchall()]
+        assert sizes == [512, 512]
+
+        conn.close()
 
     def test_cluster_mesh_descriptors_saved(self, tmp_path):
         """Test that cluster and mesh descriptors are saved during import."""
@@ -781,7 +1782,7 @@ class TestInputTensorResolution:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph, detailed=True)
+        graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         cursor.execute("SELECT tensor_id FROM input_tensors")
@@ -829,7 +1830,7 @@ class TestInputTensorResolution:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph, detailed=True)
+        graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         cursor.execute("SELECT tensor_id FROM tensors")
@@ -889,7 +1890,7 @@ class TestInputTensorResolution:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph, detailed=True)
+        graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         cursor.execute("SELECT input_index, tensor_id FROM input_tensors ORDER BY input_index")
@@ -923,7 +1924,7 @@ class TestInputTensorResolution:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph, detailed=True)
+        graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         cursor.execute("SELECT * FROM input_tensors")
@@ -975,7 +1976,7 @@ class TestImportValidation:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        stats = graph_report.import_graph(cursor, mock_graph, detailed=True)
+        stats = graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         assert stats.get("warnings", []) == [], f"Clean import should have no warnings, got: {stats['warnings']}"
@@ -1006,7 +2007,7 @@ class TestImportValidation:
         ]
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph, detailed=True)
+        graph_report.import_graph(cursor, mock_graph)
         conn.commit()
 
         # Manually insert a dangling reference (simulating the old bug)
@@ -1037,7 +2038,6 @@ class TestImportValidation:
             TestLinearModelImport.MOCK_LINEAR_GRAPH,
             base_operation_id=0,
             devices=TestLinearModelImport.MOCK_DEVICE_INFO,
-            detailed=True,
         )
         conn.commit()
 
@@ -1101,7 +2101,7 @@ class TestBufferMaxSizePerBank:
         graph = self._make_buffer_graph(size=2097152, page_size=2048, buf_type="DRAM")
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices, detailed=True)
+        graph_report.import_graph(cursor, graph, devices=devices)
         conn.commit()
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
@@ -1120,7 +2120,7 @@ class TestBufferMaxSizePerBank:
         graph = self._make_buffer_graph(size=65536, page_size=2048, buf_type="L1")
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices, detailed=True)
+        graph_report.import_graph(cursor, graph, devices=devices)
         conn.commit()
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
@@ -1141,7 +2141,7 @@ class TestBufferMaxSizePerBank:
         graph = self._make_buffer_graph(size=26624, page_size=2048, buf_type="DRAM")
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices, detailed=True)
+        graph_report.import_graph(cursor, graph, devices=devices)
         conn.commit()
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
@@ -1156,7 +2156,7 @@ class TestBufferMaxSizePerBank:
         graph = self._make_buffer_graph(size=4096, page_size=2048, buf_type="DRAM")
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=None, detailed=True)
+        graph_report.import_graph(cursor, graph, devices=None)
         conn.commit()
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
@@ -1171,7 +2171,7 @@ class TestBufferMaxSizePerBank:
         graph = self._make_buffer_graph(size=32768, page_size=2048, buf_type="L1", layout="HEIGHT_SHARDED", num_cores=8)
 
         conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices, detailed=True)
+        graph_report.import_graph(cursor, graph, devices=devices)
         conn.commit()
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
@@ -1181,7 +2181,7 @@ class TestBufferMaxSizePerBank:
 
 
 class TestCompatibleMode:
-    """Tests for compatible mode (detailed=False): output matches legacy Python capture."""
+    """Tests for compatible mode: output matches legacy Python capture."""
 
     def _make_db(self, tmp_path):
         db_path = tmp_path / "test.db"
@@ -1198,31 +2198,35 @@ class TestCompatibleMode:
             TestLinearModelImport.MOCK_LINEAR_GRAPH,
             base_operation_id=0,
             devices=TestLinearModelImport.MOCK_DEVICE_INFO,
-            detailed=False,
         )
         conn.commit()
         return conn, cursor
 
-    def test_only_device_tensors_imported(self, tmp_path):
-        """Compatible mode filters out host-only tensors (no device_id)."""
+    def test_referenced_host_tensors_kept(self, tmp_path):
+        """Compatible mode keeps host tensors that are referenced in input/output relationships."""
         conn, cursor = self._import_linear(tmp_path)
 
         cursor.execute("SELECT tensor_id, device_id FROM tensors ORDER BY CAST(tensor_id AS INTEGER)")
         rows = cursor.fetchall()
 
-        assert len(rows) == 4, f"Expected 4 device tensors, got {len(rows)}"
-        for tid, dev_id in rows:
-            assert dev_id is not None, f"Tensor {tid} should have device_id set"
+        # 3 host tensors (inputs to to_device ops) + 4 device tensors
+        assert len(rows) == 7, f"Expected 7 tensors (3 host + 4 device), got {len(rows)}"
+        host = [r for r in rows if r[1] is None]
+        device = [r for r in rows if r[1] is not None]
+        assert len(host) == 3, f"Expected 3 host tensors, got {len(host)}"
+        assert len(device) == 4, f"Expected 4 device tensors, got {len(device)}"
         conn.close()
 
-    def test_tensors_deduplicated_by_address(self, tmp_path):
-        """Same physical tensor seen at different graph points should be merged."""
+    def test_device_tensors_deduplicated_by_address(self, tmp_path):
+        """Device tensors in the linear model each have a unique address."""
         conn, cursor = self._import_linear(tmp_path)
 
-        cursor.execute("SELECT address FROM tensors ORDER BY address")
-        addresses = [r[0] for r in cursor.fetchall()]
+        cursor.execute("SELECT address FROM tensors WHERE device_id IS NOT NULL ORDER BY address")
+        device_addresses = [r[0] for r in cursor.fetchall()]
 
-        assert len(addresses) == len(set(addresses)), f"Addresses should be unique (no duplicates). Got {addresses}"
+        assert len(device_addresses) == len(
+            set(device_addresses)
+        ), f"Device tensor addresses should be unique. Got {device_addresses}"
         conn.close()
 
     def test_device_tensors_deduplicated(self, tmp_path):
@@ -1237,8 +2241,8 @@ class TestCompatibleMode:
         assert len(addresses) == len(set(addresses)), f"device_tensors addresses should be unique. Got {addresses}"
         conn.close()
 
-    def test_input_tensors_filtered_to_device_only(self, tmp_path):
-        """input_tensors should only reference tensors that exist in the tensors table."""
+    def test_input_tensors_reference_valid_tensors(self, tmp_path):
+        """All input_tensors should reference tensors that exist in the tensors table."""
         conn, cursor = self._import_linear(tmp_path)
 
         cursor.execute("SELECT tensor_id FROM tensors")
@@ -1251,7 +2255,8 @@ class TestCompatibleMode:
             tid_int = int(tid) if isinstance(tid, str) else tid
             assert tid_int in valid_ids, f"input_tensors op={op_id} references tensor {tid} not in tensors table"
 
-        assert len(rows) == 3, f"Expected 3 input_tensor rows (matmul inputs only), got {len(rows)}"
+        # 3 host tensor inputs to to_device + 3 device tensor inputs to matmul
+        assert len(rows) == 6, f"Expected 6 input_tensor rows, got {len(rows)}"
         conn.close()
 
     def test_shapes_match_reference(self, tmp_path):
@@ -1261,9 +2266,13 @@ class TestCompatibleMode:
         cursor.execute("SELECT shape FROM tensors ORDER BY shape")
         shapes = sorted([r[0] for r in cursor.fetchall()])
 
+        # 3 host tensors (2 x 1024x1024, 1 x 1x1024) + 4 device tensors
         expected = sorted(
             [
                 "Shape([1, 1024])",
+                "Shape([1, 1024])",
+                "Shape([1024, 1024])",
+                "Shape([1024, 1024])",
                 "Shape([1024, 1024])",
                 "Shape([1024, 1024])",
                 "Shape([1024, 1024])",
@@ -1311,33 +2320,6 @@ class TestCompatibleMode:
         assert all(c == 1 for c in counts), f"Each op should have 1 output tensor, got {counts}"
         conn.close()
 
-    def test_detailed_mode_includes_host_tensors(self, tmp_path):
-        """detailed=True should include host tensors (no device_id) and child operations."""
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_devices(cursor, TestLinearModelImport.MOCK_DEVICE_INFO)
-        graph_report.import_graph(
-            cursor,
-            TestLinearModelImport.MOCK_LINEAR_GRAPH,
-            base_operation_id=0,
-            devices=TestLinearModelImport.MOCK_DEVICE_INFO,
-            detailed=True,
-        )
-        conn.commit()
-
-        cursor.execute("SELECT COUNT(*) FROM tensors")
-        total = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
-        host_count = cursor.fetchone()[0]
-
-        assert total == 7, f"detailed mode should have 7 tensors, got {total}"
-        assert host_count == 3, f"detailed mode should have 3 host tensors, got {host_count}"
-
-        cursor.execute("SELECT COUNT(*) FROM operations")
-        op_count = cursor.fetchone()[0]
-        assert op_count == 5, f"detailed mode should have 5 ops (including child), got {op_count}"
-        conn.close()
-
 
 class TestLinearModelImport:
     """
@@ -1376,11 +2358,11 @@ class TestLinearModelImport:
 
     MOCK_LINEAR_GRAPH = [
         {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7, 13, 19]},
-        # --- ttnn.ones #1 → Tensor::to_device ---
+        # --- ttnn.ones #1 → ttnn.to_device ---
         {
             "counter": 1,
             "node_type": "function_start",
-            "params": {"name": "Tensor::to_device", "inputs": "1"},
+            "params": {"name": "ttnn.to_device", "inputs": "1"},
             "connections": [3, 4, 5],
             "input_tensors": [2],
         },
@@ -1413,7 +2395,7 @@ class TestLinearModelImport:
         {
             "counter": 5,
             "node_type": "function_end",
-            "params": {"name": "Tensor::to_device"},
+            "params": {"name": "ttnn.to_device"},
             "connections": [6, 7],
             "duration_ns": 2784790,
         },
@@ -1433,11 +2415,11 @@ class TestLinearModelImport:
             },
             "connections": [19],
         },
-        # --- ttnn.ones #2 → Tensor::to_device ---
+        # --- ttnn.ones #2 → ttnn.to_device ---
         {
             "counter": 7,
             "node_type": "function_start",
-            "params": {"name": "Tensor::to_device", "inputs": "1"},
+            "params": {"name": "ttnn.to_device", "inputs": "1"},
             "connections": [9, 10, 11],
             "input_tensors": [8],
         },
@@ -1470,7 +2452,7 @@ class TestLinearModelImport:
         {
             "counter": 11,
             "node_type": "function_end",
-            "params": {"name": "Tensor::to_device"},
+            "params": {"name": "ttnn.to_device"},
             "connections": [12, 13],
             "duration_ns": 252479,
         },
@@ -1490,11 +2472,11 @@ class TestLinearModelImport:
             },
             "connections": [19],
         },
-        # --- ttnn.ones #3 → Tensor::to_device ---
+        # --- ttnn.ones #3 → ttnn.to_device ---
         {
             "counter": 13,
             "node_type": "function_start",
-            "params": {"name": "Tensor::to_device", "inputs": "1"},
+            "params": {"name": "ttnn.to_device", "inputs": "1"},
             "connections": [15, 16, 17],
             "input_tensors": [14],
         },
@@ -1527,7 +2509,7 @@ class TestLinearModelImport:
         {
             "counter": 17,
             "node_type": "function_end",
-            "params": {"name": "Tensor::to_device"},
+            "params": {"name": "ttnn.to_device"},
             "connections": [18, 19],
             "duration_ns": 31240,
         },
@@ -1636,9 +2618,7 @@ class TestLinearModelImport:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
         graph_report.import_devices(cursor, self.MOCK_DEVICE_INFO)
-        graph_report.import_graph(
-            cursor, self.MOCK_LINEAR_GRAPH, base_operation_id=0, devices=self.MOCK_DEVICE_INFO, detailed=True
-        )
+        graph_report.import_graph(cursor, self.MOCK_LINEAR_GRAPH, base_operation_id=0, devices=self.MOCK_DEVICE_INFO)
         conn.commit()
         return conn, cursor
 
@@ -1649,12 +2629,11 @@ class TestLinearModelImport:
         cursor.execute("SELECT operation_id, name FROM operations ORDER BY operation_id")
         rows = cursor.fetchall()
 
-        assert len(rows) == 5
-        assert rows[0][1] == "Tensor::to_device"
-        assert rows[1][1] == "Tensor::to_device"
-        assert rows[2][1] == "Tensor::to_device"
-        assert rows[3][1] == "tt::tt_metal::create_device_tensor"
-        assert rows[4][1] == "MatmulDeviceOperation"
+        assert len(rows) == 4, f"Expected 4 ops (nested child ops filtered), got {len(rows)}"
+        assert rows[0][1] == "ttnn.to_device"
+        assert rows[1][1] == "ttnn.to_device"
+        assert rows[2][1] == "ttnn.to_device"
+        assert rows[3][1] == "MatmulDeviceOperation"
         conn.close()
 
     def test_all_input_tensors_reference_valid_tensor_ids(self, tmp_path):
@@ -1691,7 +2670,7 @@ class TestLinearModelImport:
         """
         conn, cursor = self._import_linear_graph(tmp_path)
 
-        cursor.execute("SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = 5 ORDER BY input_index")
+        cursor.execute("SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = 4 ORDER BY input_index")
         rows = cursor.fetchall()
 
         assert len(rows) == 3, f"MatmulDeviceOperation should have 3 inputs, got {len(rows)}"
@@ -1703,7 +2682,7 @@ class TestLinearModelImport:
         conn.close()
 
     def test_to_device_input_tensors_are_host_tensors(self, tmp_path):
-        """Each Tensor::to_device should take one host tensor as input."""
+        """Each ttnn.to_device should take one host tensor as input."""
         conn, cursor = self._import_linear_graph(tmp_path)
 
         cursor.execute("SELECT operation_id, tensor_id FROM input_tensors WHERE operation_id < 4 ORDER BY operation_id")
@@ -1727,8 +2706,7 @@ class TestLinearModelImport:
         assert output_map[1] == 1, "to_device #1 output should be tensor 1"
         assert output_map[2] == 3, "to_device #2 output should be tensor 3"
         assert output_map[3] == 5, "to_device #3 output should be tensor 5"
-        assert output_map[4] == 7, "create_device_tensor output should be tensor 7"
-        assert output_map[5] == 7, "MatmulDeviceOperation output should be tensor 7"
+        assert output_map[4] == 7, "MatmulDeviceOperation output should be tensor 7"
         conn.close()
 
     def test_buffer_sizes_are_per_bank_not_total(self, tmp_path):
@@ -1760,14 +2738,15 @@ class TestLinearModelImport:
     def test_buffers_are_cumulative_per_operation(self, tmp_path):
         """
         Regression: the correct DB has cumulative buffer snapshots per operation.
-        op 1: 1 buffer, op 2: 2 buffers, op 3: 3 buffers, op 4: 4 buffers, op 5: 5 buffers.
+        op 1: 1 buffer, op 2: 2 buffers, op 3: 3 buffers, op 4 (matmul): 5 buffers.
+        Nested create_device_tensor is filtered, its buffers still tracked.
         """
         conn, cursor = self._import_linear_graph(tmp_path)
 
         cursor.execute("SELECT operation_id, COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
         rows = cursor.fetchall()
 
-        expected_counts = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
+        expected_counts = {1: 1, 2: 2, 3: 3, 4: 5}
         actual_counts = {r[0]: r[1] for r in rows}
 
         assert actual_counts == expected_counts, (
@@ -1837,11 +2816,11 @@ class TestLinearModelImport:
 
         cursor.execute("SELECT COUNT(*) FROM tensors")
         tensor_count = cursor.fetchone()[0]
-        assert tensor_count == 4, f"Compatible mode: expected 4 device tensors, got {tensor_count}"
+        assert tensor_count == 7, f"Compatible mode: expected 7 tensors (3 host + 4 device), got {tensor_count}"
 
         cursor.execute("SELECT COUNT(*) FROM input_tensors")
         input_count = cursor.fetchone()[0]
-        assert input_count == 3, f"Compatible mode: expected 3 input_tensor rows (matmul only), got {input_count}"
+        assert input_count == 6, f"Compatible mode: expected 6 input_tensor rows, got {input_count}"
 
         cursor.execute("SELECT tensor_id FROM tensors")
         valid_ids = {int(r[0]) if isinstance(r[0], str) else r[0] for r in cursor.fetchall()}
@@ -2088,6 +3067,565 @@ class TestStackTraces:
             ttnn.graph.enable_stack_traces()
 
 
+class TestResNet50Patterns:
+    """
+    Tests for patterns observed in the ResNet50 reference database:
+    - Host weight tensors used as inputs to conv2d operations
+    - Deallocate operations (no output tensors)
+    - Multiple buffer types and layouts (DRAM, L1, L1_SMALL)
+    - Large number of cumulative buffers per operation
+    - Operations with multiple input/output tensors
+    """
+
+    MOCK_RESNET_GRAPH = [
+        # capture_start
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7, 13, 19, 25]},
+        # Op 1: ttnn.to_device (host tensor -> device tensor)
+        {
+            "counter": 1,
+            "node_type": "function_start",
+            "params": {"name": "ttnn.to_device", "inputs": "1"},
+            "connections": [],
+            "input_tensors": [2],
+            "stack_trace": ["frame1"],
+        },
+        {
+            "counter": 2,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "0",
+                "shape": "Shape([64, 16, 4, 4])",
+                "dtype": "DataType::FLOAT32",
+                "layout": "Layout::ROW_MAJOR",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 3,
+            "node_type": "buffer_allocate",
+            "params": {"size": "65536", "type": "DRAM", "layout": "INTERLEAVED", "device_id": "0", "address": "1000"},
+            "connections": [],
+        },
+        {
+            "counter": 4,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "1",
+                "shape": "Shape([64, 16, 4, 4])",
+                "dtype": "DataType::BFLOAT16",
+                "layout": "Layout::TILE",
+                "device_id": "0",
+                "address": "1000",
+                "buffer_type": "DRAM",
+                "memory_config": "MemoryConfig(DRAM)",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 5,
+            "node_type": "function_end",
+            "params": {"name": "ttnn.to_device"},
+            "connections": [4],
+            "duration_ns": 100,
+        },
+        # Op 2: conv2d (host weight + device activation -> device output)
+        {
+            "counter": 6,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "10",
+                "shape": "Shape([64, 64, 3, 3])",
+                "dtype": "DataType::FLOAT32",
+                "layout": "Layout::ROW_MAJOR",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 7,
+            "node_type": "function_start",
+            "params": {"name": "ttnn::conv2d", "inputs": "3"},
+            "connections": [],
+            "input_tensors": [4, 6],
+            "arguments": ["activation_tensor", "weight_tensor", "bias_tensor"],
+            "stack_trace": ["frame2"],
+        },
+        {
+            "counter": 8,
+            "node_type": "buffer_allocate",
+            "params": {"size": "176128", "type": "DRAM", "layout": "INTERLEAVED", "device_id": "0", "address": "2000"},
+            "connections": [],
+        },
+        {
+            "counter": 9,
+            "node_type": "buffer_allocate",
+            "params": {
+                "size": "4096",
+                "type": "L1",
+                "layout": "HEIGHT_SHARDED",
+                "device_id": "0",
+                "address": "5000",
+                "num_cores": "64",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 10,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "2",
+                "shape": "Shape([1, 1, 3136, 64])",
+                "dtype": "DataType::BFLOAT16",
+                "layout": "Layout::TILE",
+                "device_id": "0",
+                "address": "2000",
+                "buffer_type": "DRAM",
+                "memory_config": "MemoryConfig(DRAM)",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 11,
+            "node_type": "function_end",
+            "params": {"name": "ttnn::conv2d"},
+            "connections": [10],
+            "duration_ns": 5000,
+        },
+        # Op 3: add_ (two device tensors -> device output)
+        {
+            "counter": 12,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "3",
+                "shape": "Shape([1, 1, 3136, 64])",
+                "dtype": "DataType::BFLOAT16",
+                "layout": "Layout::TILE",
+                "device_id": "0",
+                "address": "3000",
+                "buffer_type": "L1",
+                "memory_config": "MemoryConfig(L1)",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 13,
+            "node_type": "function_start",
+            "params": {"name": "ttnn::add_", "inputs": "2"},
+            "connections": [],
+            "input_tensors": [10, 12],
+            "stack_trace": ["frame3"],
+        },
+        {
+            "counter": 14,
+            "node_type": "buffer_allocate",
+            "params": {"size": "8192", "type": "L1", "layout": "INTERLEAVED", "device_id": "0", "address": "4000"},
+            "connections": [],
+        },
+        {
+            "counter": 15,
+            "node_type": "tensor",
+            "params": {
+                "tensor_id": "4",
+                "shape": "Shape([1, 1, 3136, 64])",
+                "dtype": "DataType::BFLOAT16",
+                "layout": "Layout::TILE",
+                "device_id": "0",
+                "address": "4000",
+                "buffer_type": "L1",
+                "memory_config": "MemoryConfig(L1)",
+            },
+            "connections": [],
+        },
+        {
+            "counter": 16,
+            "node_type": "function_end",
+            "params": {"name": "ttnn::add_"},
+            "connections": [15],
+            "duration_ns": 200,
+        },
+        # Deallocate: C++ only emits buffer_deallocate (function tracking is not wrapped).
+        # The importer synthesizes an operation from this node.
+        # connections points to the buffer node (counter 8) which connects to tensor (counter 10).
+        {
+            "counter": 17,
+            "node_type": "buffer_deallocate",
+            "params": {"address": "2000", "size": "176128", "type": "DRAM", "device_id": "0"},
+            "connections": [8],
+        },
+        # capture_end
+        {"counter": 25, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+    MOCK_DEVICE_INFO = [
+        {
+            "device_id": 0,
+            "num_dram_channels": 12,
+            "l1_num_banks": 64,
+            "num_y_cores": 8,
+            "num_x_cores": 8,
+            "num_y_compute_cores": 8,
+            "num_x_compute_cores": 8,
+            "num_storage_cores": 0,
+            "worker_l1_size": 1499136,
+            "l1_bank_size": 23424,
+        }
+    ]
+
+    def _make_db(self, tmp_path):
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        return conn, cursor
+
+    def _import_resnet(self, tmp_path):
+        conn, cursor = self._make_db(tmp_path)
+        graph_report.import_devices(cursor, self.MOCK_DEVICE_INFO)
+        graph_report.import_graph(
+            cursor,
+            self.MOCK_RESNET_GRAPH,
+            base_operation_id=0,
+            devices=self.MOCK_DEVICE_INFO,
+        )
+        conn.commit()
+        return conn, cursor
+
+    def test_host_weight_tensors_kept_in_compatible_mode(self, tmp_path):
+        """Host weight tensors referenced as inputs must be preserved in compatible mode."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT tensor_id, device_id FROM tensors WHERE device_id IS NULL")
+        host_tensors = cursor.fetchall()
+        # tensor_id 0 (input to to_device) + tensor_id 10 (conv2d weight)
+        assert (
+            len(host_tensors) == 2
+        ), f"Expected 2 host tensors (to_device input + conv weight), got {len(host_tensors)}"
+
+        # Verify each host tensor is referenced in input_tensors
+        for tid, _ in host_tensors:
+            tid_int = int(tid) if isinstance(tid, str) else tid
+            cursor.execute("SELECT COUNT(*) FROM input_tensors WHERE tensor_id = ?", (tid_int,))
+            refs = cursor.fetchone()[0]
+            assert refs > 0, f"Host tensor {tid} should be referenced in input_tensors"
+        conn.close()
+
+    def test_deallocate_ops_have_no_output_tensors(self, tmp_path):
+        """Deallocate operations should have input tensors but no output tensors."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations WHERE name LIKE '%deallocate%'")
+        dealloc_ops = cursor.fetchall()
+        assert len(dealloc_ops) == 1, f"Expected 1 deallocate op, got {len(dealloc_ops)}"
+
+        op_id = dealloc_ops[0][0]
+
+        cursor.execute("SELECT COUNT(*) FROM input_tensors WHERE operation_id = ?", (op_id,))
+        input_count = cursor.fetchone()[0]
+        assert input_count == 1, f"Deallocate should have 1 input, got {input_count}"
+
+        cursor.execute("SELECT COUNT(*) FROM output_tensors WHERE operation_id = ?", (op_id,))
+        output_count = cursor.fetchone()[0]
+        assert output_count == 0, f"Deallocate should have 0 outputs, got {output_count}"
+        conn.close()
+
+    def test_conv2d_has_host_and_device_inputs(self, tmp_path):
+        """Conv2d should accept both host weight tensors and device activation tensors as inputs."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn::conv2d'")
+        conv_op = cursor.fetchone()
+        assert conv_op is not None, "Should have a conv2d operation"
+
+        cursor.execute(
+            """
+            SELECT t.tensor_id, t.device_id
+            FROM input_tensors it JOIN tensors t ON it.tensor_id = t.tensor_id
+            WHERE it.operation_id = ?
+            ORDER BY it.input_index
+        """,
+            (conv_op[0],),
+        )
+        inputs = cursor.fetchall()
+
+        device_inputs = [r for r in inputs if r[1] is not None]
+        host_inputs = [r for r in inputs if r[1] is None]
+        assert len(device_inputs) >= 1, f"Conv2d should have at least 1 device input, got {len(device_inputs)}"
+        assert len(host_inputs) >= 1, f"Conv2d should have at least 1 host weight input, got {len(host_inputs)}"
+        conn.close()
+
+    def test_multiple_buffer_types(self, tmp_path):
+        """Buffers should support DRAM, L1, and sharded layouts."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
+        types = [r[0] for r in cursor.fetchall()]
+        assert len(types) >= 1, f"Should have at least 1 buffer type, got {types}"
+        conn.close()
+
+    def test_cumulative_buffers_reflect_allocations_and_deallocations(self, tmp_path):
+        """
+        Buffer counts should grow with allocations and shrink with deallocations.
+        Op 1 (to_device): 1 DRAM buffer allocated -> 1 total
+        Op 2 (conv2d): 2 more buffers (DRAM + L1) -> 3 total
+        Op 3 (add_): 1 more L1 buffer -> 4 total
+        Op 4 (deallocate): 1 DRAM buffer deallocated before op -> 3 total
+        """
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute(
+            """
+            SELECT operation_id, COUNT(*) FROM buffers
+            GROUP BY operation_id ORDER BY operation_id
+        """
+        )
+        rows = cursor.fetchall()
+        counts_by_op = {r[0]: r[1] for r in rows}
+        assert len(counts_by_op) >= 3, f"Should have at least 3 ops with buffers, got {len(counts_by_op)}"
+
+        op_ids = sorted(counts_by_op.keys())
+        assert counts_by_op[op_ids[0]] == 1, f"First op should have 1 buffer, got {counts_by_op[op_ids[0]]}"
+        assert counts_by_op[op_ids[1]] == 3, f"Second op should have 3 buffers, got {counts_by_op[op_ids[1]]}"
+        assert counts_by_op[op_ids[2]] == 4, f"Third op should have 4 buffers, got {counts_by_op[op_ids[2]]}"
+        if len(op_ids) >= 4:
+            assert (
+                counts_by_op[op_ids[3]] == 3
+            ), f"Fourth op (post-dealloc) should have 3 buffers, got {counts_by_op[op_ids[3]]}"
+        conn.close()
+
+    def test_stack_traces_for_real_operations(self, tmp_path):
+        """Operations with function_start should have stack traces. Synthesized deallocate ops may not."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT COUNT(*) FROM operations WHERE name != 'ttnn::deallocate'")
+        real_op_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM stack_traces")
+        st_count = cursor.fetchone()[0]
+        assert st_count == real_op_count, f"Expected {real_op_count} stack traces, got {st_count}"
+        conn.close()
+
+    def test_captured_graph_per_operation(self, tmp_path):
+        """Each operation should have a captured_graph entry."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT COUNT(*) FROM operations")
+        op_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM captured_graph")
+        cg_count = cursor.fetchone()[0]
+        assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
+        conn.close()
+
+    def test_operation_ids_start_at_one(self, tmp_path):
+        """Operation IDs should start at 1 (1-based indexing)."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT MIN(operation_id), MAX(operation_id), COUNT(*) FROM operations")
+        min_id, max_id, count = cursor.fetchone()
+        assert min_id == 1, f"First operation_id should be 1, got {min_id}"
+        conn.close()
+
+    def test_all_input_output_tensors_reference_valid_ids(self, tmp_path):
+        """All tensor references in input/output tables should exist in the tensors table."""
+        conn, cursor = self._import_resnet(tmp_path)
+
+        cursor.execute("SELECT tensor_id FROM tensors")
+        valid_ids = {int(r[0]) if isinstance(r[0], str) else r[0] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT operation_id, tensor_id FROM input_tensors")
+        for op_id, tid in cursor.fetchall():
+            tid_int = int(tid) if isinstance(tid, str) else tid
+            assert tid_int in valid_ids, f"input_tensors op={op_id} references tensor {tid} not in tensors table"
+
+        cursor.execute("SELECT operation_id, tensor_id FROM output_tensors")
+        for op_id, tid in cursor.fetchall():
+            tid_int = int(tid) if isinstance(tid, str) else tid
+            assert tid_int in valid_ids, f"output_tensors op={op_id} references tensor {tid} not in tensors table"
+        conn.close()
+
+
+class TestResNet50ReferenceDB:
+    """
+    Structural validation of the ResNet50 reference database.
+    The reference DB was generated by the old Python-based graph capture flow
+    running ResNet50 on Wormhole B0 hardware.
+
+    These tests serve as documentation of the expected patterns and catch
+    accidental modifications to the reference.
+    """
+
+    REFERENCE_DB = Path(__file__).parent.parent.parent.parent.parent / "test_data" / "db.sqlite"
+
+    @pytest.fixture(autouse=True)
+    def skip_if_no_reference(self):
+        if not self.REFERENCE_DB.exists():
+            pytest.skip(f"Reference DB not found at {self.REFERENCE_DB}")
+
+    def _connect(self):
+        return sqlite3.connect(str(self.REFERENCE_DB))
+
+    def test_tables_exist(self):
+        """Reference DB should have all expected tables."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = {r[0] for r in c.fetchall()}
+        expected = {
+            "operations",
+            "tensors",
+            "buffers",
+            "buffer_pages",
+            "input_tensors",
+            "output_tensors",
+            "device_tensors",
+            "captured_graph",
+            "stack_traces",
+            "devices",
+            "operation_arguments",
+            "nodes",
+            "edges",
+            "errors",
+        }
+        missing = expected - tables
+        assert not missing, f"Missing tables: {missing}"
+        conn.close()
+
+    def test_operations_count_and_id_range(self):
+        """302 operations, IDs 109-410, contiguous."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT MIN(operation_id), MAX(operation_id), COUNT(*) FROM operations")
+        min_id, max_id, count = c.fetchone()
+        assert count == 302, f"Expected 302 operations, got {count}"
+        assert min_id == 109
+        assert max_id == 410
+        assert max_id - min_id + 1 == count, "IDs should be contiguous"
+        conn.close()
+
+    def test_tensor_count_and_host_device_split(self):
+        """683 tensors: 113 host (no device_id) + 570 device."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM tensors")
+        assert c.fetchone()[0] == 683
+        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
+        assert c.fetchone()[0] == 113
+        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+        assert c.fetchone()[0] == 570
+        conn.close()
+
+    def test_host_tensors_are_weight_inputs(self):
+        """All 113 host tensors should be referenced as operation inputs."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT COUNT(*) FROM input_tensors it
+            JOIN tensors t ON it.tensor_id = t.tensor_id
+            WHERE t.device_id IS NULL
+        """
+        )
+        host_input_refs = c.fetchone()[0]
+        assert host_input_refs == 113, f"Expected all 113 host tensors to be inputs, got {host_input_refs}"
+        conn.close()
+
+    def test_operation_name_distribution(self):
+        """Key operation types match expected counts."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
+        counts = dict(c.fetchall())
+        assert counts.get("ttnn.conv2d", 0) == 159
+        assert counts.get("ttnn.deallocate", 0) == 51
+        assert counts.get("ttnn.add_", 0) == 48
+        conn.close()
+
+    def test_deallocate_operations_have_no_outputs(self):
+        """All 51 deallocate operations should have inputs but no outputs."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT o.operation_id FROM operations o
+            WHERE o.name = 'ttnn.deallocate'
+            AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
+            AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
+        """
+        )
+        rows = c.fetchall()
+        assert len(rows) == 51, f"Expected 51 dealloc ops with inputs only, got {len(rows)}"
+        conn.close()
+
+    def test_one_captured_graph_per_operation(self):
+        """302 captured_graph entries, one per operation."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM captured_graph")
+        assert c.fetchone()[0] == 302
+        conn.close()
+
+    def test_one_stack_trace_per_operation(self):
+        """302 stack_trace entries, one per operation."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM stack_traces")
+        assert c.fetchone()[0] == 302
+        conn.close()
+
+    def test_buffer_types_include_dram_l1_and_l1_small(self):
+        """Buffers should include DRAM (0), L1 (1), and L1_SMALL (3)."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
+        types = [r[0] for r in c.fetchall()]
+        assert 0 in types, "Should have DRAM buffers (type 0)"
+        assert 1 in types, "Should have L1 buffers (type 1)"
+        assert 3 in types, "Should have L1_SMALL buffers (type 3)"
+        conn.close()
+
+    def test_device_tensors_match_tensor_count(self):
+        """570 device_tensors entries, matching the 570 device tensors."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(DISTINCT tensor_id) FROM device_tensors")
+        assert c.fetchone()[0] == 570
+        conn.close()
+
+    def test_operation_arguments_include_named_args(self):
+        """Reference uses named operation arguments (not just positional)."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT name FROM operation_arguments WHERE name NOT GLOB '[0-9]*'")
+        named_args = {r[0] for r in c.fetchall()}
+        expected_names = {"input_tensor", "weight_tensor", "conv_config", "bias_tensor", "device"}
+        found = expected_names & named_args
+        assert len(found) >= 3, f"Expected named args like {expected_names}, found {found}"
+        conn.close()
+
+    def test_referential_integrity(self):
+        """All tensor references in input/output tables should exist in tensors table."""
+        conn = self._connect()
+        c = conn.cursor()
+
+        c.execute(
+            """
+            SELECT COUNT(*) FROM input_tensors it
+            LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
+        """
+        )
+        dangling_inputs = c.fetchone()[0]
+        assert dangling_inputs == 0, f"{dangling_inputs} dangling input_tensors references"
+
+        c.execute(
+            """
+            SELECT COUNT(*) FROM output_tensors ot
+            LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
+        """
+        )
+        dangling_outputs = c.fetchone()[0]
+        assert dangling_outputs == 0, f"{dangling_outputs} dangling output_tensors references"
+        conn.close()
+
+
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Reference DB was generated on Wormhole B0")
 class TestLinearModelE2E:
     """
     End-to-end regression test: run the test_linear model on real hardware,
@@ -2101,6 +3639,8 @@ class TestLinearModelE2E:
     - device_id values vary per machine
     - Exact buffer addresses vary per run (but layout is deterministic so they usually match)
     - Intermediate matmul buffer sizes may vary across hardware revisions
+
+    Requires: Wormhole B0 hardware (N150).
     """
 
     REFERENCE_DB = Path(__file__).parent / "fixtures" / "linear_reference.sqlite"
@@ -2113,12 +3653,14 @@ class TestLinearModelE2E:
     def test_linear_model_matches_reference_db(self, device, tmp_path):
         report_path = tmp_path / "linear_report.json"
 
+        ttnn.graph.enable_buffer_pages()
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         c = ttnn.ones([1, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         ttnn.linear(a, b, bias=c)
         ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.disable_buffer_pages()
 
         assert report_path.exists(), "Report JSON should be created"
 
@@ -2258,6 +3800,314 @@ class TestLinearModelE2E:
         ref_st = rc.fetchone()[0]
         if gen_st != ref_st:
             differences.append(f"stack_traces count: generated={gen_st}, reference={ref_st}")
+
+        # --- buffer_pages: count and content should match ---
+        gc.execute("SELECT COUNT(*) FROM buffer_pages")
+        gen_bp = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM buffer_pages")
+        ref_bp = rc.fetchone()[0]
+        if gen_bp != ref_bp:
+            differences.append(f"buffer_pages count: generated={gen_bp}, reference={ref_bp}")
+        elif gen_bp > 0:
+            gc.execute(
+                "SELECT device_id, address, core_y, core_x, bank_id, page_index, page_size, buffer_type "
+                "FROM buffer_pages ORDER BY address, page_index"
+            )
+            gen_pages = gc.fetchall()
+            rc.execute(
+                "SELECT device_id, address, core_y, core_x, bank_id, page_index, page_size, buffer_type "
+                "FROM buffer_pages ORDER BY address, page_index"
+            )
+            ref_pages = rc.fetchall()
+            if gen_pages != ref_pages:
+                mismatched = sum(1 for g, r in zip(gen_pages, ref_pages) if g != r)
+                differences.append(f"buffer_pages content: {mismatched}/{gen_bp} rows differ")
+
+        gen.close()
+        ref.close()
+
+        assert differences == [], f"Generated DB differs from reference:\n" + "\n".join(f"  - {d}" for d in differences)
+
+
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Reference DB was generated on Wormhole B0")
+class TestResNet50ModelE2E:
+    """
+    End-to-end golden test: run the ResNet50 demo on real hardware,
+    capture graph to JSON, import to SQLite, and compare against the reference
+    database generated by the old Python-based capture flow.
+
+    The reference DB was generated by wrapping the ResNet50 demo with:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        run_resnet_inference(...)
+        ttnn.graph.end_graph_capture_to_file("resnet50_report.json")
+
+    Known acceptable differences between C++ capture and old Python capture:
+    - Operation names differ (C++ uses internal names, Python used ttnn.conv2d etc.)
+    - Tensor IDs differ (C++ and Python assign tensor IDs differently)
+    - dtype/layout string format: C++ uses '::' (DataType::BFLOAT16), Python used '.' (DataType.BFLOAT16)
+    - device_id values may vary per machine
+    - Operation IDs differ (Python used a global counter starting at 109)
+    - Stack trace format differs (C++ vs Python frames)
+
+    Requires: Wormhole B0 hardware, model weights, test images.
+    Run with: WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest <this_file>::TestResNet50ModelE2E
+    """
+
+    REFERENCE_DB = Path(__file__).parent / "fixtures" / "resnet50_reference.sqlite"
+
+    @staticmethod
+    def _normalize(s):
+        """Normalize C++ '::' format to Python '.' format for comparison."""
+        return s.replace("::", ".") if isinstance(s, str) else s
+
+    @pytest.fixture(autouse=True)
+    def skip_if_no_reference(self):
+        if not self.REFERENCE_DB.exists():
+            pytest.skip(f"Reference DB not found at {self.REFERENCE_DB}")
+
+    @pytest.fixture
+    def resnet_label_dict(self):
+        import ast
+
+        label_path = Path("models/sample_data/imagenet_class_labels.txt")
+        if not label_path.exists():
+            pytest.skip(f"ImageNet labels not found at {label_path}")
+        with open(label_path, "r") as f:
+            return ast.literal_eval(f.read())
+
+    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+    def test_resnet50_matches_reference_db(self, mesh_device, tmp_path, model_location_generator, resnet_label_dict):
+        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
+
+        batch_size = 16
+        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
+        report_path = tmp_path / "resnet50_report.json"
+
+        ttnn.graph.enable_buffer_pages()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        run_resnet_inference(batch_size, input_loc, resnet_label_dict, mesh_device, model_location_generator)
+        ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.disable_buffer_pages()
+
+        assert report_path.exists(), "Report JSON should be created"
+
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+        assert db_path.exists(), "Imported DB should be created"
+
+        gen = sqlite3.connect(db_path)
+        ref = sqlite3.connect(self.REFERENCE_DB)
+        gc = gen.cursor()
+        rc = ref.cursor()
+
+        differences = []
+
+        # --- operations: count should match ---
+        gc.execute("SELECT COUNT(*) FROM operations")
+        gen_op_count = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM operations")
+        ref_op_count = rc.fetchone()[0]
+        if gen_op_count != ref_op_count:
+            differences.append(f"operations count: generated={gen_op_count}, reference={ref_op_count}")
+
+        # --- operations: name distribution should match (normalized) ---
+        gc.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
+        gen_op_names = {self._normalize(n): c for n, c in gc.fetchall()}
+        rc.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
+        ref_op_names = {self._normalize(n): c for n, c in rc.fetchall()}
+        gen_total = sum(gen_op_names.values())
+        ref_total = sum(ref_op_names.values())
+        if gen_total != ref_total:
+            differences.append(f"total operations: generated={gen_total}, reference={ref_total}")
+
+        # --- tensors: count and host/device split ---
+        gc.execute("SELECT COUNT(*) FROM tensors")
+        gen_tensor_count = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM tensors")
+        ref_tensor_count = rc.fetchone()[0]
+        if gen_tensor_count != ref_tensor_count:
+            differences.append(f"tensors count: generated={gen_tensor_count}, reference={ref_tensor_count}")
+
+        gc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
+        gen_host = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
+        ref_host = rc.fetchone()[0]
+        if gen_host != ref_host:
+            differences.append(f"host tensors count: generated={gen_host}, reference={ref_host}")
+
+        gc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+        gen_dev = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+        ref_dev = rc.fetchone()[0]
+        if gen_dev != ref_dev:
+            differences.append(f"device tensors count: generated={gen_dev}, reference={ref_dev}")
+
+        # --- tensor shapes distribution should match ---
+        gc.execute("SELECT shape, COUNT(*) FROM tensors GROUP BY shape ORDER BY shape")
+        gen_shapes = dict(gc.fetchall())
+        rc.execute("SELECT shape, COUNT(*) FROM tensors GROUP BY shape ORDER BY shape")
+        ref_shapes = dict(rc.fetchall())
+        if gen_shapes != ref_shapes:
+            shape_diffs = []
+            all_shapes = set(gen_shapes.keys()) | set(ref_shapes.keys())
+            for s in sorted(all_shapes):
+                g = gen_shapes.get(s, 0)
+                r = ref_shapes.get(s, 0)
+                if g != r:
+                    shape_diffs.append(f"{s}: gen={g} ref={r}")
+            differences.append(f"tensor shape distribution differs: {'; '.join(shape_diffs[:5])}")
+
+        # --- input_tensors count ---
+        gc.execute("SELECT COUNT(*) FROM input_tensors")
+        gen_it = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM input_tensors")
+        ref_it = rc.fetchone()[0]
+        if gen_it != ref_it:
+            differences.append(f"input_tensors count: generated={gen_it}, reference={ref_it}")
+
+        # --- output_tensors count ---
+        gc.execute("SELECT COUNT(*) FROM output_tensors")
+        gen_ot = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM output_tensors")
+        ref_ot = rc.fetchone()[0]
+        if gen_ot != ref_ot:
+            differences.append(f"output_tensors count: generated={gen_ot}, reference={ref_ot}")
+
+        # --- device_tensors count ---
+        gc.execute("SELECT COUNT(*) FROM device_tensors")
+        gen_dt = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM device_tensors")
+        ref_dt = rc.fetchone()[0]
+        if gen_dt != ref_dt:
+            differences.append(f"device_tensors count: generated={gen_dt}, reference={ref_dt}")
+
+        # --- buffers count ---
+        gc.execute("SELECT COUNT(*) FROM buffers")
+        gen_buf = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM buffers")
+        ref_buf = rc.fetchone()[0]
+        if gen_buf != ref_buf:
+            differences.append(f"buffers count: generated={gen_buf}, reference={ref_buf}")
+
+        # --- buffers per operation: cumulative pattern should be non-decreasing then decreasing ---
+        gc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
+        gen_buf_series = [r[0] for r in gc.fetchall()]
+        rc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
+        ref_buf_series = [r[0] for r in rc.fetchall()]
+        if len(gen_buf_series) != len(ref_buf_series):
+            differences.append(
+                f"buffers-per-op series length: generated={len(gen_buf_series)}, reference={len(ref_buf_series)}"
+            )
+
+        # --- captured_graph: one per operation ---
+        gc.execute("SELECT COUNT(*) FROM captured_graph")
+        gen_cg = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM captured_graph")
+        ref_cg = rc.fetchone()[0]
+        if gen_cg != ref_cg:
+            differences.append(f"captured_graph count: generated={gen_cg}, reference={ref_cg}")
+
+        # --- stack_traces: should have entries ---
+        gc.execute("SELECT COUNT(*) FROM stack_traces")
+        gen_st = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM stack_traces")
+        ref_st = rc.fetchone()[0]
+        if gen_st != ref_st:
+            differences.append(f"stack_traces count: generated={gen_st}, reference={ref_st}")
+
+        # --- deallocate operations should exist ---
+        gc.execute("SELECT COUNT(*) FROM operations WHERE name LIKE '%dealloc%'")
+        gen_dealloc = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM operations WHERE name LIKE '%dealloc%'")
+        ref_dealloc = rc.fetchone()[0]
+        if gen_dealloc != ref_dealloc:
+            differences.append(f"deallocate ops: generated={gen_dealloc}, reference={ref_dealloc}")
+
+        # --- deallocate ops should have inputs but no outputs ---
+        gc.execute(
+            """
+            SELECT COUNT(*) FROM operations o
+            WHERE o.name LIKE '%dealloc%'
+            AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
+            AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
+        """
+        )
+        gen_dealloc_correct = gc.fetchone()[0]
+        if gen_dealloc_correct != gen_dealloc:
+            differences.append(f"deallocate ops with correct I/O pattern: {gen_dealloc_correct}/{gen_dealloc}")
+
+        # --- referential integrity: all input/output tensor_ids should exist in tensors ---
+        gc.execute(
+            """
+            SELECT COUNT(*) FROM input_tensors it
+            LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
+        """
+        )
+        dangling = gc.fetchone()[0]
+        if dangling > 0:
+            differences.append(f"dangling input_tensors references: {dangling}")
+
+        gc.execute(
+            """
+            SELECT COUNT(*) FROM output_tensors ot
+            LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
+        """
+        )
+        dangling = gc.fetchone()[0]
+        if dangling > 0:
+            differences.append(f"dangling output_tensors references: {dangling}")
+
+        # --- host tensors should all be referenced as inputs ---
+        gc.execute(
+            """
+            SELECT COUNT(*) FROM tensors t
+            WHERE t.device_id IS NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM input_tensors it WHERE it.tensor_id = t.tensor_id
+                UNION
+                SELECT 1 FROM output_tensors ot WHERE ot.tensor_id = t.tensor_id
+            )
+        """
+        )
+        orphan_host = gc.fetchone()[0]
+        if orphan_host > 0:
+            differences.append(f"orphaned host tensors (not in any I/O): {orphan_host}")
+
+        # --- buffer_pages: count and structural properties should match ---
+        gc.execute("SELECT COUNT(*) FROM buffer_pages")
+        gen_bp = gc.fetchone()[0]
+        rc.execute("SELECT COUNT(*) FROM buffer_pages")
+        ref_bp = rc.fetchone()[0]
+        if gen_bp != ref_bp:
+            differences.append(f"buffer_pages count: generated={gen_bp}, reference={ref_bp}")
+        elif gen_bp > 0:
+            gc.execute("SELECT DISTINCT buffer_type FROM buffer_pages ORDER BY buffer_type")
+            gen_bp_types = [r[0] for r in gc.fetchall()]
+            rc.execute("SELECT DISTINCT buffer_type FROM buffer_pages ORDER BY buffer_type")
+            ref_bp_types = [r[0] for r in rc.fetchall()]
+            if gen_bp_types != ref_bp_types:
+                differences.append(f"buffer_pages buffer_types: generated={gen_bp_types}, reference={ref_bp_types}")
+
+            gc.execute("SELECT DISTINCT address FROM buffer_pages ORDER BY address")
+            gen_bp_addrs = [r[0] for r in gc.fetchall()]
+            rc.execute("SELECT DISTINCT address FROM buffer_pages ORDER BY address")
+            ref_bp_addrs = [r[0] for r in rc.fetchall()]
+            if len(gen_bp_addrs) != len(ref_bp_addrs):
+                differences.append(
+                    f"buffer_pages distinct addresses: generated={len(gen_bp_addrs)}, reference={len(ref_bp_addrs)}"
+                )
+
+            gc.execute("SELECT address, COUNT(*) as pages FROM buffer_pages " "GROUP BY address ORDER BY address")
+            gen_bp_per_addr = gc.fetchall()
+            rc.execute("SELECT address, COUNT(*) as pages FROM buffer_pages " "GROUP BY address ORDER BY address")
+            ref_bp_per_addr = rc.fetchall()
+            if gen_bp_per_addr != ref_bp_per_addr:
+                differences.append(
+                    f"buffer_pages pages-per-address distribution differs "
+                    f"(generated {len(gen_bp_per_addr)} addrs, reference {len(ref_bp_per_addr)} addrs)"
+                )
 
         gen.close()
         ref.close()

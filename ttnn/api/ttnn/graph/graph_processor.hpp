@@ -7,6 +7,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/reports.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -121,6 +122,10 @@ private:
     std::unordered_map<uint32_t, nlohmann::json> captured_device_info;
     // Device pointers for buffer pages (only valid during capture)
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
+    // Per-operation buffer snapshots (function_start counter -> buffers)
+    std::unordered_map<node_id, std::vector<ttnn::reports::BufferInfo>> per_op_buffers_;
+    // Per-operation buffer page snapshots (function_start counter -> pages)
+    std::unordered_map<node_id, std::vector<ttnn::reports::BufferPageInfo>> per_op_buffer_pages_;
 
     node_id add_tensor(const Tensor& t);
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);
