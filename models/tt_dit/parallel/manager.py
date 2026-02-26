@@ -126,6 +126,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -169,6 +170,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]

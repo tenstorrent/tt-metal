@@ -29,6 +29,8 @@ inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(uint dst_index, u
             calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate>,
         dst_index,
         idx_index,
+        0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
+        static_cast<int>(VectorMode::RC) /* vector_mode */,
         chunk);
 }
 

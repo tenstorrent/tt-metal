@@ -33,8 +33,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& input_tensor_start,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
+    const std::vector<CoreCoord>& cores_in_order,
     const CoreRangeSet& core_group_1,
     uint32_t num_w_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
@@ -51,12 +50,12 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> start_dim_offset(num_dims, 0);
 
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(cores_in_order.size());
 
     const auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
-    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < cores_in_order.size(); i++) {
+        CoreCoord core = cores_in_order[i];
 
         uint32_t num_sticks_per_core;
         if (core_group_1.contains(core)) {
@@ -143,10 +142,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     auto
         [num_cores,
@@ -155,7 +151,10 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
          core_group_2,
          num_sticks_padded_per_core_group_1,
          num_sticks_padded_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+            sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), NCH_padded)
+                                       : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+
+    auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
 
@@ -166,7 +165,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, stick_size_padded_DRAM_aligned);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
     if (stick_size_padded_front != 0 || unaligned) {
@@ -174,7 +173,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src2_cb_index, cb_data_format}})
                 .set_page_size(src2_cb_index, stick_size_padded_DRAM_aligned);
-        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
     Buffer* src0_buffer = a.buffer();
@@ -220,33 +219,28 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved_v2.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved_v2.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     auto all_runtime_args = get_runtime_args_rm(
         a,
         output,
         input_tensor_start,
-        num_cores_total,
-        num_cores_y,
+        cores_in_order,
         core_group_1,
         num_sticks_padded_per_core_group_1,
         core_group_2,
         num_sticks_padded_per_core_group_2);
 
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0; i < cores_in_order.size(); i++) {
+        CoreCoord core = cores_in_order[i];
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, all_runtime_args[i].second
-
-        );
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
     }
     uint32_t cb_npages = get_num_stick_per_barrier(a);
     const uint32_t buffer_reader_writer_async_factor = 16;
@@ -255,10 +249,16 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
             buffer_reader_writer_async_factor * cb_npages * stick_size_padded_aligned,
             {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size_padded_aligned);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     return cached_program_t{
-        std::move(program), {reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start}};
+        std::move(program),
+        {reader_kernel_id,
+         writer_kernel_id,
+         compute_with_storage_grid_size,
+         input_tensor_start,
+         sub_core_grids,
+         std::move(cores_in_order)}};
 }
 
 void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
@@ -270,10 +270,8 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
 
     auto dst_tensor = output;
 
-    uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = cached_program.shared_variables.compute_with_storage_grid_size.y;
-
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    const auto& sub_core_grids = cached_program.shared_variables.sub_core_grids;
+    const auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
 
     auto output_tensor_shape = dst_tensor.logical_shape();
     uint32_t H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
@@ -286,37 +284,27 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
          core_group_2,
          num_sticks_padded_per_core_group_1,
          num_sticks_padded_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(
-                cached_program.shared_variables.compute_with_storage_grid_size, NCH_padded);
+            sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), NCH_padded)
+                                       : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+
+    const auto& cores_in_order = cached_program.shared_variables.cores_with_rtargs;
+
     auto all_runtime_args = get_runtime_args_rm(
         src_tensor,
         dst_tensor,
         cached_program.shared_variables.input_tensor_start,
-        num_cores_total,
-        num_cores_y,
+        cores_in_order,
         core_group_1,
         num_sticks_padded_per_core_group_1,
         core_group_2,
         num_sticks_padded_per_core_group_2);
 
-    for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            SetRuntimeArgs(
-                cached_program.program,
-                cached_program.shared_variables.reader_kernel_id,
-                core,
-                all_runtime_args[i].first);
-        }
-
-        {
-            SetRuntimeArgs(
-                cached_program.program,
-                cached_program.shared_variables.writer_kernel_id,
-                core,
-                all_runtime_args[i].second);
-        }
+    for (uint32_t i = 0; i < cores_in_order.size(); i++) {
+        CoreCoord core = cores_in_order[i];
+        SetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.reader_kernel_id, core, all_runtime_args[i].first);
+        SetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.writer_kernel_id, core, all_runtime_args[i].second);
     }
 }
 

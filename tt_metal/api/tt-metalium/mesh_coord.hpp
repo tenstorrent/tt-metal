@@ -9,7 +9,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/maybe_remote.hpp>
@@ -573,23 +572,17 @@ struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinate> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept;
 };
 
 }  // namespace std

@@ -32,6 +32,29 @@ inline void zeroPad(uint32_t cb_write_addr) {
     }
 }
 
+template <bool is_sharded, typename Reader>
+FORCE_INLINE void compute_page_id_and_offset_for_c_in_block(
+    const Reader& reader,
+    uint32_t in_page_idx,
+    uint32_t c_in_offset_bytes,
+    uint32_t in_row_size_bytes,
+    uint32_t& in_page_id,
+    uint32_t& in_offset_bytes) {
+    if constexpr (is_sharded) {
+        // For width/block sharded RowMajor tensors, a "row" is split into multiple pages of size in_row_size_bytes.
+        // TensorAccessor expects page_id to be flattened over (row_idx, col_page_idx).
+        //
+        // For height sharded layouts, col_page_idx is always 0 and the channel selection is done via offset.
+        const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+        in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+        const uint32_t width_in_pages = reader.dspec().tensor_shape()[1];
+        in_page_id = in_page_idx * width_in_pages + col_page_idx;
+    } else {
+        in_page_id = in_page_idx;
+        in_offset_bytes = c_in_offset_bytes;
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
     constexpr uint32_t N = get_compile_time_arg_val(1);
@@ -61,6 +84,9 @@ void kernel_main() {
     constexpr uint32_t stride_t = get_compile_time_arg_val(25);
     constexpr uint32_t stride_h = get_compile_time_arg_val(26);
     constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
@@ -76,7 +102,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<28>();
+    constexpr auto in_args = TensorAccessorArgs<31>();
     const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
@@ -114,18 +140,19 @@ void kernel_main() {
                                         // For each output coordinate (t, h, w),
                                         // gather the kT*kH*kW patch around (t,h,w).
                                         for (uint32_t kt = 0; kt < kT; kt++) {
-                                            int32_t t_idx = static_cast<int32_t>(t + kt) - padding_t;
+                                            int32_t t_idx = static_cast<int32_t>(t + (kt * dilation_t)) - padding_t;
                                             const bool outside_t = (t_idx < 0 || t_idx >= static_cast<int32_t>(T_in));
                                             t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
 
                                             for (uint32_t kh = 0; kh < kH; kh++) {
-                                                int32_t h_idx = static_cast<int32_t>(h + kh) - padding_h;
+                                                int32_t h_idx = static_cast<int32_t>(h + (kh * dilation_h)) - padding_h;
                                                 const bool outside_h =
                                                     (h_idx < 0 || h_idx >= static_cast<int32_t>(H_in));
                                                 h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
 
                                                 for (uint32_t kw = 0; kw < kW; kw++) {
-                                                    int32_t w_idx = static_cast<int32_t>(w + kw) - padding_w;
+                                                    int32_t w_idx =
+                                                        static_cast<int32_t>(w + (kw * dilation_w)) - padding_w;
                                                     const bool outside_w =
                                                         (w_idx < 0 || w_idx >= static_cast<int32_t>(W_in));
                                                     const bool in_padding = (outside_t || outside_h || outside_w);
@@ -147,8 +174,16 @@ void kernel_main() {
                                                         static_cast<uint32_t>(t_idx) * H_in_W_in +
                                                         static_cast<uint32_t>(h_idx) * W_in +
                                                         static_cast<uint32_t>(w_idx);
-                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(
-                                                        in_page_idx, c_in_offset_bytes /*offset*/);
+                                                    uint32_t in_page_id = in_page_idx;
+                                                    uint32_t in_offset_bytes = c_in_offset_bytes;
+                                                    compute_page_id_and_offset_for_c_in_block<in_args.is_sharded>(
+                                                        in_reader,
+                                                        in_page_idx,
+                                                        c_in_offset_bytes,
+                                                        in_row_size_bytes,
+                                                        in_page_id,
+                                                        in_offset_bytes);
+                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(in_page_id, in_offset_bytes);
                                                     noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
 
                                                     cb_write_addr += C_in_block_bytes;

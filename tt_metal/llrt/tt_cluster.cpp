@@ -1468,6 +1468,16 @@ uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_by
     return 1;
 }
 
+umd::ClusterDescriptor* Cluster::get_cluster_desc() const {
+    TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
+    return this->cluster_desc_;
+}
+
+const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
+    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+    return driver_;
+}
+
 }  // namespace tt
 
 std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram) {

@@ -48,7 +48,7 @@ KernelHandle create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
     const std::vector<uint32_t>& runtime_args = {}) {
     auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
 

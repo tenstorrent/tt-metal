@@ -12,8 +12,6 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "reshard.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
-
 namespace ttnn::operations::data_movement {
 
 namespace detail {

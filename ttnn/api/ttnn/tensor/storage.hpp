@@ -50,9 +50,17 @@ struct DeviceStorage {
 
     Buffer* get_buffer() const;
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
+
+    // Begin internal functions:
+    //
+    // These functions allows the use of the get_mesh_buffer as a view.
+    // These are considered internal functions and are not part of the public API.
+    // They will be replaced with a new initiative as described in: #38093
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
     void deallocate_root_mesh_buffer();
     void reset_root_mesh_buffer();
+    // End internal functions.
+
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 

@@ -782,4 +782,6 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
 
+SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
+
 __all__ = []

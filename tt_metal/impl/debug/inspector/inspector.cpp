@@ -13,7 +13,6 @@
 #include "program.hpp"
 #include <memory>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {

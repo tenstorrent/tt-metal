@@ -21,7 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>

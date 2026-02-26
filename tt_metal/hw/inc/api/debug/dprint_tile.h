@@ -57,6 +57,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
     uint32_t bit_offset = 0;
     uint32_t mask = 0;
     switch (data_format) {
+#ifndef ARCH_QUASAR
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
             adjusted_idx = idx / 4;
@@ -71,6 +72,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
             break;
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b:
+#endif
         default:
             adjusted_idx = idx / 1;
             bit_offset = (idx % 1) * 8;

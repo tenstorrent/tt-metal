@@ -427,7 +427,34 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
             config);
     }
 
+    if (fabric_setup_yaml["enable_channel_trimming"]) {
+        fabric_setup.enable_channel_trimming = parse_scalar<bool>(fabric_setup_yaml["enable_channel_trimming"]);
+    }
+
     return fabric_setup;
+}
+
+std::vector<ParsedTestConfig> expand_channel_trimming(std::vector<ParsedTestConfig> configs) {
+    std::vector<ParsedTestConfig> expanded;
+    expanded.reserve(configs.size() * 2);
+
+    for (auto& config : configs) {
+        if (config.fabric_setup.enable_channel_trimming) {
+            auto capture_config = config;
+            capture_config.channel_trimming_mode = ChannelTrimmingMode::CAPTURE;
+            capture_config.parametrized_name = config.name + "_capture";
+
+            auto replay_config = config;
+            replay_config.channel_trimming_mode = ChannelTrimmingMode::REPLAY;
+            replay_config.parametrized_name = config.name + "_replay";
+
+            expanded.push_back(std::move(capture_config));
+            expanded.push_back(std::move(replay_config));
+        } else {
+            expanded.push_back(std::move(config));
+        }
+    }
+    return expanded;
 }
 
 PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {
@@ -993,6 +1020,7 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
     resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
+    resolved_test.channel_trimming_mode = parsed_test.channel_trimming_mode;
 
     if (parsed_test.defaults.has_value()) {
         resolved_test.defaults = resolve_traffic_pattern(parsed_test.defaults.value());
@@ -2455,6 +2483,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     }
     out << YAML::Key << "num_links";
     out << YAML::Value << config.num_links;
+    if (config.enable_channel_trimming) {
+        out << YAML::Key << "enable_channel_trimming" << YAML::Value << true;
+    }
     out << YAML::EndMap;
 }
 

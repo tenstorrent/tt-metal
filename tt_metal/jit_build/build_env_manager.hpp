@@ -26,6 +26,7 @@ struct DeviceBuildEnv {
     JitBuildEnv build_env;
     std::vector<JitBuildState> firmware_build_states;
     std::vector<JitBuildState> kernel_build_states;
+    bool firmware_precompiled = false;
 };
 
 // A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
@@ -57,6 +58,10 @@ public:
     JitBuildStateSubset get_kernel_build_states(ChipId device_id, uint32_t programmable_core, uint32_t processor_class);
 
     void build_firmware(ChipId device_id);
+
+    // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
+    std::string get_firmware_binary_path(
+        ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.

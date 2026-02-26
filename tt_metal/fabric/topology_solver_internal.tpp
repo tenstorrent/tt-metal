@@ -190,7 +190,14 @@ void GraphIndexData<TargetNode, GlobalNode>::print_adjacency_maps() const {
 
 template <typename TargetNode, typename GlobalNode>
 bool ConstraintIndexData<TargetNode, GlobalNode>::is_valid_mapping(size_t target_idx, size_t global_idx) const {
-    // If no restrictions for this target, all mappings are valid
+    // Check forbidden pairs first - these apply even when target has no restricted mappings
+    if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
+        const auto& forbidden = forbidden_global_indices[target_idx];
+        if (std::binary_search(forbidden.begin(), forbidden.end(), global_idx)) {
+            return false;
+        }
+    }
+    // If no restrictions for this target, all mappings are valid (except forbidden above)
     if (target_idx >= restricted_global_indices.size() || restricted_global_indices[target_idx].empty()) {
         return true;
     }
@@ -314,8 +321,9 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
     // Initialize vectors for all target nodes
     restricted_global_indices.resize(graph_data.n_target);
     preferred_global_indices.resize(graph_data.n_target);
+    forbidden_global_indices.resize(graph_data.n_target);
 
-    // Get valid and preferred mappings from constraints
+    // Get valid, preferred, and forbidden mappings from constraints
     const auto& valid_mappings = constraints.get_valid_mappings();
     const auto& preferred_mappings = constraints.get_preferred_mappings();
 
@@ -413,6 +421,20 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
             preferred_global_indices[i] = std::move(preferred_indices);
         }
+    }
+
+    // Convert forbidden pairs from node-based to index-based
+    const auto& forbidden_pairs = constraints.get_forbidden_pairs();
+    for (const auto& [target_node, global_node] : forbidden_pairs) {
+        auto target_it = graph_data.target_to_idx.find(target_node);
+        auto global_it = graph_data.global_to_idx.find(global_node);
+        if (target_it != graph_data.target_to_idx.end() && global_it != graph_data.global_to_idx.end()) {
+            forbidden_global_indices[target_it->second].push_back(global_it->second);
+        }
+    }
+    for (auto& vec : forbidden_global_indices) {
+        std::sort(vec.begin(), vec.end());
+        vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
     }
 
     // Convert cardinality constraints from node-based to index-based

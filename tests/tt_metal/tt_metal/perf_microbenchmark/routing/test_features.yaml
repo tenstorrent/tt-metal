@@ -417,3 +417,28 @@ Tests:
           - destination:
               device: [0, [1, 0]]
               core: all
+
+  # ======================================================================================
+  # Test 16: Channel Trimming
+  # This demonstrates the channel trimming feature. When enabled, the test runs twice:
+  # first with fabric channel trimming capture enabled (recording which router channels
+  # are actually used), then with the fabric relaunched consuming the captured profile
+  # (optimizing router construction by disabling unused channels).
+  # For parameterized tests, all parametrizations share the same capture.
+  # ======================================================================================
+  - name: "ChannelTrimming"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    senders:
+      - device: 0
+        patterns:
+          - destination:
+              device: 1

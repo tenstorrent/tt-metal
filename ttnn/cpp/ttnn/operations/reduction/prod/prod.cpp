@@ -76,11 +76,22 @@ Tensor prod_impl(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     const int size = static_cast<int>(input_a.logical_shape().rank());
 
+    TT_FATAL(size > 0, "Tensor has no dimensions");
+    TT_FATAL(
+        !dim.has_value() || (*dim >= -size && *dim <= size - 1),
+        "Dimension for prod is out of range (expected to be in range of [{}, {}])",
+        -size,
+        size - 1);
+
     const auto old_rank = input_a.logical_shape().rank();
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
-    // If no dim is provided, compute the prod across all dimensions
-    if (!dim.has_value()) {
+    // If no dim is provided, compute the prod across all dimensions.
+    // Similarly, if the tensor has only one dimension, compute the prod across all dimensions
+    // (which is just the one dimension).
+    // Note that validation of the dim parameter above guarantees that, when dim is provided,
+    // it is the single valid dimension (0 or -1 for rank 1).
+    if (!dim.has_value() || old_rank == 1) {
         Tensor result = compute_prod_all(input_a, output_mem_config);
         if (keepdim) {
             // Reshape to have all dimensions (as many as the input rank) set to 1.
@@ -89,13 +100,6 @@ Tensor prod_impl(
         }
         return result;
     }
-
-    TT_FATAL(size > 0, "Tensor has no dimensions");
-    TT_FATAL(
-        *dim >= -size && *dim <= size - 1,
-        "Dimension for prod is out of range (expected to be in range of [{}, {}]",
-        -size,
-        size - 1);
 
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {

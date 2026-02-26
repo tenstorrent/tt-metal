@@ -230,6 +230,9 @@ struct ParsedYamlConfig {
     std::optional<PhysicalMeshConfig> physical_mesh_config;
 };
 
+// Expands configs with enable_channel_trimming into consecutive CAPTURE + REPLAY pairs.
+std::vector<ParsedTestConfig> expand_channel_trimming(std::vector<ParsedTestConfig> configs);
+
 template <typename TrafficPatternType>
 inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const TrafficPatternType& specific) {
     TrafficPatternType merged;

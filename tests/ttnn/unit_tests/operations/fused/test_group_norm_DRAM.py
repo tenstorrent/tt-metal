@@ -134,7 +134,9 @@ def run_group_norm_DRAM(
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
-        #  SDXL VAE
+        # SDXL Base
+        (1, 1920, 16, 16, 32, 1, 4, 4),
+        # SDXL VAE
         (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
         # SDXL Refiner

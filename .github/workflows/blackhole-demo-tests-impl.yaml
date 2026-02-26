@@ -218,11 +218,11 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
+            cmd: TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+            cmd: TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -342,7 +342,7 @@ jobs:
               "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)",
               "model": "llama3.3-70b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"prefill-llama3_70b-2-131072-2-2-1-1-False\"",
+              "cmd": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"prefill-llama3_70b-2-131072-2-2-1-1-False\"",
               "owner_id": "U08GELBB1AP",
               "owner_name": "Ambrose Ling"
             },
@@ -350,7 +350,7 @@ jobs:
               "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)",
               "model": "llama3.3-70b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"decode-llama3_70b-2-131072-2-10-1-1-False\"",
+              "cmd": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"decode-llama3_70b-2-131072-2-10-1-1-False\"",
               "owner_id": "U08GELBB1AP",
               "owner_name": "Ambrose Ling"
             },
@@ -366,7 +366,7 @@ jobs:
               "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill",
               "model": "qwen3-32b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"prefill-qwen3_32b-2-32768-2-2-1-1-False\"",
+              "cmd": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"prefill-qwen3_32b-2-32768-2-2-1-1-False\"",
               "owner_id": "U08GELBB1AP",
               "owner_name": "Ambrose Ling"
             },
@@ -374,7 +374,7 @@ jobs:
               "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode",
               "model": "qwen3-32b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"decode-qwen3_32b-2-32768-2-10-1-1-False\"",
+              "cmd": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k \"decode-qwen3_32b-2-32768-2-10-1-1-False\"",
               "owner_id": "U08GELBB1AP",
               "owner_name": "Ambrose Ling"
             }

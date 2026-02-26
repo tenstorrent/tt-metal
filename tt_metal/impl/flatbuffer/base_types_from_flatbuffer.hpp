@@ -11,6 +11,7 @@
 #include <tt_backend_api_types.hpp>
 #include <tile.hpp>
 #include <circular_buffer_constants.h>
+#include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

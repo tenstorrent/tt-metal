@@ -8,8 +8,6 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt_stl/reflection.hpp>
-
 namespace ttnn::prim {
 
 struct BroadcastParams {

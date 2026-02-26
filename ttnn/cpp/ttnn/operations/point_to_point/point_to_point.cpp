@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include "ttnn/decorators.hpp"
-
 #include "device/host/point_to_point_device_op.hpp"
 #include "point_to_point.hpp"
 

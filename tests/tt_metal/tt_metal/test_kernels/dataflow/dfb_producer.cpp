@@ -18,7 +18,7 @@ void kernel_main() {
     experimental::DataflowBuffer dfb(0);
     experimental::Noc noc;
 
-    // kinda weird to do this to get the producer idx
+    // TODO: Replace with get_thread_idx() kernel API when available
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));

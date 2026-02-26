@@ -15,7 +15,7 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-template <bool blocking = false, class SenderType = tt::tt_fabric::WorkerToFabricEdmSender>
+template <bool blocking = false, bool flush = true, class SenderType = tt::tt_fabric::WorkerToFabricEdmSender>
 FORCE_INLINE void perform_payload_send(
     SenderType& fabric_connection,
     size_t l1_read_addr,
@@ -24,9 +24,18 @@ FORCE_INLINE void perform_payload_send(
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
     if constexpr (blocking) {
-        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        if constexpr (flush) {
+            fabric_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            fabric_connection.send_payload_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        }
     } else {
-        fabric_connection.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        if constexpr (flush) {
+            fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            fabric_connection.send_payload_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        }
     }
 }
 

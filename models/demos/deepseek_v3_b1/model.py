@@ -155,7 +155,7 @@ class DeepSeekV3:
             return
         if self._prefill_active:
             logger.debug(f"Terminating prefill host I/O")
-            self._host_io_prefill.terminate()
+            self._host_io_prefill.terminate(sync_devices=True)
             self._prefill_active = False
         logger.debug(f"Switching to decode host I/O")
         self._host_io_decode.run()
@@ -222,8 +222,8 @@ class DeepSeekV3:
     def stop(self) -> None:
         """Clean shutdown of whichever mock decoder (prefill or decode) is active."""
         if self._prefill_active:
-            self._host_io_prefill.terminate()
+            self._host_io_prefill.terminate(sync_devices=True)
             self._prefill_active = False
         if self._decode_active:
-            self._host_io_decode.terminate()
+            self._host_io_decode.terminate(sync_devices=True)
             self._decode_active = False

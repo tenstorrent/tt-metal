@@ -39,6 +39,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/kernels/kernel.hpp"
 
 #include <array>
 #include <bit>

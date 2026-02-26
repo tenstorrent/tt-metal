@@ -63,6 +63,8 @@ void kernel_main() {
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
+    constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -75,6 +77,7 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
+    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
@@ -154,6 +157,12 @@ void kernel_main() {
         }
     }
 
+    // When block_size < TILE_HEIGHT, convert cur_pos to padded tile space.
+    // Only for causal mode; non-causal cur_pos is already in padded space.
+    if constexpr (has_block_padding && is_causal) {
+        cur_pos = (cur_pos / original_block_size) * 32 + (cur_pos % original_block_size);
+    }
+
     // Get dynamic chunk size for K in tiles
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
@@ -214,6 +223,12 @@ void kernel_main() {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
     }
     cb_wait_front(cb_q_in, q_chunk_tiles);
+
+    // Wait for block padding mask (generated once by writer, reused every chunk without popping)
+    if constexpr (has_block_padding) {
+        uint32_t block_pad_mask_tiles = Sq_chunk_t * Sk_chunk_t_dynamic;
+        cb_wait_front(cb_block_pad_mask, block_pad_mask_tiles);
+    }
 
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -348,6 +363,14 @@ void kernel_main() {
                     cb_zero_in);
 
                 /* QK += MASK */
+                // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
+                // Uses <false> to NOT pop the mask CB so it can be reused for subsequent chunks.
+                // Applied outside mask_fusion conditional since it's always needed independently.
+                if constexpr (has_block_padding) {
+                    reconfig_data_format(cb_qk_im, cb_block_pad_mask);
+                    add_block_inplace<false>(cb_qk_im, cb_block_pad_mask, qk_chunk_tiles_dynamic);
+                }
+
                 if (!add_mask_fusion) {
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode

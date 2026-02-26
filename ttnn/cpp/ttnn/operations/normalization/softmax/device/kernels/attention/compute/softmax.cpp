@@ -27,13 +27,14 @@ void calc_numeric_stable(
     reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_reserve_back(cb_max, 1);
     cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(cb_in, cb_bcast_scaler, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt++) {
         cb_wait_front(cb_in, wt + 1);
         constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(
+            cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
     }
-    reduce_uninit();
+    reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_in);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_max);
@@ -283,7 +284,7 @@ void kernel_main() {
                 /*itile_scaler=*/bcast_scaler0,
                 /*idst0=*/dst0);
         }
-        reduce_uninit();
+        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
         tile_regs_commit();

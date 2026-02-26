@@ -64,7 +64,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
-    if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
+    if (is_cpu_tensor(tensor)) {
         std::vector<ttnn::Tensor> tensors;
         auto gathered_tensor = host_ccl::all_gather(tensor);
         const auto& distributed_buffer = gathered_tensor.host_storage().buffer();
@@ -72,8 +72,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     }
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    if (is_device_tensor(tensor)) {
+        const auto& device_storage = tensor.device_storage();
         if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
             tensors.reserve(device_storage.coords.size());

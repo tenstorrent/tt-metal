@@ -14,23 +14,21 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
     Create a benchmark data object and populate the object with the given measurements.
 
     Pre-requisites:
-    - The measurements dictionary should contain the following keys: "compile_prefill", "compile_decode", "prefill_t/s", "prefill_time_to_token", "decode_t/s", "decode_t/s/u"
-    - The profiler object should contain the start and end times for the steps "compile_prefill", "compile_decode", "inference_prefill", "inference_decode"
+    - The measurements dictionary should contain the following keys: "prefill_t/s", "prefill_time_to_token", "decode_t/s", "decode_t/s/u"
+    - The profiler object should contain the start and end times for the steps "inference_prefill", "inference_decode"
 
-    Optional (should be provided if measuring perf, not required for token generation):
-    - The measurements dictionary should contain the following keys: "prefill_decode_t/s/u"
+    Optional:
+    - "compile_prefill", "compile_decode" - only needed if compilation is tracked separately from warmup
+    - "prefill_decode_t/s/u" - if measuring combined prefill+decode perf
+    - "token_verification" - if doing token verification
+
     - The targets dictionary should contain the following keys: "prefill_t/s", "decode_t/s", "decode_t/s/u"
     - The N_warmup_iter dictionary should contain the following keys: "inference_prefill", "inference_decode"
-
-    Optional (should be provided if doing token verification, not required for perf):
-    - The measurements dictionary should contain the key "token_verification"
     """
 
     assert all(
         key in measurements
         for key in [
-            "compile_prefill",
-            "compile_decode",
             "prefill_t/s",
             "prefill_time_to_token",
             "decode_t/s",
@@ -40,9 +38,11 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
 
     benchmark_data = BenchmarkData()
 
-    # Add required measurement data
-    benchmark_data.add_measurement(profiler, 0, "compile_prefill", "time(s)", measurements["compile_prefill"])
-    benchmark_data.add_measurement(profiler, 0, "compile_decode", "time(s)", measurements["compile_decode"])
+    # Add optional compile time measurements (only if compilation is tracked separately from warmup)
+    if "compile_prefill" in measurements:
+        benchmark_data.add_measurement(profiler, 0, "compile_prefill", "time(s)", measurements["compile_prefill"])
+    if "compile_decode" in measurements:
+        benchmark_data.add_measurement(profiler, 0, "compile_decode", "time(s)", measurements["compile_decode"])
     benchmark_data.add_measurement(
         profiler,
         0,

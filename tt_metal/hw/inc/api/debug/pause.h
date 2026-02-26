@@ -5,6 +5,7 @@
 #pragma once
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/pause.h"
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE) && !defined(FORCE_WATCHER_OFF)
@@ -12,7 +13,7 @@
 void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.
     debug_pause_msg_t tt_l1_ptr* pause_msg = GET_MAILBOX_ADDRESS_DEV(watcher.pause_status);
-    pause_msg->flags[PROCESSOR_INDEX] = 1;
+    pause_msg->flags[internal_::get_hw_thread_idx()] = 1;
 
     // Wait for the pause flag to be cleared.
     WAYPOINT("PASW");
@@ -21,7 +22,7 @@ void watcher_pause() {
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
 #endif
-    } while (pause_msg->flags[PROCESSOR_INDEX]);
+    } while (pause_msg->flags[internal_::get_hw_thread_idx()]);
     WAYPOINT("PASD");
 }
 

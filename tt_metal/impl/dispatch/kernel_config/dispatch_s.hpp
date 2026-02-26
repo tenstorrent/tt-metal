@@ -6,7 +6,7 @@
 #include <optional>
 
 #include "fd_kernel.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
@@ -35,7 +35,17 @@ struct dispatch_s_dependent_config_t {
 class DispatchSKernel : public FDKernel {
 public:
     DispatchSKernel(
-        int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection);
+        int node_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

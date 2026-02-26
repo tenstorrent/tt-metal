@@ -5,6 +5,7 @@
 #include "ttnn/distributed/mpi_socket.hpp"
 
 #include <ttnn/operations/data_movement/copy/copy.hpp>
+#include <ttnn/tensor/tensor_utils.hpp>
 
 #include <stdexcept>
 
@@ -13,19 +14,12 @@ namespace ttnn::distributed {
 namespace {
 
 std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
-    return std::visit(
-        [](auto&& storage) -> std::vector<tt::tt_metal::HostBuffer> {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                std::vector<tt::tt_metal::HostBuffer> buffers;
-                buffers.reserve(storage.buffer().shard_coords().size());
-                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
-                return buffers;
-            } else {
-                TT_THROW("Tensor must be on host");
-            }
-        },
-        tensor.storage());
+    TT_FATAL(tt::tt_metal::is_cpu_tensor(tensor), "Tensor must be on host");
+    const auto& storage = tensor.host_storage();
+    std::vector<tt::tt_metal::HostBuffer> buffers;
+    buffers.reserve(storage.buffer().shard_coords().size());
+    storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+    return buffers;
 }
 
 std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& cpu_tensor) {

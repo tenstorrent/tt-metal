@@ -262,7 +262,7 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 }
 
 template <typename ternary_operation_t>
-void bind_ternary_addc_operation(
+void bind_ternary_addcmul(
     nb::module_& mod,
     const ternary_operation_t& operation,
     const std::string& description,
@@ -297,6 +297,75 @@ void bind_ternary_addc_operation(
                * - Dtypes
                  - Layouts
                * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
+                 - TILE
+
+            Only TTT (tensor-tensor-tensor) variant is supported.
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        math,
+        supported_dtype);
+
+    bind_registered_operation(
+        mod,
+        operation,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& input_a,
+               const Tensor& input_b,
+               const Tensor& input_c,
+               ScalarVariant value,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_a, input_b, input_c, value, memory_config, output_tensor);
+            },
+            nb::arg("input_a"),
+            nb::arg("input_b"),
+            nb::arg("input_c"),
+            nb::kw_only(),
+            nb::arg("value") = 1.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
+}
+
+template <typename ternary_operation_t>
+void bind_ternary_addcdiv(
+    nb::module_& mod,
+    const ternary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16") {
+    auto doc = fmt::format(
+        R"doc(
+            {2}
+
+        .. math::
+            {3}
+
+        Args:
+            input_a (ttnn.Tensor): the first input tensor.
+            input_b (ttnn.Tensor): the second input tensor.
+            input_c (ttnn.Tensor): the third input tensor.
+
+        Keyword Args:
+            value (float, optional): scalar value used in the operation. Defaults to 1.0.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - FLOAT32, BFLOAT16, BFLOAT8_B
                  - TILE
 
             Only TTT (tensor-tensor-tensor) variant is supported.
@@ -401,7 +470,7 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
 
 void py_module(nb::module_& mod) {
     // new imported
-    bind_ternary_addc_operation(
+    bind_ternary_addcmul(
         mod,
         ttnn::addcmul,
         R"doc(Multiplies :attr:`input_tensor_b` by a scalar, multiplies the result
@@ -411,7 +480,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i))doc",
         "FLOAT32, BFLOAT16, BFLOAT8_B, INT32");
 
-    bind_ternary_addc_operation(
+    bind_ternary_addcdiv(
         mod,
         ttnn::addcdiv,
         R"doc(Multiplies :attr:`input_tensor_b` by a scalar, divides the result

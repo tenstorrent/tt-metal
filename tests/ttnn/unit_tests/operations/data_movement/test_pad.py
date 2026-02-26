@@ -67,7 +67,10 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert torch.equal(torch_output_tensor, output_tensor)
+    if dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    else:
+        assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -76,11 +79,13 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
 @pytest.mark.parametrize("w", [224])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
 @pytest.mark.parametrize("value", [0, 1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
-    if layout == ttnn.TILE_LAYOUT and dtype != ttnn.bfloat16:
-        pytest.skip("tiled multicore pad only supported for bf16")
+    if layout == ttnn.TILE_LAYOUT and dtype != ttnn.bfloat16 and dtype != ttnn.bfloat8_b:
+        pytest.skip("tiled multicore pad only supported for bf16 and bfp8")
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat8_b:
+        pytest.skip("row major bfloat8 is not supported")
     for _ in range(2):
         run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout)
         # dummy tensor to change tensor alloc
@@ -93,7 +98,8 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    expected_cache_entries = 3 if dtype == ttnn.bfloat8_b else 1  # due to composite logic
+    assert device.num_program_cache_entries() == expected_cache_entries
 
 
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
@@ -458,13 +464,17 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape, mem
     assert torch.equal(in_torch, out_torch)
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16])
+@pytest.mark.parametrize(
+    "in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.bfloat8_b]
+)
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_config):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and in_dtype == ttnn.bfloat8_b:
+        pytest.skip("row major bfloat8 is not supported")
     torch_input = random_torch_tensor(in_dtype, shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=layout)
@@ -474,7 +484,10 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
-    assert torch.equal(output_tt, output_torch)
+    if in_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(output_torch, output_tt, 0.99)
+    else:
+        assert torch.equal(output_tt, output_torch)
 
 
 def _unsqueeze(smaller, larger, fill):
@@ -489,7 +502,7 @@ def _unsqueeze(smaller, larger, fill):
 @pytest.mark.parametrize(
     "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.bfloat8_b])
 def test_pad_tile(shape, padding, dtype, device):
     if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
         pytest.xfail("Can't pad upper dims with rank>4")

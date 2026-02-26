@@ -113,9 +113,6 @@ create_program_dram_sharded(
         log_debug(tt::LogOp, "all_worker_cores_ordered: {}", core);
     }
 
-    uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
-    uint32_t per_core_N_in1_sender = per_core_N_compute;
-
     // Remove cores assigned to padding-only DRAM banks from the workers category
     uint32_t in1_shard_width_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
     uint32_t in1_tensor_padded_width_tiles = in1_shard_width_tiles * num_dram_banks;
@@ -143,8 +140,8 @@ create_program_dram_sharded(
         num_dram_banks = all_worker_cores_ordered.size();
     }
 
-    per_core_N_compute = div_up(N, num_dram_banks);
-    per_core_N_in1_sender = per_core_N_compute;
+    uint32_t per_core_N_compute = div_up(N, num_dram_banks);
+    uint32_t per_core_N_in1_sender = per_core_N_compute;
 
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);

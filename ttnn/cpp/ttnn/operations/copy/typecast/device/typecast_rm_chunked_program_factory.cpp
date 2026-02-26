@@ -4,7 +4,6 @@
 
 #include "typecast_rm_chunked_program_factory.hpp"
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>

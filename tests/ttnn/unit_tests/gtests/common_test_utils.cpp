@@ -12,8 +12,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
-
 namespace ttnn::test_utils {
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {

@@ -33,6 +33,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
 
@@ -361,21 +362,31 @@ std::string ComputeKernel::config_hash() const {
         unpack_mode_descriptor);
 }
 
-std::string Kernel::compute_hash() const {
-    size_t define_hash_value = 0;
+uint64_t Kernel::compute_hash() const {
+    tt::FNV1a hasher;
     for (const auto& [define, value] : this->defines_) {
-        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        hasher.update(define);
+        hasher.update(value);
     }
 
-    size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
-
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
-        fmt::join(this->compile_time_args_, "_"),
-        define_hash_value,
-        named_args_hash_value,
-        this->config_hash());
+    // named_compile_time_args_ is unordered_map; sort by key for consistent hash.
+    auto sorted_iters = []<typename T>(const T& umap) {
+        std::vector<typename T::const_iterator> iters;
+        iters.reserve(umap.size());
+        for (auto it = umap.begin(); it != umap.end(); ++it) {
+            iters.push_back(it);
+        }
+        std::ranges::sort(iters, [](const auto& a, const auto& b) { return a->first < b->first; });
+        return iters;
+    };
+    for (const auto& it : sorted_iters(this->named_compile_time_args_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second));
+    }
+    hasher.update(this->kernel_src_.source_);
+    hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
+    hasher.update(this->config_hash());
+    return hasher.digest();
 }
 
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
@@ -804,16 +815,16 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
-    const JitBuildState& orig_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    jit_build(orig_processor_build_state, this);
-    for (uint32_t i = 1; i < this->dm_cores_.size(); i++) {
-        riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i]);
-        const JitBuildState& additional_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-        jit_link_additional_processor(orig_processor_build_state, additional_processor_build_state, this);
+
+    std::vector<const JitBuildState*> targets;
+    targets.reserve(this->dm_cores_.size());
+    for (const auto& proc : this->dm_cores_) {
+        int id = static_cast<std::underlying_type_t<DataMovementProcessor>>(proc);
+        targets.push_back(&BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, id));
     }
+
+    jit_build_for_processors(targets, this);
 }
 
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {

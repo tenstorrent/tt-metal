@@ -376,8 +376,19 @@ def test_sinh(device, h, w, layout):
 @pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("vector_mode", [4])
 def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
+    class sigmoid_wrap:
+        def __init__(self):
+            self.golden_function = ttnn.sigmoid.golden_function
+
+        def __call__(self, input_tensor, vector_mode, fast_and_approximate_mode):
+            return ttnn.sigmoid(
+                input_tensor,
+                vector_mode=vector_mode,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+            )
+
     run_unary_with_approx_mode_test(
-        device, h, w, ttnn.sigmoid, vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
+        device, h, w, sigmoid_wrap(), vector_mode=vector_mode, approx_mode=approx_mode, layout=layout, pcc=0.999
     )
 
 
@@ -674,7 +685,7 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(golden_tensor, output_tensor)
 
 
@@ -1676,20 +1687,22 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     golden_tensor = golden_function(in_data)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2.0)
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1.0)
+    elif ttnn_dtype == ttnn.float32:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3.0)
     else:
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
 
 
 def test_cbrt_arange(device):
     # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
+
+    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
-    # Mask NaN, special values where cbrt has ULP>1 (Covered in atol test below).
-    # Also mask values in range -1 to 1.
-    mask = torch.isnan(input_tensor) | torch.isinf(input_tensor) | ((input_tensor > -1.0) & (input_tensor < 1.0))
+    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
+    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
     input_tensor[mask] = 1.0
 
     tt_in = ttnn.from_torch(
@@ -1705,7 +1718,7 @@ def test_cbrt_arange(device):
 
     tt_result = ttnn.cbrt(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])

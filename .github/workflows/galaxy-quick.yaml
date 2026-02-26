@@ -34,6 +34,10 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
   schedule:
     - cron: "0 */4 * * *" # Runs BH every 4 hours
   push:
@@ -72,3 +76,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
+      extra-tag: ${{ inputs.extra-tag || 'in-service' }}

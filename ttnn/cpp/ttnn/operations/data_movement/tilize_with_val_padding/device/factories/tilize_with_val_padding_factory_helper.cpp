@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

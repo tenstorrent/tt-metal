@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -17,43 +17,8 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class FF1Test(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
@@ -82,16 +47,12 @@ def test_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    grid_size=(8, 8),
 ):
     per_core_M = 4
     per_core_N = 72
 
     # Initialize input configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     start_core = ttnn.CoreCoord(0, 0)
@@ -142,20 +103,16 @@ def test_ff1_matmul(
 
     ff1_test = FF1Test(
         mesh_device,
-        in0_shape=in0_shape,
-        in1_shape=in1_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        [
+            OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT16,
-        in1_dtype=ttnn.DataType.BFLOAT8_B,
         out_dtype=ttnn.DataType.BFLOAT16,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 
@@ -241,11 +198,6 @@ def test_specific_board_ff1_matmul(
 
 @skip_for_blackhole("Use test_blackhole_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize(
-    "grid_size",
-    [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
-    ids=[f"{i}x8" for i in range(1, 9)] + [f"8x{i}" for i in range(1, 8)],  # 1x8, 2x8 ... 8x1, 8x2...
-)
-@pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
     ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
@@ -260,26 +212,17 @@ def test_specific_board_ff1_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
-):
+def test_grid_size_ff1_matmul(mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval):
     test_ff1_matmul(
         mesh_device,
         gelu,
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        grid_size=grid_size,
     )
 
 
 @skip_for_wormhole_b0("Use test_grid_size_ff1_matmul for blackhole!")
-@pytest.mark.parametrize(
-    "grid_size",
-    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
-    ids=[f"{i}x10" for i in range(1, 14)]
-    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
-)
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
@@ -296,7 +239,7 @@ def test_grid_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
 ):
     test_ff1_matmul(
         mesh_device,
@@ -304,7 +247,6 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        grid_size=grid_size,
     )
 
 

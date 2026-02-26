@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <tuple>
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
 namespace tt::tt_metal::distributed {
 template <typename T>
 class MeshContainer;
@@ -37,6 +41,7 @@ private:
 };
 
 // Returns a map of all physical mesh coordinates in the system.
-const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map();
+MeshContainer<PhysicalMeshCoordinate> get_system_mesh_coordinate_translation_map(
+    const tt::tt_fabric::ControlPlane& control_plane);
 
 }  // namespace tt::tt_metal::distributed

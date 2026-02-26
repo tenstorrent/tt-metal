@@ -459,35 +459,39 @@ void MeshGraph::initialize_from_mgd(
             mesh_instance.local_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
 
         // Get the edge ports of each mesh
-        // North, start from NW corner
         std::uint32_t chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_Y)) {
+            // North, start from NW corner
+            for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                }
+            }
+            // South, start from SW corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
+                 chip_id < (mesh_shape[0] * mesh_shape[1]);
+                 chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                }
             }
         }
-        // South, start from SW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
-             chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_X)) {
+            // East, start from NE corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
+                 chip_id += mesh_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                }
             }
-        }
-        // East, start from NE corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // West, start from NW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            // West, start from NW corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                }
             }
         }
         // Z, for all chips (only if using blackhole)
@@ -593,34 +597,39 @@ void MeshGraph::initialize_from_mgd(
         mesh_edge_ports_to_chip_id_.resize(
             std::max(mesh_edge_ports_to_chip_id_.size(), static_cast<size_t>(*switch_mesh_id + 1)));
         std::uint32_t chan_id = 0;
-        // North
-        for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_Y)) {
+            // North
+            for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                }
+            }
+            // South
+            chan_id = 0;
+            for (std::uint32_t chip_id = ((switch_shape[0] * switch_shape[1]) - switch_shape[1]);
+                 chip_id < (switch_shape[0] * switch_shape[1]);
+                 chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                }
             }
         }
-        // South
-        chan_id = 0;
-        for (std::uint32_t chip_id = ((switch_shape[0] * switch_shape[1]) - switch_shape[1]);
-             chip_id < (switch_shape[0] * switch_shape[1]);
-             chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_X)) {
+            // East
+            chan_id = 0;
+            for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
+                 chip_id += switch_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                }
             }
-        }
-        // East
-        chan_id = 0;
-        for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
-             chip_id += switch_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // West
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            // West
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                }
             }
         }
         // Z, for all chips (only if using blackhole)

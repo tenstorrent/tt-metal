@@ -136,6 +136,17 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const uint32_t num_cb_unit = 2;                // Base buffering unit
     const uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
 
+    // ==================================================================================
+    // CIRCULAR BUFFER ALLOCATION
+    //
+    // Allocation order matters: allocate_circular_buffers() processes CBs sequentially
+    // and assigns each CB the MAX address across its core ranges. To avoid L1 gaps,
+    // shared CBs (all_cores) must be allocated BEFORE core-specific CBs.
+    //
+    // Layout after allocation:
+    //   Local cores:  CB0 → CB1 → CB4 → CB5 → CB8 → CB9 → CB2 → CB3
+    //   Final core:   CB0 → CB1 → CB4 → CB5 → CB8 → CB9 → CB6 → CB7
+    // ==================================================================================
     // Input values (double-buffered for continuous DRAM streaming)
     constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
     const tt::tt_metal::CircularBufferConfig input_cb_config =
@@ -149,23 +160,6 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_input_intermed0_config);
-
-    // Transposed values (single-buffered for in-place bitonic operations)
-    // Holds all Wt_local tiles for complete width chunk processing
-    constexpr uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
-    const tt::tt_metal::CircularBufferConfig input_transposed_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
-            .set_page_size(input_transposed_cb_index, input_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, input_transposed_cb_config);
-
-    // Transposed indices (single-buffered for in-place bitonic operations)
-    constexpr uint32_t index_transposed_cb_index = tt::CBIndex::c_3;
-    const tt::tt_metal::CircularBufferConfig index_transposed_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Wt_local * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
-            .set_page_size(index_transposed_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_transposed_cb_config);
 
     // Gathered values (aggregation buffer for final core)
     // Receives local TopK results from all worker cores (Wt_final = num_cores * Kt)
@@ -184,20 +178,6 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(gathered_indices_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_indices_cb_config);
 
-    // Final values (staging buffer for final compute output)
-    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
-    const tt::tt_metal::CircularBufferConfig final_values_cb_config =
-        tt::tt_metal::CircularBufferConfig(Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
-            .set_page_size(final_values_cb_index, value_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_values_cb_config);
-
-    // Final indices (staging buffer for final compute output)
-    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_7;
-    const tt::tt_metal::CircularBufferConfig final_indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(Wt_final * index_tile_size, {{final_indices_cb_index, index_cb_data_format}})
-            .set_page_size(final_indices_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_indices_cb_config);
-
     // Local TopK values output (local cores → writer → final core)
     constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
     const tt::tt_metal::CircularBufferConfig values_cb_config =
@@ -211,6 +191,37 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         tt::tt_metal::CircularBufferConfig(num_cb_unit * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
             .set_page_size(output_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, output_ind_cb_config);
+
+    // Transposed values (single-buffered for in-place bitonic operations)
+    // Holds all Wt_local tiles for complete width chunk processing
+    constexpr uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
+    const tt::tt_metal::CircularBufferConfig input_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
+            .set_page_size(input_transposed_cb_index, input_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, input_transposed_cb_config);
+
+    // Transposed indices (single-buffered for in-place bitonic operations)
+    constexpr uint32_t index_transposed_cb_index = tt::CBIndex::c_3;
+    const tt::tt_metal::CircularBufferConfig index_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            Wt_local * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
+            .set_page_size(index_transposed_cb_index, index_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, index_transposed_cb_config);
+
+    // Final values (staging buffer for final compute output)
+    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
+    const tt::tt_metal::CircularBufferConfig final_values_cb_config =
+        tt::tt_metal::CircularBufferConfig(Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
+            .set_page_size(final_values_cb_index, value_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, final_values_cb_config);
+
+    // Final indices (staging buffer for final compute output)
+    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_7;
+    const tt::tt_metal::CircularBufferConfig final_indices_cb_config =
+        tt::tt_metal::CircularBufferConfig(Wt_final * index_tile_size, {{final_indices_cb_index, index_cb_data_format}})
+            .set_page_size(final_indices_cb_index, index_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, final_indices_cb_config);
 
     // Semaphore-based flow control for coordinating data transfer between local and final cores
     const uint32_t sender_semaphore_id =

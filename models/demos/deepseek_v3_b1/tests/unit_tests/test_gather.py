@@ -348,7 +348,8 @@ def get_gate_up_core_assignment():
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_gather_gate_up_parallel_pattern(device, dtype):
+@pytest.mark.requires_grid_size((13, 10))
+def test_gather_gate_up_parallel_pattern(device, check_requires_grid_size, dtype):
     """
     Test two parallel gathers from the Gate/Up A/B split pattern.
 
@@ -364,13 +365,6 @@ def test_gather_gate_up_parallel_pattern(device, dtype):
     The dtype parametrization validates tile-based size calculation for BFP formats
     (bfloat8_b, bfloat4_b) which have exponent headers.
     """
-    device_grid_x = device.compute_with_storage_grid_size().x
-    device_grid_y = device.compute_with_storage_grid_size().y
-
-    # Need at least 13x10 grid for full pattern
-    if device_grid_x < 13 or device_grid_y < 10:
-        pytest.skip(f"Device grid too small (need 13x10, got {device_grid_x}x{device_grid_y})")
-
     # Get core assignments
     a_cores, b_cores = get_gate_up_core_assignment()
     m_core = ttnn.CoreCoord(12, 9)  # Mcast/Reduce core

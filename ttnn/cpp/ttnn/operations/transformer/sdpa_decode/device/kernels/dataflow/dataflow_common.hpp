@@ -196,7 +196,10 @@ uint32_t read_mask_chunk(
     }
     noc_async_read_barrier();
     cb_push_back(cb_mask_in, mask_chunk_tiles);
-    mask_start_tile_id += mask_chunk_tiles;
+    // Advance by Sk_chunk_t (column stride), NOT mask_chunk_tiles (PNHt * Sk_chunk_t).
+    // The mask tensor has shape (PNHt, St) with row stride PSt. Each chunk advances
+    // Sk_chunk_t columns. Using mask_chunk_tiles would over-advance when PNHt > 1.
+    mask_start_tile_id += Sk_chunk_t;
     return mask_start_tile_id;
 }
 
@@ -352,6 +355,38 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     }
 
     cb_push_back(cb_mask_in, total_read_tiles);
+}
+
+/*
+ * Generate a block padding mask for paged attention when block_size < TILE_HEIGHT.
+ * In QK tiles, K sequence positions are along the column dimension. Columns [0, block_size)
+ * get mask=0 (valid), columns [block_size, 32) get mask=-inf (padding).
+ * This mask is pushed once and reused (without popping) by the compute kernel for every K chunk.
+ */
+template <uint32_t cb_block_pad_mask, uint32_t PNHt>
+void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
+    uint32_t total_tiles = PNHt * Sk_chunk_t;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_block_pad_mask);
+    constexpr uint32_t NEG_INF = 0xFF80FF80;
+
+    cb_reserve_back(cb_block_pad_mask, total_tiles);
+
+    for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+        // fill_tile_partial: columns [0, block_size-1] = 0, columns [block_size, 31] = -inf
+        fill_tile_partial<tile_bytes>(cb_block_pad_mask, i, block_size - 1, NEG_INF);
+
+        // Copy to all heads
+        uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_block_pad_mask));
+        uint32_t write_ptr_base = get_read_ptr(cb_block_pad_mask);
+        for (uint32_t j = 1; j < PNHt; ++j) {
+            copy_tile<tile_bytes>(noc_read_addr_base, write_ptr_base, i, j * Sk_chunk_t + i);
+            if (j == PNHt - 1) {
+                noc_async_read_barrier();
+            }
+        }
+    }
+
+    cb_push_back(cb_block_pad_mask, total_tiles);
 }
 
 /******************************************************************************

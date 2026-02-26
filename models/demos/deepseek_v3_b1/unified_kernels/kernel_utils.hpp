@@ -8,6 +8,9 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
+#if defined(COMPILE_FOR_TRISC)
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
+#endif
 
 // Firmware-set logical coordinates (defined in brisc.cc, ncrisc.cc, trisc.cc)
 extern uint8_t my_logical_x_;
@@ -61,6 +64,11 @@ SplitHalfCoreInfo get_split_half_core_info(
 FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
     cb_reserve_back(cb_id, num_tiles);
     cb_push_back(cb_id, num_tiles);
+}
+
+// Atomic semaphore decrement (for global semaphore reset across iterations)
+FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
+    __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED);
 }
 
 #endif

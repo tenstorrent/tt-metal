@@ -105,7 +105,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
     std::shared_ptr<ThreadPool>& reader_thread_pool,
     std::shared_ptr<CQSharedState>& cq_shared_state,
-    std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    std::function<std::lock_guard<std::mutex>()> lock_api_function,
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -118,7 +119,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
-        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
         expected_num_workers_completed_,
@@ -564,10 +566,8 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
 
-    // Barrier across all hosts of the mesh
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
-        mesh_device_->get_view().mesh_id());
-    distributed_context->barrier();
+    // Barrier across all active hosts of the mesh
+    active_distributed_context_->barrier();
 }
 
 bool FDMeshCommandQueue::write_shard_to_device(

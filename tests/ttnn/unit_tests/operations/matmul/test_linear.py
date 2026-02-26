@@ -780,3 +780,52 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
         assert_with_pcc(torch_output, output, 0.999)
     finally:
         _teardown_subdevice(device, sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "batch_size, seq_len, k_size, n_size, fp32_dest_acc",
+    [
+        (64, 256, 384, 1536, True),
+        (64, 256, 384, 1536, False),
+    ],
+)
+def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_len, k_size, n_size, fp32_dest_acc):
+    """Regression test for issue #36316.
+
+    When N >> K and bias is present, the bias circular buffer was being
+    underestimated (sized by in0_block_w instead of per_core_N/out_block_w),
+    causing L1 overflow. fp32_dest_acc_en=True doubles the intermediate tile
+    size from 2048 to 4096 bytes, pushing CB totals closer to L1 limits on BH
+    devices. The fp32_dest_acc=False variant exercises the same code path with
+    smaller intermediates, which can hit L1 limits on WH devices where
+    available L1 is smaller.
+    """
+    torch.manual_seed(0)
+    torch_input_a = torch.randn((batch_size, 1, seq_len, k_size), dtype=torch.bfloat16)
+    torch_input_b = torch.randn((n_size, k_size), dtype=torch.bfloat16)
+    torch_bias = torch.randn((1, 1, 1, n_size), dtype=torch.bfloat16)
+
+    torch_output = torch_input_a @ torch_input_b.T + torch_bias
+
+    input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc,
+        packer_l1_acc=True,
+    )
+
+    output = ttnn.linear(
+        input_a,
+        input_b,
+        bias=bias,
+        transpose_b=True,
+        core_grid=device.core_grid,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output, 0.99)

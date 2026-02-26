@@ -61,3 +61,18 @@ def test_worker_l1_fail(device, layout, dtype):
             device,
             memory_config=memory_config,
         )
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_dispatch_context_init_and_terminate(mesh_device, dtype, layout):
+    tensor = torch.rand((1, 1, 32, 1024), dtype=torch.bfloat16)
+    core_grid = ttnn.CoreGrid(y=1, x=1)
+    memory_config = ttnn.create_sharded_memory_config(tensor.shape, core_grid, ttnn.ShardStrategy.BLOCK)
+    ttnn_tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+
+    with ttnn.device.setup_fast_dispatch(mesh_device):
+        ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=memory_config).cpu()
+
+    assert ttnn_tensor.shape == tensor.shape

@@ -85,7 +85,14 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoE,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function

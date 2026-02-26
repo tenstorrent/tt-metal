@@ -4,9 +4,6 @@
 ///
 #include <algorithm>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"

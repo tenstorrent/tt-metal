@@ -13,12 +13,10 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt_stl/assert.hpp>
 #include "thread_pool.hpp"
 
 namespace tt::tt_metal {

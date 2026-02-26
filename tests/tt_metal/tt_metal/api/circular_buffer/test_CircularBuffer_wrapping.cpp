@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "tt_metal.hpp"
-#include "circular_buffer.hpp"
-
 namespace tt::tt_metal {
 
 /**

@@ -7,7 +7,7 @@ import pytest
 import torch
 import random
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
@@ -17,45 +17,8 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class DutyCycleTest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        program_config,
-        compute_config,
-        loop_count=1,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-        non_mm_loops=5,
-        wl_loops=100,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            program_config,
-            compute_config,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+    def __init__(self, *args, non_mm_loops=5, wl_loops=100, **kwargs):
+        super().__init__(*args, **kwargs)
         self.non_mm_loops = (non_mm_loops,)
         self.wl_loops = (wl_loops,)
 
@@ -63,20 +26,18 @@ class DutyCycleTest(OpTestBase):
         for i in range(self.wl_loops[0]):
             ttnn.matmul(
                 self.activations,
-                self.weights,
+                self.inputs[0],
                 program_config=self.program_config,
                 memory_config=self.out_mem_config,
                 dtype=self.out_dtype,
                 compute_kernel_config=self.compute_config,
             )
             for j in range(self.non_mm_loops[0]):
-                ttnn.cos(
-                    self.weights,
-                )
+                ttnn.cos(self.inputs[0])
 
         return ttnn.matmul(
             self.activations,
-            self.weights,
+            self.inputs[0],
             program_config=self.program_config,
             memory_config=self.out_mem_config,
             dtype=self.out_dtype,
@@ -104,14 +65,7 @@ class DutyCycleTest(OpTestBase):
 # the number of non-mm loops within each iteration (increasing this lowers the duty cycle)
 @pytest.mark.parametrize(
     "non_mm_loops",
-    [
-        (1),
-        (2),
-        (3),
-        (4),
-        (5),
-        (6),
-    ],
+    [1, 2, 3, 4, 5, 6],
     ids=["duty-1", "duty-2", "duty-3", "duty-4", "duty-5", "duty-6"],
 )
 def test_duty_cycle(
@@ -120,16 +74,12 @@ def test_duty_cycle(
     determinism_check_interval,
     non_mm_loops,
     wl_loops,
-    grid_size=(8, 8),
 ):
     per_core_M = 4
     per_core_N = 72
 
     # Initialize input configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     # Initialize matmul configurations
@@ -169,20 +119,16 @@ def test_duty_cycle(
 
     duty_cycle_test = DutyCycleTest(
         mesh_device,
-        in0_shape=in0_shape,
-        in1_shape=in1_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem_config),
+        [
+            OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT16,
-        in1_dtype=ttnn.DataType.BFLOAT8_B,
         out_dtype=ttnn.DataType.BFLOAT16,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
         non_mm_loops=non_mm_loops,
         wl_loops=wl_loops,

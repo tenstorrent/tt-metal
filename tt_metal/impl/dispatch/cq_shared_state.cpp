@@ -4,6 +4,8 @@
 
 #include "cq_shared_state.hpp"
 
+#include <tt_stl/assert.hpp>
+
 namespace tt::tt_metal {
 void CQOwnerState::take_ownership(SubDeviceId id, uint32_t cq_id) {
     if (cq_id_ != std::nullopt && cq_id_ != cq_id) {

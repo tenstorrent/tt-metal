@@ -70,7 +70,14 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        LMHead1D, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        LMHead1D,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_lm_head1d",
+        real_weights=False,
     )
     model_config = get_model_config(LMHead1D, mode, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)

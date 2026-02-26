@@ -44,8 +44,9 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -54,7 +55,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
@@ -163,23 +163,20 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    // watcher/dprint enabled are accounted for in the build key.
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -253,14 +250,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         auto config = std::visit(
             tt::stl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
@@ -268,7 +265,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return DataMovementConfig{
                         .processor = dm_descriptor.processor,
                         .noc = dm_descriptor.noc,
@@ -280,7 +277,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ComputeConfig{
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
@@ -292,18 +289,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                    };
-                },
-                [&](const EthernetConfigDescriptor& ethernet_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
-                    return EthernetConfig{
-                        .eth_mode = ethernet_descriptor.eth_mode,
-                        .noc = ethernet_descriptor.noc,
-                        .processor = ethernet_descriptor.processor,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
             },

@@ -14,17 +14,16 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/buffers/circular_buffer.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/context/metal_context.hpp"
 

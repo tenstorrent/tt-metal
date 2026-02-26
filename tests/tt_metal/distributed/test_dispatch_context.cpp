@@ -36,7 +36,7 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }
-    const MeshShape system_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
     // Terminating without initializing should throw
@@ -102,7 +102,7 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }
-    const MeshShape system_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
     const auto& cluster = MetalContext::instance().get_cluster();

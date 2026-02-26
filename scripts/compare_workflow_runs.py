@@ -9,7 +9,8 @@ This is useful for determining whether CI failures are regressions or flaky/pre-
 
 How it works:
     1. Fetches the latest workflow run for each workflow on your branch
-    2. Fetches the latest workflow run for the same workflow on main
+       (or a specific workflow run on your branch, if --branch-run-id is provided)
+    2. Fetches the latest completed workflow run for the same workflow on main
     3. Compares job-level results between the two runs
     4. Categorizes each job as: new failure, fixed, same failure, or passing
 
@@ -37,6 +38,9 @@ Usage examples:
     # Compare specific workflows
     python scripts/compare_workflow_runs.py --workflows t3000-unit-tests.yaml
 
+    # Compare a specific workflow run ID on your branch
+    python scripts/compare_workflow_runs.py --workflows pipeline-select.yaml --branch-run-id 1234567890
+
     # Compare a specific branch
     python scripts/compare_workflow_runs.py --branch my-feature-branch
 
@@ -50,6 +54,7 @@ Prerequisites:
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -93,13 +98,14 @@ class JobResult:
 
 @dataclass
 class WorkflowRun:
-    id: int
+    id: int  # GitHub Actions databaseId (ID of the run)
     url: str
     workflow_name: str
     branch: str
     conclusion: Optional[str]
     status: str
     jobs: list[JobResult]
+    workflow_id: Optional[int]  # GitHub Actions workflowDatabaseId (ID of the workflow)
 
 
 def run_gh_command(args: list[str]) -> Optional[dict | list]:
@@ -132,21 +138,27 @@ def get_run_jobs(run_id: int) -> list[JobResult]:
 
 
 def get_latest_run(workflow_file: str, branch: str) -> Optional[WorkflowRun]:
-    """Get the latest run of a workflow on a specific branch."""
-    data = run_gh_command(
-        [
-            "run",
-            "list",
-            "--workflow",
-            workflow_file,
-            "--branch",
-            branch,
-            "--limit",
-            "1",
-            "--json",
-            "databaseId,url,conclusion,status,displayTitle,workflowName",
-        ]
-    )
+    """Get the latest run of a workflow on a specific branch.
+    For main, only consider completed runs (skip queued/in_progress).
+    """
+
+    args = [
+        "run",
+        "list",
+        "--workflow",
+        workflow_file,
+        "--branch",
+        branch,
+        "--limit",
+        "1",
+        "--json",
+        "databaseId,url,conclusion,status,displayTitle,workflowName,workflowDatabaseId",
+    ]
+
+    if branch == "main":
+        args.extend(["--status", "completed"])
+
+    data = run_gh_command(args)
 
     if not data or not isinstance(data, list) or len(data) == 0:
         return None
@@ -162,6 +174,7 @@ def get_latest_run(workflow_file: str, branch: str) -> Optional[WorkflowRun]:
         conclusion=run.get("conclusion"),
         status=run["status"],
         jobs=jobs,
+        workflow_id=run.get("workflowDatabaseId"),
     )
 
 
@@ -289,6 +302,48 @@ def print_comparison(comparison: dict):
     )
 
 
+def get_run_by_id(run_id: int) -> Optional[WorkflowRun]:
+    """Get a specific workflow run by its GitHub run ID."""
+    data = run_gh_command(
+        [
+            "run",
+            "view",
+            str(run_id),
+            "--json",
+            "databaseId,url,conclusion,status,workflowName,headBranch,workflowDatabaseId",
+        ]
+    )
+    if not data or not isinstance(data, dict):
+        return None
+
+    db_id = data.get("databaseId")
+    if db_id is None:
+        return None
+
+    jobs = get_run_jobs(db_id)
+    return WorkflowRun(
+        id=db_id,
+        url=data["url"],
+        workflow_name=data.get("workflowName", str(run_id)),
+        branch=data.get("headBranch", ""),
+        conclusion=data.get("conclusion"),
+        status=data["status"],
+        jobs=jobs,
+        workflow_id=data.get("workflowDatabaseId"),
+    )
+
+
+def get_workflow_path_by_id(workflow_id: int) -> Optional[str]:
+    """
+    Return the YAML path for a workflow ID using GitHub REST via gh api.
+    Uses the current repository inferred from the local git remote.
+    """
+    data = run_gh_command(["api", f"repos/:owner/:repo/actions/workflows/{workflow_id}"])
+    if not data or not isinstance(data, dict):
+        return None
+    return data.get("path")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare workflow runs between branch and main", epilog="Prerequisites: gh CLI (authenticated), git"
@@ -301,6 +356,14 @@ def main():
         choices=["all", "t3000", "galaxy", "blackhole", "single-card", "core"],
         default="all",
         help="Filter workflows by category",
+    )
+    parser.add_argument(
+        "--branch-run-id",
+        type=int,
+        help=(
+            "Use this workflow run ID on the branch instead of the latest run. "
+            "Requires exactly one workflow in --workflows; the run must be for that workflow."
+        ),
     )
     args = parser.parse_args()
 
@@ -323,7 +386,59 @@ def main():
             print('   Specify the branch explicitly with "--branch <name>".', file=sys.stderr)
             sys.exit(1)
 
-    print(f"🔍 Comparing workflow runs: {branch} vs main\n")
+    branch_run_by_id: Optional[WorkflowRun] = None
+    if args.branch_run_id is not None:
+        if not args.workflows or len(args.workflows) != 1:
+            print(
+                "❌ Error: --branch-run-id requires exactly one workflow in --workflows.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # When using --branch-run-id, fetch the run once and validate it matches the workflow
+        branch_run_by_id = get_run_by_id(args.branch_run_id)
+        if branch_run_by_id is None:
+            print(
+                f"❌ Error: No workflow run found with ID {args.branch_run_id}. "
+                "Check the ID, repository, and that you're authenticated (gh auth status).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if branch_run_by_id.branch != branch:
+            print(
+                f"❌ Error: Run ID {args.branch_run_id} is from branch '{branch_run_by_id.branch}', "
+                f"but you specified branch '{branch}'. Use --branch {branch_run_by_id.branch!r} or a run from {branch!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if branch_run_by_id.workflow_id is None:
+            print(
+                "❌ Error: Could not determine workflow ID for run "
+                f"{args.branch_run_id} (missing workflowDatabaseId).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        yaml_path = get_workflow_path_by_id(branch_run_by_id.workflow_id)
+        if yaml_path is None:
+            print(
+                "❌ Error: Could not resolve workflow YAML path for run "
+                f"{args.branch_run_id}, workflow ID {branch_run_by_id.workflow_id}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        expected_yaml = os.path.basename(args.workflows[0])
+        actual_yaml = os.path.basename(yaml_path)
+
+        if actual_yaml != expected_yaml:
+            print(
+                "❌ Error: Run ID and workflow file do not match.\n"
+                f"    Run ID {args.branch_run_id} → {actual_yaml}\n"
+                f"    --workflows value      → {expected_yaml}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Default workflows to check - all board-level workflows with workflow_dispatch
     workflows = args.workflows or [
@@ -373,16 +488,21 @@ def main():
         prefixes = category_filters.get(args.category, [])
         workflows = [w for w in workflows if any(w.startswith(p) for p in prefixes)]
 
+    print(f"🔍 Comparing workflow runs: {branch} vs main\n")
+
     comparisons = []
     skipped_workflows = []
     for workflow in workflows:
         print(f"Fetching {workflow}...", end=" ", flush=True)
 
-        branch_run = get_latest_run(workflow, branch)
-        if not branch_run:
-            print("skipped (no run on branch)")
-            skipped_workflows.append(workflow)
-            continue
+        if args.branch_run_id is not None:
+            branch_run = branch_run_by_id
+        else:
+            branch_run = get_latest_run(workflow, branch)
+            if not branch_run:
+                print("skipped (no run on branch)")
+                skipped_workflows.append(workflow)
+                continue
 
         main_run = get_latest_run(workflow, "main")
         print("done")

@@ -9,7 +9,6 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/host_buffer.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>

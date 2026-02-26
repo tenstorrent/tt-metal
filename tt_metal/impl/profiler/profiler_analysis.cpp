@@ -9,6 +9,7 @@
 #include <sstream>
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <fstream>

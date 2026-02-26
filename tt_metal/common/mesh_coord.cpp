@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <boost/move/utility_core.hpp>
 #include <mesh_coord.hpp>
@@ -660,3 +661,18 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_s
 }
 
 }  // namespace tt::tt_metal::distributed
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRange>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRangeSet>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
+}

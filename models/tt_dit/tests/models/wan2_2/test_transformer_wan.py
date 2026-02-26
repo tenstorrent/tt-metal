@@ -87,8 +87,8 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        # BH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -274,6 +274,7 @@ def test_wan_transformer_model(
     spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
     prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
 
     tt_model = _make_wan_transformer(
         mesh_device=mesh_device,
@@ -294,7 +295,7 @@ def test_wan_transformer_model(
     )
     tt_spatial_out = tt_model(
         spatial=spatial_input,
-        prompt=prompt_input,
+        prompt=tt_prompt,
         timestep=timestep_input,
     )
     del tt_model

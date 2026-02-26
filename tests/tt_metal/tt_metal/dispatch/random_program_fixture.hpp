@@ -15,6 +15,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
@@ -259,7 +260,7 @@ private:
             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 
-        std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
+        std::variant<DataMovementConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
             const auto proc = this->get_processor(true);
@@ -268,14 +269,19 @@ private:
             eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
+            config = DataMovementConfig{
+                .processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
         }
 
-        KernelHandle kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            cores,
+        KernelHandle kernel_id = std::visit(
+            [&](const auto& cfg) -> KernelHandle {
+                return CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+                    "dispatcher_kernel_size_and_runtime.cpp",
+                    cores,
+                    cfg);
+            },
             config);
         return kernel_id;
     }

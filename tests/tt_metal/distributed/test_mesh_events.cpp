@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>

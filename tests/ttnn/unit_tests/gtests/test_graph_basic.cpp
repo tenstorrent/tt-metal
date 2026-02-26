@@ -182,7 +182,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         try {
-            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+            [[maybe_unused]] auto nested_capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
             operation(tt::tt_metal::DataType::BFLOAT16);
             throw std::runtime_error("Expected");
         } catch (const std::exception& e) {

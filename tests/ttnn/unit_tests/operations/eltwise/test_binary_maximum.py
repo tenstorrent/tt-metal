@@ -63,7 +63,7 @@ def test_binary_max_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_dtype
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
-    output_tensor = ttnn.to_torch(tt_result)
+    output_tensor = ttnn.to_torch(tt_result).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
 
@@ -116,7 +116,7 @@ def test_binary_max_fill_val_int32(input_shapes, input_a_val, input_b_val, ttnn_
     )
 
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
-    output_tensor = ttnn.to_torch(tt_result)
+    output_tensor = ttnn.to_torch(tt_result).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
 
@@ -178,7 +178,7 @@ def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
-    output_tensor = ttnn.to_torch(tt_result)
+    output_tensor = ttnn.to_torch(tt_result).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
 
@@ -247,7 +247,7 @@ def test_binary_max_int32_opt(input_shapes, low_a, high_a, low_b, high_b, ttnn_d
     )
 
     ttnn.maximum(tt_in_a, tt_in_b, output_tensor=tt_out, queue_id=cq_id)
-    output_tensor = ttnn.to_torch(tt_out)
+    output_tensor = ttnn.to_torch(tt_out).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
 

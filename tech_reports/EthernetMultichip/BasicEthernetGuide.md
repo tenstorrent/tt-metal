@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+>
+> **This tech report is outdated.**
+>
+> Users no longer need to program Ethernet cores directly. The fabric infrastructure manages Ethernet cores and provides a more user-friendly interface for this functionality.
+
 # Basic Ethernet Multichip
 
 Contact for questions/comments: [Sean Nijjar](mailto:snijjar@tenstorrent.com)

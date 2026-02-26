@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <tt_stl/reflection.hpp>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>

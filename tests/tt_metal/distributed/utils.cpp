@@ -14,7 +14,6 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -25,6 +24,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

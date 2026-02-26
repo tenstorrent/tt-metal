@@ -448,6 +448,14 @@ jobs:
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
 
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: .cpmcache
+          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: |
+            cpm-
+
       - name: 🔧 CMake configure
         run: |
           set -eu # basic shell hygiene

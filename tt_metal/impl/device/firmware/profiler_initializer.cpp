@@ -4,6 +4,7 @@
 
 #include "profiler_initializer.hpp"
 
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
@@ -70,7 +71,13 @@ void ProfilerInitializer::init(
 
 void ProfilerInitializer::configure() {}
 
-void ProfilerInitializer::teardown() {
+void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Dispatch),
+        "ProfilerInitializer must be torn down after DispatchKernelInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Fabric),
+        "ProfilerInitializer must be torn down after FabricFirmwareInitializer");
     // Read profiler results from dispatch cores
     for (auto* dev : devices_) {
         detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
@@ -79,6 +86,7 @@ void ProfilerInitializer::teardown() {
 
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 void ProfilerInitializer::post_teardown() {

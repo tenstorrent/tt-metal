@@ -36,6 +36,10 @@
 #include "api/compute/eltwise_unary/recip.h"
 #endif
 
+#if SFPU_OP_CBRT_INCLUDE
+#include "api/compute/eltwise_unary/cbrt.h"
+#endif
+
 #if SFPU_OP_RELU_FAMILY_INCLUDE
 #include "api/compute/eltwise_unary/relu.h"
 #endif

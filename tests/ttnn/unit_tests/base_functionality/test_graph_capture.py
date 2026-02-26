@@ -179,20 +179,20 @@ def test_graph_capture_without_dtype(device):
     captured_graph = ttnn.graph.end_graph_capture()
 
     # Note: High-level function tracing (ttnn::moreh_full_like) was removed from decorators.hpp
-    # Now only device operations are captured. Find FullLikeOperation
+    # Now only device operations are captured. Find FullDeviceOperation
     full_like_op = None
     for node in captured_graph:
-        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "FullLikeOperation":
+        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "FullDeviceOperation":
             full_like_op = node
             break
 
-    assert full_like_op is not None, "FullLikeOperation should be in the captured graph"
+    assert full_like_op is not None, "FullDeviceOperation should be in the captured graph"
 
-    # FullLikeOperation arguments
+    # FullDeviceOperation arguments
     node_full_like = full_like_op["arguments"]
     assert (
         node_full_like[0]
-        == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>]"
+        == "[ unsupported type , std::reference_wrapper<ttnn::operations::full::operation_attributes_t const>]"
     )
     assert (
         node_full_like[1]
@@ -350,15 +350,15 @@ def test_graph_capture_without_dtype_json_output(device):
     assert "content" in data
     assert isinstance(data["content"], list)
     # Note: High-level function tracing (ttnn::moreh_full_like) was removed from decorators.hpp
-    # Now only device operations are captured: FullLikeOperation, create_device_tensor
+    # Now only device operations are captured: FullDeviceOperation, create_device_tensor
     assert len(data["content"]) == 2
 
-    # --- Content item 0: FullLikeOperation (device operation) ---
+    # --- Content item 0: FullDeviceOperation (device operation) ---
     item0 = data["content"][0]
-    assert item0["operation"] == "FullLikeOperation"
+    assert item0["operation"] == "FullDeviceOperation"
     assert len(item0["arguments"]) == 2
     assert item0["arguments"][0]["arg0"] == {
-        "unsupported type": "std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>"
+        "unsupported type": "std::reference_wrapper<ttnn::operations::full::operation_attributes_t const>"
     }
     assert item0["arguments"][1]["arg1"] == {
         "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"

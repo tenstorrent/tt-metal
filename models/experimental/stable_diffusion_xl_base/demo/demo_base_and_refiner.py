@@ -28,6 +28,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline i
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     negative_prompts,
     num_inference_steps,
@@ -87,6 +88,7 @@ def run_demo_inference(
 
     # 2. Create unified config and combined pipeline
     config = TtSDXLCombinedPipelineConfig(
+        image_resolution=image_resolution,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
         is_galaxy=is_galaxy(),
@@ -287,6 +289,7 @@ def test_demo_base_and_refiner(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     negative_prompt,
     num_inference_steps,
@@ -313,6 +316,7 @@ def test_demo_base_and_refiner(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         negative_prompt,
         num_inference_steps,

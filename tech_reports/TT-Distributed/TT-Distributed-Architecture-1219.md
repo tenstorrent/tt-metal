@@ -583,8 +583,7 @@ KernelHandle CreateKernel(
 uint32_t CreateSemaphore(
     Program& program,
     const CoreRangeSet& core_spec,
-    uint32_t initial_value,
-    CoreType core_type);
+    uint32_t initial_value);
 
 CBHandle CreateCircularBuffer(
     Program& program,

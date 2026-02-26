@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -68,11 +69,11 @@ void RunOneTest(
             num_dms);
         uint32_t num_kernels = num_dms / dms_per_kernel;
         for (uint32_t i = 0; i < num_kernels; i++) {
-            experimental::quasar::CreateKernel(
+            tt::tt_metal::experimental::quasar::CreateKernel(
                 program_,
                 path,
                 coord,
-                experimental::quasar::QuasarDataMovementConfig{
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
                     .num_processors_per_cluster = dms_per_kernel, .compile_args = compile_args});
         }
     } else {

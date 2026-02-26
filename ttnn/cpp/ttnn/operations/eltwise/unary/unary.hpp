@@ -79,6 +79,20 @@ struct LogSigmoid {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Sigmoid {
+    enum class SigmoidMode {
+        FAST_APPROXIMATE,
+        ACCURATE_FAST_EXP,
+        ACCURATE,
+    };
+    static Tensor invoke(
+        const Tensor& input,
+        int vector_mode = (int32_t)VecMode::RC,
+        SigmoidMode mode = SigmoidMode::ACCURATE,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Sigmoid_accurate {
     static Tensor invoke(
         const Tensor& input,
@@ -86,6 +100,7 @@ struct Sigmoid_accurate {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
+
 struct Unary_chain {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -461,9 +476,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT);
 
-// Unaries with vector mode and fast and approximate mode
-REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
-
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
@@ -526,6 +538,7 @@ constexpr auto ge_unary = ttnn::register_operation<
 constexpr auto le_unary = ttnn::register_operation<
     "ttnn::le_unary",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LE>>();
+constexpr auto sigmoid = ttnn::register_operation<"ttnn::sigmoid", ttnn::operations::unary::Sigmoid>();
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();

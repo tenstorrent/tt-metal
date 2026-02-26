@@ -20,14 +20,12 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="2x4sp0tp1"),
-        pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, id="2x4sp1tp0"),
-        pytest.param((4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, id="wh_4x8sp0tp1"),
-        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, id="bh_4x8sp0tp1"),
-        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, id="bh_4x8sp1tp0"),
+        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -45,12 +43,6 @@ from ....utils.test import line_params, ring_params
         pytest.param(None, id="no_prompt"),
         pytest.param(26, id="short_prompt"),
         pytest.param(126, id="long_prompt"),
-    ],
-)
-@pytest.mark.parametrize(
-    "is_fsdp",
-    [
-        pytest.param(True, id="yes_fsdp"),
     ],
 )
 def test_wan_attention(
@@ -124,6 +116,7 @@ def test_wan_attention(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        is_self=attn_type == "self",
     )
     tt_model.load_state_dict(torch_model.state_dict())
 

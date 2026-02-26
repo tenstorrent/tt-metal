@@ -98,7 +98,11 @@ struct CBInterface {
 };
 
 // Named this way for compatibility with existing code where existing code references local_cb_interface as cb_interface
+#ifdef ARCH_QUASAR
+extern thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
+#else
 extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
+#endif
 
 FORCE_INLINE LocalCBInterface& get_local_cb_interface(uint32_t cb_id) { return cb_interface[cb_id].local_cb_interface; }
 

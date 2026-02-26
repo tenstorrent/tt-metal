@@ -11,7 +11,6 @@
 #include <vector>
 #include <optional>
 #include <climits>
-#include <tt_stl/assert.hpp>
 #include <memory>
 namespace tt::tt_metal {
 

@@ -1103,7 +1103,7 @@ def _get_t5_prompt_embeds(
     )
 
     # Call the new T5Encoder
-    hidden_states = text_encoder(prompt=tt_text_input_ids, device=device)
+    hidden_states = text_encoder(prompt=tt_text_input_ids)
 
     # Use the final layer output (last element in the list)
     tt_prompt_embeds = hidden_states[-1]

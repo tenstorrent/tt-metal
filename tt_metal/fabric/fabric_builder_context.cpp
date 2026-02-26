@@ -5,10 +5,13 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/channel_trimming_report.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 
@@ -54,7 +57,26 @@ void FabricBuilderContext::compute_max_channel_counts() {
 }
 
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
+    // Load channel trimming overrides from profile if specified
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    TT_FATAL(
+        !(rtoptions.has_fabric_trimming_profile() && rtoptions.get_enable_channel_trimming_capture()),
+        "TT_METAL_FABRIC_TRIMMING_PROFILE and TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE are mutually exclusive. "
+        "Capture mode instruments routers to record usage; import mode applies a previously captured profile to "
+        "optimize router construction. Enable only one at a time.");
+    if (rtoptions.has_fabric_trimming_profile()) {
+        const auto& path = rtoptions.get_fabric_trimming_profile_path();
+        log_info(tt::LogFabric, "Loading channel trimming profile: {}", path);
+        channel_trimming_overrides_ = load_channel_trimming_overrides(path);
+    }
+
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+
+    // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
+    if (rtoptions.has_fabric_trimming_profile()) {
+        const auto& path = rtoptions.get_fabric_trimming_profile_path();
+        generate_and_log_channel_trimming_report(path, fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
+    }
 
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();

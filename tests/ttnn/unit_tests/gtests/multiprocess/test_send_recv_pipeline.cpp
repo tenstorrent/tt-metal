@@ -215,7 +215,9 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
         distributed::MeshCoordinate start_coord = pipeline_stages[*pipeline_start_rank].entry_node_coord;
 
-        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
+        auto intermed_sockets = create_intermed_socket_pair(start_coord, my_sender);
+        auto& intermed_send = intermed_sockets.first;
+        auto& intermed_recv = intermed_sockets.second;
 
         distributed::SocketConnection fwd_connection(
             distributed::MeshCoreCoord(my_sender, send_core_coord),
@@ -269,7 +271,9 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
                 distributed::multihost::Rank(downstream_mesh_id));
             auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
-            auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_recv, my_sender);
+            auto intermed_sockets = create_intermed_socket_pair(my_recv, my_sender);
+            auto& intermed_send = intermed_sockets.first;
+            auto& intermed_recv = intermed_sockets.second;
 
             auto run_intermed_step = [&]() {
                 ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
@@ -284,7 +288,9 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
         } else {
             // Pipeline end
             distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
-            auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_recv, end_coord);
+            auto intermed_sockets = create_intermed_socket_pair(my_recv, end_coord);
+            auto& intermed_send = intermed_sockets.first;
+            auto& intermed_recv = intermed_sockets.second;
             uint32_t output_linear_index = ((end_coord[0] * mesh_device_->shape()[1]) + end_coord[1]);
 
             auto run_receiver_step = [&](uint32_t i) {

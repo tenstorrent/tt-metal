@@ -45,8 +45,7 @@ void kernel_main() {
         constexpr uint32_t out_cb = get_named_compile_time_arg_val("gated_local_reduce_out_cb");
         constexpr uint32_t group1_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group1_num_tiles");
         constexpr uint32_t group2_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group2_num_tiles");
-        // Full init, CBs don't matter
-        compute_kernel_hw_startup(0, 0, 0);
+        deepseek_compute_kernel_init();
 
         // ================================================================
         // Phase 1: reduce(group1) + SiLU -> intermed[0]  (ADD with SiLU)

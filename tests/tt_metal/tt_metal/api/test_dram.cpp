@@ -25,6 +25,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>

@@ -12,6 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
+#include "internal/hw_thread.h"
 #include "core_config.h"
 
 #include "api/debug/waypoint.h"
@@ -138,7 +139,8 @@ int main() {
 
         flush_erisc_icache();
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, k_ProgrammableCoreType, PROCESSOR_INDEX);
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, k_ProgrammableCoreType, internal_::get_hw_thread_idx());
         my_relative_x_ =
             my_logical_x_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_x;
         my_relative_y_ =
@@ -146,8 +148,8 @@ int main() {
 
         WAYPOINT("R");
         uint32_t kernel_lma =
-            kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[PROCESSOR_INDEX];
+            kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr]
+                                     .kernel_config.kernel_text_offset[internal_::get_hw_thread_idx()];
 #if defined(COMPILE_FOR_AERISC)
         // Stack usage is not implemented yet for subordinate active eth (active_erisck.cc)
         reinterpret_cast<void (*)()>(kernel_lma)();

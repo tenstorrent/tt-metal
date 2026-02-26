@@ -251,6 +251,7 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
+    col_tilize: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -273,6 +274,14 @@ def from_torch(
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+        col_tilize (bool, optional): If True, transpose the last two dimensions of the tensor in host
+            memory (float32) before BFP tile encoding.  In BFP format one exponent byte is shared
+            across 16 consecutive datums within a tile face row; transposing before packing redirects
+            that sharing onto the column dimension of the original tensor.  The returned tensor has
+            shape (..., N, K) instead of (..., K, N).  This transpose is applied to the raw float32
+            host data and is unrelated to Tile-level transpose flags (transpose_within_face /
+            transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
+            Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -280,6 +289,16 @@ def from_torch(
 
     if tensor is None:
         return None
+
+    if col_tilize:
+        if spec is not None:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True is not supported with spec")
+        if dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires BFP dtype (bfloat8_b or bfloat4_b)")
+        if tensor.ndim < 2:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires tensor.ndim >= 2")
+        if layout is not None and layout is not ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT")
 
     if spec is not None:
         if spec.shape != tensor.shape:
@@ -314,6 +333,7 @@ def from_torch(
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        col_tilize=col_tilize,
     )
 
 

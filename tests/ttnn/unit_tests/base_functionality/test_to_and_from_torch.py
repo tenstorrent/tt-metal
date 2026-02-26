@@ -162,3 +162,23 @@ def test_to_torch_with_mesh_composer_none(device, shape, layout):
     torch_output_tensor = ttnn_tensor.to_torch(mesh_composer=None)
 
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("K, N", [(64, 128), (128, 64)])
+def test_col_tilize_to_device_and_back(device, dtype, K, N):
+    """col_tilize=True should produce the same on-device tensor as manually transposing first."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # col_tilize path: transpose happens inside from_torch, result shape is (1,1,N,K)
+    tt_col = ttnn.from_torch(torch_W, dtype=dtype, col_tilize=True, device=device)
+    result_col = ttnn.to_torch(tt_col)
+
+    # manual path: transpose in torch first, then send to device normally
+    tt_manual = ttnn.from_torch(torch_W.transpose(-1, -2).contiguous(), dtype=dtype, device=device)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert result_col.shape == result_manual.shape
+    pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)

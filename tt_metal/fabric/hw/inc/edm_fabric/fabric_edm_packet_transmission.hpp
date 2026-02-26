@@ -139,6 +139,7 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+    channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }

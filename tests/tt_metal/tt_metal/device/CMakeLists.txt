@@ -5,6 +5,7 @@ include(sources.cmake)
 add_library(unit_tests_device_smoke OBJECT)
 add_library(TT::Metalium::Test::Device::Smoke ALIAS unit_tests_device_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_device_smoke)
+target_precompile_headers(unit_tests_device_smoke REUSE_FROM metal_common_pch)
 target_sources(unit_tests_device_smoke PRIVATE ${UNIT_TESTS_DEVICE_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_device_smoke

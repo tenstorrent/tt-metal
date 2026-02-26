@@ -7,8 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/math.hpp"

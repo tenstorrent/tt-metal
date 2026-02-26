@@ -33,6 +33,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 
 using namespace tt;

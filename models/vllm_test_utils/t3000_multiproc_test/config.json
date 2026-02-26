@@ -1,5 +1,5 @@
 {
-    "architectures": ["DummyT3000MultiProcessModel"],
+    "architectures": ["TTDummyT3000MultiProcessModel"],
     "model_type": "llama",
     "vocab_size": 128256
 }

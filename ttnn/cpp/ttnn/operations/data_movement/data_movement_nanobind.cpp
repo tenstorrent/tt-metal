@@ -6,7 +6,6 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"

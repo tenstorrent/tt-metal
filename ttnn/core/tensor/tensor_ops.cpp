@@ -129,6 +129,13 @@ void copy_to_host(
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
+    tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+    GraphTracker::instance().track_function_end(host_tensor);
+}
+
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
@@ -245,6 +252,7 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
 // ======================================================================================
 //                                  .tensor_view()
 // ======================================================================================
+
 Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
@@ -285,14 +293,12 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
             new_logical_shape,
             new_padded_shape));
     // TODO (#25340): Review tensor topology logic for reshape
-    auto output = std::visit(
-        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape, &output_memory_config, &changing_last_dim](
-            auto&& storage) -> Tensor {
-            using T = std::decay_t<decltype(storage)>;
+    auto output = std::invoke(
+        [&input_tensor, &new_spec, &new_logical_shape, &output_memory_config, &changing_last_dim]() -> Tensor {
             const auto& tensor = input_tensor;
 
-            if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+            if (is_device_tensor(tensor)) {
+                auto device_storage = tensor.device_storage();
                 if (tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
                     return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
@@ -336,14 +342,10 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                     view_mesh_buffer, device_storage.coords, device_storage.get_root_mesh_buffer());
 
                 return Tensor(view_storage, new_spec, tensor.tensor_topology());
-
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
-                return Tensor(tensor.storage(), new_spec, tensor.tensor_topology());
-            } else {
-                static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported storage type");
             }
-        },
-        input_tensor.storage());
+
+            return Tensor(tensor.host_storage(), new_spec, tensor.tensor_topology());
+        });
     output = tt::tt_metal::set_tensor_id(output);
     tt::tt_metal::GraphTracker::instance().track_function_end(output);
     return output;

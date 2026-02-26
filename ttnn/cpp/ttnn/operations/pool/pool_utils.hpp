@@ -127,8 +127,6 @@ uint32_t calculate_L1_usage(
     bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
-    uint32_t out_h,
-    uint32_t out_w,
     const tt::tt_metal::MemoryConfig& input_memory,
     const tt::tt_metal::MemoryConfig& output_memory,
     Pool2DType pool_type,

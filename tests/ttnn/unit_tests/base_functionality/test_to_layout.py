@@ -599,13 +599,24 @@ def run_unary_with_aprox_mode_fruit_test(
 @pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("vector_mode", [4])
 def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, approx_mode):
+    class sigmoid_wrap:
+        def __init__(self):
+            self.golden_function = ttnn.sigmoid.golden_function
+
+        def __call__(self, input_tensor, vector_mode, fast_and_approximate_mode):
+            return ttnn.sigmoid(
+                input_tensor,
+                vector_mode=vector_mode,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+            )
+
     run_unary_with_aprox_mode_fruit_test(
         device,
         h,
         w,
         memory_type,
         shard_shape,
-        ttnn.sigmoid,
+        sigmoid_wrap(),
         vector_mode=vector_mode,
         approx_mode=approx_mode,
         pcc=0.999,

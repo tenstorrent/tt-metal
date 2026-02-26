@@ -32,7 +32,7 @@ HF_MODELS=(
     "${LLAMA_32_3B_DIR:-meta-llama/Llama-3.2-3B-Instruct}"
     "${LLAMA_31_8B_DIR:-meta-llama/Llama-3.1-8B-Instruct}"
     "${LLAMA_32_11B_DIR:-meta-llama/Llama-3.2-11B-Vision-Instruct}"
-    "${LLAMA_31_70B_DIR:-meta-llama/Llama-3.1-70B-Instruct}"
+    "${LLAMA_33_70B_DIR:-meta-llama/Llama-3.3-70B-Instruct}"
     "${LLAMA_32_90B_DIR:-meta-llama/Llama-3.2-90B-Vision-Instruct}"
     "${QWEN_25_7B_DIR:-Qwen/Qwen2.5-7B-Instruct}"
     "${QWEN_25_72B_DIR:-Qwen/Qwen2.5-72B-Instruct}"

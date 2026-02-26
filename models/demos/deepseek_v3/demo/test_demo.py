@@ -36,7 +36,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             "dual_demo_full_results",
             False,
             id="dual_full_demo",
-            marks=pytest.mark.requires_device(["DUAL"]),
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         pytest.param(
             56,
@@ -47,7 +47,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             "dual_demo_stress_results",
             False,
             id="dual_stress_demo",
-            marks=pytest.mark.requires_device(["DUAL"]),
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         pytest.param(
             512,
@@ -58,7 +58,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             "quad_demo_full_results",
             False,
             id="quad_full_demo",
-            marks=pytest.mark.requires_device(["QUAD"]),
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         pytest.param(
             56,
@@ -69,7 +69,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             "quad_demo_stress_results",
             False,
             id="quad_stress_demo",
-            marks=pytest.mark.requires_device(["QUAD"]),
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         pytest.param(
             1,

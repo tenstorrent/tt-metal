@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "relay_mux.hpp"
-#include "context/metal_context.hpp"
+#include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
@@ -24,23 +24,21 @@ void RelayMux::GenerateStaticConfigs() {
     uint32_t l1_size = 0;
 
     if (GetCoreType() == CoreType::WORKER) {
-        l1_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        l1_base = descriptor_.hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+        l1_size = descriptor_.hal().get_dev_size(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
     } else {
-        l1_base = MetalContext::instance().hal().get_dev_addr(
+        l1_base = descriptor_.hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-        l1_size = MetalContext::instance().hal().get_dev_size(
+        l1_size = descriptor_.hal().get_dev_size(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
     }
     static_config_.buffer_base_address =
-        tt::align(l1_base, tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+        tt::align(l1_base, descriptor_.hal().get_alignment(tt::tt_metal::HalMemType::L1));
 
-    const uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    logical_core_ = MetalContext::instance().get_dispatch_core_manager().fabric_mux_core(
-        device_->id(), channel, this->cq_id_, tunnel_id_);
+    const uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
+    logical_core_ = dispatch_core_manager_.fabric_mux_core(device_->id(), channel, this->cq_id_, tunnel_id_);
 
     // Count number of value kernels that need the channels
     const auto kernels_requiring_full_size_channel =
@@ -56,7 +54,7 @@ void RelayMux::GenerateStaticConfigs() {
     static_config_.num_full_size_channels = kernels_requiring_full_size_channel;
     static_config_.num_header_only_channels = kernels_requiring_header_only_channel;
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = get_control_plane_ref();
     const auto& fabric_context = control_plane.get_fabric_context();
 
     // Buffer size for the Mux must matching downstream fabric router size
@@ -90,15 +88,20 @@ void RelayMux::GenerateStaticConfigs() {
     TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
     if (d2h_) {
         // Get the device which is upstream
-        destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
+        destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(descriptor_, device_id_);
     } else {
         // Get the device which is downstream on the specified tunnel
-        destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
+        destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(descriptor_, device_id_, tunnel_id_);
     }
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
 
-    auto link_index = get_dispatch_link_index(src_fabric_node_id, dst_fabric_node_id, device_);
+    auto link_index = get_dispatch_link_index(
+        get_control_plane_ref(),
+        descriptor_.cluster().is_galaxy_cluster(),
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        device_);
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
@@ -168,9 +171,8 @@ void assemble_fabric_mux_client_config_args(
         fabric_mux->GetMuxKernelConfig()->get_channel_credits_stream_id(ch_type, ch_index);
 }
 
-int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
-    const auto dev_mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
+int get_num_hops(const ContextDescriptor& descriptor, ChipId mmio_dev_id, ChipId downstream_dev_id) {
+    const auto dev_mmio_device_id = descriptor.cluster().get_associated_mmio_device(mmio_dev_id);
 
     if (dev_mmio_device_id != mmio_dev_id) {
         TT_THROW(
@@ -179,8 +181,7 @@ int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
             dev_mmio_device_id);
     }
 
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_dev_id);
+    auto tunnels_from_mmio = descriptor.cluster().get_tunnels_from_mmio_device(mmio_dev_id);
 
     constexpr size_t k_MaxTunnelSize = 5;  // 4 remote + 1 mmio
     for (const auto& tunnel : tunnels_from_mmio) {
@@ -201,10 +202,12 @@ int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
 }
 
 uint32_t RelayMux::get_dispatch_link_index(
-    tt::tt_fabric::FabricNodeId src_fabric_node_id, tt::tt_fabric::FabricNodeId dst_fabric_node_id, IDevice* device) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable()) {
+    const tt_fabric::ControlPlane& control_plane,
+    bool is_galaxy_cluster,
+    tt::tt_fabric::FabricNodeId src_fabric_node_id,
+    tt::tt_fabric::FabricNodeId dst_fabric_node_id,
+    IDevice* device) {
+    if (is_galaxy_cluster && device->is_mmio_capable()) {
         const auto forwarding_direction =
             control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
         TT_FATAL(

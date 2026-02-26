@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>

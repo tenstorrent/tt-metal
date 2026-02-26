@@ -62,5 +62,6 @@ PadDeviceOperation::tensor_return_value_t pad(
     float pad_value,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool use_multicore,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

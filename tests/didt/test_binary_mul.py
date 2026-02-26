@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -18,61 +18,25 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 # This test was created to measure power consumption of BH chip on non-matmul workload.
 # The underlying workload is binary eltwise multiplication.
 class BinaryMulTest(OpTestBase):
-    def __init__(
-        self,
-        mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
-        out_mem_config,
-        in0_dtype,
-        in1_dtype,
-        out_dtype,
-        in0_layout,
-        in1_layout,
-        compute_config,
-        gelu,
-        loop_count=1000,
-        determinism_check_enabled=False,
-        determinism_check_interval=False,
-    ):
-        super().__init__(
-            mesh_device,
-            in0_shape,
-            in1_shape,
-            in0_mem_config,
-            in1_mem_config,
-            out_mem_config,
-            in0_dtype,
-            in1_dtype,
-            out_dtype,
-            in0_layout,
-            in1_layout,
-            compute_config,
-            gelu,
-            loop_count,
-            determinism_check_enabled,
-            determinism_check_interval,
-        )
+    def __init__(self, *args, gelu=None, **kwargs):
+        super().__init__(*args, **kwargs)
         self.gelu = gelu
 
     def run_device_operation(self):
         return ttnn.mul(
             self.activations,
-            self.weights,
+            self.inputs[0],
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)] if self.gelu else [],
         )
 
 
-GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
-GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
-
-
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
-    GELU_FIDELITY_PARAMETRIZATION,
-    ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
+    [
+        (False, ttnn.MathFidelity.LoFi),
+        (True, ttnn.MathFidelity.HiFi2),
+    ],
+    ids=["without_gelu", "with_gelu"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -91,13 +55,9 @@ def test_binary_mul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    grid_size=(8, 8),
 ):
     # Initialize input configurations
-    if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
-    else:
-        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    compute_grid = get_mesh_grid_size(mesh_device)
     logger.info(f"Running on {compute_grid} cores")
 
     in0_shape = [1, 1, 640 * compute_grid.y, 576 * compute_grid.x]
@@ -106,24 +66,22 @@ def test_binary_mul(
     in0_mem_config = ttnn.L1_MEMORY_CONFIG
     in1_mem_config = ttnn.L1_MEMORY_CONFIG
     out_mem_config = ttnn.L1_MEMORY_CONFIG
+    program_config = None
     compute_config = None
 
     binary_mul_test = BinaryMulTest(
         mesh_device,
-        in0_shape=in0_shape,
-        in1_shape=in1_shape,
-        in0_mem_config=in0_mem_config,
-        in1_mem_config=in1_mem_config,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in0_mem_config),
+        [
+            OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),
+        ],
         out_mem_config=out_mem_config,
-        in0_dtype=ttnn.DataType.BFLOAT8_B,
-        in1_dtype=ttnn.DataType.BFLOAT8_B,
         out_dtype=ttnn.DataType.BFLOAT8_B,
-        in0_layout=ttnn.TILE_LAYOUT,
-        in1_layout=ttnn.TILE_LAYOUT,
+        program_config=program_config,
         compute_config=compute_config,
         gelu=gelu,
         loop_count=didt_workload_iterations,
-        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
 

@@ -12,10 +12,16 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+
+namespace ttsl::json {
+template <typename T>
+struct to_json_t;
+template <typename T>
+struct from_json_t;
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 

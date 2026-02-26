@@ -12,8 +12,32 @@ from loguru import logger
 
 import ttnn
 
+from ._utils import clamp, is_default_value, split_list
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
+
+
+@dataclass(frozen=True)
+class SamplingParams:
+    """
+    Sampling parameters for on-device greedy decoding / sampling.
+
+    Used by Generator decode/prefill functions. vLLM has its own duck-type-compatible
+    TTSamplingParams (in vllm/worker/tt_model_runner.py) that works with the same
+    format_sampling_params / chunk_sampling_params functions.
+    """
+
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
+    presence_penalty: float | list[float] = 0.0
+    frequency_penalty: float | list[float] = 0.0
+    repetition_penalty: float | list[float] = 1.0
+    seed: int | list[int] | None = None
+    enable_log_probs: bool | list[bool] = False
+
+
+SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
 @dataclass(frozen=True)
@@ -61,7 +85,8 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
-        self.seed_manager = SeedManager(self.tt_sampling)
+        seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
+        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=seed_batch_size)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -85,13 +110,6 @@ class SamplingGenerator:
                 )
         self._trace_states.clear()
 
-    def _is_default_penalty(self, values, default):
-        if values is None:
-            return True
-        if isinstance(values, (int, float)):
-            return values == default
-        return all(value == default for value in values)
-
     def reset_prompt_tokens(self, prompt_tokens):
         if not self._penalties_active:
             return
@@ -103,27 +121,95 @@ class SamplingGenerator:
         self.tt_penalties.reset_output_tokens(tokens)
 
     # ---------------------------------------------------------------------
+    # Prefill / decode state helpers
+    # ---------------------------------------------------------------------
+    def apply_prefill_state(
+        self,
+        *,
+        sampling_params,
+        prompt_tokens: torch.Tensor | None,
+        empty_slots: list[int],
+    ):
+        """Prepare sampling state for a prefill request.
+
+        Resets params, seeds, prompt tokens, and output state in the correct order.
+        """
+        self.reset_sampling_params(sampling_params)
+        if getattr(sampling_params, "seed", None) is not None:
+            self.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+        self.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
+        if prompt_tokens is not None:
+            self.reset_prompt_tokens(prompt_tokens)
+        self.reset_output_state()
+
+    def apply_decode_state(
+        self,
+        sampling_params_chunks: list,
+        *,
+        reset_batch: bool = False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+    ):
+        """Format, merge (if row-sharded), and apply sampling params for one model instance.
+
+        Args:
+            sampling_params_chunks: List of SamplingParams assigned to this instance.
+                Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
+            reset_batch: Also reset prompt tokens and output state (first decode step).
+            prompt_tokens: Prompt tokens for penalty tracking.
+            output_tokens: Output tokens for penalty tracking.
+
+        Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
+        advancement separately since generators call it at different points.
+        """
+        chunks_per_model = len(sampling_params_chunks)
+
+        max_batch_size = self.tt_sampling.max_batch_size
+
+        if chunks_per_model == 1:
+            formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
+            self.reset_sampling_params(formatted_params)
+        else:
+            # Row-sharded case: format each chunk to max_batch_size, concatenate.
+            # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
+            # Both TTSampling and TTPenalties use the same concatenated params.
+            formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
+            concat_fields = {}
+            for field in SAMPLING_PARAM_FIELDS:
+                lists = [getattr(fc, field) for fc in formatted_chunks]
+                if all(v is None for v in lists):
+                    concat_fields[field] = None
+                else:
+                    concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
+            formatted_params = SamplingParams(**concat_fields)
+            self.reset_sampling_params(formatted_params)
+
+        if reset_batch:
+            self.reset_prompt_tokens(prompt_tokens)
+            self.reset_output_state(output_tokens)
+
+    # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
-        old_force_argmax_sampling = self.tt_sampling._force_argmax_sampling
+        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
         )
-        if self.tt_sampling._force_argmax_sampling != old_force_argmax_sampling:
+        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
-            self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
-            and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
-            and self._is_default_penalty(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
+            is_default_value(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
+            and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
+            and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
         if (
-            not self.tt_sampling._force_argmax_sampling
+            not self.tt_sampling.force_argmax_sampling
             or self._penalties_active
             or self._penalties_active != old_penalties_active
         ):
@@ -177,7 +263,7 @@ class SamplingGenerator:
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling._force_argmax_sampling
+        force_argmax = self.tt_sampling.force_argmax_sampling
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
@@ -238,7 +324,7 @@ class SamplingGenerator:
 
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling._force_argmax_sampling
+        force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
@@ -266,118 +352,184 @@ class SamplingGenerator:
         return tt_out
 
 
-def clamp(value, min_value, max_value):
-    if value < min_value:
-        return min_value
-    elif value > max_value:
-        return max_value
-    return value
-
-
 def format_sampling_params(sampling_params, max_batch_size):
     """
-    Format sampling parameters to a dictionary.
+    Format sampling parameters for on-device use.
+
+    Converts scalar fields to lists, pads all lists to ``max_batch_size``,
+    inverts temperature, clamps top-p/top-k, and normalises penalties.
+
+    Returns a **new** SamplingParams — the input is never mutated.
     """
     if not isinstance(sampling_params.temperature, List):
-        # convert all sampling_params to lists
         update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
         sampling_params = replace(sampling_params, **update_dict)
 
-    # Must pad sampling_params to max_batch_size
-    default_params = {
-        "temp": 0.0,
-        "p": 1.0,
-        "k": 1,
+    target_len = max_batch_size
+    assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"
+
+    # Defaults used when padding short lists to target_len
+    defaults = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
+        "seed": random.randint(0, 1000000),
     }
-    target_len = max_batch_size
-    assert target_len == 32, "Sampling only support batch_size=32"
-    for name, tensor in zip(
-        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
-    ):
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
 
-    params = {}
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+    def _pad(lst, name):
+        """Return a new list padded to target_len with the default for *name*."""
+        if len(lst) >= target_len:
+            return list(lst)
+        return list(lst) + [defaults[name]] * (target_len - len(lst))
+
+    # Pad core sampling fields
+    temperature = _pad(sampling_params.temperature, "temperature")
+    top_p = _pad(sampling_params.top_p, "top_p")
+    top_k = _pad(sampling_params.top_k, "top_k")
+
+    # Normalise and pad penalty / seed fields
+    def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
-            params[name] = [default_params[name]]
+            lst = [defaults[name]]
         elif isinstance(value, List):
-            params[name] = list(value)
+            lst = list(value)
         else:
-            params[name] = [value]
+            lst = [value]
+        return _pad(lst, name)
 
-    sampling_params = replace(
-        sampling_params,
-        presence_penalty=params["presence_penalty"],
-        frequency_penalty=params["frequency_penalty"],
-        repetition_penalty=params["repetition_penalty"],
-        seed=params["seed"],
-    )
+    presence_penalty = _normalise_and_pad("presence_penalty")
+    frequency_penalty = _normalise_and_pad("frequency_penalty")
+    repetition_penalty = _normalise_and_pad("repetition_penalty")
+    seed = _normalise_and_pad("seed")
 
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
-        tensor = getattr(sampling_params, name)
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
-
-    # We must clamp top-p in range [0.0, 1.0]
-    # Cannot rely on external SamplingParams to be clamped
+    # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
     TOP_P_MAX = 1.0
 
-    for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
-        # Clamp top-p
-        clamped_top_p = clamp(top_p, TOP_P_MIN, TOP_P_MAX)
-        if clamped_top_p != top_p:
-            sampling_params.top_p[i] = clamped_top_p
+    for i in range(len(temperature)):
+        top_p[i] = clamp(top_p[i], TOP_P_MIN, TOP_P_MAX)
 
-        # Process temperature
-        if temp == 0:
-            sampling_params.temperature[i] = 1.0
-            sampling_params.top_k[i] = 1
+        if temperature[i] == 0:
+            temperature[i] = 1.0
+            top_k[i] = 1
         else:
-            sampling_params.temperature[i] = 1 / temp
+            temperature[i] = 1 / temperature[i]
 
-        # `top_k` contract: TT sampling supports up to 32 today.
-        # - k < 1 means "no restriction" so set it to max (32)
-        # - k > 32 is re-mapped to 32 until we support it
-        if sampling_params.top_k[i] < 1:
-            sampling_params.top_k[i] = 32
-        if sampling_params.top_k[i] > 32:
-            sampling_params.top_k[i] = 32
+        # top_k contract: TT sampling supports up to 32 today.
+        # k < 1 means "no restriction" → max (32); k > 32 → capped to 32.
+        if top_k[i] < 1:
+            top_k[i] = 32
+        if top_k[i] > 32:
+            top_k[i] = 32
 
-        if sampling_params.repetition_penalty[i] == 0:
-            sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
+        if repetition_penalty[i] == 0:
+            repetition_penalty[i] = defaults["repetition_penalty"]
 
-        if sampling_params.top_k[i] < 1:
-            sampling_params.top_k[i] = 32  # k<1 means no restriction so set it to max k (32)
-    return sampling_params
+    return replace(
+        sampling_params,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        repetition_penalty=repetition_penalty,
+        seed=seed,
+    )
+
+
+def broadcast_sampling_params(
+    formatted_sampling_params,
+    idx: int,
+    slot_len: int = 32,
+):
+    """
+    Create a new SamplingParams where each list field is broadcast to a full list of length
+    ``slot_len``, taking the value from ``idx``. Does not mutate the input.
+    """
+    kwargs = {}
+    for f in fields(formatted_sampling_params):
+        value = getattr(formatted_sampling_params, f.name)
+        if isinstance(value, List):
+            chosen = value[idx] if idx < len(value) else value[0]
+        else:
+            chosen = value
+        if chosen is None:
+            kwargs[f.name] = None
+        else:
+            kwargs[f.name] = [chosen] * slot_len
+    return SamplingParams(**kwargs)
+
+
+def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
+    """
+    Chunk a SamplingParams (or duck-type-compatible object) into ``sampling_dp`` pieces.
+
+    List fields are split evenly (length must be divisible by ``sampling_dp``).
+    Scalar fields are replicated to all chunks.  Falls back to dataclass defaults
+    for missing attributes so that vLLM's TTSamplingParams works transparently.
+
+    Returns a list of SamplingParams.
+    """
+    if sampling_dp == 1:
+        return [sampling_params]
+
+    chunked_fields = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        try:
+            val = getattr(sampling_params, field_name)
+        except AttributeError:
+            if hasattr(SamplingParams, field_name):
+                val = getattr(SamplingParams, field_name)
+            else:
+                raise
+        if isinstance(val, list):
+            assert (
+                len(val) % sampling_dp == 0
+            ), f"Sampling param '{field_name}' length {len(val)} not divisible by sampling_dp {sampling_dp}"
+            chunked_fields[field_name] = split_list(val, sampling_dp)
+        else:
+            chunked_fields[field_name] = [val] * sampling_dp
+
+    return [
+        SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
+        for i in range(sampling_dp)
+    ]
 
 
 class SeedManager:
-    def __init__(self, tt_sampling):
-        self.seeds = [secrets.randbits(64) for _ in range(32)]
+    def __init__(self, tt_sampling, max_batch_size=32):
+        self.max_batch_size = max_batch_size
+        self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
         self.rngs = [random.Random(seed) for seed in self.seeds]
         self.tt_sampling = tt_sampling
+        # Mesh mapper for sharding seeds across rows when sampling_dp > 1
+        if tt_sampling._sampling_dp > 1:
+            self._seed_mapper = ttnn.ShardTensor2dMesh(
+                tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
+            )
+        else:
+            self._seed_mapper = None
 
     def reset_seed(self, seeds, user_ids):
         for i, user in enumerate(user_ids):
             self.rngs[user].seed(seeds[i])
             self.seeds[user] = seeds[i]
 
-    def get_new_values(self, empty_slots=range(32), replicate_seeds=False):
+    def get_new_values(self, empty_slots=None, replicate_seeds=False):
+        if empty_slots is None:
+            empty_slots = range(self.max_batch_size)
         # get new seeds for each user in empty_slots otherwise 0
         new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
 
         if replicate_seeds:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
-            new_seeds = 32 * [new_seeds[empty_slots[0]]]
+            new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
-        new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        new_seed_tt = ttnn.from_torch(
+            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
+        )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)

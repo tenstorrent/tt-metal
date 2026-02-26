@@ -7,7 +7,6 @@
  */
 
 #include "gather.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <cstring>

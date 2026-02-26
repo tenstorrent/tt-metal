@@ -37,7 +37,7 @@ void kernel_main() {
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         cb_reserve_back(mapping_cb_id, One_Tile_Reserve);
-        const uint64_t map_noc_addr = get_noc_addr(out_page_idx, map_addr_gen);
+        const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
         const uint32_t map_addr = get_read_ptr(mapping_cb_id);
         enhanced_noc_async_read<Max_Map_Size_Bytes, true>(map_noc_addr, map_addr, Max_Map_Size_Bytes);
         noc_async_read_barrier();
@@ -62,7 +62,7 @@ void kernel_main() {
 
             cb_reserve_back(input_cb_id, One_Tile_Reserve);
             const uint32_t input_write_addr = get_read_ptr(input_cb_id);
-            const uint64_t input_page_noc_addr = get_noc_addr(input_page_idx, input_addr_gen);
+            const uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(input_page_idx);
             enhanced_noc_async_read<Tile_Size_Bytes, true>(input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
             previous_input_page_idx = input_page_idx;
             noc_async_read_barrier();

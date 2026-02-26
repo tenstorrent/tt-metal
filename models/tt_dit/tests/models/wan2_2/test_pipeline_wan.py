@@ -5,7 +5,6 @@
 import numpy as np
 import pytest
 import torch
-from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.utils import export_to_video
 
 import ttnn
@@ -66,10 +65,6 @@ def test_pipeline_inference(
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    scheduler = UniPCMultistepScheduler.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="scheduler", flow_shift=12.0
-    )
-
     pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
@@ -79,7 +74,6 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        scheduler=scheduler,
     )
 
     seed = 42

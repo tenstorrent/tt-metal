@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "dispatch/dispatch_query_manager.hpp"
+#include "dprint_server.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -437,8 +438,19 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 
     // populate_fd_kernels_only needs to be done before Fabric initialization.
     // It allocates dispatch cores to dispatch_core_manager.
-    auto dispatch_kernel_initializer =
-        std::make_unique<DispatchKernelInitializer>(descriptor_, MetalContext::instance().get_dispatch_core_manager());
+    auto dispatch_kernel_initializer = std::make_unique<DispatchKernelInitializer>(
+        descriptor_,
+        MetalContext::instance().get_dispatch_core_manager(),
+        this,
+        []() -> tt::tt_fabric::ControlPlane& { return MetalContext::instance().get_control_plane(); },
+        []() -> const tt::tt_metal::DispatchQueryManager& {
+            return MetalContext::instance().get_dispatch_query_manager();
+        },
+        [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
+        [](ChipId id) {
+            auto& s = MetalContext::instance().dprint_server();
+            return s && s.get() && s->reads_dispatch_cores(id);
+        });
     if (!activated_devices.empty()) {
         dispatch_kernel_initializer->populate_fd_kernels_only(activated_devices);
     }
@@ -491,6 +503,25 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
     init_done_.erase(DispatchKernelInitializer::key);
     if (force_recreate_topology) {
         reset_dispatch_topology();
+        // Create the initializer from scratch if this is the first time FD is being dynamically initialized.
+        // Or recreate the initializer after reset (it was erased so that topology can be recreated for FD).
+        auto dispatch_kernel_initializer = std::make_unique<DispatchKernelInitializer>(
+            descriptor_,
+            MetalContext::instance().get_dispatch_core_manager(),
+            this,
+            []() -> tt::tt_fabric::ControlPlane& { return MetalContext::instance().get_control_plane(); },
+            []() -> const tt::tt_metal::DispatchQueryManager& {
+                return MetalContext::instance().get_dispatch_query_manager();
+            },
+            [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
+            [](ChipId id) {
+                auto& s = MetalContext::instance().dprint_server();
+                return s && s.get() && s->reads_dispatch_cores(id);
+            });
+        if (!active_devices.empty()) {
+            dispatch_kernel_initializer->populate_fd_kernels_only(active_devices);
+        }
+        initializers_[DispatchKernelInitializer::key] = std::move(dispatch_kernel_initializer);
     }
     initializers_[DispatchKernelInitializer::key]->init(active_devices, init_done_);
     initializers_[DispatchKernelInitializer::key]->configure();
@@ -662,11 +693,19 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // Order matters
-    initializers_[DispatchKernelInitializer::key]->teardown();
-    initializers_[FabricFirmwareInitializer::key]->teardown();
-    initializers_[ProfilerInitializer::key]->teardown();
-    initializers_[CommandQueueInitializer::key]->teardown();
+    TT_ASSERT(init_done_.contains(DispatchKernelInitializer::key));
+    initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
 
+    TT_ASSERT(init_done_.contains(FabricFirmwareInitializer::key));
+    initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+
+    TT_ASSERT(init_done_.contains(ProfilerInitializer::key));
+    initializers_[ProfilerInitializer::key]->teardown(init_done_);
+
+    TT_ASSERT(init_done_.contains(CommandQueueInitializer::key));
+    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
     initializers_[DispatchKernelInitializer::key]->post_teardown();
     initializers_[FabricFirmwareInitializer::key]->post_teardown();
     initializers_[ProfilerInitializer::key]->post_teardown();
@@ -692,6 +731,7 @@ DeviceManager::~DeviceManager() {
     }
     this->devices_.clear();
     init_done_.clear();
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
     initializers_.clear();
     descriptor_.reset();
 }

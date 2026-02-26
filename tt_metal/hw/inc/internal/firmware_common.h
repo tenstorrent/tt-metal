@@ -127,10 +127,21 @@ uint32_t firmware_config_init(
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
+#ifdef ARCH_QUASAR
+    // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
+    // functionality is ready for Quasar
+    rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
+                                        launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
+                                        MEM_L1_UNCACHED_BASE);
+    crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
+                                         launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset +
+                                         MEM_L1_UNCACHED_BASE);
+#else
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                          launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
+#endif
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 #ifdef ARCH_QUASAR

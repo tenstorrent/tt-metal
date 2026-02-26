@@ -311,7 +311,7 @@ def run_norm_and_rope_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 4218900,
+            "trace_region_size": 5518900,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

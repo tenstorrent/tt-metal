@@ -655,6 +655,7 @@ target_sources(
             inc/hostdev/rta_constants.h
             inc/hostdev/socket.h
             # Interface Headers
+            inc/internal/hw_thread.h
             inc/internal/atomic_rwptr.h
             inc/internal/bit_utils.h
             inc/internal/circular_buffer_interface.h

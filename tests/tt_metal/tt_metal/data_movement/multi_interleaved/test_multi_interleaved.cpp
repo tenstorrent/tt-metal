@@ -109,7 +109,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
 
     std::vector<uint32_t> l1_addrs;
     std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
-    constexpr uint32_t barrier_scratch_bytes = 2u * sizeof(uint32_t);
+    constexpr uint32_t noc_l1_alignment = 16u;
+    constexpr uint32_t barrier_scratch_bytes = 2u * noc_l1_alignment;
     const uint32_t required_l1_bytes = per_core_size_bytes + barrier_scratch_bytes;
     for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
@@ -186,7 +187,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
             // Each core writes to different pages to distribute across DRAM banks
             uint32_t page_offset = i * test_config.num_pages;
             // Use the end of L1 data buffer as scratch space for polling
-            uint32_t local_barrier_addr = l1_addrs[i] + per_core_size_bytes + sizeof(uint32_t);
+            uint32_t local_barrier_addr = l1_addrs[i] + per_core_size_bytes + noc_l1_alignment;
 
             std::vector<uint32_t> writer_run_time_args = {
                 output_buffer_address,

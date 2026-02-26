@@ -16,9 +16,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"
 #include <tt-metalium/shape.hpp>
 #include <tt_stl/span.hpp>
@@ -179,7 +177,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.tensor_topology());
+            Tensor copy(tensor.host_storage(), tensor.tensor_spec(), tensor.tensor_topology());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -211,7 +209,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.tensor_topology());
+        Tensor copy(tensor.host_storage(), tensor.tensor_spec(), tensor.tensor_topology());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }

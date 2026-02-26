@@ -74,6 +74,7 @@ class SdpaTailSingleCore:
         block_size=1,
         num_blocks=1,
         final_reduction=False,
+        dense=False,
     ):
         """
         Execute SDPA tail reduction using generic_op.
@@ -89,7 +90,7 @@ class SdpaTailSingleCore:
             block_size: Number of tiles per block
             num_blocks: Number of blocks
             final_reduction: Whether to apply final normalization (l /= s)
-
+            dense: Whether to use dense packing
         Returns:
             Tuple of (l_out, m_out, s_out) tensors
         """
@@ -179,6 +180,8 @@ class SdpaTailSingleCore:
             config=ttnn.WriterConfigDescriptor(),
         )
 
+        untilize = l_out_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
         # Compute kernel - simplified args
         compute_compile_time_args = [
             cb_l1,
@@ -191,6 +194,8 @@ class SdpaTailSingleCore:
             block_size,
             num_blocks,
             final_reduction,
+            dense,
+            untilize,
         ]
 
         compute_kernel_descriptor = ttnn.KernelDescriptor(

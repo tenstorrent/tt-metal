@@ -80,8 +80,9 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "wormhole_b0 sdxl op tests", cmd: "pytest --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
-            { name: "blackhole deepseek blitz op tests", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 20 }
+            { name: "wormhole_b0 sdxl op tests", cmd: "pytest --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5, slow_dispatch: false },
+            { name: "blackhole deepseek blitz op tests (slow dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 20, slow_dispatch: true },
+            { name: "blackhole deepseek blitz op tests (fast dispatch)", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 20, slow_dispatch: false }
           ]]
     steps:
       - name: Compute tests
@@ -151,6 +152,9 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
+          if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
+            export TT_METAL_SLOW_DISPATCH_MODE=1
+          fi
           ${{ matrix.test-group.cmd }}
 
           # Device perf branch

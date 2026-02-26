@@ -4,8 +4,6 @@
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
-#include <tt-logger/tt-logger.hpp>
-
 namespace tt::tt_fabric {
 
 std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(

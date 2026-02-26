@@ -6,7 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 
 
 class TtBasicTransformerBlock(LightweightModule):
@@ -23,7 +23,7 @@ class TtBasicTransformerBlock(LightweightModule):
         super().__init__()
 
         self.module_path = module_path
-        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisationsBase)
 
         self.attn1 = TtAttention(
             device,

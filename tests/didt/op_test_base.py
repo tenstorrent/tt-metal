@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,20 +10,22 @@ from models.common.utility_functions import comp_pcc, is_blackhole
 import ttnn
 
 
+class OpParameter:
+    def __init__(self, shape, dtype, layout, mem_config):
+        self.shape = shape
+        self.mem_config = mem_config
+        self.dtype = dtype
+        self.layout = layout
+
+
 class OpTestBase:
     def __init__(
         self,
         mesh_device,
-        in0_shape,
-        in1_shape,
-        in0_mem_config,
-        in1_mem_config,
+        activation: OpParameter,
+        arguments: [OpParameter],
         out_mem_config,
-        in0_dtype,
-        in1_dtype,
         out_dtype,
-        in0_layout,
-        in1_layout,
         program_config,
         compute_config,
         loop_count=1000,
@@ -41,16 +43,10 @@ class OpTestBase:
             self.from_torch_mesh_mapper = None
             self.device_ids = [self.mesh_device.id()]
 
-        self.in0_mem_config = in0_mem_config
-        self.in1_mem_config = in1_mem_config
-        self.out_mem_config = out_mem_config
-        self.in0_shape = in0_shape
-        self.in1_shape = in1_shape
-        self.in0_dtype = in0_dtype
-        self.in1_dtype = in1_dtype
+        self.activation = activation
+        self.arguments = arguments
         self.out_dtype = out_dtype
-        self.in0_layout = in0_layout
-        self.in1_layout = in1_layout
+        self.out_mem_config = out_mem_config
         self.program_config = program_config
         self.compute_config = compute_config
         self.loop_count = loop_count
@@ -59,7 +55,7 @@ class OpTestBase:
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
-        self.weights = None
+        self.inputs = []
 
     def get_device(self, device_idx):
         return self.mesh_device
@@ -73,37 +69,37 @@ class OpTestBase:
         return torch.randn(shape)
 
     # Override if needed
-    def generate_torch_weights(self, shape):
+    def generate_torch_input(self, shape):
         return torch.randn(shape)
 
     def generate_tt_activations_from_torch(self, torch_tensor):
         return ttnn.from_torch(
             torch_tensor,
-            dtype=self.in0_dtype,
-            layout=self.in0_layout,
+            dtype=self.activation.dtype,
+            layout=self.activation.layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
             mesh_mapper=self.from_torch_mesh_mapper,
         )
 
-    def generate_tt_weights_from_torch(self, torch_tensor):
+    def generate_tt_input_from_torch(self, torch_tensor, dtype, layout, mem_config, ind):
         return ttnn.from_torch(
             torch_tensor,
-            dtype=self.in1_dtype,
-            layout=self.in1_layout,
-            memory_config=self.in1_mem_config,
+            dtype=dtype,
+            layout=layout,
+            memory_config=mem_config,
             device=self.mesh_device,
             mesh_mapper=self.from_torch_mesh_mapper,
         )
 
     def convert_activations_to_memory_config(self, activations):
-        return ttnn.to_memory_config(activations, self.in0_mem_config)
+        return ttnn.to_memory_config(activations, self.activation.mem_config)
 
     def run_device_operation(self):
         # Default Op is matmul. Override in derived class if needed.
         return ttnn.matmul(
             self.activations,
-            self.weights,
+            self.inputs[0],
             program_config=self.program_config,
             memory_config=self.out_mem_config,
             dtype=self.out_dtype,
@@ -119,8 +115,7 @@ class OpTestBase:
 
         logger.info(f"Running on {num_devices} devices")
 
-        a_shape = self.in0_shape
-        b_shape = self.in1_shape
+        a_shape = self.activation.shape
 
         num_activation_tensors = 1
         if self.determinism_check_enabled:
@@ -132,17 +127,20 @@ class OpTestBase:
         A = []
         for act in range(num_activation_tensors):
             A.append(self.generate_torch_activations(a_shape))
-        B = self.generate_torch_weights(b_shape)
+        B = [self.generate_torch_input(a.shape) for a in self.arguments]
 
         logger.info("Pushing activations to devices...")
         a_t = []
         for act in range(num_activation_tensors):
             a_t.append(self.generate_tt_activations_from_torch(A[act]))
 
-        logger.info("Pushing weights to devices...")
-        self.weights = self.generate_tt_weights_from_torch(B)
+        logger.info("Pushing inputs to devices...")
+        self.inputs = [
+            self.generate_tt_input_from_torch(b, a.dtype, a.layout, a.mem_config, i)
+            for i, (b, a) in enumerate(zip(B, self.arguments))
+        ]
 
-        logger.info("Activations and weights pushed to devices!")
+        logger.info("Activations and inputs pushed to devices!")
 
         if self.determinism_check_enabled:
             # Run op once to populate reference output to use for determinism checks
@@ -215,6 +213,9 @@ class OpTestBase:
         assert catch_nd_on_fail
 
 
-def get_blackhole_grid_size(mesh_device):
-    assert is_blackhole()
+def test():
+    pass
+
+
+def get_mesh_grid_size(mesh_device):
     return mesh_device.compute_with_storage_grid_size()
