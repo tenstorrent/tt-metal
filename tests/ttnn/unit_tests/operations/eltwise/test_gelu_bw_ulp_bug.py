@@ -433,13 +433,6 @@ def test_derive_gelu_derivative_polynomial_coefficients():
         """Vectorized GELU'(x)."""
         return np.array([gelu_derivative_fp64(float(xi)) for xi in x_arr])
 
-    def eval_poly_horner(coeffs, x):
-        """Evaluate polynomial using Horner's method. coeffs[0] is constant term."""
-        result = np.zeros_like(x, dtype=np.float64)
-        for c in reversed(coeffs):
-            result = result * x + c
-        return result
-
     # Use numpy's chebyshev fitting which is numerically stable
     from numpy.polynomial import chebyshev as C
 
