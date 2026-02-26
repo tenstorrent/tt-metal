@@ -524,7 +524,7 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         // If it's allocatable, make sure it's in a segment.
         if (section.sh_flags & SHF_ALLOC && !FindSegment(section)) {
             std::string_view sec_name = GetName(section);
-            if (sec_name.find(".device_print") != std::string_view::npos) {
+            if (sec_name.starts_with(".device_print")) {
                 // Special case: .device_print sections are used for
                 // debug printing, and are not mapped into memory.
                 continue;
