@@ -404,6 +404,22 @@ class ReduceToOneB1:
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
+        # Create global semaphores for worker→fabric signaling
+        # Compute num_workers_per_column from input shard grid (same for all devices)
+        sample_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
+        sample_columns = {}
+        for c in sample_cores:
+            sample_columns.setdefault(c.x, []).append(c)
+        num_worker_fabric_sems = len(sample_columns[sorted(sample_columns.keys())[0]])
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        worker_fabric_sem_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        worker_fabric_global_sems = [
+            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
+        ]
+        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+
         # Create or use provided D2D_0 infrastructure
         d2d0_infra = None
         if enable_d2d0_output:
@@ -596,7 +612,7 @@ class ReduceToOneB1:
                         fabric_core_phys.x,  # fabric_core_noc_x
                         fabric_core_phys.y,  # fabric_core_noc_y
                         slot_idx,  # my_slot_idx
-                        slot_idx,  # worker_sem_id (same as slot_idx for simplicity)
+                        worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
                         dst_l1_addr,  # dst_l1_addr
                         dst_sem_addr,  # dst_sem_addr
                         output_tensor_device.buffer_address(),  # output_base_addr
@@ -605,10 +621,9 @@ class ReduceToOneB1:
                     ]
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore IDs (fabric args appended later)
+                # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
                 for fc in fabric_cores:
-                    fabric_args = list(range(num_workers_per_column))  # Worker sem IDs
-                    brisc_per_core_args.append((fc, fabric_args))
+                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -752,16 +767,8 @@ class ReduceToOneB1:
                 kernel_result = unified_kernel.get_kernel_descriptors()
                 fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
 
-                # Create semaphores for worker→fabric synchronization
+                # Worker→fabric semaphores are global (created before the loop)
                 semaphore_descriptors = []
-                for worker_idx in range(num_workers_per_column):
-                    sem_desc = ttnn.SemaphoreDescriptor(
-                        id=worker_idx,
-                        core_type=ttnn.CoreType.WORKER,
-                        core_ranges=fabric_core_set,
-                        initial_value=0,
-                    )
-                    semaphore_descriptors.append(sem_desc)
 
                 # === Program Descriptor ===
                 all_kernels = kernel_result.kernels

@@ -447,7 +447,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),  // fabric_core_noc_x
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),  // fabric_core_noc_y
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),  // my_slot_idx
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),  // worker_sem_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),  // worker_sem_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),  // dst_l1_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),  // dst_sem_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),  // output_base_addr
