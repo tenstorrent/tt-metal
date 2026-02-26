@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 
@@ -891,6 +892,67 @@ INSTANTIATE_TEST_SUITE_P(
     T3kTopologyMapperCustomMapping,
     T3kTopologyMapperWithCustomMappingFixture,
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
+
+// CPU-only host test: verifies mesh host rank correctness when using manual logical-to-physical
+// pinnings. The topology mapper must correctly use mesh graph host ranks for get_host_rank_for_chip
+// (preserving coordinate ranges) while get_local_host_rank returns local_mesh_binding.host_rank for
+// the current host.
+TEST_F(TopologyMapperTest, T3kMeshGraphTestHostRankWithManualPinning) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::T3K, mesh_graph_desc_path.string());
+
+    // t3k_2x2: mesh 0 is 2x2 with host_topology [1,1] (single host)
+    // Eth coords split: mesh 0 uses chips 0,1,4,5 (eth coords with x=0,1)
+    const std::vector<std::vector<EthCoord>> mesh_graph_eth_coords = {{
+        {0, 0, 0, 0, 0},  // chip 0 -> host_rank 0
+        {0, 1, 0, 0, 0},  // chip 1 -> host_rank 0
+        {0, 0, 1, 0, 0},  // chip 2 -> host_rank 0
+        {0, 1, 1, 0, 0}   // chip 3 -> host_rank 0
+    }};
+
+    auto logical_mesh_chip_id_to_physical_chip_id_mapping =
+        fabric_router_tests::get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords);
+
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {MeshId{0}};
+    local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
+
+    auto topology_mapper = TopologyMapper(
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        local_mesh_binding,
+        logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    const MeshId mesh_id{0};
+
+    // Verify get_host_rank_for_chip returns mesh graph's host rank for each chip
+    // (based on host_topology, not physical placement - tests rebuild_host_rank_structs_from_mapping)
+    // All chips in mesh 0 have host_rank 0 since host_topology is [1,1]
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId(0));
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 1), MeshHostRankId(0));
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 2), MeshHostRankId(0));
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 3), MeshHostRankId(0));
+
+    // Verify get_local_host_rank returns mesh graph's host rank
+    // (all chips on mock cluster are local, and mesh has single host rank 0)
+    auto local_host_rank = topology_mapper.get_local_host_rank(mesh_id);
+    ASSERT_TRUE(local_host_rank.has_value()) << "get_local_host_rank should return a value for mesh with local chips";
+    EXPECT_EQ(*local_host_rank, MeshHostRankId(0));
+
+    // Verify get_host_ranks includes only one host rank (single host mesh)
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1u);
+
+    // Verify coordinate range for the single host rank (2x2 mesh: (0,0) to (1,1))
+    auto coord_range = topology_mapper.get_coord_range(mesh_id, MeshHostRankId(0));
+    EXPECT_EQ(coord_range.start_coord(), MeshCoordinate(0, 0));
+    EXPECT_EQ(coord_range.end_coord(), MeshCoordinate(1, 1));
+}
 
 TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // Test that TopologyMapper::generate_mesh_graph_from_physical_system_descriptor uses map_mesh_to_physical
