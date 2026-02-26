@@ -251,6 +251,39 @@ def _emit_rt_arg_undef() -> str:
     return "#undef get_arg_val"
 
 
+def _emit_common_rt_arg_wrapper(phase_idx: int, crta_offset: int) -> List[str]:
+    """Emit wrapper functions for common runtime arg access with offset.
+
+    Emitted once at file scope (before any #define redirect) so the
+    wrapper body references the real ``get_common_arg_val`` /
+    ``get_common_arg_addr``.
+    """
+    name = f"phase_{phase_idx}_get_common_arg_val"
+    addr_name = f"phase_{phase_idx}_get_common_arg_addr"
+    return [
+        f"template <typename T>",
+        f"FORCE_INLINE T {name}(int arg_idx) {{",
+        f"    return get_common_arg_val<T>(arg_idx + {crta_offset});",
+        f"}}",
+        f"static FORCE_INLINE uintptr_t {addr_name}(int arg_idx) {{",
+        f"    return get_common_arg_addr(arg_idx + {crta_offset});",
+        f"}}",
+    ]
+
+
+def _emit_common_rt_arg_define(phase_idx: int) -> List[str]:
+    """Emit #define redirects for common RT arg access."""
+    return [
+        f"#define get_common_arg_val phase_{phase_idx}_get_common_arg_val",
+        f"#define get_common_arg_addr phase_{phase_idx}_get_common_arg_addr",
+    ]
+
+
+def _emit_common_rt_arg_undef() -> List[str]:
+    """Emit #undef to restore common RT arg access after a phase."""
+    return ["#undef get_common_arg_val", "#undef get_common_arg_addr"]
+
+
 def _transform_phase_source(
     source: str,
     phase_idx: int,
@@ -415,6 +448,7 @@ def _generate_phase_block(
     defines: List[Tuple[str, str]],
     ct_arg_offset: int,
     phase_name: str = "",
+    has_common_rt_args: bool = False,
 ) -> List[str]:
     """Generate a preprocessor-based phase block.
 
@@ -425,6 +459,8 @@ def _generate_phase_block(
 
     - ``get_named_compile_time_arg_val(name)`` → ``get_named_ct_arg("phase_N_" name)``
     - ``get_arg_val`` → ``phase_N_get_arg_val``
+    - ``get_common_arg_val`` → ``phase_N_get_common_arg_val`` (when common RT args present)
+    - ``get_common_arg_addr`` → ``phase_N_get_common_arg_addr`` (when common RT args present)
 
     Positional CT arg offsetting (``get_compile_time_arg_val(N)``) is done
     via regex in the caller, not via ``#define``, because some kernels use
@@ -446,6 +482,10 @@ def _generate_phase_block(
     # RT arg redirect (all phases, including phase 0)
     lines.append(_emit_rt_arg_define(phase_idx))
 
+    # Common RT arg redirect (when any phase has common args)
+    if has_common_rt_args:
+        lines.extend(_emit_common_rt_arg_define(phase_idx))
+
     # Named CT arg redirect (phase N>0 — phase 0 keeps original names)
     if phase_idx > 0:
         lines.append(f'#define get_named_compile_time_arg_val(name) get_named_ct_arg("phase_{phase_idx}_" name)')
@@ -460,6 +500,10 @@ def _generate_phase_block(
     # Undo named CT arg redirect
     if phase_idx > 0:
         lines.append("#undef get_named_compile_time_arg_val")
+
+    # Undo common RT arg redirect
+    if has_common_rt_args:
+        lines.extend(_emit_common_rt_arg_undef())
 
     # Undo RT arg redirect
     lines.append(_emit_rt_arg_undef())
@@ -489,6 +533,9 @@ def _generate_fused_source(
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
+    common_rt_arg_offsets: Optional[Dict[int, int]] = None,
+    all_phase_indices: Optional[List[int]] = None,
+    has_compute: bool = True,
 ) -> Optional[str]:
     """Generate fused kernel source for any RISC type.
 
@@ -582,6 +629,14 @@ def _generate_fused_source(
                 lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
         lines.append("")
 
+    # Common RT arg wrappers at file scope (when any phase has common args)
+    has_common_rt_args = bool(common_rt_arg_offsets)
+    if has_common_rt_args:
+        for phase_idx, _ in role_sources:
+            if phase_idx in common_rt_arg_offsets:
+                lines.extend(_emit_common_rt_arg_wrapper(phase_idx, common_rt_arg_offsets[phase_idx]))
+        lines.append("")
+
     # Phase blocks (preprocessor-based)
     for phase_idx, raw_source in role_sources:
         defines = per_phase_defines.get(phase_idx, [])
@@ -602,21 +657,39 @@ def _generate_fused_source(
                 defines,
                 ct_offset,
                 phase_name=phase_names.get(phase_idx, ""),
+                has_common_rt_args=has_common_rt_args,
             )
         )
 
     needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
-    # Barrier namespace
+    # Build set of phase indices that have a kernel for this role
+    role_phase_set = set(idx for idx, _ in role_sources)
+
+    # Determine the full list of phases for the dispatcher.
+    # When mixing ops with different role sets (e.g. slice has no compute,
+    # LN has compute), the dispatcher must include ALL phases so that barrier
+    # wait/reset happens at every phase transition on every RISC.
+    if all_phase_indices is not None:
+        dispatch_phases = all_phase_indices
+    else:
+        dispatch_phases = [idx for idx, _ in role_sources]
+
+    # Barrier namespace — use ALL phase indices, not just role_sources.
+    # This ensures the barrier dispatch table includes ALL phase transitions
+    # so that CB reset/resync and segment sync happen at every phase boundary
+    # on every RISC — even if this RISC had no work in a phase.
     if needs_barrier:
+        all_sources = [(i, "") for i in dispatch_phases]
         lines.extend(
             _generate_barrier_namespace(
                 risc_type,
                 multi_barrier,
                 rebind_info or {},
-                role_sources,
+                all_sources,
                 per_phase_cb_slots,
                 op_semaphore_info=op_semaphore_info,
+                has_compute=has_compute,
             )
         )
 
@@ -628,21 +701,27 @@ def _generate_fused_source(
 
     has_trailing = False
     if needs_barrier:
-        last_phase_idx = role_sources[-1][0]
+        last_phase_idx = dispatch_phases[-1]
         has_trailing = last_phase_idx in multi_barrier.transition_map
 
-    for count, (phase_idx, _) in enumerate(role_sources):
+    for count, phase_idx in enumerate(dispatch_phases):
         pname = phase_names.get(phase_idx, "")
         label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
-        lines.append(f"    // {label}")
-        if pname:
-            lines.append("    {")
-            lines.append(f'        DeviceZoneScopedN("{pname}");')
-            lines.append(f"        phase_{phase_idx}::run();")
-            lines.append("    }")
+        has_work = phase_idx in role_phase_set
+
+        if has_work:
+            lines.append(f"    // {label}")
+            if pname:
+                lines.append("    {")
+                lines.append(f'        DeviceZoneScopedN("{pname}");')
+                lines.append(f"        phase_{phase_idx}::run();")
+                lines.append("    }")
+            else:
+                lines.append(f"    phase_{phase_idx}::run();")
         else:
-            lines.append(f"    phase_{phase_idx}::run();")
-        is_last = count == len(role_sources) - 1
+            lines.append(f"    // {label} (no-op for this RISC)")
+
+        is_last = count == len(dispatch_phases) - 1
         if needs_barrier and (not is_last or has_trailing):
             lines.append("    barrier::phase::wait();")
             lines.append("    barrier::phase::reset();")

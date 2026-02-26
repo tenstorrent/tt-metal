@@ -34,6 +34,7 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
     _append_barrier_runtime_args,
     _append_rebind_runtime_args,
     _concatenate_common_runtime_args,
+    _compute_common_rt_arg_offsets,
     _merge_named_compile_time_args,
     _merge_compile_time_args,
     _collect_phase_defines,
@@ -163,14 +164,17 @@ def _build_fused_descriptor(
     # Validate fp32 consistency
     _validate_fp32_consistency([p.op_descriptor for p in phases])
 
-    # Discover all kernel roles from phase 0
+    # Discover all kernel roles from ALL phases (not just phase 0).
+    # Different ops may have different role sets — e.g. slice has no compute
+    # kernel, while layer_norm has reader+compute+writer.  We need the union.
     role_keys: List[Tuple[str, frozenset]] = []
     role_keys_set: Set[Tuple[str, frozenset]] = set()
-    for kernel_desc in phases[0].op_descriptor.descriptor.kernels:
-        rk = _get_role_key(kernel_desc, target_core_range)
-        if rk not in role_keys_set:
-            role_keys.append(rk)
-            role_keys_set.add(rk)
+    for phase in phases:
+        for kernel_desc in phase.op_descriptor.descriptor.kernels:
+            rk = _get_role_key(kernel_desc, target_core_range)
+            if rk not in role_keys_set:
+                role_keys.append(rk)
+                role_keys_set.add(rk)
 
     # Build phase_kernels as List[Dict[role_key, KernelDescriptor]]
     # and phase_kernel_indices as List[Dict[role_key, kernel_index]]
@@ -231,6 +235,10 @@ def _build_fused_descriptor(
 
     _t2 = _time.perf_counter()
 
+    # Determine whether any phase has a compute kernel.
+    # When no compute exists, BRISC barrier skips compute_done semaphore.
+    has_compute = any(rk[0] == "compute" for rk in role_keys)
+
     fused_kernels = []
     kernel_labels = []
     _source_gen_total = 0.0
@@ -274,6 +282,12 @@ def _build_fused_descriptor(
         if role_label is None:
             continue
 
+        common_rt_offsets = _compute_common_rt_arg_offsets(phase_kernels, role_key)
+
+        # All phase indices (for dispatcher — ensures barrier participation
+        # even for phases where this role has no kernel).
+        all_phase_indices = list(range(len(phases)))
+
         _sg_start = _time.perf_counter()
         fused_source = _generate_fused_source(
             phase_kernels,
@@ -287,15 +301,23 @@ def _build_fused_descriptor(
             op_semaphore_info=op_semaphore_info if risc_type == "riscv_0" else None,
             multi_barrier=multi_barrier,
             rt_arg_offsets=rt_offsets,
+            common_rt_arg_offsets=common_rt_offsets,
+            all_phase_indices=all_phase_indices,
+            has_compute=has_compute,
         )
         _sg_end = _time.perf_counter()
         _source_gen_total += _sg_end - _sg_start
 
-        # Determine barrier RT addresses per RISC type
+        # Determine barrier RT addresses per RISC type.
+        # When no compute kernel exists, BRISC only tracks writer_done
+        # (compute_done would never be signaled).
         barrier_addrs: List[int] = []
         if multi_barrier is not None:
             if risc_type == "riscv_0":
-                barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
+                if has_compute:
+                    barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
+                else:
+                    barrier_addrs = [multi_barrier.writer_done_addr]
                 for seg in multi_barrier.segments:
                     barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
             elif risc_type == "riscv_1":
