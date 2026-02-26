@@ -30,6 +30,7 @@
 #include "api/compute/reduce_custom.h"
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#include "api/compute/experimental/tile_move_copy_custom.h"
 
 #include <tools/profiler/kernel_profiler.hpp>
 
@@ -599,9 +600,8 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
-        sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-            copy_tile(prev_cb, row_start + i, i);
+            copy_tile_custom(prev_cb, row_start + i, i);
         }
     }
 
@@ -891,11 +891,7 @@ void sdpa_inner_loop_step(
         kt_index_offset = 0;
 
 #ifdef ARCH_BLACKHOLE
-        // if (q_subblock == 0) {
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-        // } else {
-        //     mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
-        // }
 #else
         mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
@@ -948,7 +944,7 @@ void sdpa_inner_loop_step(
                 q_subblock,
                 !is_first_iter /*do_eltwise_max*/,
                 q_subblock /*in0_row_group_index*/,
-                q_subblock == 0 /*use_init*/);
+                q_subblock == 0 || is_last_iter /*use_init*/);
             cb_push_back(cur_max, sbh);
         }
 
