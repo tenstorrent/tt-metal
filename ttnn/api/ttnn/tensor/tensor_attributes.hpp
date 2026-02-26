@@ -20,9 +20,18 @@ public:
     TensorAttributes(MeshTensor mesh_tensor) : tensor_attributes(std::move(mesh_tensor)) {}
 
     // Deallocation related
-    void deallocate() { tensor_attributes = Deallocated{}; }
+    void deallocate_device_memory() {
+        if (!is_allocated() || storage_type() == StorageType::HOST) {
+            return;
+        }
+        // This should not be needed as MeshTensor is the sole owner of the underlying MeshBuffer,
+        // and it is part of it's invariant that the MeshBuffer is allocated.
+        // This is here as the invariant cannot be guaranteed currently, see: #38375
+        mesh_tensor().mesh_buffer_ptr()->deallocate();
+        tensor_attributes = Deallocated{};
+    }
 
-    bool is_allocated() const { return std::holds_alternative<Deallocated>(tensor_attributes); }
+    bool is_allocated() const { return !std::holds_alternative<Deallocated>(tensor_attributes); }
 
     StorageType storage_type() const {
         return std::visit(
