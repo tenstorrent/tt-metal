@@ -820,6 +820,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto device_id = device->id();
 
     program.impl().allocate_circular_buffers(device);
+    program.impl().validate_circular_buffer_core_ranges(device);
     program.impl().validate_circular_buffer_region(device);
     program.impl().allocate_dataflow_buffers(device);
     program.impl().validate_dataflow_buffer_region(device);

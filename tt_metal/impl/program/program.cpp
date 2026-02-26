@@ -936,6 +936,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& cr : cb->core_ranges().ranges()) {
+            TT_FATAL(
+                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                cr.str(),
+                this->id,
+                grid_size.x,
+                grid_size.y);
+        }
+    }
+}
+
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     const auto& hal = MetalContext::instance().hal();
