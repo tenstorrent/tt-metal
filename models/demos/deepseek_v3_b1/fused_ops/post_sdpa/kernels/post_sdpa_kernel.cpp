@@ -285,42 +285,6 @@ void kernel_main() {
     deepseek_compute_kernel_init();
 #endif
 
-    // ========================================================================
-    // Setup sharded buffers (NCRISC only)
-    // ========================================================================
-#if defined(COMPILE_FOR_NCRISC)
-    // Matmul1 buffers (8x8 grid)
-    // NOTE: When SDPA is enabled, matmul1 waits for scatter data arrival before setup
-    if constexpr (Core::is_matmul1_core) {
-#ifndef SKIP_SDPA
-        // Wait for SDPA scatter to deliver data to matmul1_in0
-        // Each SDPA worker signals this semaphore after scatter write completes
-        constexpr uint32_t scatter_arrival_semaphore_id =
-            get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
-        volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
-        noc_semaphore_wait(scatter_arrival_sem_addr, 1);
-        noc_semaphore_set(scatter_arrival_sem_addr, 0);
-#endif
-
-        constexpr uint32_t matmul1_in0 = get_named_compile_time_arg_val("matmul1_in0");
-        constexpr uint32_t matmul1_k_num_tiles = get_named_compile_time_arg_val("matmul1_k_num_tiles");
-        unified_kernels::setup_sharded_buffer(matmul1_in0, matmul1_k_num_tiles);
-
-        constexpr uint32_t matmul1_in1 = get_named_compile_time_arg_val("matmul1_in1");
-        constexpr uint32_t matmul1_out_w_per_core = get_named_compile_time_arg_val("matmul1_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul1_in1, matmul1_k_num_tiles * matmul1_out_w_per_core);
-    }
-
-    // Matmul2 buffers (112 active cores) - weights only, input comes from mcast
-    if constexpr (Core::is_matmul2_core) {
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
-    }
-#endif
-
 #ifndef SKIP_SDPA
     // ========================================================================
     // SDPA REDUCE-TO-ALL PHASE (using unified ops from sdpa_reduce_worker.hpp
@@ -483,6 +447,42 @@ void kernel_main() {
 #endif
     }
 #endif  // SKIP_SDPA
+
+    // ========================================================================
+    // Setup sharded buffers (NCRISC only)
+    // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    // Matmul1 buffers (8x8 grid)
+    // NOTE: When SDPA is enabled, matmul1 waits for scatter data arrival before setup
+    if constexpr (Core::is_matmul1_core) {
+#ifndef SKIP_SDPA
+        // Wait for SDPA scatter to deliver data to matmul1_in0
+        // Each SDPA worker signals this semaphore after scatter write completes
+        constexpr uint32_t scatter_arrival_semaphore_id =
+            get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
+        volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
+        noc_semaphore_wait(scatter_arrival_sem_addr, 1);
+        noc_semaphore_set(scatter_arrival_sem_addr, 0);
+#endif
+
+        constexpr uint32_t matmul1_in0 = get_named_compile_time_arg_val("matmul1_in0");
+        constexpr uint32_t matmul1_k_num_tiles = get_named_compile_time_arg_val("matmul1_k_num_tiles");
+        unified_kernels::setup_sharded_buffer(matmul1_in0, matmul1_k_num_tiles);
+
+        constexpr uint32_t matmul1_in1 = get_named_compile_time_arg_val("matmul1_in1");
+        constexpr uint32_t matmul1_out_w_per_core = get_named_compile_time_arg_val("matmul1_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(matmul1_in1, matmul1_k_num_tiles * matmul1_out_w_per_core);
+    }
+
+    // Matmul2 buffers (112 active cores) - weights only, input comes from mcast
+    if constexpr (Core::is_matmul2_core) {
+        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
+        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
+        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
+    }
+#endif
 
     // ========================================================================
     // Matmul1: [1, 512] x [512, 128] -> [1, 128] per core (8x8 grid)
