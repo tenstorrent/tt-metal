@@ -151,11 +151,16 @@ jobs:
             if [ -d /opt/venv ]; then
               ls -la /opt/venv/
               ls -la /opt/venv/bin/ || true
+              echo "=== pyvenv.cfg contents ==="
+              cat /opt/venv/pyvenv.cfg || echo "No pyvenv.cfg found"
             fi
             echo "PATH: $PATH"
             echo "VIRTUAL_ENV: $VIRTUAL_ENV"
             which python
             python --version
+            echo "=== Checking which uv ==="
+            which uv || echo "uv not in PATH"
+            /opt/venv/bin/uv --version || echo "uv not in venv"
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
