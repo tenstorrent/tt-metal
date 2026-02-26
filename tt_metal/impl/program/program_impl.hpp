@@ -284,6 +284,8 @@ public:
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
+    // Ensures that circular buffer core ranges are within the device compute grid
+    void validate_circular_buffer_core_ranges(const IDevice* device);
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
