@@ -2,12 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import torch
-import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
 from models.common.utility_functions import nearest_y
@@ -22,7 +19,7 @@ from models.tt_transformers.tt.common import (
 
 
 def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
-    b, nh, _, _ = Q.shape  # b, nh, 1, d
+    b, nh, _, _ = Q.shape
     _, nkv, _, _ = K.shape
 
     attn_mask = None
@@ -34,19 +31,15 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
     else:
         assert False, "Non-causal attention is not supported in this function."
 
-    Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
-    K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+    Q_slice = Q[:, :nh, :, :]
+    K_slice = K[:, :nkv, :padded_layer_len, :]
+    K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_slice = V[:, :, :padded_layer_len, :]
+    V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    attn_mask_slice = attn_mask[:, :nh, :, :]
     out = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )  # b, nh, 1, d
+    )
 
     return out
 
@@ -56,14 +49,11 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
     Full-sequence causal SDPA reference.
     Q: (B, nh, S, d_qk), K/V: (B, nkv, S, d)
     """
-
-    b, nh, S, d_qk = Q.shape
-    _, nkv, _, d_v = V.shape
-    # Expand KV to match Q heads
+    _, nh, _, _ = Q.shape
+    _, nkv, _, _ = V.shape
     head_rep = nh // nkv
-    K_exp = K.repeat_interleave(head_rep, dim=1)  # (B, nh, S, d_qk)
-    V_exp = V.repeat_interleave(head_rep, dim=1)  # (B, nh, S, d_v)
-    # Use PyTorch's builtin causal attention
+    K_exp = K.repeat_interleave(head_rep, dim=1)
+    V_exp = V.repeat_interleave(head_rep, dim=1)
     return torch.nn.functional.scaled_dot_product_attention(
         Q, K_exp, V_exp, attn_mask=None, scale=scale, is_causal=is_causal
     )
@@ -104,7 +94,6 @@ def to_paged_cache(
         paged_cache: The converted paged cache tensor.
     """
     batch_size, nh, seq_len, dim = cache.shape
-
     block_size, max_num_blocks = config.block_size, config.max_num_blocks
     assert (
         max_num_blocks % batch_size == 0
@@ -113,23 +102,9 @@ def to_paged_cache(
         max_num_blocks // batch_size
     ), f"Sequence length {seq_len} must equal effective paged seq_len {block_size * (max_num_blocks // batch_size)}."
 
-    paged_cache = cache.reshape(batch_size, nh, -1, block_size, dim)  # (B, H, num_blocks // B, block_size, D)
-    paged_cache = paged_cache.transpose(1, 2)  # (B, num_blocks // B, H, block_size, D)
-    paged_cache = paged_cache.reshape(max_num_blocks, nh, block_size, dim)  # (num_blocks, H, block_size, D)
-
-    """
-    Get the reverse mapping to reorder the paged cache,
-    so that paged cache + mapping = original cache
-    and paged_cache = original_cache + inverse mapping
-
-    For example:
-        cache = [0, 1, 2, 3]
-        mapping = [1, 3, 0, 2]
-        inverse_mapping (argsort) = [2, 0, 3, 1]
-    Then,
-        paged_cache = cache[inverse_mapping] = [2, 0, 3, 1]
-        paged_cache[mapping] = cache = [0, 1, 2, 3]
-    """
+    paged_cache = cache.reshape(batch_size, nh, -1, block_size, dim)
+    paged_cache = paged_cache.transpose(1, 2)
+    paged_cache = paged_cache.reshape(max_num_blocks, nh, block_size, dim)
 
     inverse_mapping = torch.argsort(mapping.view(-1))
     paged_cache = paged_cache[inverse_mapping]
@@ -151,7 +126,7 @@ def from_paged_cache(
     Returns:
         cache: The converted cache tensor.
     """
-    max_num_blocks, nh, block_size, dim = paged_cache.shape  # (max_num_blocks, H, block_size, D)
+    max_num_blocks, nh, block_size, dim = paged_cache.shape
     assert (
         block_size == config.block_size
     ), f"block_size {block_size} must match the paged attention config block size {config.block_size}."
@@ -161,12 +136,10 @@ def from_paged_cache(
 
     batch, num_blocks_per_batch = mapping.shape
 
-    # Use the mapping to get the original order, paged_cache + mapping = original cache
     cache = paged_cache[mapping.view(-1)]
-
-    cache = cache.reshape(batch, num_blocks_per_batch, nh, block_size, dim)  # (B, num_blocks // B, H, block_size, D)
-    cache = cache.transpose(1, 2)  # (B, H, num_blocks // B, block_size, D)
-    cache = cache.reshape(batch, nh, -1, dim)  # (B, H, seq_len, D)
+    cache = cache.reshape(batch, num_blocks_per_batch, nh, block_size, dim)
+    cache = cache.transpose(1, 2)
+    cache = cache.reshape(batch, nh, -1, dim)
 
     return cache
 
@@ -178,8 +151,6 @@ def nearest_n(x, n):
 def nearest_pow_2(x):
     if x < 1:
         raise ValueError("x must be >= 1")
-    import math
-
     power = math.ceil(math.log2(x))
     return 1 << power
 
@@ -199,6 +170,7 @@ def run_flash_mla_decode_impl(
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
+    max_cores_per_head_batch=16,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -215,7 +187,6 @@ def run_flash_mla_decode_impl(
     logger.debug(f"Query Data Type: {q_dtype}")
     logger.debug(f"Key-Value Data Type: {dtype}")
 
-    # Paged attention configuration
     paged_attention_cfg = None
     if use_paged_attention:
         assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
@@ -229,24 +200,19 @@ def run_flash_mla_decode_impl(
     ######################
     ### Torch Setup
     ######################
-    q = torch.randn(batch, nh, 1, kv_lora_rank + d_rope).float()  # (B, H, S (1 for decode), D)
-    k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S, D)
-    v = k[..., :kv_lora_rank]  # (B, H, S, D)
+    q = torch.randn(batch, nh, 1, kv_lora_rank + d_rope).float()
+    k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()
+    v = k[..., :kv_lora_rank]
 
-    # In this configuration, q is replicated across all cores within each head group
-    # num_cores_per_head_for_config is used to tell the program factory about the replication factor
-    num_cores_per_head_for_config = 1  # Default: no replication
     if q_mem_config is not None:
-        # Replicate Q for each core in the reducer group
         num_cores_per_head = 4
-        num_cores_per_head_for_config = num_cores_per_head  # Pass replication factor to program config
-        q_heads_parallel_factor = 4
-        num_virtual_batches = batch * q_heads_parallel_factor  # 16 virtual batches
-        heads_per_vbatch = nh // q_heads_parallel_factor  # 32 heads per virtual batch
-        q_permuted = q.permute(2, 0, 1, 3)  # (S, B, H, D) = (1, 4, 128, 576)
-        q_reshaped = q_permuted.reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)  # (1, 4, 4, 32, 576)
-        q_replicated = q_reshaped.repeat_interleave(num_cores_per_head, dim=2)  # (1, 4, 16, 32, 576)
-        q_for_tt = q_replicated.reshape(1, 1, -1, q_replicated.shape[-1])  # (1, 1, 2048, 576)
+        q_heads_parallel_factor = math.ceil(nh / ttnn.TILE_SIZE)
+        num_virtual_batches = batch * q_heads_parallel_factor
+        heads_per_vbatch = nh // q_heads_parallel_factor
+        q_permuted = q.permute(2, 0, 1, 3)
+        q_reshaped = q_permuted.reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)
+        q_replicated = q_reshaped.repeat_interleave(num_cores_per_head, dim=2)
+        q_for_tt = q_replicated.reshape(1, 1, -1, q_replicated.shape[-1])
     else:
         q_for_tt = q.permute(2, 0, 1, 3)  # Original path: (1, 4, 128, 576)
 
@@ -260,28 +226,12 @@ def run_flash_mla_decode_impl(
     tt_page_table = None
     if paged_attention_cfg:
         page_table = page_table_setup(batch, paged_attention_cfg)
-        tt_k_torch = to_paged_cache(
-            k,
-            page_table,
-            paged_attention_cfg,
-        )
-        tt_k_torch_og = from_paged_cache(
-            tt_k_torch,
-            page_table,
-            paged_attention_cfg,
-        )
+        tt_k_torch = to_paged_cache(k, page_table, paged_attention_cfg)
+        tt_k_torch_og = from_paged_cache(tt_k_torch, page_table, paged_attention_cfg)
         assert torch.all(tt_k_torch_og == k), "Paged cache conversion for K failed."
 
-        tt_v_torch = to_paged_cache(
-            v,
-            page_table,
-            paged_attention_cfg,
-        )
-        tt_v_torch_og = from_paged_cache(
-            tt_v_torch,
-            page_table,
-            paged_attention_cfg,
-        )
+        tt_v_torch = to_paged_cache(v, page_table, paged_attention_cfg)
+        tt_v_torch_og = from_paged_cache(tt_v_torch, page_table, paged_attention_cfg)
         assert torch.all(tt_v_torch_og == v), "Paged cache conversion for V failed."
 
         tt_page_table = ttnn.from_torch(
@@ -291,26 +241,24 @@ def run_flash_mla_decode_impl(
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    q_chunk_size = 0  # Not used in decode
+    q_chunk_size = 0
     k_chunk_size = 32
 
     scale = (kv_lora_rank + d_rope) ** -0.5
 
-    max_start_idx = seq_len - 1
-    # [0, 170, 341, 512]
+    max_start_idx = seq_len // 2
     start_indices = [max_start_idx] * batch
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    # Check if Q is pre-sharded/replicated (custom q_mem_config provided)
     q_locally_available = q_mem_config is not None and q_mem_config != ttnn.DRAM_MEMORY_CONFIG
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
+        k_chunk_size=0,
         exp_approx_mode=False,
-        max_cores_per_head_batch=4,  # Cores per reducer group
-        q_locally_available=q_locally_available,  # Program factory deduces B and num_q_heads from K/V and shard config
+        max_cores_per_head_batch=max_cores_per_head_batch,
+        q_locally_available=q_locally_available,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -320,8 +268,7 @@ def run_flash_mla_decode_impl(
         packer_l1_acc=False,
     )
 
-    # Set up input tensors
-    if q_num_cores < 1:  # DRAM
+    if q_num_cores < 1:
         q_mem_config = ttnn.DRAM_MEMORY_CONFIG
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
     else:
@@ -332,13 +279,11 @@ def run_flash_mla_decode_impl(
             )
 
         if nkv == 1:
-            # Batch + nh shard if nkv == 1
-            q_num_cores = min(batch * nh, q_num_cores)  # Limit q_num_cores to batch size
+            q_num_cores = min(batch * nh, q_num_cores)
         else:
-            # Only batch shard if nkv > 1
-            q_num_cores = min(batch, q_num_cores)  # Limit q_num_cores to batch size
+            q_num_cores = min(batch, q_num_cores)
 
-        block_height = 32  # nearest_y(np.prod(q_for_tt.shape[:-1]) // q_num_cores, ttnn.TILE_SIZE)
+        block_height = ttnn.TILE_SIZE
 
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
@@ -357,15 +302,13 @@ def run_flash_mla_decode_impl(
                 use_height_and_width_as_shard_shape=True,
             )
         else:
-            # Custom q_mem_config provided (Q is replicated for local reads)
             out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     tt_q = ttnn.from_torch(
-        q_for_tt,  # (S, B, H, D)
+        q_for_tt,
         device=device,
         dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -466,7 +409,7 @@ def run_flash_mla_decode_impl(
         pcc_threshold = 0.98
 
     for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
-        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
+        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)
         for b in range(batch):
             for h in range(nh):
                 out_pass, out_pcc = comp_pcc(tt_out_torch[b, h, :, :], out_t[b, h, :, :], pcc_threshold)
@@ -494,7 +437,6 @@ def run_flash_mla_prefill_impl(
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
 ):
-    # Log the test parameters
     logger.debug(f"Running FlashMLA Prefill with parameters: ")
     logger.debug(f"Batch: {batch}")
     logger.debug(f"Sequence Length: {seq_len}")
@@ -505,7 +447,6 @@ def run_flash_mla_prefill_impl(
     logger.debug(f"Query Data Type: {q_dtype}")
     logger.debug(f"Key-Value Data Type: {dtype}")
 
-    # Paged attention configuration
     paged_attention_cfg = None
     if use_paged_attention:
         assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
@@ -516,31 +457,16 @@ def run_flash_mla_prefill_impl(
             max_num_blocks=max_num_blocks,
         )
 
-    ######################
-    ### Torch Setup
-    ######################
-    q = torch.randn(batch, nh, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S (1 for decode), D)
-    k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S, D)
-    v = k[..., :kv_lora_rank]  # (B, H, S, D)
-    ######################
-    ### TT Setup
-    #######################
+    q = torch.randn(batch, nh, seq_len, kv_lora_rank + d_rope).float()
+    k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()
+    v = k[..., :kv_lora_rank]
 
-    # Page-related setup
     tt_k_torch = k
     tt_page_table = None
     if paged_attention_cfg:
         page_table = page_table_setup(batch, paged_attention_cfg)
-        tt_k_torch = to_paged_cache(
-            k,
-            page_table,
-            paged_attention_cfg,
-        )
-        tt_k_torch_og = from_paged_cache(
-            tt_k_torch,
-            page_table,
-            paged_attention_cfg,
-        )
+        tt_k_torch = to_paged_cache(k, page_table, paged_attention_cfg)
+        tt_k_torch_og = from_paged_cache(tt_k_torch, page_table, paged_attention_cfg)
         assert torch.all(tt_k_torch_og == k), "Paged cache conversion for K failed."
 
         tt_page_table = ttnn.from_torch(
@@ -571,23 +497,20 @@ def run_flash_mla_prefill_impl(
     )
 
     tt_q = ttnn.from_torch(
-        q,  # (B, H, S, D)
+        q,
         device=device,
         dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_k = ttnn.from_torch(
-        tt_k_torch,  # (B, H, S, D)
+        tt_k_torch,
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    ##########################
-    ### FlashMLA Prefill
-    ##########################
     if tt_page_table:
         tt_out = ttnn.transformer.chunked_flash_mla_prefill(
             tt_q,
@@ -612,13 +535,9 @@ def run_flash_mla_prefill_impl(
             attn_mask=None,
             is_causal=True,
         )
-    tt_back = ttnn.to_torch(tt_out)  # now (B, H_padded, S_padded, D)
-    # slice out the padded heads and sequence length; no permute needed
-    tt_out_torch = tt_back[:, :nh, :seq_len, :]  # (B, nh, S, D)
+    tt_back = ttnn.to_torch(tt_out)
+    tt_out_torch = tt_back[:, :nh, :seq_len, :]
 
-    ########################
-    ### Validation
-    ########################
     out_t = scaled_dot_product_attention_reference_prefill(
         q,
         k,
