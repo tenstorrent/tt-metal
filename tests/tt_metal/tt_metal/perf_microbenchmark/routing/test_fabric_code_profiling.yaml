@@ -36,6 +36,7 @@ Tests:
       - type: full_ring
 
   - name: "CodeProfilingMeshMulticast"
+    skip: [watcher] # Code size gets bloated when run with watcher
     fabric_setup:
       topology: Mesh
 
