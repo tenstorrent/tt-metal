@@ -39,13 +39,16 @@ void kernel_main() {
         cb_push_back(cb_mask_in, 1);
     }
 
-    // Normalized output streams through a dedicated 1-tile CB (decoupled from ping-pong out CBs).
+    // Normalized output streams through a double-buffered CB (decoupled from ping-pong out CBs).
+    // Compute pushes head_dim_t tiles at a time; we wait for the full batch, issue all writes
+    // back-to-back (pipelining NoC transactions), then pop.
     constexpr uint32_t cb_normalized_out = tt::CBIndex::c_9;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * head_dim_t;
+    const uint32_t tile_size_bytes = get_tile_size(cb_normalized_out);
 
     uint32_t out_addr = get_arg_val<uint32_t>(0);
     constexpr auto out_accessor_args = TensorAccessorArgs<9>();
-    const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, get_tile_size(cb_normalized_out));
+    const auto out_accessor = TensorAccessor(out_accessor_args, out_addr, tile_size_bytes);
 
     // subblock_h from compile-time arg (index 7), must match compute kernel
     constexpr uint32_t row_tiles = subblock_h * head_dim_t;
@@ -54,12 +57,16 @@ void kernel_main() {
     for (uint32_t q = 0; q < num_q_chunks; q++) {
         uint32_t tile_base = q * out_chunk_tiles;
         for (uint32_t row = 0; row < rows_per_chunk; row++) {
-            // Issue all tile writes for one row, then barrier once
-            for (uint32_t t = 0; t < row_tiles; t++) {
-                cb_wait_front(cb_normalized_out, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_normalized_out);
-                noc_async_write_tile(tile_base + row * row_tiles + t, out_accessor, l1_read_addr);
-                cb_pop_front(cb_normalized_out, 1);
+            // Wait for each compute push (head_dim_t tiles), issue writes back-to-back, pop batch.
+            // With sbh>1, compute pushes head_dim_t tiles × subblock_h times per writer row.
+            for (uint32_t s = 0; s < subblock_h; s++) {
+                cb_wait_front(cb_normalized_out, head_dim_t);
+                uint32_t l1_base = get_read_ptr(cb_normalized_out);
+                for (uint32_t t = 0; t < head_dim_t; t++) {
+                    noc_async_write_tile(
+                        tile_base + row * row_tiles + s * head_dim_t + t, out_accessor, l1_base + t * tile_size_bytes);
+                }
+                cb_pop_front(cb_normalized_out, head_dim_t);
             }
             noc_async_write_barrier();
         }

@@ -143,7 +143,8 @@ void sdpa_single_core(
         create_cb(program, core, CBIndex::c_7, 1, single_tile_size, cb_data_format);  // neginf tile for padded mask
     }
     create_cb(program, core, CBIndex::c_8, 1, single_tile_size, cb_data_format);                  // col_identity
-    create_cb(program, core, CBIndex::c_9, head_dim_t, single_tile_size, cb_data_format);         // normalized_out
+    create_cb(
+        program, core, CBIndex::c_9, 2 * head_dim_t, single_tile_size, cb_data_format);  // normalized_out (double-buf)
     create_cb(program, core, CBIndex::c_10, 1, single_tile_size, cb_data_format);                 // recip_scratch
     create_cb(program, core, CBIndex::c_25, out_chunk_tiles, single_tile_size, cb_data_format);   // prev_out
     create_cb(program, core, CBIndex::c_26, out_chunk_tiles, single_tile_size, cb_data_format);   // curr_out
