@@ -89,11 +89,11 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
 
 Tensor::Tensor(tt::tt_metal::HostTensor host_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, MeshTensor>>(std::move(host_tensor))) {}
+    tensor_attributes(std::make_shared<TensorAttributes>(std::move(host_tensor))) {}
 
 Tensor::Tensor(tt::tt_metal::MeshTensor device_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, MeshTensor>>(std::move(device_tensor))) {
+    tensor_attributes(std::make_shared<TensorAttributes>(std::move(device_tensor))) {
     if (auto mesh_buffer = device_storage().mesh_buffer) {
         mesh_device_ = mesh_buffer->device();
     }
@@ -369,25 +369,15 @@ Tensor Tensor::reshape(
 }
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
-    Tensor result = *this;
-    result.tensor_attributes = std::make_shared<std::variant<HostTensor, MeshTensor>>(std::visit(
-        [&](auto& tensor) -> std::variant<HostTensor, MeshTensor> {
-            return tensor.with_tensor_topology(std::move(tensor_topology));
-        },
-        *tensor_attributes));
-    return result;
+    switch (storage_type()) {
+        case StorageType::HOST: return Tensor(host_tensor().with_tensor_topology(std::move(tensor_topology)));
+        case StorageType::DEVICE: return Tensor(device_tensor().with_tensor_topology(std::move(tensor_topology)));
+    }
 }
 
 bool Tensor::is_allocated() const { return tensor_attributes != nullptr; }
 
-StorageType Tensor::storage_type() const {
-    return std::visit(
-        tt::stl::overloaded{
-            [](const HostTensor&) { return StorageType::HOST; },
-            [](const MeshTensor&) { return StorageType::DEVICE; },
-        },
-        *this->tensor_attributes);
-}
+StorageType Tensor::storage_type() const { return tensor_attributes->storage_type(); }
 
 tt::tt_metal::Shape Tensor::strides() const {
     auto s = tt::tt_metal::compute_strides(this->padded_shape());
@@ -494,7 +484,10 @@ DataType Tensor::dtype() const { return tensor_spec().tensor_layout().get_data_t
 Layout Tensor::layout() const { return tensor_spec().tensor_layout().get_layout(); }
 
 const TensorSpec& Tensor::tensor_spec() const {
-    return std::visit([](const auto& tensor) -> const TensorSpec& { return tensor.tensor_spec(); }, *tensor_attributes);
+    switch (storage_type()) {
+        case StorageType::HOST: return host_tensor().tensor_spec();
+        case StorageType::DEVICE: return device_tensor().tensor_spec();
+    }
 }
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
@@ -503,29 +496,13 @@ const DeviceStorage& Tensor::device_storage() const& { return device_tensor().ge
 
 const HostStorage& Tensor::host_storage() const& { return host_tensor().get_storage(); }
 
-const HostTensor& Tensor::host_tensor() const& {
-    const auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
-    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got MeshTensor");
-    return *host_tensor;
-}
+const HostTensor& Tensor::host_tensor() const& { return tensor_attributes->host_tensor(); }
 
-HostTensor& Tensor::host_tensor() & {
-    auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
-    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got MeshTensor");
-    return *host_tensor;
-}
+HostTensor& Tensor::host_tensor() & { return tensor_attributes->host_tensor(); }
 
-const MeshTensor& Tensor::device_tensor() const& {
-    const auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
-    TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
-    return *device_tensor;
-}
+const MeshTensor& Tensor::device_tensor() const& { return tensor_attributes->mesh_tensor(); }
 
-MeshTensor& Tensor::device_tensor() & {
-    auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
-    TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
-    return *device_tensor;
-}
+MeshTensor& Tensor::device_tensor() & { return tensor_attributes->mesh_tensor(); }
 
 distributed::MeshDevice* Tensor::device() const {
     if (this->mesh_device_.has_value()) {
@@ -543,8 +520,10 @@ const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory
 const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->memory_config().nd_shard_spec(); }
 
 const TensorTopology& Tensor::tensor_topology() const {
-    return std::visit(
-        [](const auto& tensor) -> const TensorTopology& { return tensor.tensor_topology(); }, *tensor_attributes);
+    switch (storage_type()) {
+        case StorageType::HOST: return host_tensor().tensor_topology();
+        case StorageType::DEVICE: return device_tensor().tensor_topology();
+    }
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {

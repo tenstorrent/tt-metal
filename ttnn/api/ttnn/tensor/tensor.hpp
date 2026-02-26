@@ -15,6 +15,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
@@ -41,7 +42,7 @@ public:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::MeshTensor>> tensor_attributes = nullptr;
+    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
     // ======================================================================================
     //                                  Hi Level APIs
