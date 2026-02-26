@@ -121,7 +121,7 @@ def test_pack_untilize(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus
     # because stimulus must have 4 faces and 16 is only valid r_dim for 4 faces
     # In output for smaller actual r_dims lower portion is unused and therefore truncated

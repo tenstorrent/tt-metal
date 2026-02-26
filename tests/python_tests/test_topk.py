@@ -341,7 +341,7 @@ def test_topk_sfpu(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     res_tensor = transform_result_tensor_to_right_form(

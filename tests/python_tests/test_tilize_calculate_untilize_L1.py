@@ -82,7 +82,7 @@ def test_tilize_calculate_untilize_L1(
         L1_to_L1_iterations=2,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(golden_tensor)
 

@@ -8,11 +8,11 @@ import shutil
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar, List
+from typing import Any, ClassVar, List
 
 import numpy as np
 import pytest
@@ -86,6 +86,12 @@ class DummyGoldenGenerator:
 
 def dummy_golden_generator(cls):
     return DummyGoldenGenerator()
+
+
+@dataclass
+class TestOutcome:
+    result: Any
+    dumps: Any | None = None
 
 
 class TestConfig:
@@ -1123,12 +1129,15 @@ class TestConfig:
         self.write_runtimes_to_L1(location)
         self.variant_stimuli.write(location)
         elfs = self.run_elf_files(location)
-        wait_for_tensix_operations_finished(elfs, location)
+        dumps = wait_for_tensix_operations_finished(elfs, location)
 
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device(location)
 
-        return self.variant_stimuli.collect_results(location)
+        return TestOutcome(
+            result=self.variant_stimuli.collect_results(location),
+            dumps=dumps,
+        )
 
 
 def process_coverage_run_artefacts() -> bool:

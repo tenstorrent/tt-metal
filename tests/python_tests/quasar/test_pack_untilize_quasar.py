@@ -132,7 +132,7 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run()
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

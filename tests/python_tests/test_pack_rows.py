@@ -90,7 +90,7 @@ def test_pack_rows(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 

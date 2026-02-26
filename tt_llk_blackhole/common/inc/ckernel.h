@@ -713,4 +713,14 @@ constexpr std::uint32_t get_dest_max_tiles()
     return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
 }
 
+/**
+ * @brief Used to invalidate the RISCV core's DCache.
+ * On Blackhole this happens as a side effect of the FENCE instruction.
+ */
+inline void invalidate_data_cache()
+{
+    // clobber memory to prevent code reordering by the compiler.
+    asm volatile("fence" ::: "memory");
+}
+
 } // namespace ckernel

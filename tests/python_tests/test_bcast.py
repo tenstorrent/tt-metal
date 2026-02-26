@@ -177,7 +177,7 @@ def test_unpack_bcast(
         and dest_acc == DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # --- Assertions ------------------------------------------------------
     assert len(res_from_L1) == len(

@@ -498,4 +498,13 @@ constexpr std::uint32_t get_dest_max_tiles()
     return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
 }
 
+/**
+ * @brief Used to invalidate the RISCV core's DCache.
+ * ** NOTE: Wormhole RISCs don't have a DCache, so this is a no-op, but exists for forward compatibility. **
+ */
+inline void invalidate_data_cache()
+{
+    return;
+}
+
 } // namespace ckernel

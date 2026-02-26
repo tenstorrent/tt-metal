@@ -220,7 +220,7 @@ def test_math_matmul(
         ),
         dest_acc=matmul_config.dest_acc,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor

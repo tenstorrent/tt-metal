@@ -28,6 +28,7 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
+from .dump import TensixDump
 from .fused_operation import FusedOperation
 from .llk_params import DataFormat, MailboxesPerf, format_dict
 from .pack import (
@@ -243,6 +244,8 @@ def wait_for_tensix_operations_finished(
 
     time.sleep(0.001)
 
+    tensix_dumps = []
+
     start_time = time.time()
     backoff = 0.005  # Initial backoff time in seconds
 
@@ -253,8 +256,10 @@ def wait_for_tensix_operations_finished(
             if read_word_from_device(core_loc, mailbox.value) == KERNEL_COMPLETE:
                 completed.add(mailbox)
 
+        TensixDump.try_process_request(tensix_dumps, core_loc)
+
         if completed == mailboxes:
-            return
+            return tensix_dumps
 
         # Disable any waiting if running on simulator
         # this makes simulator tests run ever so slightly faster

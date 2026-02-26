@@ -105,7 +105,7 @@ def test_fast_tilize_tiny_tiles(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # Verify the kernel wrote a contiguous block of tiles to L1 (no gaps
     # from incorrect bank-switch addressing). This confirms the packer's

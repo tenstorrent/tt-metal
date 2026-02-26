@@ -102,7 +102,7 @@ def test_ttnn_where(formats, dest_acc, mathop, test_case, workers_tensix_coordin
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(
@@ -192,7 +192,7 @@ def test_ttnn_where_mcw(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates)
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     res_from_L1 = res_from_L1[:1024]
 

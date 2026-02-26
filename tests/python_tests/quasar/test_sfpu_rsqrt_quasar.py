@@ -196,7 +196,7 @@ def test_sfpu_rsqrt_quasar(formats_dest_acc_implied_math_input_dims):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run()
+    res_from_L1 = configuration.run().result
 
     # Verify results match golden
     assert len(res_from_L1) == len(

@@ -153,7 +153,7 @@ def test_eltwise_binary(
         disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
 
-    res_from_L1 = configuration.run()
+    res_from_L1 = configuration.run().result
 
     # Verify results match golden
     assert len(res_from_L1) == len(

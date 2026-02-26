@@ -136,7 +136,7 @@ def test_eltwise_binary_broadcast_quasar(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run()
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
