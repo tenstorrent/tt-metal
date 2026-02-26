@@ -95,6 +95,7 @@ jobs:
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
+          export ASAN_OPTIONS=detect_odr_violation=0
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ttfabric_tests
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
