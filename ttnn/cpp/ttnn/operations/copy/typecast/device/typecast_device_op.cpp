@@ -6,15 +6,54 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+bool is_valid_for_sharded_optimized_typecast(const TypecastParams& args, const TypecastInputs& tensor_args) {
+    const auto& input = tensor_args.input;
+    if (!input.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shard_spec = input.shard_spec().value();
+
+    tt::DataFormat act_df = datatype_to_dataformat_converter(args.input_dtype);
+    tt::DataFormat out_df = datatype_to_dataformat_converter(args.output_dtype);
+
+    if (tt::tile_size(act_df) != tt::tile_size(out_df)) {
+        return false;
+    }
+
+    if (input.buffer()->buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+
+    if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B) {
+        if ((shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() != 0) {
+            return false;
+        }
+        size_t shard_size_in_bytes = shard_spec.shape[0] * shard_spec.shape[1] * tt::datum_size(act_df);
+        if (shard_size_in_bytes % tt::tile_size(act_df) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.input.is_sharded()) {
-        log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
-        return TypecastShardedProgramFactory{};
+        if (is_valid_for_sharded_optimized_typecast(args, tensor_args)) {
+            log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
+            return TypecastShardedProgramFactory{};
+        }
+        log_debug(tt::LogOp, "Using TypecastProgramFactory");
+        return TypecastProgramFactory{};
     }
     if (args.sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
@@ -67,35 +106,27 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor_memory_layout,
         out_memory_config.memory_layout());
 
-    if (!input_tensor.is_sharded()) {
+    if (input_tensor.is_sharded()) {
+        const uint32_t l1_alignment = hal::get_l1_alignment();
+        const uint32_t page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
         TT_FATAL(
-            input_tensor_memory_layout == TensorMemoryLayout::INTERLEAVED,
-            "Typecast operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
-            "memory layout: `{}`",
-            input_tensor_memory_layout);
-    } else {
-        TT_FATAL(
-            !args.sub_core_grids.has_value(),
-            "Typecast operation has sub_core_grids support for non-sharded inputs only");
+            page_size_bytes % l1_alignment == 0,
+            "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
+            page_size_bytes,
+            l1_alignment);
+        if (input_tensor.shard_spec().has_value()) {
+            TT_FATAL(
+                !args.sub_core_grids.has_value(),
+                "Typecast operation has sub_core_grids support for non-sharded inputs only");
+        }
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
         TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "When preallocted output tensor is used, Typecast operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            computed_output_shape,
-            preallocated_output_shape);
-
-        if (!input_tensor.is_sharded()) {
-            TT_FATAL(
-                preallocated_output_tensor.value().layout() == input_tensor.layout(),
-                "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
-                input_tensor.layout(),
-                preallocated_output_tensor.value().layout());
-        }
+            preallocated_output_tensor.value().layout() == input_tensor.layout(),
+            "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
+            input_tensor.layout(),
+            preallocated_output_tensor.value().layout());
     }
 }
 
