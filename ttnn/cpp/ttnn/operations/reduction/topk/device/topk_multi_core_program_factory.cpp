@@ -331,6 +331,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         static_cast<std::uint32_t>(std::log2(Wt_local)),  // log2(width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sorting requirement
     };
     const tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -356,6 +357,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         static_cast<std::uint32_t>(std::log2(Wt_final)),  // log2(final_width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sorting requirement
     };
     tt::tt_metal::CreateKernel(
         program,

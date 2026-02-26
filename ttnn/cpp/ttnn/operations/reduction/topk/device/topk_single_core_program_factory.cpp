@@ -185,6 +185,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
+        static_cast<std::uint32_t>(args.stable),   // Stable sorting requirement
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,

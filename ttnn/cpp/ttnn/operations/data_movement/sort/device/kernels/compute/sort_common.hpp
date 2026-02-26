@@ -20,11 +20,13 @@ namespace NAMESPACE {
  * @param switch_dir If true, alternates the sorting direction for each tile pair to build a bitonic sequence.
  * @param ascending Initial sorting direction: true for ascending, false for descending.
  * @param end_phase Indicates the current phase of the bitonic sort (used by the local sort kernel).
+ * @param stable If true, ensures stable sorting (preserves order of equal elements).
  *
  * The function assumes that the input and index buffers contain at least Wt tiles,
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
  */
+template <bool stable = false>
 void sort_Wt_tiles_row_to_bitonic_sequence(
     const uint32_t input_cb_index,
     const uint32_t index_cb_index,
@@ -56,7 +58,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_wh_tile(index_cb_index, 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
+        ckernel::topk_local_sort<stable>(0, (int)ascending_local, end_phase);
 
         tile_regs_commit();
         tile_regs_wait();
