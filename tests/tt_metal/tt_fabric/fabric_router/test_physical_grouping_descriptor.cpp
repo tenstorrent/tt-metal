@@ -3087,10 +3087,14 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_4x4Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -3142,10 +3146,14 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_2x8Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -3195,10 +3203,14 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x16Mesh) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -3241,10 +3253,14 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -3286,10 +3302,14 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy8x8) {
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
 
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -3333,7 +3353,11 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy8x8) {
 
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Phase3_HigherLayerGraphMatching) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/single_galaxy_psd.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
     const std::string mgd_str = R"proto(
@@ -3390,7 +3414,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Phase3_HigherLayer
 
     MeshGraphDescriptor mgd{mgd_str};
 
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // Phase 2: MESH level must pass
     // Count unique mesh definitions (M0, M1), not instances
