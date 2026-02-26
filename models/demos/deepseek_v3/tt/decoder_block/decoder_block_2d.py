@@ -66,40 +66,6 @@ class DecoderBlock2D(DecoderBlock2DBase):
         return {}
 
     @classmethod
-    def _all_gather_helper(
-        cls,
-        x: ttnn.Tensor,
-        cfg: RunPrefillConfig | RunDecodeConfig,
-        all_gather_config_key: str = "all_gather",
-    ) -> ttnn.Tensor | None:
-        """
-        Helper function to perform all_gather operation if needed.
-
-        Returns:
-            Gathered tensor if all_gather was performed, None otherwise.
-        """
-        ccl = cfg.get("ccl")
-        return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg[all_gather_config_key]))
-
-    @classmethod
-    def _reduce_scatter_helper(
-        cls,
-        output: ttnn.Tensor,
-        cfg: RunPrefillConfig | RunDecodeConfig,
-        reduce_scatter_config_key: str,
-    ) -> ttnn.Tensor:
-        """
-        Helper function to perform reduce_scatter operation.
-
-        Returns:
-            Scattered tensor after reduce_scatter.
-        """
-        ccl = cfg.get("ccl")
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg[reduce_scatter_config_key])
-        )
-
-    @classmethod
     def _forward_mlp_common(
         cls,
         x: ttnn.Tensor,
@@ -123,17 +89,22 @@ class DecoderBlock2D(DecoderBlock2DBase):
             mode_name: Name of the mode for logging ("prefill" or "decode")
         """
         x_dim = x.shape[-1]
+        ccl = cfg.get("ccl")
 
         # Check if input is TP-sharded
         if x_dim == hidden_size // tp_size:
             # Input is TP-sharded, need to gather
-            x_gathered = cls._all_gather_helper(x, cfg)
+            x_gathered = ttnn.experimental.all_gather_async(
+                x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
+            )
 
             # Run NonExpert with gathered input
             output = forward_fn(x_gathered, cfg)
 
             # Perform reduce_scatter
-            output_scattered = cls._reduce_scatter_helper(output, cfg, reduce_scatter_key)
+            output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                output, **ccl.populate_reduce_scatter_runtime_args(cfg[reduce_scatter_key])
+            )
 
             # Cleanup
             ttnn.deallocate(output)

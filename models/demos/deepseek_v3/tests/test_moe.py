@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
+    run_module_forward,
 )
 
 
@@ -120,10 +121,7 @@ def test_forward_pass(
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    if mode == "prefill":
-        tt_output = MoE.forward_prefill(tt_input, run_config, handle_tensor_parallel=True)
-    else:  # decode
-        tt_output = MoE.forward_decode(tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

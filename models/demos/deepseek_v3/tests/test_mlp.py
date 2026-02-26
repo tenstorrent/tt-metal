@@ -23,6 +23,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_test_weight_config,
     load_reference_io_tensors_for_module,
+    run_module_forward,
 )
 
 
@@ -208,10 +209,7 @@ def test_forward_pass(
 
     # TTNN forward pass - collective operations handled inside forward functions
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    if mode == "prefill":
-        tt_output = MLPClass.forward_prefill(tt_input, run_config, handle_tensor_parallel=True)
-    else:  # decode
-        tt_output = MLPClass.forward_decode(tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
