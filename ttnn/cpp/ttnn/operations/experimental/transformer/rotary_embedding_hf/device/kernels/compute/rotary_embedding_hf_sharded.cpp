@@ -7,9 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
