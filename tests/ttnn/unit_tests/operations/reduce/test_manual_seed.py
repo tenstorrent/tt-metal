@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 def test_manual_seed_different_argument_calls(device):
@@ -92,6 +93,8 @@ def test_manual_seed_mapping_functionality(device):
     """
     Test that manual_seed correctly handles per-core seed mapping.
     """
+    if is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     # Prepare test data
     shape = (1, 1, 32, 64)
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

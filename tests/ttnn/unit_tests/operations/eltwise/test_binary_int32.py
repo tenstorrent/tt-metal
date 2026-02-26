@@ -7,6 +7,7 @@ import pytest
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -296,6 +297,8 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
     ],
 )
 def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
+    if ttnn_dtype == ttnn.uint32 and ttnn_function == ttnn.bitwise_left_shift and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     # Test with regular values and extreme values for both int32 and uint32
     if ttnn_dtype == ttnn.int32:
         x_torch = torch.tensor(

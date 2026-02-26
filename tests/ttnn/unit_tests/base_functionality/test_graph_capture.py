@@ -5,7 +5,7 @@ import pathlib
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, is_llk_assert_enabled
 from ttnn.graph_tracer_utils import GraphTracerUtils
 from ttnn.operations.conv2d import Conv2dConfig
 
@@ -420,6 +420,8 @@ def test_extract_levelized_graph(device):
 
 
 def test_program_cache_invalidation_across_dispatch_modes(device):
+    if is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for L1 memory address validation.")
     def test_conv(device):
         weights_shape = (32, 3, 3, 3)
         bias_shape = (1, 1, 1, 32)

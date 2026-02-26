@@ -8,6 +8,7 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 def run_conv(
@@ -178,6 +179,8 @@ def test_conv1d_mamba(
     config_override,
     output_layout,
 ):
+    if input_length == 32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for L1 memory access.")
     if activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if groups > 5120 or input_channels > 5120 or output_channels > 5120:

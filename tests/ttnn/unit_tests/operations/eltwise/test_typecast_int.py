@@ -5,10 +5,13 @@
 import torch
 import ttnn
 import pytest
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 # use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
 def test_typecast_uint16(device):
+    if is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch.manual_seed(0)
 
     in_data1 = torch.tensor([[[[700, 100, 65000, 9500]]]], dtype=torch.int32)

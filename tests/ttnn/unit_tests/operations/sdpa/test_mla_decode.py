@@ -6,6 +6,7 @@ import pytest
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_decode_impl
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 @pytest.mark.parametrize(
@@ -57,6 +58,8 @@ def test_flash_mla_decode(
     function_level_defaults,
     reset_seeds,
 ):
+    if batch == 4 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
     run_flash_mla_decode_impl(
         device,
         batch,

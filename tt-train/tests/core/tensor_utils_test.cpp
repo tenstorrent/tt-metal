@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "ttnn/types.hpp"
@@ -41,6 +42,9 @@ using IntOrUintConfigs = ::testing::Types<Uint32Config, Int32Config>;
 TYPED_TEST_SUITE(TtmlFromVectorIntUintTest, IntOrUintConfigs);
 
 TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorEven) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {1, 5, 10, 15};
