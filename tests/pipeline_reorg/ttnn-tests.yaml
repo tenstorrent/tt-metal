@@ -172,6 +172,8 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false
   ttsim: false  # SDPA tests require device
 
