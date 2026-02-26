@@ -640,9 +640,21 @@ class PI0SimulationEnv:
         print(f"   State: 14-dim (7 pos + 7 vel), padded to {self.config.state_dim}")
         print(f"   Action horizon: {self.config.action_horizon}")
         print(f"   Random seed: {self.seed}")
-        print(f"   Tokenizer: Word-based (improved)")
-        print(f"\n⚠️  NOTE: Using word-based tokenizer instead of Gemma's SentencePiece.")
-        print(f"   Task understanding should be improved but may not be perfect.")
+
+        # Detect which tokenizer is actually being used
+        if isinstance(self.tokenizer, GemmaTokenizerWrapper):
+            if self.tokenizer.use_official:
+                print(f"   Tokenizer: ✅ Official Gemma (SentencePiece)")
+                print(f"\n✅ Using authentic Gemma tokenizer - matches PI0 training!")
+            else:
+                print(f"   Tokenizer: SimpleRoboticsTokenizer (word-based)")
+                print(f"\n⚠️  NOTE: Gemma tokenizer failed to load, using word-based fallback.")
+                print(f"   Task understanding should be good but may not be perfect.")
+        else:
+            print(f"   Tokenizer: SimpleRoboticsTokenizer (word-based)")
+            print(f"\n⚠️  NOTE: Using word-based tokenizer instead of Gemma's SentencePiece.")
+            print(f"   Task understanding should be improved but may not be perfect.")
+
         print(f"{'='*70}\n")
 
         # Warm-up inference (first call includes JIT compilation)
