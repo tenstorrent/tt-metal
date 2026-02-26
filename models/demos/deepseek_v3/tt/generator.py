@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -13,7 +14,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
-from models.common.sampling.generator import SamplingGenerator, format_sampling_params
+from models.common.sampling.generator import SamplingGenerator, chunk_sampling_params
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -35,8 +36,10 @@ class SamplingModuleArgs:
     vocab_size: int
     padded_vocab_size: int
     max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
     cluster_shape: tuple[int, int]
-    sampling_cluster_axis: int = 0
+    sampling_all_gather_axis: int = 0
     sub_core_grids: ttnn.CoreRangeSet | None = None
     sub_core_grid_topk: ttnn.CoreRangeSet | None = None
     start_core: ttnn.CoreCoord = field(default_factory=lambda: ttnn.CoreCoord(0, 0))
@@ -102,11 +105,18 @@ class DeepseekGenerator(WarmupForwardMixin):
         force_recalculate: bool = False,
         profile_decode: bool = False,
         sample_on_device: bool = True,
+        dump_host_logits: bool = False,
+        dump_host_logits_dir: str | Path | None = None,
+        dump_sampling_compare: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
         self.sample_on_device = sample_on_device
+        self.dump_host_logits = dump_host_logits
+        self.dump_sampling_compare = dump_sampling_compare
+        self._logits_dump_dir = Path(dump_host_logits_dir) if dump_host_logits_dir is not None else None
+        self._rank = os.getenv("OMPI_COMM_WORLD_RANK") or os.getenv("PMI_RANK") or os.getenv("RANK") or "0"
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -147,8 +157,10 @@ class DeepseekGenerator(WarmupForwardMixin):
             vocab_size=self.hf_config.vocab_size,
             padded_vocab_size=self.hf_config.vocab_size,
             max_top_k=32,
+            max_batch_size=USERS_PER_ROW,
+            sampling_dp=mesh_shape[0],
             cluster_shape=tuple(mesh_shape),
-            sampling_cluster_axis=1,
+            sampling_all_gather_axis=1,
         )
         self.sampling = SamplingGenerator(
             args=self.sampling_args,
@@ -170,6 +182,16 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # Log sampling mode
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
+        if self.dump_host_logits:
+            if self._logits_dump_dir is None:
+                self._logits_dump_dir = Path(self.cache_dir) / "debug_host_logits"
+            self._logits_dump_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Host logits dump enabled: {self._logits_dump_dir} (rank={self._rank})")
+        if self.dump_sampling_compare:
+            if self._logits_dump_dir is None:
+                self._logits_dump_dir = Path(self.cache_dir) / "debug_host_logits"
+                self._logits_dump_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Sampling compare dump enabled: {self._logits_dump_dir} (rank={self._rank})")
 
         # Model runtime state
         self.model_state = None
@@ -462,8 +484,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _reset_sampling_state(self, sampling: SamplingParams, num_of_prompts: int) -> SamplingParams:
-        sampling = format_sampling_params(sampling, self.batch_size_per_row)
-        self.sampling.reset_sampling_params(sampling)
+        # Use sampling_dp-aware param distribution so each mesh row gets its own
+        # sampling chunk (critical when sampling_dp > 1).
+        sampling_dp = getattr(self.sampling.tt_sampling, "_sampling_dp", 1)
+        sampling_chunks = chunk_sampling_params(sampling, sampling_dp)
+        self.sampling.apply_decode_state(sampling_chunks, reset_batch=False)
         # self.sampling.reset_prompt_tokens(prefill_ids)
         self.sampling.reset_output_state()
         # self.sampling.reset_seed(sampling.seed)
@@ -664,6 +689,73 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         return logits  # [1, 1, B, V]
 
+    def _maybe_dump_host_logits(
+        self,
+        logits_host: torch.Tensor,
+        *,
+        stage: str,
+        repeat_idx: int,
+        mode: str,
+        user_id: int | None = None,
+        gen_idx: int | None = None,
+    ) -> None:
+        if not self.dump_host_logits or self._logits_dump_dir is None:
+            return
+
+        filename_parts = [f"rank{self._rank}", f"mode_{mode}", stage, f"repeat_{repeat_idx:03d}"]
+        if user_id is not None:
+            filename_parts.append(f"user_{user_id:03d}")
+        if gen_idx is not None:
+            filename_parts.append(f"step_{gen_idx:04d}")
+        filename = "__".join(filename_parts) + ".pt"
+        out_path = self._logits_dump_dir / filename
+
+        payload = {
+            "stage": stage,
+            "repeat_idx": repeat_idx,
+            "user_id": user_id,
+            "gen_idx": gen_idx,
+            "mode": mode,
+            "shape": tuple(logits_host.shape),
+            "dtype": str(logits_host.dtype),
+            "logits": logits_host.detach().cpu(),
+        }
+        torch.save(payload, out_path)
+
+    def _maybe_dump_sampling_compare(
+        self,
+        *,
+        repeat_idx: int,
+        gen_idx: int,
+        host_argmax: torch.Tensor,
+        device_tokens: torch.Tensor,
+    ) -> None:
+        if not self.dump_sampling_compare or self._logits_dump_dir is None:
+            return
+
+        host_argmax_cpu = host_argmax.detach().cpu().reshape(-1).to(torch.int64)
+        device_tokens_cpu = device_tokens.detach().cpu().reshape(-1).to(torch.int64)
+        n = min(host_argmax_cpu.numel(), device_tokens_cpu.numel())
+        host_argmax_cpu = host_argmax_cpu[:n]
+        device_tokens_cpu = device_tokens_cpu[:n]
+        mismatch_mask = host_argmax_cpu != device_tokens_cpu
+        mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=False).reshape(-1).to(torch.int64)
+
+        filename = (
+            f"rank{self._rank}__mode_device__decode_sampling_compare__repeat_{repeat_idx:03d}__step_{gen_idx:04d}.pt"
+        )
+        out_path = self._logits_dump_dir / filename
+        payload = {
+            "repeat_idx": repeat_idx,
+            "gen_idx": gen_idx,
+            "num_users": int(n),
+            "num_mismatches": int(mismatch_indices.numel()),
+            "mismatch_indices": mismatch_indices,
+            "host_argmax_tokens": host_argmax_cpu,
+            "device_sampled_tokens": device_tokens_cpu,
+        }
+        torch.save(payload, out_path)
+
     def _decode_step_tt(
         self,
         tt_tokens: ttnn.Tensor,
@@ -687,7 +779,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         if page_table is not None:
-            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
+            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table, device=self.mesh_device)
         else:
             page_tables_to_use = self._get_page_tables()
 
@@ -697,6 +789,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             self.model_run_config_decode,
             rope_tensors,
             page_tables=page_tables_to_use,
+            profile_decode=self.profile_decode,
         )
         return logits_tt
 
@@ -799,7 +892,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             teacher_forcing = None
 
         # Run one or more prefill+decode batches
-        for _ in range(repeat_batches):
+        for repeat_idx in range(repeat_batches):
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
@@ -842,6 +935,17 @@ class DeepseekGenerator(WarmupForwardMixin):
                     assert prefill_logits is not None
                     last_logits = self._slice_last_token_logits(prefill_logits, prompt_len)
                     last_logits = self._expand_prefill_logits(last_logits)
+                    host_last_logits_for_debug = None
+                    if self.dump_host_logits:
+                        host_last_logits_for_debug = self._logits_to_host(last_logits)
+                        self._maybe_dump_host_logits(
+                            host_last_logits_for_debug,
+                            stage="prefill",
+                            repeat_idx=repeat_idx,
+                            mode="device" if self.sample_on_device else "host",
+                            user_id=user_id,
+                            gen_idx=0,
+                        )
 
                     if self.sample_on_device:
                         # Device sampling (new way)
@@ -851,7 +955,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                         ttnn.deallocate(tt_pred)
                     else:
                         # Host sampling (old way)
-                        host_logits = self._logits_to_host(last_logits)
+                        host_logits = (
+                            host_last_logits_for_debug
+                            if host_last_logits_for_debug is not None
+                            else self._logits_to_host(last_logits)
+                        )
                         sampled_tokens = self._sample_greedy(host_logits)  # [B]
                         pred_token = sampled_tokens[0]  # Get first token
 
@@ -919,6 +1027,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
+                    host_decode_logits = None
 
                     if self.enable_trace:
                         # Trace mode (always uses device sampling)
@@ -947,6 +1056,18 @@ class DeepseekGenerator(WarmupForwardMixin):
                         logits = self._logits_to_host(logits_tt)
                         ttnn.deallocate(logits_tt)
 
+                    if self.dump_host_logits:
+                        host_decode_logits = (
+                            logits if isinstance(logits, torch.Tensor) else self._logits_to_host(logits)
+                        )
+                        self._maybe_dump_host_logits(
+                            host_decode_logits,
+                            stage="decode",
+                            repeat_idx=repeat_idx,
+                            mode="device" if self.sample_on_device else "host",
+                            gen_idx=gen_idx,
+                        )
+
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
 
@@ -968,8 +1089,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                     elif self.sample_on_device:
                         # Device sampling path
                         self._sample_tokens_device(logits, tt_out_tok=tt_next_tokens)
+                        if self.dump_sampling_compare:
+                            host_decode_logits_cmp = (
+                                host_decode_logits if host_decode_logits is not None else self._logits_to_host(logits)
+                            )
+                            host_argmax_tokens = self._sample_greedy(host_decode_logits_cmp)
                         ttnn.deallocate(logits)
                         pred_tokens = self._tokens_from_device(tt_next_tokens, self.batch_size)
+                        if self.dump_sampling_compare:
+                            self._maybe_dump_sampling_compare(
+                                repeat_idx=repeat_idx,
+                                gen_idx=gen_idx,
+                                host_argmax=host_argmax_tokens,
+                                device_tokens=pred_tokens,
+                            )
                         if teacher_forcing is not None:
                             forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
                             pred_tokens[0] = int(forced)
