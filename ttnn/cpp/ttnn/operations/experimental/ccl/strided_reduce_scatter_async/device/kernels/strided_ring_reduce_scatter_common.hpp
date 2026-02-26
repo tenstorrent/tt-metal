@@ -91,6 +91,21 @@ FORCE_INLINE void get_next_tile_coordinates(
     chunk_col_in_tiles = new_col;
 }
 
+/**
+ * Return the actual height (in tiles) of the M-block at index m_block_iter.
+ * All blocks except the last have height mm_block_ht. The last block is clamped
+ * to the remaining rows, which may be less than mm_block_ht when slice_Ht_per_core
+ * is not a multiple of mm_block_ht.
+ */
+FORCE_INLINE uint32_t get_current_mm_block_ht(
+    const uint32_t m_block_iter,
+    const uint32_t mm_M_unit_blocks_per_core,
+    const uint32_t mm_block_ht,
+    const uint32_t slice_Ht_per_core) {
+    return (m_block_iter == mm_M_unit_blocks_per_core - 1) ? (slice_Ht_per_core - m_block_iter * mm_block_ht)
+                                                           : mm_block_ht;
+}
+
 FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
     const uint32_t tile_row_in_mm_M_unit_block,
     const uint32_t chunk_col_in_tiles,

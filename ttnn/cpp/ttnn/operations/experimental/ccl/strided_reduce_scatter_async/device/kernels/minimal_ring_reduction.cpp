@@ -22,6 +22,7 @@ void kernel_main() {
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(11);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
+    constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(14);
 
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
@@ -38,10 +39,12 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
+            const uint32_t current_mm_block_ht =
+                get_current_mm_block_ht(m_block_iter, mm_M_unit_blocks_per_core, mm_block_ht, slice_Ht_per_core);
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
-                const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
+                const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
 
                 for (uint32_t i = 1; i < ring_size; i++) {
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
@@ -57,7 +60,7 @@ void kernel_main() {
                             effective_worker_id,
                             effective_subchunk_size,
                             effective_chunk_width_in_tiles,
-                            mm_block_ht);
+                            current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
