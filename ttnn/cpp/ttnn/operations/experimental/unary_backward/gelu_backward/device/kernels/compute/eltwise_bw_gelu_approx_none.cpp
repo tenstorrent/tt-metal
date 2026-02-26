@@ -53,7 +53,7 @@ void kernel_main() {
             // Step 1: erf(x / sqrt(2))
             fill_tile(3, kAlpha);
             mul_binary_tile(1, 3, 1);  // tile[1] = x / sqrt(2)
-            erf_tile(1);               // tile[1] = erf( x / sqrt(2) )
+            erf_tile(1);            // tile[1] = erf( x / sqrt(2) )
 
             // cdf_term = 0.5 * (1.0 + erf(x / sqrt(2)))
             fill_tile(3, 1.0f);
@@ -68,7 +68,7 @@ void kernel_main() {
             square_tile(2);  // tile[2] = x^2
             fill_tile(3, -0.5f);
             mul_binary_tile(2, 3, 2);  // tile[2] = -0.5 * x^2
-            exp_tile(2);               // tile[2] = exp(- x^2 / 2)
+            exp_tile(2);            // tile[2] = exp(- x^2 / 2)
 
             // multiply by (1 / sqrt(2π))
             fill_tile(3, kBeta);
