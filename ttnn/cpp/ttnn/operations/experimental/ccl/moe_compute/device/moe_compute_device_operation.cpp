@@ -145,7 +145,7 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     // re-percieve tilize output tensor as RM for output
     const auto& output_storage = tilize_output_tensor.device_storage();
     const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
+    const auto& output_topology = tilize_output_tensor.tensor_topology();
     const ttnn::Tensor output_tensor(output_storage,output_spec,output_topology);
 
     return {
