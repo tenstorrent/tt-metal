@@ -24,6 +24,10 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
         ((1024, 1024), (1, 512, 128, 128), 0),
         ((1024, 1024), (1, 512, 256, 256), 1),
         ((1024, 1024), (1, 256, 512, 512), 2),
+        # 512x512 image resolution
+        ((512, 512), (1, 512, 64, 64), 0),
+        ((512, 512), (1, 512, 128, 128), 1),
+        ((512, 512), (1, 256, 256, 256), 2),
     ],
 )
 @pytest.mark.parametrize("stride", [(1, 1)])
@@ -33,10 +37,6 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 def test_vae_upsample2d(
     device, image_resolution, input_shape, up_block_id, stride, padding, dilation, debug_mode, is_ci_env, reset_seeds
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
