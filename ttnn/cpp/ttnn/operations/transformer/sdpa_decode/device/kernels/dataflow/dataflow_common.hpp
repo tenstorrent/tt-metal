@@ -586,8 +586,6 @@ uint64_t read_k(
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
     const KMcastParams& mcast_params = {}) {
-    constexpr uint32_t row_tile_bytes = DHt * k_tile_bytes;
-
     cb_reserve_back(cb_k_in, k_chunk_tiles);
     uint32_t k_write_ptr = get_write_ptr(cb_k_in);
     uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
@@ -596,7 +594,7 @@ uint64_t read_k(
     if constexpr (use_mcast) {
         if (mcast_params.do_mcast) {
             for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-                uint32_t row_write_ptr = k_write_ptr + row * row_tile_bytes;
+                uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
                 uint32_t physical_k_tile_id =
                     (is_page_table_sharded)
@@ -604,57 +602,49 @@ uint64_t read_k(
                               virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
                         : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
                               virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
-                // Read one row of K, write contiguously (DHt tiles)
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc_async_read_tile(physical_k_tile_id, k_reader, row_write_ptr);
-                    physical_k_tile_id += 1;        // Go to next tile in K row
-                    row_write_ptr += k_tile_bytes;  // Contiguous write (next tile in buffer)
-
+                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                    physical_k_tile_id += 1;
+                    k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
                         noc_async_read_barrier();
                         barrier_count = 0;
                     }
                 }
-                noc_async_read_barrier();
-                // Multicast just this row (DHt tiles) to other cores (vertical multicast)
-                uint32_t row_start_ptr = k_write_ptr + row * row_tile_bytes;
-                uint64_t dst_mcast_addr = get_noc_multicast_addr(
-                    mcast_params.mcast_x,   // x (same column)
-                    mcast_params.mcast_y0,  // y_start
-                    mcast_params.mcast_x,   // x (same column)
-                    mcast_params.mcast_y1,  // y_end
-                    row_start_ptr);
-
-                noc_async_write_multicast(
-                    row_start_ptr,
-                    dst_mcast_addr,
-                    row_tile_bytes,  // Only this row (DHt tiles)
-                    mcast_params.num_dests,
-                    /*linked=*/false);
-
-                // Ensure data multicast is complete
-                noc_async_write_barrier();
-                // Signal "tiles ready" via semaphore multicast
-                constexpr uint32_t VALID = 1;
-                noc_semaphore_set(mcast_params.mcast_sem_ptr, VALID);
-
-                uint64_t sem_mcast_addr = get_noc_multicast_addr(
-                    mcast_params.mcast_x,
-                    mcast_params.mcast_y0,
-                    mcast_params.mcast_x,
-                    mcast_params.mcast_y1,
-                    mcast_params.mcast_sem_addr);
-                noc_semaphore_set_multicast(mcast_params.mcast_sem_addr, sem_mcast_addr, mcast_params.num_dests, false);
-                // Push DHt tiles (one K^T column) - allows compute to start immediately
-                cb_push_back(cb_k_in, DHt);
-                noc_async_write_barrier();
             }
+            noc_async_read_barrier();
+            // Multicast the full K^T chunk to all receiver cores at once
+            uint64_t dst_mcast_addr = get_noc_multicast_addr(
+                mcast_params.mcast_x,   // x (same column)
+                mcast_params.mcast_y0,  // y_start
+                mcast_params.mcast_x,   // x (same column)
+                mcast_params.mcast_y1,  // y_end
+                k_write_ptr);
+            noc_async_write_multicast(
+                k_write_ptr,
+                dst_mcast_addr,
+                k_chunk_tiles * k_tile_bytes,
+                mcast_params.num_dests,
+                /*linked=*/false);
+            // Ensure data multicast is complete before signaling
+            noc_async_write_barrier();
+            // Signal all receivers that the full K^T chunk is ready
+            constexpr uint32_t VALID = 1;
+            noc_semaphore_set(mcast_params.mcast_sem_ptr, VALID);
+            uint64_t sem_mcast_addr = get_noc_multicast_addr(
+                mcast_params.mcast_x,
+                mcast_params.mcast_y0,
+                mcast_params.mcast_x,
+                mcast_params.mcast_y1,
+                mcast_params.mcast_sem_addr);
+            noc_semaphore_set_multicast(mcast_params.mcast_sem_addr, sem_mcast_addr, mcast_params.num_dests, false);
+            cb_push_back(cb_k_in, k_chunk_tiles);
+            noc_async_write_barrier();
         } else {
-            for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-                noc_semaphore_wait(mcast_params.mcast_sem_ptr, 1);
-                noc_semaphore_set(mcast_params.mcast_sem_ptr, 0);
-                cb_push_back(cb_k_in, DHt);
-            }
+            // Wait for single signal that the full K^T chunk is ready
+            noc_semaphore_wait(mcast_params.mcast_sem_ptr, 1);
+            noc_semaphore_set(mcast_params.mcast_sem_ptr, 0);
+            cb_push_back(cb_k_in, k_chunk_tiles);
         }
     } else {
         // Non-multicast path: original transposed read
