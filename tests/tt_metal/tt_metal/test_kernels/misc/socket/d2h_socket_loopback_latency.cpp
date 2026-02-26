@@ -4,7 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "pcie_noc_utils.h"
+#include "socket_benchmark_defs.h"
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -46,6 +46,7 @@ void kernel_main() {
         *reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr + i * sizeof(uint64_t)) =
             end_timestamp - start_timestamp;
     }
+    socket_barrier(sender_socket);
     noc_async_write_barrier();
 
     update_socket_config(sender_socket);

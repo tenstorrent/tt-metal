@@ -10,9 +10,9 @@ constexpr uint32_t WARMUP_ITERS = 5;
 
 // D2H: write one page from L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
 inline void noc_write_page_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
+    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
     while (size) {
         uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
-        noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             NOC_INDEX, src_l1, pcie_xy_enc, dst_pcie, chunk, 1);
         src_l1 += chunk;
