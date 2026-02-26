@@ -191,6 +191,7 @@ class TtQwenModelArgs(TtModelArgs):
         self.qk_norm = True
         self.is_qwen = True
         self.unfuse_res_add = True
+        self.pad_logits_to_power_of_2 = True
 
         if self.num_devices == 32:
             self.use_prefetcher = True
