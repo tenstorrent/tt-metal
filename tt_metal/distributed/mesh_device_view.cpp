@@ -85,7 +85,7 @@ MeshDeviceViewImpl::MeshDeviceViewImpl(
 
     // Build coordinate map.
     for (const auto& [coord, maybe_device] : devices_) {
-        maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
+        maybe_device.if_local([this, coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
     }
 }
 
