@@ -225,6 +225,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}

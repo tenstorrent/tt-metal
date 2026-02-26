@@ -36,6 +36,11 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      timeout-minutes-override:
+        required: false
+        type: number
+        default: 0
+        description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
 
 jobs:
   load-test-matrix:
@@ -59,6 +64,7 @@ jobs:
           pip3 install PyYAML
 
       - name: Verify test timeouts against budget
+        if: ${{ inputs.timeout-minutes-override == 0 }}
         run: |
           set -e
           python3 .github/scripts/utils/verify_time_budget.py \
@@ -138,7 +144,7 @@ jobs:
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
 
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
 
