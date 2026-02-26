@@ -308,30 +308,13 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(rot_mats[1])
 
             # --- Postprocessing ---
-            # 1. Convert TT output back to torch tensor
-            tt_output_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
-
-            deepstack_visual_embeds_torch_list = [
-                ttnn.to_torch(
-                    deepstack_visual_embeds[i],
-                    mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1),
-                )
-                for i in range(len(deepstack_visual_embeds))
-            ]
-
-            # deallocate TT output
-            ttnn.deallocate(tt_out)
-            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
-
-            # 2. Extract the relevant output part and adjust shape (matching test logic)
+            # 1. Extract the relevant output part and adjust shape (matching test logic)
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            final_output = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-            deepstack_visual_embeds_torch = [
-                deepstack_visual_embeds_torch_list[i][:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-                for i in range(len(deepstack_visual_embeds_torch_list))
+            final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+            deepstack_visual_embeds = [
+                ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+                for i in range(len(deepstack_visual_embeds))
             ]
 
             if self.debug:
@@ -343,13 +326,13 @@ class DropInVisionTransformer(torch.nn.Module):
             final_outputs.append(final_output)
             for i in range(len(deepstack_visual_embeds_list)):
                 if deepstack_visual_embeds_list[i] is None:
-                    deepstack_visual_embeds_list[i] = deepstack_visual_embeds_torch[i]
+                    deepstack_visual_embeds_list[i] = deepstack_visual_embeds[i]
                 else:
-                    deepstack_visual_embeds_list[i] = torch.cat(
-                        [deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0
+                    deepstack_visual_embeds_list[i] = ttnn.concat(
+                        [deepstack_visual_embeds_list[i], deepstack_visual_embeds[i]], dim=0
                     )
         # concatenate all the outputs
-        return torch.cat(final_outputs, dim=0), deepstack_visual_embeds_list
+        return ttnn.concat(final_outputs, dim=0), deepstack_visual_embeds_list
 
 
 class Transformer(TTTransformer):
