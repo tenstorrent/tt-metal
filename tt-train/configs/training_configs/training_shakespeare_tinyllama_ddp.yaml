@@ -16,7 +16,7 @@ training_config:
 
 device_config:
   enable_ddp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [32, 1]
 
 eval_config:
   repetition_penalty: 1.0

@@ -1,21 +1,24 @@
 training_config:
-  project_name: "tt_train_nano_gpt"
+  project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
   seed: 5489
-  model_save_interval: 500
+  model_save_interval: 1
   batch_size: 8
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 5
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  tokenizer_type: "bpe"
+  data_path: "data/tokenized_shakespeare_llama8b.yaml"
+  model_config: "configs/model_configs/llama8b.yaml"
 
 device_config:
   enable_ddp: true
-  mesh_shape: [32, 1]
+  enable_tp: true
+  mesh_shape: [8, 4]
 
 eval_config:
   repetition_penalty: 1.0
