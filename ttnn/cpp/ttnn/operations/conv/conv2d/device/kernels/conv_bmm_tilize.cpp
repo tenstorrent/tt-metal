@@ -618,7 +618,13 @@ void kernel_main() {
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
                     // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
-                    compute_kernel_lib::untilize<out_block_w, matmul_partials_cb, out_cb_id>(
+                    compute_kernel_lib::untilize<
+                        out_block_w,
+                        matmul_partials_cb,
+                        out_cb_id,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
                         in0_num_subblocks * out_subblock_h);
                 }
             }

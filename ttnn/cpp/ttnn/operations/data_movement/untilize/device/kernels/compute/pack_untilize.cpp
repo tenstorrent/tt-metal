@@ -27,5 +27,11 @@ void kernel_main() {
     // - Detects data format (integer vs non-integer) from unpack_dst_format
     // - Uses block-based pack_untilize for wide integer types (hardware-accelerated)
     // - Falls back to standard untilize for wide non-integer types
-    compute_kernel_lib::untilize<per_core_block_tile_cnt, src_cb_id, out_cb_id>(per_core_block_cnt);
+    compute_kernel_lib::untilize<
+        per_core_block_tile_cnt,
+        src_cb_id,
+        out_cb_id,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
 }
