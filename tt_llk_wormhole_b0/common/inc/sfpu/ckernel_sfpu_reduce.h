@@ -727,9 +727,11 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
     // Determine InstrModLoadStore from llk_defs; Int32 MAX/MIN use INT32_2S_COMP for SFPSWAP
+    // Float16_b uses DEFAULT instruction mode due to accuracy issues when RISCV_DEBUG_REG_DBG_FEATURE_DISABLE bit 11 is reset
     constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN))
                                                        ? InstrModLoadStore::INT32_2S_COMP
-                                                       : GetSfpLoadStoreInstrMod<format>();
+                                                   : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
+                                                                                       : GetSfpLoadStoreInstrMod<format>();
 
     // Dispatch to appropriate PoolType init
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN)
@@ -769,9 +771,11 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
     // Determine InstrModLoadStore from llk_defs; Int32 MAX/MIN use INT32_2S_COMP for SFPSWAP
+    // Float16_b uses DEFAULT instruction mode due to accuracy issues when RISCV_DEBUG_REG_DBG_FEATURE_DISABLE bit 11 is reset
     constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN))
                                                        ? InstrModLoadStore::INT32_2S_COMP
-                                                       : GetSfpLoadStoreInstrMod<format>();
+                                                   : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
+                                                                                       : GetSfpLoadStoreInstrMod<format>();
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN)

@@ -52,6 +52,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     {
         _llk_math_dbg_feature_disable_();
     }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
+    }
 }
 
 template <DstSync Dst>
