@@ -40,15 +40,14 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
     ttnn::bind_function<"untilize_with_unpadding">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::untilize_with_unpadding,
-            nb::arg("input_tensor"),
-            nb::arg("output_tensor_end"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("use_pack_untilize") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::untilize_with_unpadding,
+        nb::arg("input_tensor"),
+        nb::arg("output_tensor_end"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("use_pack_untilize") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

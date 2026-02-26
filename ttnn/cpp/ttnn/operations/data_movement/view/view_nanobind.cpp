@@ -53,7 +53,9 @@ void bind_view(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, tt::stl::Span<const int32_t>>(&ttnn::view),
+            +[](const ttnn::Tensor& input_tensor, const tt::stl::SmallVector<int32_t>& shape) {
+                return ttnn::view(input_tensor, shape);
+            },
             nb::arg("input_tensor"),
             nb::arg("shape")));
 }
