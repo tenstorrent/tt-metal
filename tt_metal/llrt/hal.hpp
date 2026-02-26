@@ -257,6 +257,7 @@ public:
     // The results from this query interface may vary based on these parameters.
     struct Params {
         bool is_fw;
+        bool is_lgc;
         HalProgrammableCoreType core_type;
         HalProcessorClassType processor_class;
         uint32_t processor_id;
