@@ -69,6 +69,39 @@ def galaxy_type():
         return None
 
 
+@pytest.fixture(autouse=True)
+def ttnn_graph_report():
+    """
+    Automatically generate graph reports on each test run.
+    """
+    import ttnn
+
+    if not getattr(ttnn.CONFIG, "enable_logging", False):
+        yield
+        return
+    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+        yield
+        return
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+
+    report_path = Path(report_path)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        yield
+    finally:
+        report_path.mkdir(parents=True, exist_ok=True)
+        json_path = report_path / "graph_capture.json"
+        ttnn.graph.end_graph_capture_to_file(str(json_path))
+        if json_path.exists():
+            from ttnn.graph_report import import_report
+
+            import_report(json_path, report_path)
+
+
 def is_galaxy():
     import ttnn
 
