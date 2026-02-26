@@ -132,16 +132,11 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
-                        // static_assert(noc_mode == DM_DYNAMIC_NOC);
-                        DPRINT << "BRISC: Creating receiver socket" << ENDL();
+                        static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
-                        DPRINT << "BRISC: Setting receiver socket page size" << ENDL();
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        DPRINT << "BRISC: Waiting for pages" << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DPRINT << "BRISC: Reserving destination CB" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        DPRINT << "BRISC: Moving data with noc: " << (uint32_t)(1 - noc_index) << ENDL();
                         // memmove((void*)(get_write_ptr(CTArgs::cb0_id)), (void*)(recv.read_ptr),
                         // (size_t)(args.socket_page_size));
                         noc_async_read(
@@ -150,15 +145,10 @@ struct Broadcast {
                             args.socket_page_size,
                             1 - noc_index);
                         noc_async_read_barrier(1 - noc_index);
-                        DPRINT << "BRISC: Pushing data" << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        DPRINT << "BRISC: Popping pages" << ENDL();
                         socket_pop_pages(recv, args.socket_num_pages);
-                        DPRINT << "BRISC: Notifying sender" << ENDL();
                         socket_notify_sender(recv, 1 - noc_index);
-                        DPRINT << "BRISC: Updating socket config" << ENDL();
                         update_socket_config(recv);
-                        DPRINT << "BRISC: Socket config updated" << ENDL();
                     } else {
 #endif
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);

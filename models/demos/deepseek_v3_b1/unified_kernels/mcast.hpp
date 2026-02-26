@@ -91,7 +91,6 @@ template <
     uint8_t cmd_buf>
 FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     constexpr uint32_t noc = noc_index;
-    DPRINT << "Mcast noc: " << (uint32_t)noc << ENDL();
     if constexpr (loopback) {
         static_assert(is_part_of_receiver_grid, "Loopback mode is only supported for receiver grid");
     }
@@ -99,45 +98,33 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        DPRINT << "Dynamic NoC" << ENDL();
         if constexpr (posted) {
-            DPRINT << "Posted" << ENDL();
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
-            DPRINT << "Non-posted" << ENDL();
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
-        DPRINT << "After inc_noc_counter_val" << ENDL();
     }
 
-    DPRINT << "Before noc_cmd_buf_ready" << ENDL();
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    DPRINT << "After noc_cmd_buf_ready" << ENDL();
 
     if constexpr (set_size) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
-        DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_AT_LEN_BE)" << ENDL();
     }
     if constexpr (set_addresses) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-        DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_RET_ADDR_LO)" << ENDL();
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    DPRINT << "After NOC_CMD_BUF_WRITE_REG(NOC_CMD_CTRL)" << ENDL();
 
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if constexpr (posted) {
             noc_posted_writes_num_issued[noc] += 1;
-            DPRINT << "After noc_posted_writes_num_issued" << ENDL();
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += num_dests;
-            DPRINT << "After noc_nonposted_writes_acked" << ENDL();
         }
     }
-    DPRINT << "Kernel ends" << ENDL();
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>
@@ -363,11 +350,9 @@ struct Mcast {
                 uint32_t data_receiver_semaphore_addr = get_semaphore(args.data_receiver_semaphore_id);
 
                 // Wait for source CB data to be ready
-                DPRINT << "Waiting for src CB data to be ready" << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
                 // Send data with state
-                DPRINT << "Sending data with state" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -377,7 +362,6 @@ struct Mcast {
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
-                DPRINT << "Sending data with state done" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -387,12 +371,10 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 4);
-                DPRINT << "Sending data with state done" << ENDL();
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                DPRINT << "Mcast done" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
@@ -402,23 +384,17 @@ struct Mcast {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
                 // Reserve space in destination CB before mcast writes to it
-                DPRINT << "Reserving destination CB (receiver core)" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << "Waiting for semaphore (receiver core)" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 
                 // Push to destination CB after data arrived
-                DPRINT << "Pushing to destination CB (receiver core)" << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << "Mcast done (receiver core)" << ENDL();
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
-                DPRINT << "Waiting for semaphore (grid core)" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
-                DPRINT << "Mcast done (grid core)" << ENDL();
             }
 #endif
         }

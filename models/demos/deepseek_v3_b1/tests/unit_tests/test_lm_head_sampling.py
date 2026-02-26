@@ -41,6 +41,10 @@ def _is_lm_head_sampling_perf_enabled():
     return os.getenv("RUN_LM_HEAD_SAMPLING_PERF", "0") == "1"
 
 
+def _is_persistent_mode_enabled():
+    return os.getenv("RUN_PERSISTENT_MODE", "0") == "1"
+
+
 @pytest.mark.skipif(not _is_lm_head_sampling_perf_enabled(), reason="Set RUN_LM_HEAD_SAMPLING_PERF=1 to run perf test")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("use_fp32", [True])
@@ -2128,6 +2132,7 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
             pipeline_block.terminate()
 
 
+@pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -2464,4 +2469,6 @@ def test_persistent_mode(mesh_device, use_fp32):
         logger.info(f"Barrier completed for P{my_mesh_id}")
 
     finally:
+        # if pipeline_block is not None:
+        #     pipeline_block.terminate()
         pass

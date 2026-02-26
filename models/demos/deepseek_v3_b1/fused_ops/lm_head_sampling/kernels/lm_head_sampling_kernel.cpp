@@ -317,49 +317,16 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
             constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
             if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
-                DPRINT << "mesh=(" << Core::mesh_row << "," << Core::mesh_col << ") Iteration " << iteration_count
-                       << ENDL();
-                DPRINT << "mesh=(" << Core::mesh_row << "," << Core::mesh_col << ") WAITING FOR NEXT ITER SEM "
-                       << iteration_count << ENDL();
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-                DPRINT << "NEXT ITERATION SEMAPHORE WAITING " << iteration_count << ENDL();
                 noc_semaphore_wait(next_iteration_semaphore, 1);
                 noc_semaphore_set(next_iteration_semaphore, 0);
-                DPRINT << "NEXT ITERATION SEMAPHORE WAIT COMPLETE " << iteration_count << ENDL();
             }
 #endif
-            // DPRINT << "CCL Broadcast" << ENDL();
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
-#if defined(COMPILE_FOR_NCRISC)
-                if constexpr (Core::is_argmax_final_core) {
-                    DPRINT << "NCRISC: Entering BROADCAST" << ENDL();
-                }
-                if constexpr (Core::is_input_core) {
-                    DPRINT << "NCRISC(input): Entering BROADCAST" << ENDL();
-                }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-                if constexpr (Core::is_input_core) {
-                    DPRINT << "BRISC(input): Entering BROADCAST" << ENDL();
-                }
-#endif
                 bcast(bcast_args);
-#if defined(COMPILE_FOR_NCRISC)
-                if constexpr (Core::is_argmax_final_core) {
-                    DPRINT << "NCRISC: BROADCAST complete" << ENDL();
-                }
-                if constexpr (Core::is_input_core) {
-                    DPRINT << "NCRISC(input): BROADCAST complete" << ENDL();
-                }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-                if constexpr (Core::is_input_core) {
-                    DPRINT << "BRISC(input): BROADCAST complete" << ENDL();
-                }
-#endif
             }
         }
 
@@ -373,146 +340,26 @@ void kernel_main() {
         }
 #endif
 
-        // DPRINT << "RMSNorm" << ENDL();
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
         {
             DeviceZoneScopedN("RMSNORM");
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: Entering RMSNORM" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): Entering RMSNORM" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "TRISC(input): Entering RMSNORM" << ENDL();
-            }
-#endif
             rmsnorm(rmsnorm_args);
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: RMSNORM complete" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): RMSNORM complete" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "BRISC(input): RMSNORM complete" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "TRISC(input): RMSNORM complete" << ENDL();
-            }
-#endif
         }
 
-        // DPRINT << "MCAST" << ENDL();
         {
             DeviceZoneScopedN("MCAST");
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: Entering MCAST" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): Entering MCAST" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "BRISC(input): Entering MCAST" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "TRISC(input): Entering MCAST" << ENDL();
-            }
-#endif
             mcast(mcast_args);
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: MCAST complete" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): MCAST complete" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "BRISC(input): MCAST complete" << ENDL();
-            }
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "BRISC: Entering MCAST" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_input_core) {
-                DPRINT << "TRISC(input): MCAST complete" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "TRISC: Entering MCAST" << ENDL();
-            }
-#endif
         }
 
-        // DPRINT << "MATMUL" << ENDL();
         {
             DeviceZoneScopedN("MATMUL");
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: Entering MATMUL" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): Entering MATMUL" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "BRISC: Entering MATMUL" << ENDL();
-            }
-#endif
-#if defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "TRISC: Entering MATMUL" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "TRISC(input): Entering MATMUL" << ENDL();
-            }
-#endif
             matmul(matmul_args);
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: MATMUL complete" << ENDL();
-            }
-            if constexpr (Core::is_input_core) {
-                DPRINT << "NCRISC(input): MATMUL complete" << ENDL();
-            }
-#endif
         }
 
-        // DPRINT << "ARGMAX" << ENDL();
         {
             DeviceZoneScopedN("ARGMAX");
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_argmax_final_core) {
-                DPRINT << "NCRISC: Entering ARGMAX" << ENDL();
-            }
-#endif
             sampling_op(sampling_args);
         }
-
-#if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::persistent_mode && Core::is_argmax_final_core) {
-            DPRINT << "END OF ITERATION " << iteration_count << ENDL();
-            DPRINT << ENDL() << ENDL();
-        }
-#endif
 
         if constexpr (!Core::persistent_mode) {
             break;
