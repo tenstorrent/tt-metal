@@ -115,7 +115,7 @@ def load_d2h_throughput_csv(path):
 
 
 def load_d2h_latency_csv(path):
-    """Load D2H latency benchmark CSV (pcie_socket_data_ping output)."""
+    """Load D2H latency benchmark CSV (d2h_socket_loopback_latency output)."""
     _, rows = _read_split_rows(path)
     cols = [
         "page_size",
