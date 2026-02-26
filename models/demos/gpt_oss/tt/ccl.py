@@ -5,23 +5,27 @@ import ttnn
 
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring):
+    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring, use_model_parallelism=False):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.use_model_parallelism = use_model_parallelism
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
 
-        # Setup semaphores
-        self._init_subdevice()
+        if self.use_model_parallelism:
+            self._init_submeshes()
+        else:
+            # Setup semaphores
+            self._init_subdevice()
 
-        # Initialize semaphores for reduce scatter and all gather
-        self._init_semaphores()
-        self.rs_ping_pong_idx = 0
-        self.ag_ping_pong_idx = 0
-        self.barrier_idx = 0
+            # Initialize semaphores for reduce scatter and all gather
+            self._init_semaphores()
+            self.rs_ping_pong_idx = 0
+            self.ag_ping_pong_idx = 0
+            self.barrier_idx = 0
 
     def _init_subdevice(self):
         compute_grid_size = ttnn.CoreCoord(8, 8)
@@ -35,6 +39,34 @@ class CCLManager:
             ]
         )
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
+
+    def _init_submeshes(self):
+        self.mp_submeshes = []
+        for i in range(self.mesh_device.shape[1]):
+            self.mp_submeshes.append(
+                self.mesh_device.create_submesh(ttnn.MeshShape(self.mesh_device.shape[0], 1), ttnn.MeshCoordinate(0, i))
+            )
+
+        # Create socket pairs between submeshes for copying hidden_states in _forward_layers_and_head.
+        # One pair per (from_id, to_id) with from_id != to_id; reused for all forward passes.
+        num_submeshes = self.mesh_device.shape[1]
+        self.submesh_socket_pairs = {}
+        socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 16 * 1024)
+        for from_id in range(num_submeshes - 1):
+            to_id = from_id + 1
+            from_submesh = self.mp_submeshes[from_id]
+            to_submesh = self.mp_submeshes[to_id]
+            socket_connections = []
+            for coord in ttnn.MeshCoordinateRange(from_submesh.shape):
+                socket_connections.append(
+                    ttnn.SocketConnection(
+                        ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                        ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                    )
+                )
+            socket_config = ttnn.SocketConfig(socket_connections, socket_memconfig)
+            sender_socket, receiver_socket = ttnn.create_socket_pair(from_submesh, to_submesh, socket_config)
+            self.submesh_socket_pairs[(from_id, to_id)] = (sender_socket, receiver_socket)
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong

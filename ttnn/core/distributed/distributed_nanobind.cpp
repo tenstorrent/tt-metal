@@ -108,8 +108,12 @@ void py_module_types(nb::module_& mod) {
         .def(nb::self > nb::self)
         .def(nb::self >= nb::self);
 
-    nb::class_<MeshToTensor>(mod, "CppMeshToTensor");
-    nb::class_<TensorToMesh>(mod, "CppTensorToMesh");
+    nb::class_<MeshToTensor>(mod, "CppMeshToTensor").def("__repr__", [](const MeshToTensor& composer) {
+        return nb::str("{}").format((void*)&composer);
+    });
+    nb::class_<TensorToMesh>(mod, "CppTensorToMesh").def("__repr__", [](const TensorToMesh& composer) {
+        return nb::str("{}").format((void*)&composer);
+    });
 
     nb::class_<MeshMapperConfig>(mod, "MeshMapperConfig");
     nb::class_<MeshComposerConfig>(mod, "MeshComposerConfig");

@@ -29,6 +29,7 @@ class DecoderLayer:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_model_parallelism=False,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,

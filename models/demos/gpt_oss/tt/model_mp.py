@@ -19,7 +19,7 @@ from .rms_norm import RMSNorm
 
 
 def create_rope_setup(
-    mesh_device,
+    mesh_devices,
     hf_config,
     max_local_batch_size=1,
     users_row_sharded=False,
@@ -33,7 +33,7 @@ def create_rope_setup(
     for independent testing and comparison with HuggingFace reference implementations.
 
     Args:
-        mesh_device: TTNN mesh device for computation
+        mesh_devices: List of TTNN mesh devices for computation
         hf_config: HuggingFace model configuration containing rope_scaling, rope_theta, etc.
         max_local_batch_size: Maximum local batch size (default: 1)
         users_row_sharded: Whether users are row-sharded across devices (default: False)
@@ -45,23 +45,36 @@ def create_rope_setup(
     """
     max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
     rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
-    batch_size = max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size
+    batch_size = max_local_batch_size * mesh_devices[0].shape[0] if users_row_sharded else max_local_batch_size
 
-    rope_setup = RotarySetup(
-        device=mesh_device,
-        batch_size=batch_size,
-        head_dim=hf_config.head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=getattr(hf_config, "rope_theta", 150000.0),
-        rope_scaling=rope_scaling,
-        datatype=datatype,
-        shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
-    )
+    rope_setup = [
+        RotarySetup(
+            device=device,
+            batch_size=batch_size,
+            head_dim=hf_config.head_dim,
+            max_seq_len=max_seq_len,
+            rope_theta=getattr(hf_config, "rope_theta", 150000.0),
+            rope_scaling=rope_scaling,
+            datatype=datatype,
+            shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+        )
+        for device in mesh_devices
+    ]
 
     return rope_setup
 
 
-class Model:
+def worker_for_task(t, N, M):
+    q = N // M
+    r = N % M
+
+    if t < (q + 1) * r:
+        return t // (q + 1)
+    else:
+        return r + (t - (q + 1) * r) // q
+
+
+class ModelWithMP:
     """
     GPT-OSS TTNN Model Implementation
 
@@ -89,7 +102,6 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
-        use_model_parllelism=False,
     ):
         """
         Initialize GPT-OSS model
@@ -104,6 +116,7 @@ class Model:
             paged_attention_config: Configuration for paged attention
             mesh_config: Mesh configuration for parallelization
         """
+        print("Loading Model MP")
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
@@ -115,30 +128,29 @@ class Model:
 
         self.ccl_manager = ccl_manager
 
-        # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
-        # Decode: EP=rows for expert parallelism, SP=1
-        # Prefill: EP=1, SP=rows for sequence parallelism (auto-defaults)
-        self.mesh_config = mesh_config or MeshConfig(
-            mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
+        self.mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
+            mp_enabled=True,
         )
-        print("Mesh Config = ", self.mesh_config, "use_model_parallelism = ", use_model_parllelism)
-        if use_model_parllelism:
-            self.mp_submeshes = []
-            self.mesh_config = MeshConfig(
-                mesh_device.shape,
-                decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
-                mp_enabled=True,
-            )
-            print("Model parallelism enabled: adjusting mesh config to use columns for TP and rows for EP/SP")
-            for i in range(mesh_device.shape[1]):
-                self.mp_submeshes.append(
-                    mesh_device.create_submesh(ttnn.MeshShape(mesh_device.shape[0], 1), ttnn.MeshCoordinate(0, i))
-                )
-            print("Submeshes = ", self.mp_submeshes, "model_config = ", self.mesh_config)
+        print("Initialized ModelWithMP with mesh_config: ", self.mesh_config)
+        self.mp_submeshes = self.ccl_manager.mp_submeshes
+
+        print("Submeshes = ", self.mp_submeshes, "model_config = ", self.mesh_config)
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
+
+        num_layers_per_submesh = hf_config.num_hidden_layers // mesh_device.shape[1]
+        num_layers_per_submesh_rem = hf_config.num_hidden_layers % mesh_device.shape[1]
+        print(
+            "num_layers_per_submesh = ",
+            num_layers_per_submesh,
+            "num_layers_per_submesh_rem = ",
+            num_layers_per_submesh_rem,
+        )
+
         self.rope_setup = create_rope_setup(
-            mesh_device=mesh_device,
+            mesh_devices=self.mp_submeshes,  # Run on first submesh
             hf_config=hf_config,
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
@@ -147,67 +159,79 @@ class Model:
         )
 
         # Keep references for compatibility
-        self.cos_matrix = self.rope_setup.cos_matrix
-        self.sin_matrix = self.rope_setup.sin_matrix
-        self.transformation_mats = self.rope_setup.get_both_trans_mats()
+        self.cos_matrix = [x.cos_matrix for x in self.rope_setup]
+        self.sin_matrix = [x.sin_matrix for x in self.rope_setup]
+        self.transformation_mats = [x.get_both_trans_mats() for x in self.rope_setup]
 
-        embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-        embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        if state_dict:
+            embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
+            embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        else:
+            embedding_weight = None
+
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
-            device=mesh_device,
+            device=self.mp_submeshes[0],  # Place on first submesh for embedding lookup
             layout=ttnn.ROW_MAJOR_LAYOUT,
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.layers = [
-            DecoderLayer(
-                mesh_device,
-                hf_config,
-                substate(state_dict, f"model.layers.{layer_idx}"),
-                layer_idx,
-                ccl_manager,
-                dtype=dtype,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
-                paged_attention_config=paged_attention_config,
-                mesh_config=self.mesh_config,
-                create_kv_cache=create_kv_cache,
-                transformation_mats=self.transformation_mats,
-                max_local_batch_size=max_local_batch_size,
-                users_row_sharded=users_row_sharded,
-                use_throughput_experts=use_throughput_experts,
+        self.layers = []
+        for layer_idx in range(hf_config.num_hidden_layers):
+            submesh_id = worker_for_task(layer_idx, hf_config.num_hidden_layers, mesh_device.shape[1])
+            print("Assigning layer ", layer_idx, " to submesh ", submesh_id)
+            self.layers.append(
+                DecoderLayer(
+                    self.mp_submeshes[submesh_id],
+                    hf_config,
+                    substate(state_dict, f"model.layers.{layer_idx}"),
+                    layer_idx,
+                    ccl_manager,
+                    dtype=dtype,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
+                    paged_attention_config=paged_attention_config,
+                    mesh_config=self.mesh_config,
+                    create_kv_cache=create_kv_cache,
+                    transformation_mats=self.transformation_mats[submesh_id],
+                    max_local_batch_size=max_local_batch_size,
+                    users_row_sharded=users_row_sharded,
+                    use_throughput_experts=use_throughput_experts,
+                )
             )
-            for layer_idx in range(hf_config.num_hidden_layers)
-        ]
         self.norm = RMSNorm(
-            mesh_device,
+            self.mp_submeshes[-1],
             hf_config,
             substate(state_dict, "model.norm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+
         # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
         # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
         # If we shard at unpadded boundaries and pad after, the offsets are wrong for devices 1+.
         # Pre-sharding padding ensures device shard boundaries match the offset stride.
-        sampling_splits = mesh_device.shape[1]
+        sampling_splits = 1  # mesh_device.shape[1]
         per_device_padded = (((self.vocab_size + sampling_splits - 1) // sampling_splits + 31) // 32) * 32
         padded_vocab_size = per_device_padded * sampling_splits
-        lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
-        if lm_head_weight.shape[1] < padded_vocab_size:
-            lm_head_weight = torch.nn.functional.pad(
-                lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
-            )
+
+        if state_dict:
+            lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
+            if lm_head_weight.shape[1] < padded_vocab_size:
+                lm_head_weight = torch.nn.functional.pad(
+                    lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
+                )
+        else:
+            lm_head_weight = None
+
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            device=mesh_device,
+            device=self.mp_submeshes[-1],
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
         # Initialize on-device sampling (supported when per-device vocab fits in 64K)
@@ -218,8 +242,8 @@ class Model:
         if self._supports_on_device_sampling:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
             self.sampling = SamplingGenerator(
-                args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
-                mesh_device=mesh_device,
+                args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, self.mp_submeshes[-1]),
+                mesh_device=self.mp_submeshes[-1],
                 tt_ccl=None,
                 enable_internal_trace=False,
             )
@@ -283,13 +307,18 @@ class Model:
         users_row_sharded=False,
         use_throughput_experts=False,
         use_model_parallelism=False,
+        ccl_manager=None,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
-
+        if ccl_manager is None:
+            ccl_manager = CCLManager(
+                mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1, use_model_parallelism=use_model_parallelism
+            )
+        else:
+            print("Got CCL Manager")
         # Create instance using direct initialization
         instance = cls.__new__(cls)
         instance.__init__(
@@ -305,7 +334,6 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
-            use_model_parllelism=use_model_parallelism,
         )
 
         # Add tt_transformers compatible attributes
@@ -319,6 +347,21 @@ class Model:
     def switch_mode(self, mode: Mode):
         # No-op; required by tt_transformers generator interface.
         return None
+
+    def _copy_hidden_states_between_submeshes(self, hidden_states, from_submesh_id, to_submesh_id):
+        """
+        Copy hidden_states from one submesh to another using the pre-created socket pair.
+        Sockets are created in the constructor and reused for every forward pass.
+        """
+        to_submesh = self.mp_submeshes[to_submesh_id]
+        output_tensor = ttnn.allocate_tensor_on_device(hidden_states.spec, to_submesh)
+        sender_socket, receiver_socket = self.ccl_manager.submesh_socket_pairs[(from_submesh_id, to_submesh_id)]
+        ttnn.experimental.send_async(hidden_states, sender_socket)
+        ttnn.experimental.recv_async(output_tensor, receiver_socket)
+        ttnn.synchronize_device(self.mp_submeshes[from_submesh_id])
+        ttnn.synchronize_device(to_submesh)
+        hidden_states.deallocate(True)
+        return output_tensor
 
     def _forward_layers_and_head(
         self,
@@ -348,14 +391,37 @@ class Model:
         """
         # Determine mode based on current_pos presence
         mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
+        seq_len = hidden_states.shape[-2]
+
+        num_submeshes = self.mesh_device.shape[1]
+        # hidden_states starts on submesh 0 (embedding is on first submesh)
+        current_submesh_id = 0
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
-            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+            logger.info("Running layer ", i, " on submesh ", current_submesh_id)
+            # Layer i is on submesh given by worker_for_task (same mapping as in __init__)
+            next_submesh_id = worker_for_task(i, self.hf_config.num_hidden_layers, num_submeshes)
+            if next_submesh_id != current_submesh_id:
+                logger.info(
+                    f"Copying hidden_states from submesh {current_submesh_id}, {hidden_states.device().id()} to {next_submesh_id} for layer {i}"
+                )
+                # Copy hidden_states from current submesh to the submesh that runs this layer
+                hidden_states = self._copy_hidden_states_between_submeshes(
+                    hidden_states, current_submesh_id, next_submesh_id
+                )
+                logger.info(f"Copied hidden_states with device id {hidden_states.device().id()} for layer {i}")
+                current_submesh_id = next_submesh_id
 
+            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+            this_rope_mats_setup = rope_mats[current_submesh_id]
+            this_rope_mats = [
+                this_rope_mats_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                this_rope_mats_setup.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
             hidden_states = decoder_layer(
                 hidden_states,
-                position_embeddings=rope_mats,
+                position_embeddings=this_rope_mats,
                 position_idx=current_pos,
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
@@ -363,7 +429,16 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            current_submesh_id = next_submesh_id
         logits = hidden_states
+
+        # Norm and lm_head are on the last submesh; copy there if we are not already
+        last_submesh_id = num_submeshes - 1
+        if current_submesh_id != last_submesh_id:
+            copied = self._copy_hidden_states_between_submeshes(hidden_states, current_submesh_id, last_submesh_id)
+            hidden_states.deallocate(True)
+            hidden_states = copied
+            logits = hidden_states
 
         if get_last_token != -1:
             if len(logits.shape) == 3:
@@ -479,10 +554,7 @@ class Model:
             rope_mats = rot_mats_global
         else:
             # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
-            rope_mats = [
-                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-            ]
+            rope_mats = self.rope_setup
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
@@ -641,7 +713,7 @@ class Model:
                 sharded across mesh rows. Each row processes a different user.
         """
         # Embed the tokens
-        device = None if trace_enabled else self.mesh_device
+        device = None if trace_enabled else self.mp_submeshes[0]
 
         if batched_prefill:
             # Row-parallel batched prefill: tokens is [num_rows, seq_len]
@@ -654,7 +726,7 @@ class Model:
                 device=device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(0, None), mesh_shape=device.shape),
             )
         else:
             if tokens.dim() == 2:
@@ -671,10 +743,7 @@ class Model:
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = [
-            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-        ]
+        rot_mats_global = self.rope_setup
         rot_mats_local = None
 
         # Prepare page tables if provided
@@ -686,9 +755,7 @@ class Model:
                 tt_page_table = ttnn.from_torch(
                     page_table,
                     device=device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(0, None), mesh_shape=device.shape),
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
@@ -698,7 +765,7 @@ class Model:
                 assert (
                     global_user_id is not None
                 ), "global_user_id is required for single-user row-sharded prefill to target the correct mesh row"
-                num_rows = self.mesh_device.shape[0]
+                num_rows = device.shape[0]
                 users_per_row = getattr(self.args, "max_local_batch_size", self.args.max_batch_size // num_rows)
                 target_row = global_user_id // users_per_row
 
@@ -709,9 +776,7 @@ class Model:
                 tt_page_table = ttnn.from_torch(
                     full_page_table,
                     device=device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(0, None), mesh_shape=device.shape),
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
@@ -720,7 +785,7 @@ class Model:
                 tt_page_table = ttnn.from_torch(
                     page_table,
                     device=device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )

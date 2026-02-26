@@ -464,7 +464,7 @@ class Generator(WarmupForwardMixin):
                 model_id = res["model_id"]
                 num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
                 last_token_idx_relative = last_token_idx - num_cached_tokens
-                ttnn.synchronize_device(self.model[model_id].mesh_device)
+                # ttnn.synchronize_device(self.model[model_id].mesh_device)
 
                 if "hidden_states" in res:
                     output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(

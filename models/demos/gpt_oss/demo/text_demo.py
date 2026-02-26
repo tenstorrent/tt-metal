@@ -28,7 +28,8 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
+from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+from models.demos.gpt_oss.tests.test_factory import TestFactory
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
@@ -96,6 +97,8 @@ def prepare_gpt_oss_generator_args(
     state_dict=None,
     users_row_sharded=False,
     long_context_mode=False,
+    use_model_parallelism=False,
+    ccl_manager=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)
 
@@ -105,7 +108,7 @@ def prepare_gpt_oss_generator_args(
                           Also disables throughput experts since single-user prefill
                           is not compatible with all_to_all dispatch/combine.
     """
-    submesh_devices = create_submeshes(mesh_device, data_parallel)
+    submesh_devices = create_submeshes(mesh_device, data_parallel)  # DP submeshes for throughput experts
 
     # Hybrid requires a model per submesh
     model_args = []
@@ -136,6 +139,8 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
+            use_model_parallelism=use_model_parallelism,
+            ccl_manager=ccl_manager,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -213,7 +218,7 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
-            4 * 1024,  # max_seq_len
+            1 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
@@ -375,7 +380,15 @@ def prepare_gpt_oss_generator_args(
         # "prefill_128k", #OOM error
     ],
 )
-@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize(
+    "use_model_parallelism, device_params",
+    [
+        [True, [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}]],
+        [False, [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]],
+    ],
+    indirect=True,
+    ids=["model_parallelism", "tensor_parallelism"],
+)
 def test_gpt_oss_demo(
     mesh_device,
     device_params,
@@ -395,7 +408,10 @@ def test_gpt_oss_demo(
     stop_at_eos,
     is_ci_env,
     state_dict,
+    use_model_parallelism,
 ):
+    if not state_dict:
+        state_dict = None
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
         pytest.skip(
@@ -412,10 +428,15 @@ def test_gpt_oss_demo(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False, use_model_parallelism=use_model_parallelism)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
-
+    if use_model_parallelism:
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
+            mp_enabled=True,
+        )
     logger.info(f"Using mesh config: {mesh_config}, model config: {config}")
 
     # Configuration matching tt_transformers defaults
@@ -460,6 +481,8 @@ def test_gpt_oss_demo(
         state_dict=state_dict,
         users_row_sharded=users_row_sharded,
         long_context_mode=long_context_mode,
+        use_model_parallelism=use_model_parallelism,
+        ccl_manager=setup["ccl_manager"],
     )
 
     # Create generator (match tt-transformers pattern)

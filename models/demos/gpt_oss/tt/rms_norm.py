@@ -11,13 +11,16 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None):
         super().__init__()
-        torch_weight = state_dict["weight"]
-
+        if state_dict:
+            torch_weight = state_dict["weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
+        else:
+            torch_weight = None
+        print(f"Init RMS Norm with device {mesh_device.shape}")
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         self.is_distributed = False  # self.mesh_config.tp > 1
         self.tt_weight = ttnn.as_tensor(
-            torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),
+            torch_weight,
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,

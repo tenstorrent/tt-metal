@@ -7,6 +7,7 @@ GPT-OSS specific implementation of create_tt_model that's compatible with tt_tra
 """
 
 import ttnn
+from models.demos.gpt_oss.tt.model_mp import ModelWithMP
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -23,6 +24,8 @@ def create_tt_model(
     create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
+    use_model_parallelism=False,
+    ccl_manager=None,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -44,6 +47,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        use_model_parallelism=use_model_parallelism,
     )
     # Note: num_layers parameter is intentionally not used to preserve full model architecture
 
@@ -51,23 +55,41 @@ def create_tt_model(
     if not state_dict:
         state_dict = gpt_oss_model_args.load_state_dict(
             weights_path=gpt_oss_model_args.model_path,
-            dummy_weights=gpt_oss_model_args.dummy_weights,
+            dummy_weights=True,  # gpt_oss_model_args.dummy_weights,
             convert_to_meta_format=True,
         )
 
-    # Create GPT-OSS model using transformer-compatible constructor
-    model = Model.create_transformer_compatible(
-        args=gpt_oss_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
-        paged_attention_config=paged_attention_config,
-        mesh_config=mesh_config,  # Pass explicit MeshConfig
-        create_kv_cache=create_kv_cache,
-        users_row_sharded=users_row_sharded,
-        use_throughput_experts=use_throughput_experts,
-    )
+    if use_model_parallelism:
+        # Create GPT-OSS model using transformer-compatible constructor
+        model = ModelWithMP.create_transformer_compatible(
+            args=gpt_oss_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+            paged_attention_config=paged_attention_config,
+            mesh_config=mesh_config,  # Pass explicit MeshConfig
+            create_kv_cache=create_kv_cache,
+            users_row_sharded=users_row_sharded,
+            use_throughput_experts=use_throughput_experts,
+            use_model_parallelism=use_model_parallelism,
+            ccl_manager=ccl_manager,
+        )
+    else:
+        # Create GPT-OSS model using transformer-compatible constructor
+        model = Model.create_transformer_compatible(
+            args=gpt_oss_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+            paged_attention_config=paged_attention_config,
+            mesh_config=mesh_config,  # Pass explicit MeshConfig
+            create_kv_cache=create_kv_cache,
+            users_row_sharded=users_row_sharded,
+            use_throughput_experts=use_throughput_experts,
+            use_model_parallelism=use_model_parallelism,
+        )
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []

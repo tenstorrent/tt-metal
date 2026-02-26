@@ -35,10 +35,12 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,
+        use_model_parallelism=False,
     ):
         self.mesh_device = mesh_device
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        self.use_model_parallelism = use_model_parallelism
         if self.max_batch_size > 32:
             assert (
                 self.max_batch_size % self.mesh_device.shape[0] == 0
@@ -257,7 +259,10 @@ class ModelArgs:
         else:
             cache_dir = Path(self.model_path)  # Use same directory as model
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
+        if self.use_model_parallelism:
+            cache_path = cache_dir / f"tensor_cache_{dtype_str}_MeshShape([1, 1])"
+        else:
+            cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
         logger.info(f"Cache directory: {cache_dir}, path = {cache_path}")
 
         cache_path.mkdir(parents=True, exist_ok=True)

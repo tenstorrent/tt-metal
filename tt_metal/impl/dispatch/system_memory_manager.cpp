@@ -282,7 +282,7 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
         this->cq_to_last_completed_event[cq_id],
         fmt::ptr(this));
     cq_to_event_locks[cq_id].lock();
-
+    log_info(tt::LogMetal, "Setting last completed event for cq_id {} to {}", cq_id, event_id);
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();
 }

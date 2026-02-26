@@ -59,7 +59,7 @@ class MeshConfig:
         self.tp_axis = tp_axis
         self.ep_axis = 0 if tp_axis == 1 else 1
         self.sp_axis = self.ep_axis
-
+        self.mp_enabled = mp_enabled
         self.total_devices = mesh_shape[0] * mesh_shape[1]
 
         # Store mode configs
@@ -79,10 +79,11 @@ class MeshConfig:
         self._validate_config(self.prefill, Mode.PREFILL)
 
         # Legacy attributes point to decode config
+        self.mp = self.decode.mp
         self.tp = self.decode.tp
         self.ep = self.decode.ep
         self.sp = self.decode.sp
-        self.dp = self.total_devices // (self.decode.tp * self.decode.ep)
+        self.dp = self.total_devices // (self.decode.tp * self.decode.ep * self.decode.mp)
 
     def _validate_config(self, config: ModeConfig, mode: Mode):
         """Validate a mode config fits the mesh"""
@@ -111,7 +112,13 @@ class MeshConfig:
     # Clean semantic helpers (all use unified shard_mapper)
     def column_parallel(self, mesh_device):
         """Column-parallel weights (feature dimension sharding)"""
-        return self.shard_mapper(mesh_device, tensor_dim=-1)
+        if self.mp_enabled:
+            return self.shard_mapper(mesh_device, mesh_dims=(None, None))
+        column_shard_mapper = self.shard_mapper(mesh_device, tensor_dim=-1)
+        print(
+            f"Column parallel mapper for mesh {mesh_device.shape} with TP axis {self.tp_axis}, MP {self.mp_enabled}, {self.mp}: {column_shard_mapper}"
+        )
+        return column_shard_mapper
 
     def row_parallel(self, mesh_device):
         """Row-parallel weights (sequence/batch dimension sharding)"""
@@ -197,8 +204,10 @@ class MeshConfig:
     def __repr__(self):
         decode_dp = self.total_devices // (self.decode.tp * self.decode.ep)
         prefill_dp = self.total_devices // (self.prefill.tp * self.prefill.ep)
-        decode_str = f"decode[TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
-        prefill_str = f"prefill[TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
+        decode_str = (
+            f"decode[MP={self.decode.mp},TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
+        )
+        prefill_str = f"prefill[MP={self.decode.mp}, TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
         return f"MeshConfig({self.mesh_shape}, {decode_str}, {prefill_str})"
 
 
