@@ -48,19 +48,29 @@ _BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 class _CacheEntry:
     """Cached build result plus metadata for updating the ProgramDescriptor on cache hit."""
 
+    # The built FusedOp (merged ProgramDescriptor with fused kernel sources,
+    # CB descriptors, named CT args, etc.).  Updated in-place on cache hit.
     fused_op: "FusedOp"
-    # Per fused kernel: ordered list of (op_idx, kernel_idx_in_op)
-    # telling which source kernels contributed to this fused kernel's RT args.
-    # op_idx indexes into the flattened ops list from _flatten_ops().
-    role_map: List[List[Tuple[int, int]]]
-    # Per fused kernel: fixed barrier address values (appended uniformly).
+    # Per fused kernel: which original unfused op kernels' RT args were
+    # concatenated into this fused kernel, as (op_idx, kernel_idx_in_op)
+    # pairs.  Needed because on cache hit, the ops have new tensors with
+    # new buffer addresses — all RT args are stale and must be rebuilt by
+    # appending from the correct origin kernels in the right order.
+    origin_kernel_map: List[List[Tuple[int, int]]]
+    # Per fused kernel: fixed barrier RT arg values (GlobalSemaphore L1
+    # addresses).  Stable across builds because semaphore refs are kept
+    # alive in FusedOp.semaphores.
     barrier_suffix: List[List[int]]
-    # Per fused kernel: rebind spec entries [(op_idx, cb_idx, total_size)]
-    # for recomputing sharded CB address RT args.
+    # Per fused kernel: [(op_idx, cb_idx, total_size)] for sharded CBs
+    # whose buffer addresses appear in RT args.  The kernel reads these
+    # at runtime to rebind CBs to new L1 locations between phases.
     rebind_spec: List[List[Tuple[int, int, int]]]
-    # (merged_cb_idx, op_idx, orig_cb_idx) for updating sharded CB buffer ptrs.
+    # (merged_cb_idx, op_idx, orig_cb_idx) for sharded CBs at the
+    # descriptor level.  Updates CBDescriptor buffer pointers so that
+    # generic_op's override_runtime_arguments can call
+    # UpdateDynamicCircularBufferAddress on the cached Program.
     sharded_cb_map: List[Tuple[int, int, int]]
-    # Which ops contribute to the FusedOp's output_tensors:
+    # Which source ops produce the FusedOp's output tensors:
     # [(op_idx, tensor_idx_within_op), ...]
     output_sources: List[Tuple[int, int]]
 
@@ -91,7 +101,7 @@ def _cache_key_and_ops(items):
 def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
     """Record metadata from a freshly-built FusedOp for future cache hits.
 
-    Extracts the role_map (which phase kernels map to each fused kernel),
+    Extracts the origin_kernel_map (which phase kernels map to each fused kernel),
     barrier suffix (fixed barrier addresses), rebind spec (sharded CB info),
     sharded CB map (merged CB indices needing buffer pointer updates), and
     output tensor sources (which phases produce the FusedOp's outputs).
@@ -103,9 +113,9 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
     """
     desc = fused_op.descriptor
 
-    # --- Build role_map from builder-provided kernel_phase_map ---
+    # --- Build origin_kernel_map from builder-provided kernel_phase_map ---
     op_id_to_idx = {id(op): idx for idx, op in enumerate(ops)}
-    role_map: List[List[Tuple[int, int]]] = [
+    origin_kernel_map: List[List[Tuple[int, int]]] = [
         [(op_id_to_idx[id(od)], ki) for od, ki in sources] for sources in kernel_phase_map
     ]
 
@@ -198,7 +208,7 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
 
     return _CacheEntry(
         fused_op=fused_op,
-        role_map=role_map,
+        origin_kernel_map=origin_kernel_map,
         barrier_suffix=barrier_suffix,
         rebind_spec=rebind_spec,
         sharded_cb_map=sharded_cb_map,
@@ -219,7 +229,7 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
     # 1. Rebuild per-kernel RT args via C++ helpers
     for role_idx, fused_kernel in enumerate(desc.kernels):
         fused_kernel.clear_runtime_args()
-        for op_idx, k_idx in entry.role_map[role_idx]:
+        for op_idx, k_idx in entry.origin_kernel_map[role_idx]:
             fused_kernel.append_runtime_args_from(ops[op_idx].descriptor.kernels[k_idx])
         if entry.barrier_suffix[role_idx]:
             fused_kernel.extend_runtime_args_uniform(entry.barrier_suffix[role_idx])
@@ -230,7 +240,7 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
     # 2. Rebuild common_runtime_args
     for role_idx, fused_kernel in enumerate(desc.kernels):
         common: List[int] = []
-        for op_idx, k_idx in entry.role_map[role_idx]:
+        for op_idx, k_idx in entry.origin_kernel_map[role_idx]:
             src_kernel = ops[op_idx].descriptor.kernels[k_idx]
             try:
                 common.extend(list(src_kernel.common_runtime_args))
