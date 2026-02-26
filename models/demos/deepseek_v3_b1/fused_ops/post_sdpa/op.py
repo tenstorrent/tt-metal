@@ -273,14 +273,10 @@ class PostSDPA:
             sdpa_enabled and sdpa_position_id_tensor_mesh is not None and sdpa_per_device_chunk_size > 0
         )
         if sdpa_enabled:
-            # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
-            sdpa_worker_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),  # 4 cores
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),  # 4 cores
-                ]
-            )
-            num_sdpa_workers = 8
+            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
+            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
+
+            sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
 
             # SDPA forwarder cores: (6,9), (7,9) - provided by caller or default
             # Both must be on row 9 with x > 3 to be outside matmul2 grid (same compile-time args)
@@ -295,10 +291,6 @@ class PostSDPA:
 
             # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
             full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
-
-            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
-            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-            sdpa_input_ms_sample = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
 
             # Get actual tile dimensions from input tensor (matches original op)
             sdpa_tile = sdpa_input_l_sample.tile
@@ -1290,6 +1282,7 @@ class PostSDPA:
                     ),
                     defines=kernel_defines,
                     unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 # Get kernel descriptors
@@ -1444,18 +1437,6 @@ class PostSDPA:
                     # Get matmul1 input buffer address for scatter destination
                     scatter_dest_l1_addr = input_tensor_device.buffer_address()
 
-                    # Iterate over SDPA worker cores
-                    sdpa_worker_cores = [
-                        ttnn.CoreCoord(2, 8),
-                        ttnn.CoreCoord(3, 8),
-                        ttnn.CoreCoord(4, 8),
-                        ttnn.CoreCoord(5, 8),
-                        ttnn.CoreCoord(2, 9),
-                        ttnn.CoreCoord(3, 9),
-                        ttnn.CoreCoord(4, 9),
-                        ttnn.CoreCoord(5, 9),
-                    ]
-
                     # Type A/B worker split (like original sdpa_reduce_to_all op)
                     # This distributes R1/R2 traffic across both FWD and BWD forwarder instances
                     # Type A: R1 via FWD forwarder (BRISC), R2 via BWD forwarder (NCRISC)
@@ -1472,6 +1453,7 @@ class PostSDPA:
                     bwd_r1_count = [0, 0]
                     bwd_r2_count = [0, 0]
 
+                    sdpa_worker_cores = ttnn.corerange_to_cores(sdpa_worker_grid)
                     for worker_idx, worker_core in enumerate(sdpa_worker_cores):
                         # Convert worker core to NOC coordinates (like original sdpa_reduce_to_all op)
                         worker_core_noc = device.worker_core_from_logical_core(worker_core)
@@ -1673,11 +1655,6 @@ class PostSDPA:
                     program.kernels[
                         sdpa_forwarder_group.ncrisc_kernel_index
                     ].runtime_args = sdpa_forwarder_ncrisc_rt_args
-                    # Set for ALL kernel groups that have is_sdpa_forwarder_core=1
-                    # for group in kernel_result.groups:
-                    #    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                    #        program.kernels[group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    #        program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_forwarder_ncrisc_rt_args
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
