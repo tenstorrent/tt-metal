@@ -996,8 +996,13 @@ void sdpa_inner_loop_step(
                         // Matmul — FPU overlaps with SFPU EXP
                         {
                             uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
                             mm_no_mop_init_short(
                                 cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+#else
+                            mm_block_init_short(
+                                cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                             for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                                 blocked_matmul_and_pack<
@@ -1033,8 +1038,13 @@ void sdpa_inner_loop_step(
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                     {
                         uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
                         mm_no_mop_reinit_short(
                             cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#else
+                        mm_block_init_short(
+                            cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<
@@ -1115,7 +1125,11 @@ void sdpa_inner_loop_step(
             // Uses w_q for the output row offset (adjusted for pushed rows)
             {
                 uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
                 mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#else
+                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<
