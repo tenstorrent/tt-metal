@@ -4,6 +4,7 @@
 
 #include "gtest/gtest.h"
 
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -185,6 +186,8 @@ TEST_P(MeshDeviceDual2x4SendRecvFixture, SendRecvAsync) {
 }
 
 TEST_P(MeshDeviceSplit2x2SendRecvFixture, SendRecvAsync) {
+    // Skip test when watcher is enabled due to code size being bloated with watcher.
+    SKIP_FOR_WATCHER();
     auto [tensor_spec, socket_buffer_type] = GetParam();
     for (uint32_t i = 0; i < 10; i++) {
         test_send_recv_async(
