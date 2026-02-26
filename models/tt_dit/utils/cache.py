@@ -114,6 +114,10 @@ def load_model(
     # tensors lead to redundant copies when saved to disk.
     tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
 
+    # If distributed, ensure that all processes have completed the check whether cache_dir exists,
+    # before any rank might proceed to create that dir to save.
+    ttnn.distributed_context_barrier()
+
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
