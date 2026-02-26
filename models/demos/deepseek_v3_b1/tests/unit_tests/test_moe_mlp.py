@@ -413,12 +413,9 @@ def extract_routed_expert_output(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
+@pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused(device, use_hardcoded_expert_index):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
@@ -562,6 +559,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
+@pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
@@ -578,10 +576,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
-
-    device_grid = submesh.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
@@ -809,12 +803,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 # ============================================================================
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
+@pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
-
-    device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
@@ -931,6 +922,7 @@ def test_mlp(device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
+@pytest.mark.requires_grid_size((13, 10))
 def test_mlp_with_reduce(bh_2d_mesh_device):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
@@ -948,10 +940,6 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
-
-    device_grid = submesh.compute_with_storage_grid_size()
-    if device_grid.x < 13 or device_grid.y < 10:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 13x10")
 
     M = 1
     K = 7168
