@@ -303,6 +303,7 @@ def prepare_attention_weights(
     layer_idx: int,
     *,
     is_moe: bool,
+    move_to_device: bool = False,
 ) -> AttentionWeights:
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
@@ -313,14 +314,16 @@ def prepare_attention_weights(
     logger.debug("  load raw tensors: {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
-    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=False)
-    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=False)
+    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+        q_a, q_b, kv_a, move_to_device=move_to_device
+    )
+    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device)
     logger.debug("  convert q_ab_kv_a + kv_b12: {:.3f}s", time.perf_counter() - t0)
 
     if is_moe:
         gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=False
+            o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
         o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
         gate_bias_tt = create_gate_bias_tensor(
@@ -344,7 +347,7 @@ def prepare_attention_weights(
     else:
         gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=False
+            o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
         o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
@@ -404,6 +407,7 @@ def prepare_routed_expert_weights(
     *,
     is_moe: bool,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    move_to_device: bool = False,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts)."""
     if is_moe:
@@ -430,7 +434,7 @@ def prepare_routed_expert_weights(
         up_stacked = torch.stack(up_list, dim=0)
         down_stacked = torch.stack(down_list, dim=0)
         routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
-            gate_stacked, up_stacked, down_stacked, move_to_device=False
+            gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
         return MoERoutedExpertWeights(
@@ -443,7 +447,7 @@ def prepare_routed_expert_weights(
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
         routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
-            mlp_gate, mlp_up, mlp_down, move_to_device=False
+            mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
         )
         return DenseRoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
@@ -491,14 +495,20 @@ def prepare_moe_layer_weights(
     layer_idx: int,
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    move_to_device: bool = False,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True)
+    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
+    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
     routed = prepare_routed_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts
+        bdw,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_routed_experts,
+        move_to_device=move_to_device,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
