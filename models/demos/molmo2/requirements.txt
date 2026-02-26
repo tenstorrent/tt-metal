@@ -1,0 +1,18 @@
+# Molmo2-8B model requirements
+# Note: tt-metal and ttnn are assumed to be installed from the main package
+
+# HuggingFace transformers for reference model
+transformers>=4.45.0
+
+# Image processing
+Pillow>=10.0.0
+
+# Torch for reference computations
+torch>=2.0.0
+
+# Logging
+loguru
+
+# Testing
+pytest>=7.0.0
+pytest-xdist  # For parallel test execution
