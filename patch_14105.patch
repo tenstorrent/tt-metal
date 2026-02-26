@@ -1,0 +1,9 @@
+diff --git a/src/tt-metal/CommandQueue.cpp b/src/tt-metal/CommandQueue.cpp
+--- a/src/tt-metal/CommandQueue.cpp
++++ b/src/tt-metal/CommandQueue.cpp
+@@ -42,6 +42,8 @@ void CommandQueue::enqueueCommandBuffer(CommandBuffer* commandBuffer) {
+     metalCommandBuffer->commit();
+ 
++    // Ensure the command buffer is properly released after commit
++    [metalCommandBuffer release];
+ }
