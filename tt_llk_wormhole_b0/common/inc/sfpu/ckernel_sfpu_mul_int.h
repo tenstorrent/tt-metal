@@ -22,6 +22,67 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     int offset1    = (dst_index_in1 * 32) << 1;
     int offset_out = (dst_index_out * 32) << 1;
 
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        // Split u16 inputs a and b into a = (a1 << 8) | a0; b = (b1 << 8) | b0,
+        // where a0, a1, b0, b1 are u8.  Then cast to fp32, and calculate:
+        //   lo  = a0*b0
+        //   hi0 = a0*b1
+        //   hi1 = a1*b0
+        // Observe that these are < 2**16.  This allows conversion back to u16
+        // using TTI_SFP_STOCH_RND.
+        // Finally, the result will be lo + ((hi0 + hi1) << 8).
+
+        // a0
+        TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, offset0);
+
+        // a1
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
+        TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
+
+        // a0 = (a0 & mask) as fp32
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+
+        // b0
+        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, offset1);
+
+        // b1
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, 5);
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
+
+        // b0 = (b0 & mask) as fp32
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
+
+        // hi0 = a0*b1
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+        // lo = a0*b0
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        // hi1 = a1*b0
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+
+        // lo = rnd(lo)
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
+
+        // hi1 = rnd(hi1)
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, 6);
+        // hi0 = rnd(hi0)
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, 6);
+
+        // hi = hi0 + hi1
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_CC_NONE);
+        // hi <<= 8
+        TTI_SFPSHFT(8, 0, p_sfpu::LREG2, 1);
+
+        // lo += hi
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+
+        TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_2, offset_out);
+    }
+#else
     constexpr int a0  = p_sfpu::LREG0;
     constexpr int b0  = p_sfpu::LREG1;
     constexpr int a1  = p_sfpu::LREG2;
@@ -98,12 +159,16 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
 inline void _init_mul_int_()
 {
-    sfpi::vConstIntPrgm0   = 0xff;      // LREG12
+    sfpi::vConstIntPrgm0 = 0xff; // LREG12
+#ifdef DISABLE_SFPLOADMACRO
+    sfpi::vConstIntPrgm1 = -8; // LREG13
+#else
     sfpi::vConstFloatPrgm1 = 8388608.0; // LREG13
 
     constexpr int tmp = p_sfpu::LREG5;
@@ -170,6 +235,7 @@ inline void _init_mul_int_()
     //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0xff0, 8, 1);
+#endif
 }
 
 } // namespace sfpu
