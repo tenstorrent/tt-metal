@@ -70,7 +70,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
     const uint32_t pad_value = get_arg_val<uint32_t>(2);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);  // modify in program factory for ND-sharded case
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
     const uint32_t n_block_reps = get_arg_val<uint32_t>(4);
 
     const uint32_t num_tiles_per_row =
@@ -98,7 +98,7 @@ void kernel_main() {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             for (uint32_t i = 0; i < num_sticks_in_row; i++) {
                 uint64_t src_noc_addr = s.get_noc_addr(base_stick_id + k * num_sticks_in_row + i);
-                bool is_last_stick_in_row = i == num_sticks_in_row - 1;
+                bool is_last_stick_in_row = i == (num_sticks_in_row - 1);
                 uint32_t num_bytes_to_read =
                     (is_last_stick_in_row ? size_of_valid_data_in_last_stick_in_row : stick_size);
                 // Read from DRAM to tmp buffer
@@ -109,8 +109,6 @@ void kernel_main() {
                     fill_with_val<elem_size>(
                         start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
                 }
-                // fill_with_val<elem_size>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size,
-                // pad_value);
 
                 // Block before copying data from tmp to cb buffer
                 noc_async_read_barrier();
@@ -151,11 +149,11 @@ void kernel_main() {
         for (uint32_t t = 0; t < times; ++t) {
             for (uint32_t y_t = 0; y_t < n_data; y_t++) {
                 read_block(stick_id, tile_height);
-                stick_id += tile_height * num_sticks_in_row;  // adjust for ND-sharded case
+                stick_id += tile_height * num_sticks_in_row;
             }
 
             read_block(stick_id, n_mixed);
-            stick_id += n_mixed * num_sticks_in_row;  // adjust for ND-sharded case
+            stick_id += n_mixed * num_sticks_in_row;
 
             pad_blocks(n_pads);
         }
