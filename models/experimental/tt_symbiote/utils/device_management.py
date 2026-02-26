@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device management utilities for TTNN modules."""
+import functools
 import time
 
 from torch import nn
@@ -55,6 +56,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
             if kwargs.get("register_forward_hook", True):
 
                 def timed_call(original_call, module_name, module_class):
+                    @functools.wraps(original_call)
                     def new_call(*args, **kwargs):
                         begin = time.time()
                         DispatchManager.set_current_module_name(module_name)
