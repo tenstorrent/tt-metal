@@ -9,12 +9,18 @@ Five demos showcasing different fusion capabilities:
 
 1. Basic 3-op chain (RMS -> Matmul -> RMS) with DRAM I/O on a 4x2 grid
 2. Sharded 2-op chain (RMS -> LN) demonstrating pinned buffer address reassignment
-3. Branching topology (5 ops) on full 8x8 grid (segment barrier measurement)
+3. All-matmul symmetric branching (7 matmuls) on full 8x8 grid — same core grids both paths
 4. Two parallel independent chains on disjoint cores
 5. GlobalCircularBuffer mid-kernel write to an external consumer
+
+Each demo is split into separate fused and unfused tests, each with cold + warm timing.
+Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
+warm = all caches populated.
 """
 
+import shutil
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -22,30 +28,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-
-
-# =============================================================================
-# Golden Reference Functions
-# =============================================================================
-
-
-def torch_layer_norm(x, weight, bias=None, eps=1e-5):
-    mean = x.mean(dim=-1, keepdim=True)
-    var = x.var(dim=-1, keepdim=True, unbiased=False)
-    out = (x - mean) / torch.sqrt(var + eps)
-    if weight is not None:
-        out = out * weight
-    if bias is not None:
-        out = out + bias
-    return out
-
-
-def torch_rms_norm(x, weight, eps=1e-5):
-    rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
-    out = x / rms
-    if weight is not None:
-        out = out * weight
-    return out
+from models.experimental.ops.descriptors.fusion import clear_build_cache
 
 
 # =============================================================================
@@ -54,23 +37,16 @@ def torch_rms_norm(x, weight, eps=1e-5):
 
 
 def _tt(t, device):
-    """Move tensor to device with DRAM interleaved memory config."""
     return ttnn.from_torch(
-        t,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
 
 def _cores(x1, y1, x2, y2):
-    """Create a CoreRangeSet from corner coordinates."""
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2))})
 
 
 def _mm_config(grid_x, grid_y, in0_block_w, per_core_M, per_core_N):
-    """Create a MatmulMultiCoreReuseProgramConfig."""
     return ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
         in0_block_w=in0_block_w,
@@ -82,15 +58,89 @@ def _mm_config(grid_x, grid_y, in0_block_w, per_core_M, per_core_N):
 
 
 def _compute(fp32=False, math_approx_mode=True):
-    """Create a WormholeComputeKernelConfig.
-
-    Defaults match RMS norm's internal defaults (fp32=False, math_approx_mode=True).
-    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=math_approx_mode,
         fp32_dest_acc_en=fp32,
     )
+
+
+def _clear_all_caches(device):
+    """Clear every cache layer for a truly cold dispatch.
+
+    Clears: fusion build cache, device program cache, in-memory JIT cache,
+    and disk-cached compiled kernels. Preserves firmware/ ELFs (needed by the
+    running process's linker for --just-symbols).
+    """
+    clear_build_cache()  # fusion Python build cache
+    device.clear_program_cache()  # device program cache
+    ttnn.device.ClearKernelCache()  # in-memory JIT build cache
+    cache_dir = Path.home() / ".cache" / "tt-metal-cache"
+    for kernels_dir in cache_dir.glob("*/*/kernels"):
+        shutil.rmtree(kernels_dir)
+
+
+def _time_cold_warm(cold_fn, device, warm_fn=None):
+    """Clear all caches, run cold_fn() once, then run warm_fn() once.
+
+    If warm_fn is None, cold_fn is used for both.
+    Returns (cold_ms, warm_ms).
+    """
+    if warm_fn is None:
+        warm_fn = cold_fn
+    sync = lambda: ttnn.synchronize_device(device)
+    _clear_all_caches(device)
+    sync()
+    t0 = time.perf_counter()
+    cold_fn()
+    sync()
+    cold = 1000 * (time.perf_counter() - t0)
+
+    sync()
+    t0 = time.perf_counter()
+    warm_fn()
+    sync()
+    warm = 1000 * (time.perf_counter() - t0)
+    return cold, warm
+
+
+def _time_fused(build_fn, device):
+    """Build + time cold/warm for a fused op.
+
+    build_fn: callable returning a FusedOp (e.g. ``lambda: Sequential(...).build(device)``)
+    Returns (fused_op, cold_ms, warm_ms).
+    """
+    fused = [None]
+
+    def build_and_launch():
+        fused[0] = build_fn()
+        fused[0].launch()
+
+    cold, warm = _time_cold_warm(build_and_launch, device, warm_fn=lambda: fused[0].launch())
+    return fused[0], cold, warm
+
+
+def _time_steady_state(fn, device, num_warmup=5, num_measure=100):
+    """Measure steady-state e2e time per iteration.
+
+    Runs num_warmup iterations (discarded), then num_measure iterations
+    timed as a batch, returning total_ms / num_measure.
+    All caches are warm (program cache, build cache, JIT cache).
+    """
+    sync = lambda: ttnn.synchronize_device(device)
+
+    # Warmup
+    for _ in range(num_warmup):
+        fn()
+    sync()
+
+    # Measure
+    t0 = time.perf_counter()
+    for _ in range(num_measure):
+        fn()
+    sync()
+    total_ms = 1000 * (time.perf_counter() - t0)
+    return total_ms / num_measure
 
 
 # =============================================================================
@@ -278,7 +328,6 @@ def _make_kernel_desc(source, core_ranges, config, named_ct_args, rt_args_per_co
 
 
 def _build_globalcb_sender_op(input_tensor, core_ranges, gcb, num_tiles):
-    """Phase 0: read from DRAM -> compute identity -> push to GlobalCB."""
     src_addr = input_tensor.buffer_address()
     cb_in = _make_cb_desc(0, core_ranges)
     cb_out = _make_cb_desc(4, core_ranges)
@@ -314,7 +363,6 @@ def _build_globalcb_sender_op(input_tensor, core_ranges, gcb, num_tiles):
 
 
 def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
-    """Identity copy: DRAM -> compute -> DRAM."""
     src_addr = input_tensor.buffer_address()
     dst_addr = output_tensor.buffer_address()
     cb_in = _make_cb_desc(0, core_ranges)
@@ -355,7 +403,6 @@ def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
 
 
 def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
-    """Consumer: wait on GlobalCB -> write to DRAM."""
     dst_addr = output_tensor.buffer_address()
 
     cb_recv = ttnn.CBDescriptor()
@@ -394,173 +441,111 @@ def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
 # =============================================================================
 
 
-@pytest.fixture(params=[1, 2], ids=["warmup", "timed"], scope="class")
-def iteration(request):
-    return request.param
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestFusedDemo:
     """Fusion infrastructure demo tests.
 
-    The suite runs twice via the ``iteration`` parameter.  The first pass
-    (warmup) populates the JIT cache for ALL kernels -- fused and unfused.
-    The second pass (timed) is all cache hits and provides accurate timing.
+    Each demo is split into fused and unfused tests with cold + warm timing.
+    Cold = all caches cleared, warm = all caches populated.
     """
 
     # -----------------------------------------------------------------
     # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
+    # Parametrized: H=128 (small) vs H=1024 (large)
+    # Input [256, H], matmul [H, H], 4x2 = 8 cores
     # -----------------------------------------------------------------
 
-    def test_demo1_rms_matmul_rms(self, device, iteration):
-        """3-op chain: RMS -> Matmul -> RMS on a 4x2 grid with DRAM I/O.
-
-        Demonstrates basic sequential chaining of heterogeneous ops.
-        Intermediate results stay in L1 between phases -- no DRAM round-trips.
-
-        Setup:
-            Input:  (1, 1, 256, 128) -- 8x4 tiles, BF16, DRAM interleaved
-            B:      (1, 1, 128, 128) -- 4x4 tiles
-            Grid:   4x2 = 8 cores (8 M-tile rows, 1 per core)
-            Compute: fp32=False, math_approx=True, HiFi4 (all phases)
-
-        Comparison: ttnn.rms_norm -> ttnn.matmul -> ttnn.rms_norm
-        """
-        from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
-
+    def _demo1_setup(self, device, hidden):
         torch.manual_seed(42)
-
-        hidden = 128
-        core_range = _cores(0, 0, 3, 1)
-        mm_cfg = _mm_config(grid_x=4, grid_y=2, in0_block_w=4, per_core_M=1, per_core_N=4)
+        M_tiles = 256 // 32  # 8
+        N_tiles = hidden // 32
+        core_range = _cores(0, 0, 3, 1)  # 4x2 = 8 cores
+        mm_cfg = _mm_config(grid_x=4, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 8, per_core_N=N_tiles)
 
         torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
         torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
         torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
 
-        # ---- Build + launch fused ----
-        factory_start = time.perf_counter()
-        r1 = rms_norm.rms_norm(
-            _tt(torch_input, device),
-            core_range_set=core_range,
-            weight=_tt(torch_w, device),
-            epsilon=1e-5,
-        )
+        return core_range, mm_cfg, torch_input, torch_w, torch_b
+
+    @pytest.mark.parametrize("hidden", [128, 1024], ids=["small", "large"])
+    def test_demo1_fused(self, device, hidden):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, hidden)
+
+        tt_in = _tt(torch_input, device)
+        tt_w = _tt(torch_w, device)
+        tt_b = _tt(torch_b, device)
+        r1 = rms_norm.rms_norm(tt_in, core_range_set=core_range, weight=tt_w, epsilon=1e-5)
         m = matmul_desc(
             r1.output_tensors[0],
-            _tt(torch_b, device),
+            tt_b,
             core_range_set=core_range,
             program_config=mm_cfg,
             compute_kernel_config=_compute(),
         )
         r2 = rms_norm.rms_norm(
-            m.output_tensors[0],
-            core_range_set=core_range,
-            weight=_tt(torch_w, device),
-            epsilon=1e-5,
+            m.output_tensors[0], core_range_set=core_range, weight=_tt(torch_w, device), epsilon=1e-5
         )
-        factory_time = time.perf_counter() - factory_start
-        build_start = time.perf_counter()
-        fused = Sequential(r1, m, r2).build(device)
-        build_time = time.perf_counter() - build_start
 
-        outputs = composite.launch([fused])
-        fused_result = ttnn.to_torch(outputs[0][0])
+        _, cold, warm = _time_fused(lambda: Sequential(r1, m, r2).build(device), device)
+        fused_result = ttnn.to_torch(r2.output_tensors[0])
 
-        # ---- Unfused path ----
-        tt_input = _tt(torch_input, device)
-        tt_w = _tt(torch_w, device)
-        tt_B = _tt(torch_b, device)
-
-        # Warmup unfused ops (populate C++ program cache)
-        _u0 = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
-        _u0 = ttnn.matmul(_u0, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
-        _u0 = ttnn.rms_norm(_u0, weight=tt_w, epsilon=1e-5)
-        del _u0
-
-        # Timed unfused path (C++ program cache hit)
-        t_u0 = time.perf_counter()
-        u1 = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
-        t_u1 = time.perf_counter()
+        # Unfused reference for PCC
+        tt_in, tt_w, tt_B = _tt(torch_input, device), _tt(torch_w, device), _tt(torch_b, device)
+        u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
         u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
-        t_u2 = time.perf_counter()
-        u3 = ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
-        t_u3 = time.perf_counter()
-        unfused_result = ttnn.to_torch(u3)
+        ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
-        # ---- Golden ----
-        temp = torch_rms_norm(torch_input.float(), torch_w.float())
-        temp = temp @ torch_b.float()
-        golden = torch_rms_norm(temp, torch_w.float())
+        passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
+        print(f"\n  Demo 1 Fused (H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms  PCC={pcc:.6f}")
+        assert passing, f"PCC: {pcc}"
 
-        passing_f, pcc_f = comp_pcc(golden, fused_result, pcc=0.97)
-        passing_u, pcc_u = comp_pcc(golden, unfused_result, pcc=0.97)
+    @pytest.mark.parametrize("hidden", [128, 1024], ids=["small", "large"])
+    def test_demo1_unfused(self, device, hidden):
+        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, hidden)
+        tt_in, tt_w, tt_B = _tt(torch_input, device), _tt(torch_w, device), _tt(torch_b, device)
 
-        if iteration == 2:
-            print(f"\n{'='*60}")
-            print(f"Demo 1: RMS -> Matmul -> RMS (4x2 grid, DRAM)")
-            print(f"  Factory (tensor alloc + descriptors): {factory_time*1000:.2f} ms")
-            print(f"  Build (Sequential.build): {build_time*1000:.2f} ms")
-            print(f"  Unfused host time per op (C++ cache hit):")
-            print(f"    rms_norm: {1000*(t_u1-t_u0):.3f} ms")
-            print(f"    matmul:   {1000*(t_u2-t_u1):.3f} ms")
-            print(f"    rms_norm: {1000*(t_u3-t_u2):.3f} ms")
-            print(f"    total:    {1000*(t_u3-t_u0):.3f} ms")
-            print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
-            print(f"{'='*60}")
+        def unfused():
+            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
+            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
+            return ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
 
-        assert passing_f, f"Fused PCC: {pcc_f}"
-        assert passing_u, f"Unfused PCC: {pcc_u}"
+        cold, warm = _time_cold_warm(unfused, device)
+        print(f"\n  Demo 1 Unfused (H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms")
 
     # -----------------------------------------------------------------
     # Demo 2: RMS -> LN (block-sharded, 4x4 grid)
+    # Parametrized: rows=128/shard_h=32 (small) vs rows=512/shard_h=128 (large)
+    # Cols fixed at 512, 4x4 = 16 cores
     # -----------------------------------------------------------------
 
-    def test_demo2_rms_ln_sharded(self, device, iteration):
-        """2-op chain: RMS -> LN with block-sharded input/output on 4x4 grid.
-
-        Demonstrates pinned buffer address reassignment in the CB allocator.
-        Sharded CBs have their L1 buffer addresses pinned to the shard location.
-        The fusion CB allocator detects this and preserves the pinning while
-        still pool-allocating other CB slots for sharing between phases.
-
-        Setup:
-            Input:  (1, 1, 128, 512) -- 4x16 tiles, BF16, block-sharded
-            Grid:   4x4 = 16 cores, shard (32, 128) = 1x4 tiles per core
-            Compute: fp32=False, math_approx=True, HiFi4 (all phases)
-
-        Comparison: ttnn.rms_norm -> ttnn.layer_norm (sharded program config)
-        """
-        from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-        from models.experimental.ops.descriptors import composite
-
+    def _demo2_setup(self, device, rows):
         torch.manual_seed(42)
+        cols = 512
+        shard_h = rows // 4  # rows distributed across 4 core-rows
+        shard_w = cols // 4  # 128 always
+        block_h = shard_h // 32  # tile rows per core
+        block_w = shard_w // 32  # tile cols per core = 4 always
 
         cores = _cores(0, 0, 3, 3)
-        shard_spec = ttnn.ShardSpec(cores, (32, 128), ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        )
+        shard_spec = ttnn.ShardSpec(cores, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
         compute_cfg = _compute(fp32=False)
         program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(4, 4),
             subblock_w=4,
-            block_h=1,
-            block_w=4,
+            block_h=block_h,
+            block_w=block_w,
             inplace=False,
         )
 
-        torch_input = torch.randn(1, 1, 128, 512, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, 512, dtype=torch.bfloat16)
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, cols, dtype=torch.bfloat16)
 
-        # ---- Build + launch fused ----
-        build_start = time.perf_counter()
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=ttnn.bfloat16,
@@ -569,6 +554,16 @@ class TestFusedDemo:
             memory_config=sharded_mem,
         )
         tt_w = _tt(torch_w, device)
+
+        return cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w
+
+    @pytest.mark.parametrize("rows", [128, 512], ids=["small", "large"])
+    def test_demo2_fused(self, device, rows):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+
+        cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w = self._demo2_setup(device, rows)
+
         r = rms_norm.rms_norm(
             tt_input,
             core_range_set=cores,
@@ -585,13 +580,11 @@ class TestFusedDemo:
             compute_kernel_config=compute_cfg,
             memory_config=sharded_mem,
         )
-        fused = Sequential(r, ln).build(device)
-        build_time = time.perf_counter() - build_start
 
-        outputs = composite.launch([fused])
-        fused_result = ttnn.to_torch(outputs[0][0])
+        _, cold, warm = _time_fused(lambda: Sequential(r, ln).build(device), device)
+        fused_result = ttnn.to_torch(ln.output_tensors[0])
 
-        # ---- Unfused path ----
+        # Unfused reference for PCC
         u1 = ttnn.rms_norm(
             tt_input,
             weight=tt_w,
@@ -600,62 +593,276 @@ class TestFusedDemo:
             compute_kernel_config=compute_cfg,
             memory_config=sharded_mem,
         )
-        u2 = ttnn.layer_norm(
-            u1,
-            weight=tt_w,
-            epsilon=1e-5,
-            program_config=program_cfg,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_mem,
+        ref = ttnn.to_torch(
+            ttnn.layer_norm(
+                u1,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=compute_cfg,
+                memory_config=sharded_mem,
+            )
         )
-        unfused_result = ttnn.to_torch(u2)
 
-        # ---- Golden ----
-        temp = torch_rms_norm(torch_input.float(), torch_w.float())
-        golden = torch_layer_norm(temp, torch_w.float())
+        passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
+        print(f"\n  Demo 2 Fused (rows={rows}): cold={cold:.2f}ms  warm={warm:.2f}ms  PCC={pcc:.6f}")
+        assert passing, f"PCC: {pcc}"
 
-        passing_f, pcc_f = comp_pcc(golden, fused_result, pcc=0.98)
-        passing_u, pcc_u = comp_pcc(golden, unfused_result, pcc=0.98)
+    @pytest.mark.parametrize("rows", [128, 512], ids=["small", "large"])
+    def test_demo2_unfused(self, device, rows):
+        cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w = self._demo2_setup(device, rows)
 
-        if iteration == 2:
-            print(f"\n{'='*60}")
-            print(f"Demo 2: RMS -> LN (4x4 grid, block-sharded)")
-            print(f"  Fused compile: {build_time*1000:.2f} ms")
-            print(f"  PCC: fused={pcc_f:.6f}  unfused={pcc_u:.6f}")
-            print(f"{'='*60}")
+        def unfused():
+            u1 = ttnn.rms_norm(
+                tt_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=compute_cfg,
+                memory_config=sharded_mem,
+            )
+            return ttnn.layer_norm(
+                u1,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=compute_cfg,
+                memory_config=sharded_mem,
+            )
 
-        assert passing_f, f"Fused PCC: {pcc_f}"
-        assert passing_u, f"Unfused PCC: {pcc_u}"
+        cold, warm = _time_cold_warm(unfused, device)
+        print(f"\n  Demo 2 Unfused (rows={rows}): cold={cold:.2f}ms  warm={warm:.2f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 3: All-matmul symmetric branching on full 8x8 grid
+    #
+    #     stem (8x8=64c)
+    #       ├── left (8x4=32c)
+    #       │     ├── ll (8x2=16c)
+    #       │     └── lr (8x2=16c)
+    #       └── right (8x4=32c)
+    #             ├── rl (8x2=16c)
+    #             └── rr (8x2=16c)
+    #
+    # All 7 matmuls: [2048,H] @ [H,H] → [2048,H].
+    # Parametrized on hidden to compare small (128) vs large (1024) compute.
+    # Using matmul everywhere gives both paths identical core grid
+    # control via MatmulMultiCoreReuseProgramConfig.
+    # -----------------------------------------------------------------
+
+    def _demo3_setup(self, device, hidden, half_grid=False):
+        torch.manual_seed(42)
+
+        N_tiles = hidden // 32
+
+        if half_grid:
+            # Half grid: stem 4x4=16, branch 4x2=8, leaf 4x1=4
+            M_tiles = 512 // 32  # 16
+            stem_cores = _cores(0, 0, 3, 3)  # 4x4 = 16 cores
+            left_cores = _cores(0, 0, 3, 1)  # 4x2 = 8 cores
+            right_cores = _cores(0, 2, 3, 3)  # 4x2 = 8 cores
+            ll_cores = _cores(0, 0, 3, 0)  # 4x1 = 4 cores
+            lr_cores = _cores(0, 1, 3, 1)  # 4x1 = 4 cores
+            rl_cores = _cores(0, 2, 3, 2)  # 4x1 = 4 cores
+            rr_cores = _cores(0, 3, 3, 3)  # 4x1 = 4 cores
+            stem_cfg = _mm_config(grid_x=4, grid_y=4, in0_block_w=4, per_core_M=M_tiles // 16, per_core_N=N_tiles)
+            branch_cfg = _mm_config(grid_x=4, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 8, per_core_N=N_tiles)
+            leaf_cfg = _mm_config(grid_x=4, grid_y=1, in0_block_w=4, per_core_M=M_tiles // 4, per_core_N=N_tiles)
+            rows = 512
+        else:
+            # Full grid: stem 8x8=64, branch 8x4=32, leaf 8x2=16
+            M_tiles = 2048 // 32  # 64
+            stem_cores = _cores(0, 0, 7, 7)  # 8x8 = 64 cores
+            left_cores = _cores(0, 0, 7, 3)  # 8x4 = 32 cores
+            right_cores = _cores(0, 4, 7, 7)  # 8x4 = 32 cores
+            ll_cores = _cores(0, 0, 7, 1)  # 8x2 = 16 cores
+            lr_cores = _cores(0, 2, 7, 3)  # 8x2 = 16 cores
+            rl_cores = _cores(0, 4, 7, 5)  # 8x2 = 16 cores
+            rr_cores = _cores(0, 6, 7, 7)  # 8x2 = 16 cores
+            stem_cfg = _mm_config(grid_x=8, grid_y=8, in0_block_w=4, per_core_M=M_tiles // 64, per_core_N=N_tiles)
+            branch_cfg = _mm_config(grid_x=8, grid_y=4, in0_block_w=4, per_core_M=M_tiles // 32, per_core_N=N_tiles)
+            leaf_cfg = _mm_config(grid_x=8, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 16, per_core_N=N_tiles)
+            rows = 2048
+
+        mm_compute = _compute()
+        torch_A = torch.randn(1, 1, rows, hidden, dtype=torch.bfloat16)
+        tt_A = _tt(torch_A, device)
+
+        def _make_b():
+            return ttnn.from_torch(
+                torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        tt_Bs = [_make_b()] * 7
+
+        return (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            mm_compute,
+            stem_cfg,
+            branch_cfg,
+            leaf_cfg,
+            tt_A,
+            tt_Bs,
+        )
+
+    @pytest.mark.parametrize(
+        "hidden,half_grid", [(1024, False), (1024, True), (512, True)], ids=["full", "half", "half512"]
+    )
+    def test_demo3_fused(self, device, hidden, half_grid):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            mm_compute,
+            stem_cfg,
+            branch_cfg,
+            leaf_cfg,
+            tt_A,
+            tt_Bs,
+        ) = self._demo3_setup(device, hidden, half_grid=half_grid)
+
+        m_stem = matmul_desc(
+            tt_A, tt_Bs[0], core_range_set=stem_cores, program_config=stem_cfg, compute_kernel_config=mm_compute
+        )
+        m_left = matmul_desc(
+            m_stem.output_tensors[0],
+            tt_Bs[1],
+            core_range_set=left_cores,
+            program_config=branch_cfg,
+            compute_kernel_config=mm_compute,
+        )
+        m_right = matmul_desc(
+            m_stem.output_tensors[0],
+            tt_Bs[2],
+            core_range_set=right_cores,
+            program_config=branch_cfg,
+            compute_kernel_config=mm_compute,
+        )
+        m_ll = matmul_desc(
+            m_left.output_tensors[0],
+            tt_Bs[3],
+            core_range_set=ll_cores,
+            program_config=leaf_cfg,
+            compute_kernel_config=mm_compute,
+        )
+        m_lr = matmul_desc(
+            m_left.output_tensors[0],
+            tt_Bs[4],
+            core_range_set=lr_cores,
+            program_config=leaf_cfg,
+            compute_kernel_config=mm_compute,
+        )
+        m_rl = matmul_desc(
+            m_right.output_tensors[0],
+            tt_Bs[5],
+            core_range_set=rl_cores,
+            program_config=leaf_cfg,
+            compute_kernel_config=mm_compute,
+        )
+        m_rr = matmul_desc(
+            m_right.output_tensors[0],
+            tt_Bs[6],
+            core_range_set=rr_cores,
+            program_config=leaf_cfg,
+            compute_kernel_config=mm_compute,
+        )
+
+        _, cold, warm = _time_fused(
+            lambda: Sequential(
+                m_stem,
+                Parallel(
+                    Sequential(m_left, Parallel(m_ll, m_lr)),
+                    Sequential(m_right, Parallel(m_rl, m_rr)),
+                ),
+            ).build(device),
+            device,
+        )
+        result_ll = ttnn.to_torch(m_ll.output_tensors[0])
+        result_lr = ttnn.to_torch(m_lr.output_tensors[0])
+        result_rl = ttnn.to_torch(m_rl.output_tensors[0])
+        result_rr = ttnn.to_torch(m_rr.output_tensors[0])
+
+        # Unfused reference for PCC
+        u_stem = ttnn.matmul(tt_A, tt_Bs[0], program_config=stem_cfg, compute_kernel_config=mm_compute)
+        u_left = ttnn.matmul(u_stem, tt_Bs[1], program_config=branch_cfg, compute_kernel_config=mm_compute)
+        u_right = ttnn.matmul(u_stem, tt_Bs[2], program_config=branch_cfg, compute_kernel_config=mm_compute)
+        u_ll = ttnn.matmul(u_left, tt_Bs[3], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+        u_lr = ttnn.matmul(u_left, tt_Bs[4], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+        u_rl = ttnn.matmul(u_right, tt_Bs[5], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+        u_rr = ttnn.matmul(u_right, tt_Bs[6], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+
+        p_ll, pcc_ll = comp_pcc(ttnn.to_torch(u_ll), result_ll, pcc=0.97)
+        p_lr, pcc_lr = comp_pcc(ttnn.to_torch(u_lr), result_lr, pcc=0.97)
+        p_rl, pcc_rl = comp_pcc(ttnn.to_torch(u_rl), result_rl, pcc=0.97)
+        p_rr, pcc_rr = comp_pcc(ttnn.to_torch(u_rr), result_rr, pcc=0.97)
+
+        grid = "half" if half_grid else "full"
+        print(
+            f"\n  Demo 3 Fused ({grid}, H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: ll={pcc_ll:.4f} lr={pcc_lr:.4f} rl={pcc_rl:.4f} rr={pcc_rr:.4f}"
+        )
+        assert p_ll, f"ll PCC: {pcc_ll}"
+        assert p_lr, f"lr PCC: {pcc_lr}"
+        assert p_rl, f"rl PCC: {pcc_rl}"
+        assert p_rr, f"rr PCC: {pcc_rr}"
+
+    @pytest.mark.parametrize(
+        "hidden,half_grid", [(1024, False), (1024, True), (512, True)], ids=["full", "half", "half512"]
+    )
+    def test_demo3_unfused(self, device, hidden, half_grid):
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            mm_compute,
+            stem_cfg,
+            branch_cfg,
+            leaf_cfg,
+            tt_A,
+            tt_Bs,
+        ) = self._demo3_setup(device, hidden, half_grid=half_grid)
+
+        def unfused():
+            u_stem = ttnn.matmul(tt_A, tt_Bs[0], program_config=stem_cfg, compute_kernel_config=mm_compute)
+            u_left = ttnn.matmul(u_stem, tt_Bs[1], program_config=branch_cfg, compute_kernel_config=mm_compute)
+            ttnn.matmul(u_left, tt_Bs[3], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+            ttnn.matmul(u_left, tt_Bs[4], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+            u_right = ttnn.matmul(u_stem, tt_Bs[2], program_config=branch_cfg, compute_kernel_config=mm_compute)
+            ttnn.matmul(u_right, tt_Bs[5], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+            ttnn.matmul(u_right, tt_Bs[6], program_config=leaf_cfg, compute_kernel_config=mm_compute)
+
+        cold, warm = _time_cold_warm(unfused, device)
+        grid = "half" if half_grid else "full"
+        print(f"\n  Demo 3 Unfused ({grid}, H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms")
 
     # -----------------------------------------------------------------
     # Demo 4: Two parallel 2-op chains
     # -----------------------------------------------------------------
 
-    def test_demo4_parallel_chains(self, device, iteration):
-        """Two independent 2-op chains on disjoint 4x4 cores, fused in parallel.
-
-        Chain A: LN -> Matmul on (0,0)-(3,3) = 16 cores
-        Chain B: RMS -> Matmul on (4,0)-(7,3) = 16 cores
-
-        Both chains execute in a single kernel dispatch. The hardware runs
-        them simultaneously on separate cores with no inter-chain synchronization.
-
-        Setup:
-            Input A: (1, 1, 512, 128) -- 16x4 tiles
-            Input B: (1, 1, 512, 128) -- 16x4 tiles
-            B weight: (1, 1, 128, 128) -- 4x4 tiles
-            Grid A: (0,0)-(3,3) = 4x4, Grid B: (4,0)-(7,3) = 4x4
-            Compute: fp32=False, math_approx=True, HiFi4 (all phases)
-        """
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
-
+    def _demo4_setup(self, device):
         torch.manual_seed(42)
-
-        cores_a = _cores(0, 0, 3, 3)  # 4x4 = 16
-        cores_b = _cores(4, 0, 7, 3)  # 4x4 = 16
+        cores_a = _cores(0, 0, 3, 3)
+        cores_b = _cores(4, 0, 7, 3)
         hidden = 128
         mm_cfg = _mm_config(grid_x=4, grid_y=4, in0_block_w=4, per_core_M=1, per_core_N=4)
 
@@ -665,13 +872,21 @@ class TestFusedDemo:
         torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
         torch_B = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
 
-        # ---- Build + launch fused ----
-        build_start = time.perf_counter()
         ta = _tt(torch_a, device)
         tb = _tt(torch_b, device)
         tw = _tt(torch_w, device)
         tbi = _tt(torch_bias, device)
         tB = _tt(torch_B, device)
+
+        return cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB
+
+    def test_demo4_fused(self, device):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB = self._demo4_setup(device)
+
         la = layer_norm.layer_norm(
             ta,
             core_range_set=cores_a,
@@ -687,12 +902,7 @@ class TestFusedDemo:
             program_config=mm_cfg,
             compute_kernel_config=_compute(),
         )
-        rb = rms_norm.rms_norm(
-            tb,
-            core_range_set=cores_b,
-            weight=tw,
-            epsilon=1e-5,
-        )
+        rb = rms_norm.rms_norm(tb, core_range_set=cores_b, weight=tw, epsilon=1e-5)
         mb = matmul_desc(
             rb.output_tensors[0],
             tB,
@@ -700,226 +910,48 @@ class TestFusedDemo:
             program_config=mm_cfg,
             compute_kernel_config=_compute(),
         )
-        fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
-        build_time = time.perf_counter() - build_start
 
-        outputs = composite.launch([fused])
+        fused = [None]
 
-        result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[0][1])
+        def build_and_launch():
+            fused[0] = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
+            fused[0].launch()
 
-        # ---- Unfused path (4 sequential dispatches) ----
+        cold, warm = _time_cold_warm(build_and_launch, device, warm_fn=lambda: fused[0].launch())
+        result_a = ttnn.to_torch(ma.output_tensors[0])
+        result_b = ttnn.to_torch(mb.output_tensors[0])
+
+        # Quick unfused reference for PCC
         ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
         ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
         ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
         ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
 
-        unfused_a = ttnn.to_torch(ua2)
-        unfused_b = ttnn.to_torch(ub2)
+        p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
+        p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
 
-        # Golden
-        golden_a = torch_layer_norm(torch_a.float(), torch_w.float(), torch_bias.float()) @ torch_B.float()
-        golden_b = torch_rms_norm(torch_b.float(), torch_w.float()) @ torch_B.float()
+        print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
+        assert p_a, f"Chain A PCC: {pcc_a}"
+        assert p_b, f"Chain B PCC: {pcc_b}"
 
-        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.97)
-        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.97)
-        passing_ua, pcc_ua = comp_pcc(golden_a, unfused_a, pcc=0.97)
-        passing_ub, pcc_ub = comp_pcc(golden_b, unfused_b, pcc=0.97)
+    def test_demo4_unfused(self, device):
+        cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB = self._demo4_setup(device)
 
-        if iteration == 2:
-            print(f"\n{'='*60}")
-            print(f"Demo 4: Two parallel chains (disjoint cores)")
-            print(f"  Fused compile: {build_time*1000:.2f} ms")
-            print(f"  PCC: chain_a={pcc_a:.6f}  chain_b={pcc_b:.6f}")
-            print(f"  Unfused PCC: chain_a={pcc_ua:.6f}  chain_b={pcc_ub:.6f}")
-            print(f"{'='*60}")
+        def unfused():
+            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
+            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
+            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
+            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
 
-        assert passing_a, f"Chain A PCC: {pcc_a}"
-        assert passing_b, f"Chain B PCC: {pcc_b}"
-        assert passing_ua, f"Unfused Chain A PCC: {pcc_ua}"
-        assert passing_ub, f"Unfused Chain B PCC: {pcc_ub}"
+        cold, warm = _time_cold_warm(unfused, device)
+        print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  warm={warm:.2f}ms")
 
     # -----------------------------------------------------------------
-    # Demo 3: Branching topology on full 8x8 grid (segment barriers)
+    # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
     # -----------------------------------------------------------------
 
-    def test_demo3_branching(self, device, iteration):
-        """Branching graph with nested Sequential/Parallel on full 8x8 grid.
-
-        Topology:
-                       stem_rms (8x8 = 64 cores)
-                            |
-                  +---------+---------+
-                  |                   |
-               left_ln             right_mm
-             (0,0)-(7,3)         (0,4)-(7,7)
-              8x4 = 32            8x4 = 32
-                  |
-             +----+----+
-             |         |
-           ll_mm    lr_rms
-         (0,0)-(3,3) (4,0)-(7,3)
-          4x4 = 16    4x4 = 16
-
-        At each branching point, a segment barrier synchronizes all cores in
-        the parent group: every core sends noc_semaphore_inc to core 0, core 0
-        waits for all arrivals, then multicasts the release semaphore to all
-        cores. This test exercises segment barriers at 64-core and 32-core scale.
-
-        Setup:
-            Input:  (1, 1, 2048, 128) -- 64x4 tiles, BF16, DRAM interleaved
-            B:      (1, 1, 128, 128) -- matmul weight
-            Grid:   8x8 = 64 cores total
-            Compute: fp32=False, math_approx=True, HiFi4 (all phases)
-        """
+    def test_demo5_fused(self, device):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
-
-        torch.manual_seed(42)
-
-        # Core grids -- split by rows (y) so matmul grid_y divides N_tiles=4
-        stem_cores = _cores(0, 0, 7, 7)  # 8x8 = 64
-        left_cores = _cores(0, 0, 7, 3)  # 8x4 = 32
-        right_cores = _cores(0, 4, 7, 7)  # 8x4 = 32
-        ll_cores = _cores(0, 0, 3, 3)  # 4x4 = 16
-        lr_cores = _cores(4, 0, 7, 3)  # 4x4 = 16
-
-        hidden = 128
-        mm_compute = _compute()
-        # right_mm: 8x4=32 cores, per_core_M=64/32=2, per_core_N=4 (N not distributed)
-        right_mm_cfg = _mm_config(grid_x=8, grid_y=4, in0_block_w=4, per_core_M=2, per_core_N=4)
-        # ll_mm: 4x4=16 cores, per_core_M=64/16=4, per_core_N=4 (N not distributed)
-        ll_mm_cfg = _mm_config(grid_x=4, grid_y=4, in0_block_w=4, per_core_M=4, per_core_N=4)
-
-        torch_input = torch.randn(1, 1, 2048, hidden, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
-        torch_B = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
-
-        # ---- Build + launch fused ----
-        build_start = time.perf_counter()
-        tt_input = _tt(torch_input, device)
-        tt_w = _tt(torch_w, device)
-        tt_B = _tt(torch_B, device)
-        s = rms_norm.rms_norm(tt_input, core_range_set=stem_cores, weight=tt_w, epsilon=1e-5)
-        ll = layer_norm.layer_norm(
-            s.output_tensors[0],
-            core_range_set=left_cores,
-            weight=tt_w,
-            epsilon=1e-5,
-            compute_kernel_config=mm_compute,
-        )
-        rm = matmul_desc(
-            s.output_tensors[0],
-            tt_B,
-            core_range_set=right_cores,
-            program_config=right_mm_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        llm = matmul_desc(
-            ll.output_tensors[0],
-            tt_B,
-            core_range_set=ll_cores,
-            program_config=ll_mm_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        lrr = rms_norm.rms_norm(
-            ll.output_tensors[0],
-            core_range_set=lr_cores,
-            weight=tt_w,
-            epsilon=1e-5,
-        )
-        fused = Sequential(
-            s,
-            Parallel(Sequential(ll, Parallel(llm, lrr)), rm),
-        ).build(device)
-        build_time = time.perf_counter() - build_start
-
-        composite.launch([fused])
-
-        # Reference outputs through the original op descriptors.
-        result_ll = ttnn.to_torch(llm.output_tensors[0])
-        result_lr = ttnn.to_torch(lrr.output_tensors[0])
-        result_r = ttnn.to_torch(rm.output_tensors[0])
-
-        # ---- Unfused path (5 sequential ttnn dispatches matching tree structure) ----
-        # Matmul configs match fused branch core counts:
-        #   ll_mm:    4x4 = 16 cores (matches fused ll_cores)
-        #   right_mm: 8x4 = 32 cores (matches fused right_cores)
-        # Norm ops use the default interleaved grid (64 cores) because the ttnn
-        # API does not expose a core_range parameter for interleaved inputs.
-        # This makes the unfused norm kernel times a lower bound (more cores = faster).
-        u_stem = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
-        u_left = ttnn.layer_norm(u_stem, weight=tt_w, epsilon=1e-5)
-        u_ll = ttnn.matmul(u_left, tt_B, program_config=ll_mm_cfg, compute_kernel_config=mm_compute)
-        u_lr = ttnn.rms_norm(u_left, weight=tt_w, epsilon=1e-5)
-        u_right = ttnn.matmul(u_stem, tt_B, program_config=right_mm_cfg, compute_kernel_config=mm_compute)
-
-        u_ll_result = ttnn.to_torch(u_ll)
-        u_lr_result = ttnn.to_torch(u_lr)
-        u_right_result = ttnn.to_torch(u_right)
-
-        # ---- Golden ----
-        stem_golden = torch_rms_norm(torch_input.float(), torch_w.float())
-        left_ln_golden = torch_layer_norm(stem_golden, torch_w.float())
-        ll_mm_golden = left_ln_golden @ torch_B.float()
-        lr_rms_golden = torch_rms_norm(left_ln_golden, torch_w.float())
-        right_mm_golden = stem_golden @ torch_B.float()
-
-        passing_ll, pcc_ll = comp_pcc(ll_mm_golden, result_ll, pcc=0.97)
-        passing_lr, pcc_lr = comp_pcc(lr_rms_golden, result_lr, pcc=0.97)
-        passing_r, pcc_r = comp_pcc(right_mm_golden, result_r, pcc=0.97)
-        passing_ull, pcc_ull = comp_pcc(ll_mm_golden, u_ll_result, pcc=0.97)
-        passing_ulr, pcc_ulr = comp_pcc(lr_rms_golden, u_lr_result, pcc=0.97)
-        passing_ur, pcc_ur = comp_pcc(right_mm_golden, u_right_result, pcc=0.97)
-
-        if iteration == 2:
-            print(f"\n{'='*60}")
-            print(f"Demo 3: Branching (8x8 grid = 64 cores)")
-            print(f"  Fused compile: {build_time*1000:.2f} ms")
-            print(f"  PCC: ll_mm={pcc_ll:.6f}  lr_rms={pcc_lr:.6f}  right_mm={pcc_r:.6f}")
-            print(f"  Unfused PCC: ll_mm={pcc_ull:.6f}  lr_rms={pcc_ulr:.6f}  right_mm={pcc_ur:.6f}")
-            print(f"{'='*60}")
-
-        assert passing_ll, f"ll_mm PCC: {pcc_ll}"
-        assert passing_lr, f"lr_rms PCC: {pcc_lr}"
-        assert passing_r, f"right_mm PCC: {pcc_r}"
-        assert passing_ull, f"Unfused ll_mm PCC: {pcc_ull}"
-        assert passing_ulr, f"Unfused lr_rms PCC: {pcc_ulr}"
-        assert passing_ur, f"Unfused right_mm PCC: {pcc_ur}"
-
-    # -----------------------------------------------------------------
-    # Demo 5: GlobalCircularBuffer mid-kernel write
-    # -----------------------------------------------------------------
-
-    def test_demo5_global_cb_mid_kernel(self, device, iteration):
-        """Mid-kernel data exfiltration via GlobalCircularBuffer.
-
-        Architecture:
-            Sender core (0,0):
-                Phase 0: DRAM(input_a) -> compute -> GlobalCB push
-                Phase 1: DRAM(input_b) -> compute -> DRAM(output_b)
-            Receiver core (1,0):
-                GlobalCB -> DRAM(output_recv)
-
-        The receiver gets data from Phase 0 while the sender continues
-        with Phase 1. This demonstrates mid-kernel communication -- the
-        fused kernel doesn't have to finish all phases before data reaches
-        the consumer.
-
-        Setup:
-            Tiles: 8 tiles of 32x32 BF16
-            Sender: core (0,0)
-            Receiver: core (1,0)
-            GlobalCB: 2-tile double-buffer
-
-        Verification:
-            output_recv == input_a  (GlobalCB transfer from Phase 0)
-            output_b   == input_b  (Phase 1 identity copy)
-        """
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors import composite
 
         torch.manual_seed(42)
         num_tiles = 8
@@ -933,11 +965,7 @@ class TestFusedDemo:
         receiver_range = _cores(1, 0, 1, 0)
 
         gcb_size = TILE_SIZE_BF16 * 2
-        gcb = ttnn.create_global_circular_buffer(
-            device,
-            [(sender_core, receiver_range)],
-            gcb_size,
-        )
+        gcb = ttnn.create_global_circular_buffer(device, [(sender_core, receiver_range)], gcb_size)
 
         tia = _tt(torch_input_a, device)
         tib = _tt(torch_input_b, device)
@@ -947,11 +975,13 @@ class TestFusedDemo:
         ob = _build_identity_op(tib, tt_output_b, sender_range, num_tiles)
         con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
-        build_start = time.perf_counter()
-        fused = Parallel(Sequential(oa, ob), con).build(device)
-        build_time = time.perf_counter() - build_start
+        fused = [None]
 
-        composite.launch([fused])
+        def build_and_launch():
+            fused[0] = Parallel(Sequential(oa, ob), con).build(device)
+            fused[0].launch()
+
+        cold, warm = _time_cold_warm(build_and_launch, device, warm_fn=lambda: fused[0].launch())
 
         result_recv = ttnn.to_torch(tt_output_recv)
         result_b = ttnn.to_torch(tt_output_b)
@@ -959,12 +989,456 @@ class TestFusedDemo:
         passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
         passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
 
-        if iteration == 2:
-            print(f"\n{'='*60}")
-            print(f"Demo 5: GlobalCB mid-kernel write")
-            print(f"  Fused compile: {build_time*1000:.2f} ms")
-            print(f"  PCC: receiver={pcc_recv:.6f}  phase1={pcc_b:.6f}")
-            print(f"{'='*60}")
-
+        print(f"\n  Demo 5 Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
         assert passing_recv, f"Receiver PCC: {pcc_recv}"
         assert passing_b, f"Phase 1 PCC: {pcc_b}"
+
+    # -----------------------------------------------------------------
+    # Demo 6: All-layernorm symmetric branching on 2x8 grid
+    #
+    #     stem (2x8=16c) — LN on [512,1024]
+    #       ├── left (1x8=8c)
+    #       │     ├── ll (1x4=4c)
+    #       │     └── lr (1x4=4c)
+    #       └── right (1x8=8c)
+    #             ├── rl (1x4=4c)
+    #             └── rr (1x4=4c)
+    #
+    # DRAM interleaved, no weight/bias. Each phase re-normalizes the
+    # same [512,1024] tensor but on a shrinking core subset.
+    # -----------------------------------------------------------------
+
+    def _demo6_setup(self, device):
+        torch.manual_seed(42)
+        rows, cols = 512, 1024
+
+        stem_cores = _cores(0, 0, 1, 7)  # 2x8 = 16 cores
+        left_cores = _cores(0, 0, 0, 7)  # 1x8 = 8 cores
+        right_cores = _cores(1, 0, 1, 7)  # 1x8 = 8 cores
+        ll_cores = _cores(0, 0, 0, 3)  # 1x4 = 4 cores
+        lr_cores = _cores(0, 4, 0, 7)  # 1x4 = 4 cores
+        rl_cores = _cores(1, 0, 1, 3)  # 1x4 = 4 cores
+        rr_cores = _cores(1, 4, 1, 7)  # 1x4 = 4 cores
+
+        compute_cfg = _compute(fp32=False)
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        tt_input = _tt(torch_input, device)
+
+        return (stem_cores, left_cores, right_cores, ll_cores, lr_cores, rl_cores, rr_cores, compute_cfg, tt_input)
+
+    def test_demo6_fused(self, device):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            tt_input,
+        ) = self._demo6_setup(device)
+
+        rows, cols = 512, 1024
+        half = rows // 2  # 256
+        quarter = rows // 4  # 128
+
+        # Level 0: stem LN on 16 cores, full [1,1,512,1024]
+        ln_stem = layer_norm.layer_norm(
+            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        # Level 1: slice top/bottom halves, then LN on 8 cores each
+        sl_top = slice_op(ln_stem.output_tensors[0], [0, 0, 0, 0], [1, 1, half, cols], core_range_set=left_cores)
+        sl_bot = slice_op(ln_stem.output_tensors[0], [0, 0, half, 0], [1, 1, rows, cols], core_range_set=right_cores)
+
+        ln_left = layer_norm.layer_norm(
+            sl_top.output_tensors[0], core_range_set=left_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_right = layer_norm.layer_norm(
+            sl_bot.output_tensors[0], core_range_set=right_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        # Level 2: slice each half into quarters, then LN on 4 cores each
+        sl_tl = slice_op(ln_left.output_tensors[0], [0, 0, 0, 0], [1, 1, quarter, cols], core_range_set=ll_cores)
+        sl_bl = slice_op(ln_left.output_tensors[0], [0, 0, quarter, 0], [1, 1, half, cols], core_range_set=lr_cores)
+        sl_tr = slice_op(ln_right.output_tensors[0], [0, 0, 0, 0], [1, 1, quarter, cols], core_range_set=rl_cores)
+        sl_br = slice_op(ln_right.output_tensors[0], [0, 0, quarter, 0], [1, 1, half, cols], core_range_set=rr_cores)
+
+        ln_ll = layer_norm.layer_norm(
+            sl_tl.output_tensors[0], core_range_set=ll_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_lr = layer_norm.layer_norm(
+            sl_bl.output_tensors[0], core_range_set=lr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rl = layer_norm.layer_norm(
+            sl_tr.output_tensors[0], core_range_set=rl_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rr = layer_norm.layer_norm(
+            sl_br.output_tensors[0], core_range_set=rr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        _, cold, warm = _time_fused(
+            lambda: Sequential(
+                ln_stem,
+                Parallel(
+                    Sequential(sl_top, ln_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
+                    Sequential(sl_bot, ln_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
+                ),
+            ).build(device),
+            device,
+        )
+
+        # Unfused reference for PCC (just stem → slice top → left → slice tl → ll path)
+        u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+        u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols])
+        u_left = ttnn.layer_norm(u_top, epsilon=1e-5, compute_kernel_config=compute_cfg)
+        u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, cols])
+        ref_ll = ttnn.to_torch(ttnn.layer_norm(u_tl, epsilon=1e-5, compute_kernel_config=compute_cfg))
+        result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
+
+        passing, pcc = comp_pcc(ref_ll, result_ll, pcc=0.97)
+        print(f"\n  Demo 6 Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC(ll)={pcc:.6f}")
+        assert passing, f"PCC: {pcc}"
+
+    def test_demo6_unfused(self, device):
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            tt_input,
+        ) = self._demo6_setup(device)
+
+        rows, cols = 512, 1024
+        half = rows // 2
+        quarter = rows // 4
+
+        def unfused():
+            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols])
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols])
+            u_left = ttnn.layer_norm(u_top, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_right = ttnn.layer_norm(u_bot, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, cols]), epsilon=1e-5, compute_kernel_config=compute_cfg
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, cols]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, cols]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, cols]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+
+        cold, warm = _time_cold_warm(unfused, device)
+        print(f"\n  Demo 6 Unfused: cold={cold:.2f}ms  warm={warm:.2f}ms")
+
+    # =================================================================
+    # Demo 7: LN → Slice → Matmul → Slice → LN  (heterogeneous tree)
+    # =================================================================
+    #
+    # Same balanced binary tree topology as demo 6, but the two "middle"
+    # nodes are matmul ops that each read a different B weight tensor.
+    #
+    #   Level 0:  LN_stem            (16 cores)  [1,1,8192,1024]
+    #   Level 1:  Slice → MM_left    ( 8 cores)  [1,1,4096,1024] × B_left → [1,1,4096,256]
+    #             Slice → MM_right   ( 8 cores)  [1,1,4096,1024] × B_right → [1,1,4096,256]
+    #   Level 2:  Slice → LN_ll/lr   ( 4 cores)  [1,1,2048,256]
+    #             Slice → LN_rl/rr   ( 4 cores)  [1,1,2048,256]
+
+    def _demo7_setup(self, device):
+        torch.manual_seed(42)
+        rows, cols = 8192, 1024
+        mm_n = 256  # matmul output width (B = [1024, 256] = 512KB)
+
+        stem_cores = _cores(0, 0, 1, 7)  # 2x8 = 16 cores
+        left_cores = _cores(0, 0, 0, 7)  # 1x8 = 8 cores
+        right_cores = _cores(1, 0, 1, 7)  # 1x8 = 8 cores
+        ll_cores = _cores(0, 0, 0, 3)  # 1x4 = 4 cores
+        lr_cores = _cores(0, 4, 0, 7)  # 1x4 = 4 cores
+        rl_cores = _cores(1, 0, 1, 3)  # 1x4 = 4 cores
+        rr_cores = _cores(1, 4, 1, 7)  # 1x4 = 4 cores
+
+        compute_cfg = _compute(fp32=False)
+
+        # Matmul config for 8 cores (1x8 grid):
+        # A=[1,1,4096,1024] → M=128 tiles, K=32 tiles
+        # B=[1,1,1024,256] → output [1,1,4096,256]
+        mm_n_tiles = mm_n // 32  # 8
+        mm_cfg = _mm_config(
+            grid_x=1,
+            grid_y=8,
+            in0_block_w=4,
+            per_core_M=16,  # 128 M-tiles / 8 cores = 16
+            per_core_N=mm_n_tiles,  # 8 N-tiles / 1 = 8
+        )
+
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        tt_input = _tt(torch_input, device)
+
+        # B in L1 interleaved: eliminates DRAM bank contention when parallel
+        # matmuls read B simultaneously on disjoint core groups.
+        def _tt_l1(t):
+            return ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+
+        tt_B_left = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
+        tt_B_right = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
+
+        return (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+        )
+
+    def _demo7_make_ops(self, device):
+        """Create all OpDescriptors for Demo 7's tree."""
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+        ) = self._demo7_setup(device)
+
+        rows, cols = 8192, 1024
+        half = rows // 2
+        quarter = rows // 4
+
+        # Level 0: stem LN on 16 cores
+        ln_stem = layer_norm.layer_norm(
+            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        # Level 1: slice then matmul
+        sl_top = slice_op(ln_stem.output_tensors[0], [0, 0, 0, 0], [1, 1, half, cols], core_range_set=left_cores)
+        sl_bot = slice_op(ln_stem.output_tensors[0], [0, 0, half, 0], [1, 1, rows, cols], core_range_set=right_cores)
+
+        mm_left = matmul_desc(
+            sl_top.output_tensors[0],
+            tt_B_left,
+            core_range_set=left_cores,
+            program_config=mm_cfg,
+            compute_kernel_config=compute_cfg,
+        )
+        mm_right = matmul_desc(
+            sl_bot.output_tensors[0],
+            tt_B_right,
+            core_range_set=right_cores,
+            program_config=mm_cfg,
+            compute_kernel_config=compute_cfg,
+        )
+
+        # Level 2: slice then LN (post-matmul width = mm_n)
+        sl_tl = slice_op(mm_left.output_tensors[0], [0, 0, 0, 0], [1, 1, quarter, mm_n], core_range_set=ll_cores)
+        sl_bl = slice_op(mm_left.output_tensors[0], [0, 0, quarter, 0], [1, 1, half, mm_n], core_range_set=lr_cores)
+        sl_tr = slice_op(mm_right.output_tensors[0], [0, 0, 0, 0], [1, 1, quarter, mm_n], core_range_set=rl_cores)
+        sl_br = slice_op(mm_right.output_tensors[0], [0, 0, quarter, 0], [1, 1, half, mm_n], core_range_set=rr_cores)
+
+        ln_ll = layer_norm.layer_norm(
+            sl_tl.output_tensors[0], core_range_set=ll_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_lr = layer_norm.layer_norm(
+            sl_bl.output_tensors[0], core_range_set=lr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rl = layer_norm.layer_norm(
+            sl_tr.output_tensors[0], core_range_set=rl_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rr = layer_norm.layer_norm(
+            sl_br.output_tensors[0], core_range_set=rr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        return (
+            ln_stem,
+            sl_top,
+            sl_bot,
+            mm_left,
+            mm_right,
+            sl_tl,
+            sl_bl,
+            sl_tr,
+            sl_br,
+            ln_ll,
+            ln_lr,
+            ln_rl,
+            ln_rr,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+        )
+
+    def _demo7_build_fused(self, device, ops):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        return Sequential(
+            ln_stem,
+            Parallel(
+                Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
+                Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
+            ),
+        ).build(device)
+
+    # Set to True for Tracy profiling: skips timing loops, runs once only.
+    _SINGLE_RUN_ONLY = False
+
+    def test_demo7_fused(self, device):
+        (
+            ln_stem,
+            sl_top,
+            sl_bot,
+            mm_left,
+            mm_right,
+            sl_tl,
+            sl_bl,
+            sl_tr,
+            sl_br,
+            ln_ll,
+            ln_lr,
+            ln_rl,
+            ln_rr,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+        ) = self._demo7_make_ops(device)
+
+        rows, cols = 8192, 1024
+        half = rows // 2
+        quarter = rows // 4
+        ops = (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr)
+
+        if self._SINGLE_RUN_ONLY:
+            fused = self._demo7_build_fused(device, ops)
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 7 Fused: single run (for Tracy)")
+        else:
+            # Cold start
+            _, cold, _ = _time_fused(lambda: self._demo7_build_fused(device, ops), device)
+
+            # Steady-state e2e
+            fused = self._demo7_build_fused(device, ops)
+            e2e = _time_steady_state(fused.launch, device)
+
+            # Unfused reference for PCC
+            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols])
+            u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n])
+            ref_ll = ttnn.to_torch(ttnn.layer_norm(u_tl, epsilon=1e-5, compute_kernel_config=compute_cfg))
+            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
+
+            passing, pcc = comp_pcc(ref_ll, result_ll, pcc=0.97)
+            print(f"\n  Demo 7 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC(ll)={pcc:.6f}")
+            assert passing, f"PCC: {pcc}"
+
+    def test_demo7_unfused(self, device):
+        (
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+        ) = self._demo7_make_ops(device)
+
+        rows, cols = 8192, 1024
+        half = rows // 2
+        quarter = rows // 4
+
+        def unfused():
+            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols])
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols])
+            u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            u_right = ttnn.matmul(u_bot, tt_B_right, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n]), epsilon=1e-5, compute_kernel_config=compute_cfg
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, mm_n]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, mm_n]),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+
+        if self._SINGLE_RUN_ONLY:
+            unfused()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 7 Unfused: single run (for Tracy)")
+        else:
+            # Cold start
+            cold, _ = _time_cold_warm(unfused, device)
+
+            # Steady-state e2e
+            e2e = _time_steady_state(unfused, device)
+
+            print(f"\n  Demo 7 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
