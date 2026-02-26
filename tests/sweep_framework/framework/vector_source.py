@@ -203,7 +203,7 @@ class VectorExportSource(VectorSource):
             else:
                 logger.warning("Could not determine current machine info from tt-smi")
 
-            # Parse target mesh shape from env var (e.g., "1x2" -> (1, 2))
+            # Parse target mesh shape from the env var (e.g., "1x2" -> (1, 2))
             try:
                 target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
                 target_mesh = (target_rows, target_cols)
