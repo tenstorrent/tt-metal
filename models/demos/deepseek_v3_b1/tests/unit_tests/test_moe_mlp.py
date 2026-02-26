@@ -608,10 +608,11 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
+    device_grid_size = submesh.compute_with_storage_grid_size()
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
@@ -970,10 +971,11 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
 
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
+    device_grid_size = submesh.compute_with_storage_grid_size()
     full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
-    num_full_cores = device_grid.x * device_grid.y
+    num_full_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
