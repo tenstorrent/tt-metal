@@ -123,9 +123,9 @@ class SamplingGenerator:
         self.tt_penalties.reset_output_tokens(tokens)
 
     def reset_seed(self, seeds, user_ids=None):
-        """Reset seeds for sampling. If user_ids not provided, resets all 32 slots."""
+        """Reset seeds for sampling. If user_ids not provided, resets all slots."""
         if user_ids is None:
-            user_ids = list(range(32))
+            user_ids = list(range(self.tt_sampling.max_batch_size))
         self.seed_manager.reset_seed(seeds, user_ids)
         self.seed_manager.get_new_values(user_ids)
 
