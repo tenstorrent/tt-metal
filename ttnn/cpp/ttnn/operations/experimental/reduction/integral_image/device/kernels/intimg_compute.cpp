@@ -16,7 +16,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 
-#define APPROX false
+#define APPROX ckernel::ApproximationMode::Precise
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 

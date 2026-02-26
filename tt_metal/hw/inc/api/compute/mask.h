@@ -14,7 +14,8 @@
 namespace ckernel {
 
 ALWI void mask_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_mask_init<true>()));  // TODO(AP): move out init
+    MATH(
+        (llk_math_eltwise_unary_sfpu_mask_init<ckernel::ApproximationMode::Approximate>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -40,11 +41,11 @@ ALWI void mask_tile_init() {
  */
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
-    MATH((llk_math_eltwise_unary_sfpu_mask<true>(idst_data, data_format)));
+    MATH((llk_math_eltwise_unary_sfpu_mask<ckernel::ApproximationMode::Approximate>(idst_data, data_format)));
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
-    MATH((llk_math_eltwise_unary_sfpu_mask_posinf<true>(idst_data)));
+    MATH((llk_math_eltwise_unary_sfpu_mask_posinf<ckernel::ApproximationMode::Approximate>(idst_data)));
 }
 
 }  // namespace ckernel

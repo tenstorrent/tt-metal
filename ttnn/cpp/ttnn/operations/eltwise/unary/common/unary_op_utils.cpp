@@ -570,7 +570,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RSQRT: {
             return {
                 "rsqrt_tile_init<APPROX>();",
-                fmt::format("rsqrt_tile<to_approximate_enum<APPROX_BOOL, {1}>()>({0});", idst, param0_raw)};
+                fmt::format("rsqrt_tile<ckernel::use_approximate_enum<APPROX_BOOL, {1}>()>({0});", idst, param0_raw)};
         }
         case UnaryOpType::SQRT: {
             return {

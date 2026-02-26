@@ -14,7 +14,7 @@ namespace ckernel {
 template <DataFormat DATA_FORMAT>
 void llk_math_eltwise_binary_sfpu_copy_dest_values(
     uint32_t dst_index_in, uint32_t dst_index_out, int vector_mode = VectorMode::RC) {
-    constexpr ckernel::ApproximationMode APPROX_MODE = 0;
+    constexpr ckernel::ApproximationMode APPROX_MODE = ckernel::ApproximationMode::Precise;
     _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
         sfpu::copy_dest_value<DATA_FORMAT, APPROX_MODE>, dst_index_in, dst_index_out, 0 /*unused*/, vector_mode);
 }
@@ -23,13 +23,13 @@ void llk_math_eltwise_binary_sfpu_copy_dest_values(
 [[deprecated("Use llk_math_eltwise_binary_sfpu_copy_dest_values<DataFormat> instead")]]
 void llk_math_eltwise_binary_sfpu_copy_dest_values(
     uint32_t dst_index_in, uint32_t dst_index_out, int vector_mode = VectorMode::RC) {
-    constexpr ckernel::ApproximationMode APPROX_MODE = 0;
+    constexpr ckernel::ApproximationMode APPROX_MODE = ckernel::ApproximationMode::Precise;
     _llk_math_eltwise_binary_sfpu_params_<APPROX_MODE>(
         sfpu::copy_dest_value<APPROX_MODE>, dst_index_in, dst_index_out, 0 /*unused*/, vector_mode);
 }
 
 inline void llk_math_eltwise_binary_sfpu_copy_dest_values_init() {
-    constexpr ckernel::ApproximationMode APPROX_MODE = 0;
+    constexpr ckernel::ApproximationMode APPROX_MODE = ckernel::ApproximationMode::Precise;
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROX_MODE>(sfpu::copy_dest_value_init);
 }
 
