@@ -157,10 +157,6 @@ def _build_fused_descriptor(
 
     Discovers kernel roles dynamically via ``(risc_type, core_ranges)`` keys.
     """
-    import time as _time
-
-    _t0 = _time.perf_counter()
-
     # Validate fp32 consistency
     _validate_fp32_consistency([p.op_descriptor for p in phases])
 
@@ -190,7 +186,6 @@ def _build_fused_descriptor(
         phase_kernels.append(role_map)
         phase_kernel_indices.append(idx_map)
 
-    _t1 = _time.perf_counter()
     # Pool-allocate CB slots based on compatibility keys.
     # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
     # without adding to remaps, so they are excluded from inter-phase CB reset.
@@ -205,7 +200,7 @@ def _build_fused_descriptor(
     # Compute CB address rebinding info using remapped slot indices.
     rebind_info = _compute_rebind_info(phases, pool.phase_remaps)
 
-    # Build merged CB descriptors from pool (modifies buffer_index in-place)
+    # Build merged CB descriptors from pool (uses stored source_cb/source_fmt references)
     merged_cbs = pool.build_merged_cb_descriptors(phases)
 
     # Set CB core_ranges to the target when building for a specific core group.
@@ -233,17 +228,12 @@ def _build_fused_descriptor(
                 seen_sem_ids_for_reset.add(sem.id)
     op_semaphore_info.sort(key=lambda x: x[0])
 
-    _t2 = _time.perf_counter()
-
     # Determine whether any phase has a compute kernel.
     # When no compute exists, BRISC barrier skips compute_done semaphore.
     has_compute = any(rk[0] == "compute" for rk in role_keys)
 
     fused_kernels = []
     kernel_labels = []
-    _source_gen_total = 0.0
-    _rt_args_total = 0.0
-    _ct_args_total = 0.0
 
     for role_key in role_keys:
         risc_type, core_key = role_key
@@ -263,19 +253,13 @@ def _build_fused_descriptor(
             continue
 
         # Merge compile-time args, compute RT offsets + concatenate RT args
-        _ct_start = _time.perf_counter()
         ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
-        _ct_end = _time.perf_counter()
-        _ct_args_total += _ct_end - _ct_start
 
-        _rt_start = _time.perf_counter()
         rt_offsets, rt_args = _compute_and_concatenate_runtime_args(
             phase_kernels,
             role_key,
             target_core_range=target_core_range,
         )
-        _rt_end = _time.perf_counter()
-        _rt_args_total += _rt_end - _rt_start
 
         # Generate fused source (or reuse from cache)
         role_label = {"riscv_0": "reader", "riscv_1": "writer", "compute": "compute"}.get(risc_type)
@@ -288,7 +272,6 @@ def _build_fused_descriptor(
         # even for phases where this role has no kernel).
         all_phase_indices = list(range(len(phases)))
 
-        _sg_start = _time.perf_counter()
         fused_source = _generate_fused_source(
             phase_kernels,
             role_key,
@@ -305,8 +288,6 @@ def _build_fused_descriptor(
             all_phase_indices=all_phase_indices,
             has_compute=has_compute,
         )
-        _sg_end = _time.perf_counter()
-        _source_gen_total += _sg_end - _sg_start
 
         # Determine barrier RT addresses per RISC type.
         # When no compute kernel exists, BRISC only tracks writer_done
@@ -401,13 +382,27 @@ def _build_fused_descriptor(
                     all_named = False
         kernel_labels.append("_".join(role_phase_names) if all_named and role_phase_names else "")
 
-    # Merge semaphores (dedup by ID)
+    # Merge semaphores (dedup by ID).
+    # When building for a specific core group, restrict each semaphore's
+    # core_ranges to the target.  Without this, the stem phase's semaphores
+    # (covering the full 16-core range) would overlap across groups after merge.
+    # We create new SemaphoreDescriptor objects to avoid mutating the originals
+    # (no save/restore mechanism for semaphores like there is for CBs).
     all_semaphores = []
     seen_sem_ids: Set[int] = set()
     for phase in phases:
         for sem in phase.op_descriptor.descriptor.semaphores:
             if sem.id not in seen_sem_ids:
-                all_semaphores.append(sem)
+                if target_core_range is not None:
+                    new_sem = ttnn.SemaphoreDescriptor(
+                        id=sem.id,
+                        core_type=sem.core_type,
+                        core_ranges=target_core_range,
+                        initial_value=sem.initial_value,
+                    )
+                    all_semaphores.append(new_sem)
+                else:
+                    all_semaphores.append(sem)
                 seen_sem_ids.add(sem.id)
 
     # Collect input/output tensors (use id() for dedup because ttnn Tensor's
@@ -433,14 +428,6 @@ def _build_fused_descriptor(
 
     # Collect semaphore references to prevent GC of GlobalSemaphores
     sem_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
-
-    _t3 = _time.perf_counter()
-    print(
-        f"  [build] setup={1000*(_t1-_t0):.2f}ms  cb_alloc={1000*(_t2-_t1):.2f}ms  "
-        f"source_gen={1000*_source_gen_total:.2f}ms  rt_args={1000*_rt_args_total:.2f}ms  "
-        f"ct_args={1000*_ct_args_total:.2f}ms  assembly={1000*(_t3-_t2-_source_gen_total-_rt_args_total-_ct_args_total):.2f}ms  "
-        f"total={1000*(_t3-_t0):.2f}ms"
-    )
 
     # Build kernel_phase_map: per fused kernel, list of (OpDescriptor, kernel_index)
     # identifying which source phase kernels' RT args were concatenated in.
