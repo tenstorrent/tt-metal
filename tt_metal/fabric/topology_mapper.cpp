@@ -68,6 +68,7 @@ void execute_with_timeout(
     OperationType&& operation,
     const std::string& operation_description,
     std::chrono::duration<float> timeout,
+    const tt::tt_metal::distributed::multihost::DistributedContext* abort_on_timeout,
     Args&&... args) {
     std::atomic<bool> operation_completed{false};
     std::atomic<bool> operation_failed{false};
@@ -92,8 +93,12 @@ void execute_with_timeout(
             auto now = std::chrono::steady_clock::now();
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
-                // Timeout occurred - detach the thread and throw an error
+                // Timeout occurred - detach the thread
                 operation_thread.detach();
+                // Abort all processes to prevent other ranks from hanging in the collective op
+                if (abort_on_timeout != nullptr) {
+                    abort_on_timeout->abort(1);
+                }
                 TT_THROW(
                     "Timeout while waiting for {} operation. One or more hosts may have failed.",
                     operation_description);
@@ -115,7 +120,11 @@ void execute_with_timeout(
 // Specialized wrapper for request-based operations (like irecv)
 template <typename RequestType>
 void wait_for_request_with_timeout(
-    RequestType& req, const std::string& operation_description, int rank, std::chrono::duration<float> timeout) {
+    RequestType& req,
+    const std::string& operation_description,
+    int rank,
+    std::chrono::duration<float> timeout,
+    const tt::tt_metal::distributed::multihost::DistributedContext* abort_on_timeout = nullptr) {
     auto start = std::chrono::steady_clock::now();
 
     while (!req->test()) {
@@ -125,6 +134,11 @@ void wait_for_request_with_timeout(
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
                 req->cancel();
+                // Abort all processes to prevent controller (rank 0) from hanging when it
+                // tries to ssend to processes that have already exited due to this timeout.
+                if (abort_on_timeout != nullptr) {
+                    abort_on_timeout->abort(1);
+                }
                 TT_THROW(
                     "Timeout while waiting for {} from rank {}. Controller likely failed.",
                     operation_description,
@@ -145,6 +159,7 @@ void all_gather_with_timeout(
         [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) { context.all_gather(send, recv); },
         operation_description,
         topology_mapping_timeout,
+        &context,
         send_buf,
         recv_buf);
 }
@@ -820,7 +835,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});
 
-        wait_for_request_with_timeout(req, "chip info header", source_rank, topology_mapping_timeout_);
+        wait_for_request_with_timeout(
+            req, "chip info header", source_rank, topology_mapping_timeout_, &distributed_context);
     }
 
     // Don't clear chip_topology_mapping_ - we want to keep initialized entries and update them
@@ -857,7 +873,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
                 req,
                 "chip info record size " + std::to_string(i + 1) + " of " + std::to_string(count),
                 source_rank,
-                topology_mapping_timeout_);
+                topology_mapping_timeout_,
+                &distributed_context);
         }
 
         TT_FATAL(
@@ -878,7 +895,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             req,
             "chip info record " + std::to_string(i + 1) + " of " + std::to_string(count),
             source_rank,
-            topology_mapping_timeout_);
+            topology_mapping_timeout_,
+            &distributed_context);
 
         std::size_t idx = 0;
 
