@@ -1321,6 +1321,19 @@ class MoeRoutedExpert:
                 "output_core": reduce_output_core,
             }
 
+        # Create global semaphores for reduce worker→fabric signaling
+        if enable_reduce_to_one:
+            reduce_worker_fabric_sem_cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+            )
+            reduce_worker_fabric_global_sems = [
+                ttnn.create_global_semaphore(mesh_device, reduce_worker_fabric_sem_cores, 0)
+                for _ in range(reduce_params["num_workers_per_column"])
+            ]
+            reduce_worker_fabric_sem_addrs = [
+                ttnn.get_global_semaphore_address(s) for s in reduce_worker_fabric_global_sems
+            ]
+
         # Helper to create NCRISC compile-time args with chip-specific mesh_chip_id
         def create_ncrisc_compile_time_args(mesh_chip_id: int) -> list:
             return [
@@ -2024,8 +2037,6 @@ class MoeRoutedExpert:
                             break
 
                     # Build per-core BRISC args for reduce worker cores
-                    # Semaphore IDs start at 5 to avoid conflicts with existing semaphores (0-5)
-                    reduce_worker_fabric_sem_base = 5
                     reduce_brisc_per_core_args = []
                     for core in reduce_params["worker_cores_list"]:
                         fabric_core = reduce_params["column_to_fabric_core"][core.x]
@@ -2037,7 +2048,7 @@ class MoeRoutedExpert:
                             fabric_core_phys.x,  # fabric_core_noc_x
                             fabric_core_phys.y,  # fabric_core_noc_y
                             slot_idx,  # my_slot_idx
-                            reduce_worker_fabric_sem_base + slot_idx,  # worker_sem_id
+                            reduce_worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
                             dst_l1_addr,  # dst_l1_addr
                             dst_sem_addr,  # dst_sem_addr
                             out_tensor.buffer_address(),  # output_base_addr
@@ -2045,12 +2056,9 @@ class MoeRoutedExpert:
                         ]
                         reduce_brisc_per_core_args.append((core, worker_args))
 
-                    # Fabric cores BRISC args: worker semaphore IDs
+                    # Fabric cores BRISC args: worker semaphore addresses
                     for fc in reduce_params["fabric_cores"]:
-                        fabric_args = [
-                            reduce_worker_fabric_sem_base + i for i in range(reduce_params["num_workers_per_column"])
-                        ]
-                        reduce_brisc_per_core_args.append((fc, fabric_args))
+                        reduce_brisc_per_core_args.append((fc, list(reduce_worker_fabric_sem_addrs)))
 
                     device_runtime_args_descriptor = PerCoreRuntimeArgsDescriptor(
                         brisc_args=reduce_brisc_per_core_args,
@@ -2092,18 +2100,7 @@ class MoeRoutedExpert:
 
                 kernel_result = chip_unified_kernel.get_kernel_descriptors()
 
-                # Add worker→fabric semaphores if reduce is enabled
-                if enable_reduce_to_one:
-                    fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
-                    reduce_worker_fabric_sem_base = 5
-                    for worker_idx in range(reduce_params["num_workers_per_column"]):
-                        sem_desc = ttnn.SemaphoreDescriptor(
-                            id=reduce_worker_fabric_sem_base + worker_idx,
-                            core_type=ttnn.CoreType.WORKER,
-                            core_ranges=fabric_core_set,
-                            initial_value=0,
-                        )
-                        device_semaphore_descriptors.append(sem_desc)
+                # Worker→fabric semaphores are global (created before the loop)
 
                 # Create program for this device
                 program = ttnn.ProgramDescriptor(
