@@ -125,22 +125,11 @@ Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() { this->deallocate(/*force=*/false); }
 
-void Tensor::deallocate(bool force) {
+void Tensor::deallocate(bool) {
     if (tensor_attributes == nullptr) {
         return;
     }
-
-    auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
-        // It is safe to deallocate a shared resource, if either it is not shared or `force` is set.
-        return shared_resource.use_count() == 1 ||  //
-               (shared_resource.use_count() > 1 && force);
-    };
-
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    if (storage_type() == StorageType::DEVICE && can_deallocate(tensor_attributes, force)) {
-        std::get<MeshTensor>(*tensor_attributes).deallocate();
-    }
-    // GraphTracker::instance().track_function_end();
+    tensor_attributes.reset();
 }
 
 std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
@@ -389,12 +378,7 @@ Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     return result;
 }
 
-bool Tensor::is_allocated() const {
-    if (storage_type() == StorageType::HOST) {
-        return true;
-    }
-    return device_tensor().is_allocated();
-}
+bool Tensor::is_allocated() const { return tensor_attributes != nullptr; }
 
 StorageType Tensor::storage_type() const {
     return std::visit(
