@@ -36,7 +36,7 @@ void MAIN {
             // W1 chunks
             uint32_t w1_rem = w1_expert_tiles;
             while (w1_rem > 0) {
-                uint32_t chunk = w1_rem > 256 ? 256 : w1_rem;
+                uint32_t chunk = w1_rem > 32 ? 32 : w1_rem;
                 cb_wait_front(cb_id_w1, chunk);
                 // Math goes here
                 cb_pop_front(cb_id_w1, chunk);
@@ -46,7 +46,7 @@ void MAIN {
             // W3 chunks
             uint32_t w3_rem = w3_expert_tiles;
             while (w3_rem > 0) {
-                uint32_t chunk = w3_rem > 256 ? 256 : w3_rem;
+                uint32_t chunk = w3_rem > 32 ? 32 : w3_rem;
                 cb_wait_front(cb_id_w3, chunk);
                 // Math goes here
                 cb_pop_front(cb_id_w3, chunk);
@@ -56,7 +56,7 @@ void MAIN {
             // W2 chunks
             uint32_t w2_rem = w2_expert_tiles;
             while (w2_rem > 0) {
-                uint32_t chunk = w2_rem > 256 ? 256 : w2_rem;
+                uint32_t chunk = w2_rem > 32 ? 32 : w2_rem;
                 cb_wait_front(cb_id_w2, chunk);
                 // Math goes here
                 cb_pop_front(cb_id_w2, chunk);
