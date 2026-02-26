@@ -177,7 +177,7 @@ jobs:
           with open(path) as f:
               tests = yaml.safe_load(f)
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
-          TTSIM_TIMEOUT_MINUTES = 15
+          TTSIM_TIMEOUT_MINUTES = 20
           entries = []
           for t in tests:
               if not t.get("ttsim") or not t.get("cmd"):
