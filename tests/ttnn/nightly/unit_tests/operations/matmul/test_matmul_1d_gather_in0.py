@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_with_watcher
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
@@ -410,6 +410,7 @@ def run_multi_core_matmul_1d(
         3,
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to timeout, see github issue #38631")
 def test_multi_core_matmul_1d_in1_dram_wh(
     device,
     in0_dtype,
@@ -484,6 +485,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
         1,
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to timeout, see github issue #38631")
 def test_multi_core_matmul_1d_pad_wh(
     device,
     in0_dtype,
@@ -654,6 +656,7 @@ def test_multi_core_matmul_1d_wh(
     "num_iters",
     [1, 3],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to timeout, see github issue #38631")
 def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,
