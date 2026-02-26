@@ -90,17 +90,11 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-<<<<<<< HEAD
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
         # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
         # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
         - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
-=======
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - "${{ matrix.test-group.extra-tag != 'pipeline-yyz2-lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', matrix.test-group.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
-        - "${{ matrix.test-group.extrag-ta == 'pipeline-functional' && '/mnt/MLPerf/huggingface/hub:/mnt/MLPerf/huggingface/hub:ro' || '/no_hf_hub_cache' }}"
->>>>>>> da652c3258d (Demo tests add hf cache)
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
