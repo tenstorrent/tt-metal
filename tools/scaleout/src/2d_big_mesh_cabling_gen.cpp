@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,11 +27,18 @@ struct InputConfig {
 InputConfig parse_arguments(int argc, char** argv) {
     cxxopts::Options options("2d_big_mesh_cabling_gen", "Generate 2D big mesh cabling configuration");
 
-    options.add_options()
-        ("g,galaxy-structure", "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 8, M must be divisible by 4", cxxopts::value<std::string>())
-        ("t,topology", "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both dimensions), '00' (mesh topology)", cxxopts::value<std::string>())
-        ("y,galaxy-type", "Galaxy type: 'WH_GALAXY' or 'BH_GALAXY'", cxxopts::value<std::string>()->default_value("WH_GALAXY"))
-        ("h,help", "Print usage information");
+    options.add_options()(
+        "g,galaxy-structure",
+        "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 4, M must be "
+        "divisible by 8",
+        cxxopts::value<std::string>())(
+        "t,topology",
+        "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both "
+        "dimensions), '00' (mesh topology)",
+        cxxopts::value<std::string>())(
+        "y,galaxy-type",
+        "Galaxy type: 'WH_GALAXY' or 'BH_GALAXY_REV_AB' or 'BH_GALAXY_REV_C'",
+        cxxopts::value<std::string>()->default_value("WH_GALAXY"))("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -58,7 +65,7 @@ InputConfig parse_arguments(int argc, char** argv) {
         size_t x_pos = config.galaxy_structure.find('x');
         if (x_pos == std::string::npos) {
             throw std::invalid_argument(
-                "Galaxy structure must be in format 'NxM' (e.g., '8x4'), got: '" + config.galaxy_structure + "'");
+                "Galaxy structure must be in format 'NxM' (e.g., '4x8'), got: '" + config.galaxy_structure + "'");
         }
 
         try {
@@ -76,14 +83,15 @@ InputConfig parse_arguments(int argc, char** argv) {
                 std::to_string(config.nodes_1));
         }
 
-        if (config.nodes_0 % 8 != 0) {
+        if (config.nodes_0 % 4 != 0) {
             throw std::invalid_argument(
-                "First dimension (" + std::to_string(config.nodes_0) + ") must be divisible by 8 for 8x4 Galaxy basis");
+                "First dimension (" + std::to_string(config.nodes_0) + ") must be divisible by 4 for 4x8 Galaxy basis");
         }
 
-        if (config.nodes_1 % 4 != 0) {
+        if (config.nodes_1 % 8 != 0) {
             throw std::invalid_argument(
-                "Second dimension (" + std::to_string(config.nodes_1) + ") must be divisible by 4 for 8x4 Galaxy basis");
+                "Second dimension (" + std::to_string(config.nodes_1) +
+                ") must be divisible by 8 for 4x8 Galaxy basis");
         }
 
         // Parse topology
@@ -105,9 +113,11 @@ InputConfig parse_arguments(int argc, char** argv) {
         }
 
         // Validate galaxy type
-        if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY") {
+        if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY_REV_AB" &&
+            config.galaxy_type != "BH_GALAXY_REV_C") {
             throw std::invalid_argument(
-                "Invalid galaxy type '" + config.galaxy_type + "'. Must be 'WH_GALAXY' or 'BH_GALAXY'");
+                "Invalid galaxy type '" + config.galaxy_type +
+                "'. Must be 'WH_GALAXY' or 'BH_GALAXY_REV_AB' or 'BH_GALAXY_REV_C'");
         }
 
         return config;
@@ -123,8 +133,8 @@ int main(int argc, char** argv) {
     try {
         InputConfig config = parse_arguments(argc, argv);
 
-        int galaxy_nodes_0 = config.nodes_0 / 8;
-        int galaxy_nodes_1 = config.nodes_1 / 4;
+        int galaxy_nodes_0 = config.nodes_0 / 4;
+        int galaxy_nodes_1 = config.nodes_1 / 8;
 
         std::string graph_template_name = "big_mesh_" + config.galaxy_structure;
         const std::string dim_1_graph_template_name = "big_mesh_dim1";
@@ -160,13 +170,13 @@ int main(int argc, char** argv) {
                     connection.mutable_port_a()->add_path("dim1_node" + std::to_string(i));
                     connection.mutable_port_b()->add_path("dim1_node" + std::to_string((i + 1) % galaxy_nodes_1));
 
-                    for (int port_id = 3; port_id <= 6; port_id++) {
+                    for (int port_id = 1; port_id <= 2; port_id++) {
                         int tray_a = 0, tray_b = 0;
-                        if (config.galaxy_type == "WH_GALAXY") {
-                            tray_a = 2;
-                            tray_b = 1;
-                        } else if (config.galaxy_type == "BH_GALAXY") {
+                        if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                             tray_a = 3;
+                            tray_b = 1;
+                        } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
+                            tray_a = 2;
                             tray_b = 1;
                         }
                         connection.mutable_port_a()->set_tray_id(tray_a);
@@ -176,12 +186,12 @@ int main(int argc, char** argv) {
                         auto* new_conn = internal_connection.add_connections();
                         new_conn->CopyFrom(connection);
 
-                        if (config.galaxy_type == "WH_GALAXY") {
-                            tray_a = 4;
-                            tray_b = 3;
-                        } else if (config.galaxy_type == "BH_GALAXY") {
+                        if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                             tray_a = 4;
                             tray_b = 2;
+                        } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
+                            tray_a = 4;
+                            tray_b = 3;
                         }
                         connection.mutable_port_a()->set_tray_id(tray_a);
                         connection.mutable_port_b()->set_tray_id(tray_b);
@@ -211,13 +221,13 @@ int main(int argc, char** argv) {
                         connection.mutable_port_b()->add_path("dim0_group" + std::to_string((i + 1) % galaxy_nodes_0));
                         connection.mutable_port_b()->add_path("dim1_node" + std::to_string(j));
 
-                        for (int port_id = 1; port_id <= 2; port_id++) {
+                        for (int port_id = 3; port_id <= 6; port_id++) {
                             int tray_a = 0, tray_b = 0;
-                            if (config.galaxy_type == "WH_GALAXY") {
-                                tray_a = 3;
-                                tray_b = 1;
-                            } else if (config.galaxy_type == "BH_GALAXY") {
+                            if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                                 tray_a = 2;
+                                tray_b = 1;
+                            } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
+                                tray_a = 3;
                                 tray_b = 1;
                             }
                             connection.mutable_port_a()->set_tray_id(tray_a);
@@ -227,12 +237,12 @@ int main(int argc, char** argv) {
                             auto* new_conn = internal_connection.add_connections();
                             new_conn->CopyFrom(connection);
 
-                            if (config.galaxy_type == "WH_GALAXY") {
-                                tray_a = 4;
-                                tray_b = 2;
-                            } else if (config.galaxy_type == "BH_GALAXY") {
+                            if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                                 tray_a = 4;
                                 tray_b = 3;
+                            } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
+                                tray_a = 4;
+                                tray_b = 2;
                             }
                             connection.mutable_port_a()->set_tray_id(tray_a);
                             connection.mutable_port_b()->set_tray_id(tray_b);
