@@ -98,7 +98,7 @@ void kernel_main() {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             for (uint32_t i = 0; i < num_sticks_in_row; i++) {
                 uint64_t src_noc_addr = s.get_noc_addr(base_stick_id + k * num_sticks_in_row + i);
-                bool is_last_stick_in_row = i == num_sticks_in_row - 1;
+                bool is_last_stick_in_row = i == (num_sticks_in_row - 1);
                 uint32_t num_bytes_to_read =
                     (is_last_stick_in_row ? size_of_valid_data_in_last_stick_in_row : stick_size);
                 // Read from DRAM to tmp buffer
