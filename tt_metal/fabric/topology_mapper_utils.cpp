@@ -453,10 +453,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     log_info(
         tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
 
-    // Build hierarchical graph from mesh groupings
-    // The all_mesh_groupings contains sets of ASIC IDs that represent each mesh grouping mapping
-    // Each element in the vector represents one mesh, with index becoming the MeshId
-
     PhysicalMultiMeshGraph result;
     if (all_mesh_groupings.empty()) {
         log_warning(tt::LogFabric, "No mesh groupings found in PSD - returning empty graph");
