@@ -60,8 +60,7 @@ TEST_F(MockDeviceAPIFixture, WormholeConfigurationsAreValid) {
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "t3k_cluster_desc.yaml");
     experimental::disable_mock_mode();
 
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 32);
-    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "tg_cluster_desc.yaml");
+    // Note: 32-chip TG configuration removed as tg_cluster_desc.yaml doesn't exist in UMD
 }
 
 TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
@@ -134,6 +133,49 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardwareWithDeviceCreation) {
         EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
         real_device->close();
         real_device.reset();
+    }
+}
+
+TEST_F(MockDeviceAPIFixture, SwitchFromRealToMockHardware) {
+    // Skip if no real hardware available
+    tt::ARCH detected_arch = get_physical_architecture();
+    if (detected_arch == tt::ARCH::Invalid) {
+        GTEST_SKIP() << "No TT hardware detected - skipping real-to-mock transition test";
+    }
+
+    // Phase 1: Create real hardware device
+    {
+        auto real_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+        real_device->close();
+        real_device.reset();
+    }
+
+    // Phase 2: Switch to mock mode - should properly close UMD driver and reinitialize
+    experimental::configure_mock_mode(detected_arch, 1);
+    EXPECT_TRUE(experimental::is_mock_mode_registered());
+    EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Mock);
+
+    // Phase 3: Create mock device - verifies full reinitialization worked
+    {
+        auto mock_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Mock);
+        mock_device->close();
+        mock_device.reset();
+    }
+
+    // Phase 4: Switch back to real hardware
+    experimental::disable_mock_mode();
+    EXPECT_FALSE(experimental::is_mock_mode_registered());
+    EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+
+    // Phase 5: Verify real hardware works again
+    {
+        auto real_device2 =
+            distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+        real_device2->close();
+        real_device2.reset();
     }
 }
 

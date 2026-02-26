@@ -345,10 +345,15 @@ void MetalContext::teardown() {
 
     noc_debug_state_.reset();
 
-    // Clear mock mode configuration if it was enabled
-    if (experimental::is_mock_mode_registered()) {
-        experimental::disable_mock_mode();
-    }
+    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
+    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
+    // when context is re-initialized).
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 }
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.

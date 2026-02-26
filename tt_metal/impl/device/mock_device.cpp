@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "llrt/get_platform_architecture.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -23,7 +24,30 @@ static std::optional<MockDeviceConfig> g_registered_mock_config = std::nullopt;
 
 void configure_mock_mode(tt::ARCH arch, uint32_t num_chips) {
     g_registered_mock_config = MockDeviceConfig{arch, num_chips};
-    log_info(tt::LogMetal, "Mock mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
+
+    auto& context = tt::tt_metal::MetalContext::instance();
+    if (context.is_device_manager_initialized()) {
+        if (context.get_cluster().get_target_device_type() == tt::TargetDevice::Silicon) {
+            log_info(
+                tt::LogMetal,
+                "Switching from real hardware to mock mode: arch={}, num_chips={}",
+                static_cast<int>(arch),
+                num_chips);
+            tt::tt_metal::detail::ReleaseOwnership();
+        } else {
+            log_info(
+                tt::LogMetal,
+                "Mock mode already active, updating configuration: arch={}, num_chips={}",
+                static_cast<int>(arch),
+                num_chips);
+        }
+    } else {
+        log_info(
+            tt::LogMetal,
+            "Mock mode configured (will be applied on MetalContext initialization): arch={}, num_chips={}",
+            static_cast<int>(arch),
+            num_chips);
+    }
 }
 
 void configure_mock_mode_from_hw() {
@@ -66,8 +90,7 @@ std::optional<std::string> get_mock_cluster_desc() {
          {{1, "wormhole_N150.yaml"},
           {2, "wormhole_N300.yaml"},
           {4, "2x2_n300_cluster_desc.yaml"},
-          {8, "t3k_cluster_desc.yaml"},
-          {32, "tg_cluster_desc.yaml"}}},
+          {8, "t3k_cluster_desc.yaml"}}},
         {tt::ARCH::BLACKHOLE, {{1, "blackhole_P150.yaml"}, {2, "blackhole_P300_both_mmio.yaml"}}}};
 
     const auto& config = *g_registered_mock_config;
