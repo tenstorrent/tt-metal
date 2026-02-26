@@ -212,15 +212,9 @@ def run_test_linear_impl(
         tt_output = tt_output_tensor_list[n]
 
         if use_non_fused:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis + 2, tp_axis + 2]
-            else:
-                concat_dims = [tp_axis + 2, sp_axis + 2]
+            concat_dims = [sp_axis + 2, tp_axis + 2]
         else:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis, tp_axis]
-            else:
-                concat_dims = [tp_axis, sp_axis]
+            concat_dims = [sp_axis, tp_axis]
 
         tt_output = ttnn.from_device(tt_output)
         tt_output = ttnn.to_torch(
@@ -300,16 +294,10 @@ def run_test_linear(
             bias_input = torch.randn((1, N), dtype=torch_dtype)
 
     # Prepare TT tensors
-    if sp_axis == 1:
-        if use_non_fused:
-            shard_dims = [sp_axis + 2, tp_axis + 2]
-        else:
-            shard_dims = [sp_axis, tp_axis]
+    if use_non_fused:
+        shard_dims = [sp_axis + 2, tp_axis + 2]
     else:
-        if use_non_fused:
-            shard_dims = [tp_axis + 2, sp_axis + 2]
-        else:
-            shard_dims = [tp_axis, sp_axis]
+        shard_dims = [sp_axis, tp_axis]
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
@@ -369,6 +357,18 @@ def run_test_linear(
             1,
             4,
             4,
+            1,
+        ],
+        [
+            (1, 8),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            1,
+            4,
+            0,
+            1,
+            8,
+            7,
             1,
         ],
         [
@@ -438,6 +438,7 @@ def run_test_linear(
     ],
     ids=[
         "2x4links1",
+        "wh1x8links1",
         "wh8x4links1",
         "wh8x4links2",
         "wh8x4links4",
