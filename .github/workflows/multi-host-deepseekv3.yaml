@@ -83,8 +83,8 @@ env:
   DS_ENABLE_LTO: ${{ github.event_name == 'schedule' && 'false'   || (github.event.inputs['enable-lto'] || 'false') }}
 
 run-name: >-
-  DeepSeek V3 – ${{ env.DS_SETUP }}
-  [${{ fromJSON(env.DS_UNIT) && 'unit ' || '' }}${{ fromJSON(env.DS_MODULE) && 'module ' || '' }}${{ fromJSON(env.DS_TF) && 'tf ' || '' }}${{ fromJSON(env.DS_DEMO) && 'demo ' || '' }}${{ fromJSON(env.DS_STRESS) && 'stress' || '' }}]
+  DeepSeek V3 – ${{ github.event_name == 'schedule' && 'both' || (github.event.inputs.setup || 'both') }}
+  [${{ (github.event_name == 'schedule' && 'true' || (github.event.inputs.deepseekv3_unit_tests || 'false')) == 'true' && 'unit ' || '' }}${{ (github.event_name == 'schedule' && 'true' || (github.event.inputs.deepseekv3_module_tests || 'false')) == 'true' && 'module ' || '' }}${{ (github.event_name == 'schedule' && 'true' || (github.event.inputs.teacher_forced || 'false')) == 'true' && 'tf ' || '' }}${{ (github.event_name == 'schedule' && 'true' || (github.event.inputs.demo || 'false')) == 'true' && 'demo ' || '' }}${{ (github.event_name == 'schedule' && 'false' || (github.event.inputs.demo_stress || 'false')) == 'true' && 'stress' || '' }}]
 
 jobs:
   build-artifact:
@@ -93,13 +93,13 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ env.DS_BUILD_TYPE }}
-      platform: ${{ env.DS_PLATFORM }}
-      enable-lto: ${{ fromJSON(env.DS_ENABLE_LTO) }}
+      build-type: ${{ github.event_name == 'schedule' && 'Release' || (github.event.inputs['build-type'] || 'Release') }}
+      platform: ${{ github.event_name == 'schedule' && 'Ubuntu 22.04' || (github.event.inputs.platform || 'Ubuntu 22.04') }}
+      enable-lto: ${{ github.event_name == 'schedule' && false || github.event.inputs['enable-lto'] == 'true' }}
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ fromJSON(env.DS_UNIT) || fromJSON(env.DS_MODULE) || fromJSON(env.DS_TF) || fromJSON(env.DS_DEMO) || fromJSON(env.DS_STRESS) }}
+    if: ${{ (github.event_name == 'schedule' && 'true' || (github.event.inputs.deepseekv3_unit_tests || 'false')) == 'true' || (github.event_name == 'schedule' && 'true' || (github.event.inputs.deepseekv3_module_tests || 'false')) == 'true' || (github.event_name == 'schedule' && 'true' || (github.event.inputs.teacher_forced || 'false')) == 'true' || (github.event_name == 'schedule' && 'true' || (github.event.inputs.demo || 'false')) == 'true' || (github.event_name == 'schedule' && 'false' || (github.event.inputs.demo_stress || 'false')) == 'true' }}
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
