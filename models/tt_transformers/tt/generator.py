@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
 import os
+from collections import defaultdict
 
 import torch
 from loguru import logger
