@@ -99,6 +99,11 @@ class CBPoolAllocator:
         self._next_index = 0  # Next candidate index for allocation
         # Maps slot_index -> original CB index that created it (for identity-preference)
         self._slot_to_orig_index: Dict[int, int] = {}
+        # Alias groups: tracks which pool slots form an alias group (shared L1).
+        # Aliased CBs (multiple format_descriptors on one CBDescriptor) must
+        # either reuse an existing complete alias group or get fresh slots —
+        # reusing non-aliased slots would corrupt phases that use them independently.
+        self._slot_alias_groups: Dict[int, frozenset] = {}  # slot_index -> group members
 
     def reserve_index(self, index: int) -> None:
         """Reserve a slot index without creating a pool slot or remap entry.
@@ -129,6 +134,11 @@ class CBPoolAllocator:
         phases, CBs with matching configs can share a slot because only one
         phase runs at a time.
 
+        Aliased CBs (multiple format_descriptors sharing one CBDescriptor)
+        either reuse an existing pool alias group wholesale or get fresh
+        slots.  Reusing non-aliased slots would corrupt phases that use
+        them independently (the merged CBDescriptor would force aliasing).
+
         Args:
             phase_idx: Phase index.
             cb_info: Dict mapping original CB index -> CBInfo for this phase.
@@ -139,15 +149,29 @@ class CBPoolAllocator:
         remap: Dict[int, int] = {}
         slots_used_this_phase: Set[int] = set()
 
-        # Reserve phantom CB indices first (identity mapping)
+        # Reserve phantom CB indices first (identity mapping).
+        # Do NOT add to slots_used_this_phase — phantom CBs (e.g., cb_bias
+        # when bias is absent) are never accessed at runtime, so real CBs
+        # can safely share their slot index.
         for phantom_idx in phantom_cb_indices:
             if phantom_idx not in self._allocated_indices:
                 self._allocated_indices.add(phantom_idx)
             remap[phantom_idx] = phantom_idx
 
-        # Two-pass allocation: identity-matching CBs first (preserves cross-phase
-        # slot assignments), then remaining CBs from the pool.
-        identity_cbs, remaining_cbs = self._partition_by_identity(cb_info)
+        # Identify alias groups in this phase (alias_group_id -> list of orig indices).
+        phase_alias_groups: Dict[int, List[int]] = defaultdict(list)
+        for orig_idx, info in cb_info.items():
+            phase_alias_groups[info.alias_group].append(orig_idx)
+
+        # Split CBs into aliased (multi-member group) and non-aliased (single).
+        aliased_indices: Set[int] = set()
+        for members in phase_alias_groups.values():
+            if len(members) > 1:
+                aliased_indices.update(members)
+
+        # --- Non-aliased CBs: normal two-pass allocation (identity first) ---
+        non_aliased_info = {k: v for k, v in cb_info.items() if k not in aliased_indices}
+        identity_cbs, remaining_cbs = self._partition_by_identity(non_aliased_info)
 
         for orig_idx, info, key in identity_cbs + remaining_cbs:
             slot_idx = self._find_reusable_slot(key, orig_idx, slots_used_this_phase)
@@ -158,7 +182,102 @@ class CBPoolAllocator:
             slots_used_this_phase.add(slot_idx)
             remap[orig_idx] = slot_idx
 
+        # --- Aliased CBs: reuse existing alias group or allocate fresh ---
+        for alias_id, members in phase_alias_groups.items():
+            if len(members) <= 1:
+                continue
+            members_sorted = sorted(members)
+            reused = self._try_reuse_alias_group(members_sorted, cb_info, slots_used_this_phase, phase_idx)
+            if reused is not None:
+                for orig_idx, slot_idx in reused:
+                    slots_used_this_phase.add(slot_idx)
+                    remap[orig_idx] = slot_idx
+            else:
+                # Allocate fresh slots for all members
+                for orig_idx in members_sorted:
+                    info = cb_info[orig_idx]
+                    key = CBPoolKey(
+                        data_format=info.data_format,
+                        page_size=info.page_size,
+                        has_buffer=info.has_buffer,
+                        unpack_to_dest_mode=info.unpack_to_dest_mode,
+                    )
+                    slot_idx = self._allocate_new_slot(key, info, orig_idx, phase_idx)
+                    slots_used_this_phase.add(slot_idx)
+                    remap[orig_idx] = slot_idx
+                # Record the new alias group
+                new_group = frozenset(remap[m] for m in members_sorted)
+                for slot_idx in new_group:
+                    self._slot_alias_groups[slot_idx] = new_group
+
         self.phase_remaps.append(remap)
+
+    def _try_reuse_alias_group(
+        self,
+        members: List[int],
+        cb_info: Dict[int, CBInfo],
+        slots_used_this_phase: Set[int],
+        phase_idx: int,
+    ) -> Optional[List[Tuple[int, int]]]:
+        """Try to reuse an existing pool alias group for aliased CBs.
+
+        Returns list of (orig_idx, slot_idx) pairs if successful, None otherwise.
+        An existing alias group can be reused when:
+        - It has the same number of members
+        - Each member slot is compatible (same CBPoolKey) with a current CB
+        - No member slot is already used this phase
+        """
+        # Collect existing alias groups
+        seen_groups: Set[frozenset] = set()
+        for group in self._slot_alias_groups.values():
+            if group not in seen_groups and len(group) == len(members):
+                seen_groups.add(group)
+
+        for group in seen_groups:
+            # Check no slot in this group is used this phase
+            if group & slots_used_this_phase:
+                continue
+            # Try to match each member to a group slot
+            group_slots = sorted(group)
+            matched = self._match_alias_members(members, group_slots, cb_info)
+            if matched is not None:
+                # Reuse: update total_size for each slot
+                for orig_idx, slot_idx in matched:
+                    self._reuse_slot(slot_idx, cb_info[orig_idx], phase_idx)
+                return matched
+
+        return None
+
+    def _match_alias_members(
+        self,
+        members: List[int],
+        group_slots: List[int],
+        cb_info: Dict[int, CBInfo],
+    ) -> Optional[List[Tuple[int, int]]]:
+        """Match aliased CB members to existing group slots by compatible CBPoolKey.
+
+        Returns list of (orig_idx, slot_idx) pairs or None if no valid matching.
+        """
+        # Build keys for current members
+        member_keys = []
+        for orig_idx in members:
+            info = cb_info[orig_idx]
+            key = CBPoolKey(
+                data_format=info.data_format,
+                page_size=info.page_size,
+                has_buffer=info.has_buffer,
+                unpack_to_dest_mode=info.unpack_to_dest_mode,
+            )
+            member_keys.append((orig_idx, key))
+
+        # Try simple order-preserving match (members and group_slots both sorted)
+        result = []
+        for (orig_idx, key), slot_idx in zip(member_keys, group_slots):
+            slot = self._slots.get(slot_idx)
+            if slot is None or slot.config != key:
+                return None
+            result.append((orig_idx, slot_idx))
+        return result
 
     def _partition_by_identity(
         self, cb_info: Dict[int, CBInfo]
@@ -297,37 +416,66 @@ class CBPoolAllocator:
     ) -> list:
         """Build merged CB descriptors from the pool.
 
-        Uses stored source_cb/source_fmt references (set during slot allocation)
-        to return original CBDescriptor objects.  id()-based dedup ensures
-        multi-format CBDescriptors (aliased slots) appear only once.
-
-        Two-phase approach: first collect all (slot, source_cb, source_fmt)
-        tuples, then apply buffer_index mutations and dedup.
+        Uses alias groups to determine which pool slots share an L1 allocation
+        (e.g. matmul's c_4/c_5 aliased CBDescriptor).  Constructs NEW
+        CBDescriptor objects per alias group — never emits originals — so that
+        multi-phase slot sharing cannot produce duplicate buffer_index conflicts.
         """
-        # Collect results from stored references
-        results = []
+        slot_alias = self._compute_slot_alias_groups(phases)
+
+        # Group slots by alias group
+        groups: Dict[int, List[int]] = defaultdict(list)
         for slot_idx in sorted(self._slots.keys()):
-            slot = self._slots[slot_idx]
-            if slot.source_cb is not None and slot.source_fmt is not None:
-                results.append((slot_idx, slot.total_size, slot.source_cb, slot.source_fmt))
+            groups[slot_alias[slot_idx]].append(slot_idx)
 
-        # Apply buffer_index mutations and compute max total_size per CBDescriptor
         merged = []
-        seen_ids: Set[int] = set()
-        max_size_by_id: Dict[int, int] = {}
-        for slot_idx, total_size, cb_desc, fmt_desc in results:
-            fmt_desc.buffer_index = slot_idx
-            cid = id(cb_desc)
-            max_size_by_id[cid] = max(max_size_by_id.get(cid, 0), total_size)
+        seen_ids: Set[int] = set()  # Track GlobalCB pass-through dedup
 
-        for _, _, cb_desc, _ in results:
-            cid = id(cb_desc)
-            if cid not in seen_ids:
-                seen_ids.add(cid)
-                cb_desc.total_size = max_size_by_id[cid]
-                merged.append(cb_desc)
+        for group_id in sorted(groups.keys()):
+            slot_indices = groups[group_id]
+            slot_set = set(slot_indices)
+            max_total = 0
+            fmts = []
 
-        # Pass through GlobalCB-backed CBDescriptors not already in merged set.
+            for slot_idx in slot_indices:
+                slot = self._slots[slot_idx]
+                max_total = max(max_total, slot.total_size)
+                if slot.source_fmt is not None:
+                    # Mutate source_fmt buffer_index (save/restore handles revert)
+                    slot.source_fmt.buffer_index = slot_idx
+                    fmts.append(slot.source_fmt)
+
+            if not fmts:
+                continue  # Skip slots with no format descriptors (test mocks)
+
+            # Find buffer from the EARLIEST phase that has a buffer-backed CB
+            # mapping to any slot in this group.  This matches the rebind logic
+            # which computes address diffs relative to phase 0's baseline.
+            buffer_source_cb = None
+            for phase_idx, phase in enumerate(phases):
+                remap = self.phase_remaps[phase_idx]
+                for orig_idx, info in sorted(phase.cb_info.items()):
+                    if info.has_buffer and remap.get(orig_idx) in slot_set:
+                        buffer_source_cb = info.source_cb
+                        break
+                if buffer_source_cb is not None:
+                    break
+
+            # Use first slot's source_cb for core_ranges / address_offset
+            rep_cb = self._slots[slot_indices[0]].source_cb
+
+            new_cb = ttnn.CBDescriptor()
+            new_cb.total_size = max_total
+            new_cb.core_ranges = rep_cb.core_ranges if rep_cb else fmts[0].core_ranges
+            new_cb.format_descriptors = fmts
+            if rep_cb is not None:
+                new_cb.address_offset = rep_cb.address_offset
+            if buffer_source_cb is not None:
+                new_cb.set_buffer_from_cb(buffer_source_cb)
+
+            merged.append(new_cb)
+
+        # Pass through GlobalCB-backed CBDescriptors not covered by pool slots
         for phase in phases:
             for cb_desc in phase.op_descriptor.descriptor.cbs:
                 if cb_desc.has_global_circular_buffer():
