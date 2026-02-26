@@ -9,6 +9,7 @@ import time
 from torch import nn
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
+from models.experimental.tt_symbiote.utils.graph_visualization import draw_model_graph
 
 
 class DeviceInit:
@@ -129,3 +130,5 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                         _set_device_recursive(v)
 
     _set_device_recursive(obj)
+    if kwargs.get("dump_visualization", True):
+        draw_model_graph(obj)
