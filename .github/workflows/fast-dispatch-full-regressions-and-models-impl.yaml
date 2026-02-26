@@ -356,7 +356,8 @@ jobs:
     defaults:
       run:
         shell: bash
-    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "P150b"]
+    # Use cloud BH runners with /mnt/MLPerf for HF model cache access
+    runs-on: ["in-service", "arch-blackhole", "pipeline-functional"]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
