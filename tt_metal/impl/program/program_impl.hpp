@@ -281,6 +281,8 @@ public:
 
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
+    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
+
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
