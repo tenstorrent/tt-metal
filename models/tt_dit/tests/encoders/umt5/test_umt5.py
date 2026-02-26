@@ -28,42 +28,57 @@ from models.tt_dit.utils import cache
 from models.tt_dit.utils.check import assert_quality
 
 
+def get_uninitialized_minimal_model() -> UMT5EncoderModel:
+    hf_config = HF_UMT5Config(
+        d_model=4096,
+        d_ff=10240,
+        num_heads=64,
+        num_layers=2,
+        num_decoder_layers=2,
+        feed_forward_proj="gated-gelu",
+        output_past=True,
+    )
+    return UMT5EncoderModel(hf_config)
+
+
 @pytest.mark.parametrize(
-    "mesh_device,submesh_shape, num_links",
-    [[(2, 4), (1, 4), 1], [(4, 8), (1, 8), 4], [(4, 8), (1, 8), 2]],
-    ids=["t3k", "glx", "bh_glx"],
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links, topology",
+    [[(2, 4), 1, ttnn.Topology.Linear], [(4, 8), 4, ttnn.Topology.Ring], [(4, 8), 2, ttnn.Topology.Ring]],
+    ids=["t3k", "wh_glx", "bh_glx"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params, topology",
-    [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
-    indirect=["device_params"],
+    "device_params",
+    [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_umt5_embeddings(
     *,
     mesh_device: ttnn.Device,
-    submesh_shape: ttnn.MeshShape,
     topology: ttnn.Topology,
     num_links: int,
+    dit_unit_test: bool,
 ) -> None:
-    parent_mesh_shape = tuple(mesh_device.shape)
-    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
-        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
-    encoder_submesh = mesh_device  # mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
-
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
     )
     ccl_manager = CCLManager(
-        mesh_device=encoder_submesh,
+        mesh_device=mesh_device,
         num_links=num_links,
         topology=topology,
     )
 
-    model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-
-    hf_model = UMT5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder", local_files_only=True)
+    if dit_unit_test:
+        hf_model = get_uninitialized_minimal_model()
+    else:
+        model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+        hf_model = UMT5EncoderModel.from_pretrained(
+            model_name_checkpoint, subfolder="text_encoder", local_files_only=True
+        )
 
     hf_model.eval()
 
@@ -85,8 +100,8 @@ def test_umt5_embeddings(
     tt_prompt = ttnn.from_torch(
         tokens,
         layout=ttnn.TILE_LAYOUT,
-        device=encoder_submesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # === TT-DiT UMT5 ====
@@ -105,11 +120,9 @@ def test_umt5_embeddings(
 
     state_dict = hf_model.state_dict()
 
-    tt_token_embed = TT_UMT5TokenEmbeddings(config, encoder_submesh)
+    tt_token_embed = TT_UMT5TokenEmbeddings(config, mesh_device)
     tt_token_embed.load_torch_state_dict({"weight": state_dict["encoder.embed_tokens.weight"]})
-    tt_relative_position_embed = TT_UMT5RelativePositionEmbeddings(
-        config, encoder_submesh, ccl_manager, parallel_config
-    )
+    tt_relative_position_embed = TT_UMT5RelativePositionEmbeddings(config, mesh_device, ccl_manager, parallel_config)
     tt_relative_position_embed.load_torch_state_dict(
         {"weight": state_dict["encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"]}
     )
@@ -139,21 +152,21 @@ def test_umt5_embeddings(
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
     tt_embeddings_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_embeddings_output)[0])
-    mesh_shape = list(encoder_submesh.shape)
+    mesh_shape = list(mesh_device.shape)
     mesh_shape[1 - parallel_config.tensor_parallel.mesh_axis] = 1
 
     tt_position_bias_torch = ttnn.to_torch(
         tt_position_bias,
         mesh_composer=ttnn.create_mesh_composer(
-            encoder_submesh, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(mesh_shape))
+            mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(mesh_shape))
         ),  # [0,1] is the mesh dimensions to concatenate. Set replicated dimensions to 1.
     )
 
     logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")
 
-    assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=0.99)
-    assert_quality(hf_position_bias, tt_position_bias_torch, pcc=0.99)
+    assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=(1 - 1e-5), relative_rmse=0.005)
+    assert_quality(hf_position_bias, tt_position_bias_torch, pcc=(1 - 1e-5), relative_rmse=0.005)
 
 
 @pytest.mark.parametrize(

@@ -375,3 +375,25 @@ class CCLManager:
             "num_workers_per_link": 2,
             "num_buffers_per_channel": 2,
         }
+
+    def device_to_host(
+        self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = False
+    ) -> torch.Tensor:
+        """Move a ttnn device tensor to a torch host tensor.
+        Args:
+            tensor: The ttnn tensor to move to host
+            mesh_dims: The dimensions to mesh. Provided dimensions will be concatenated along the corresponding mesh axis.
+        Returns:
+            The torch host tensor
+        """
+        device_tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+        for mesh_axis, mesh_dim in enumerate(mesh_dims):
+            if mesh_dim is not None:
+                device_tensor = self.all_gather(
+                    device_tensor,
+                    dim=mesh_dim,
+                    mesh_axis=mesh_axis,
+                    use_hyperparams=True,
+                    use_persistent_buffer=use_persistent_buffer,
+                )
+        return ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0])
