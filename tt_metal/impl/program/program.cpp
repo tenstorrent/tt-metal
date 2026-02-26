@@ -250,14 +250,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         auto config = std::visit(
             tt::stl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
@@ -265,7 +265,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return DataMovementConfig{
                         .processor = dm_descriptor.processor,
                         .noc = dm_descriptor.noc,
@@ -277,7 +277,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ComputeConfig{
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
@@ -289,18 +289,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                    };
-                },
-                [&](const EthernetConfigDescriptor& ethernet_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
-                    return EthernetConfig{
-                        .eth_mode = ethernet_descriptor.eth_mode,
-                        .noc = ethernet_descriptor.noc,
-                        .processor = ethernet_descriptor.processor,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
             },
@@ -944,6 +932,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 lowest_address.value(),
                 cb_region_end);
+        }
+    }
+}
+
+void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& cr : cb->core_ranges().ranges()) {
+            TT_FATAL(
+                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                cr.str(),
+                this->id,
+                grid_size.x,
+                grid_size.y);
         }
     }
 }

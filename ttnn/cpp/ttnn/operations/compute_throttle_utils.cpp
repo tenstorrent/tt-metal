@@ -54,13 +54,13 @@ void throttle_mm_perf(
     // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
     // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
     // bound)
-    const bool mm_throttle_env_enabled = std::getenv("TT_MM_THROTTLE_PERF");
+    const char* mm_throttle_env = std::getenv("TT_MM_THROTTLE_PERF");
 
     uint32_t uint_throttle_level = static_cast<uint32_t>(throttle_level);
 
     // If environment variable is set, this overrides the throttle level parameter
-    if (mm_throttle_env_enabled) {
-        uint_throttle_level = std::stoi(std::getenv("TT_MM_THROTTLE_PERF"));
+    if (mm_throttle_env) {
+        uint_throttle_level = std::stoi(mm_throttle_env);
     }
 
     // No throttling requested
