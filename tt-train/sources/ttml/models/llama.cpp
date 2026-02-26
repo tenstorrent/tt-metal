@@ -117,6 +117,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     fmt::print("    Num blocks: {}\n", num_blocks);
     fmt::print("    Positional embedding type: RoPE\n");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
+    fmt::print("    Composite SDPA: {}\n", config.experimental.use_composite_sdpa);
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
 
@@ -160,10 +161,11 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
+    auto use_composite_sdpa = config.experimental.use_composite_sdpa;
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
-            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
+            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim, use_composite_sdpa));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = last_fc;
@@ -267,6 +269,10 @@ LlamaConfig read_config(const YAML::Node& config) {
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
+
+    if (auto experimental_config = config["experimental"]) {
+        llama_config.experimental.use_composite_sdpa = experimental_config["use_composite_sdpa"].as<bool>(false);
+    }
 
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {

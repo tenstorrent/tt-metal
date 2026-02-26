@@ -23,6 +23,7 @@ struct GQAConfig {
     float dropout_prob{};
     std::reference_wrapper<const ops::RotaryEmbeddingParams> rope_params;
     bool bias_linears{false};
+    bool use_composite_sdpa{false};
 };
 
 class GroupedQueryAttention : public ttml::modules::ModuleBase {
@@ -30,6 +31,7 @@ private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
     uint32_t m_num_groups{};
+    bool m_use_composite_sdpa = false;
     std::shared_ptr<ModuleBase> m_q_linear;
     std::shared_ptr<ModuleBase> m_kv_linear;
     std::shared_ptr<ModuleBase> m_out_linear;

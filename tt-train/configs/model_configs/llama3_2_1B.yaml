@@ -11,6 +11,8 @@ transformer_config:
   max_sequence_length: 2048
   runner_type: memory_efficient
   theta: 500000.0
+  experimental:
+    use_composite_sdpa: false
 
   rope_scaling:
     scaling_factor: 32.0

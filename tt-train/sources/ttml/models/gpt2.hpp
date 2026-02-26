@@ -37,6 +37,7 @@ struct TransformerConfig {
 
     struct Experimental {
         bool use_composite_layernorm = false;
+        bool use_composite_sdpa = false;
     };
     Experimental experimental;
 };

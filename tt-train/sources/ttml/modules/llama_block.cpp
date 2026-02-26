@@ -47,7 +47,8 @@ LlamaBlock::LlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim) {
+    std::optional<uint32_t> intermediate_dim,
+    bool use_composite_sdpa) {
     m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
@@ -58,6 +59,7 @@ LlamaBlock::LlamaBlock(
         .dropout_prob = dropout_prob,
         .rope_params = rope_params,
         .bias_linears = false,
+        .use_composite_sdpa = use_composite_sdpa,
     });
 
     create_name("llama_block");

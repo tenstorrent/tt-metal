@@ -10,3 +10,5 @@ transformer_config:
   runner_type: memory_efficient
   theta: 10000.0
   weight_tying: "disabled"
+  experimental:
+    use_composite_sdpa: false

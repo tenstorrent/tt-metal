@@ -436,21 +436,26 @@ int main(int argc, char **argv) {
     ttml::autograd::ctx().initialize_parallelism_context(
         {.enable_ddp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
 
+    bool use_composite_sdpa =
+        std::visit([](auto &&arg) { return arg.experimental.use_composite_sdpa; }, model_config.transformer_config);
+
     struct CachedHostData {
         std::vector<uint32_t> data;
         std::vector<uint32_t> targets;
         ttml::autograd::TensorPtr masks_tensor;
     };
     CachedHostData cached_data;
-    std::vector<float> mask;
-    mask.reserve(sequence_length * sequence_length);
-    for (int i = 0; i < sequence_length; ++i) {
-        for (int j = 0; j < sequence_length; ++j) {
-            mask.push_back(i >= j ? 1.0F : 0.0F);
+    if (use_composite_sdpa) {
+        std::vector<float> mask;
+        mask.reserve(sequence_length * sequence_length);
+        for (int i = 0; i < sequence_length; ++i) {
+            for (int j = 0; j < sequence_length; ++j) {
+                mask.push_back(i >= j ? 1.0F : 0.0F);
+            }
         }
+        cached_data.masks_tensor = ttml::autograd::create_tensor(
+            ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
     }
-    cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {

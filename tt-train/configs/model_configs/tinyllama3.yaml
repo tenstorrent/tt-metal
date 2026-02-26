@@ -8,3 +8,5 @@ transformer_config:
   vocab_size: 32000
   max_sequence_length: 2048
   runner_type: default
+  experimental:
+    use_composite_sdpa: false

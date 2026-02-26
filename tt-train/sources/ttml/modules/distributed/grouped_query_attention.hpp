@@ -16,6 +16,7 @@ struct GQAConfig {
     uint32_t num_groups{};
     float dropout_prob{};
     std::reference_wrapper<const ops::RotaryEmbeddingParams> rope_params;
+    bool use_composite_sdpa{false};
 };
 
 class DistributedGroupedQueryAttention : public ModuleBase {
@@ -25,6 +26,7 @@ private:
     uint32_t m_num_local_heads{};
     uint32_t m_num_local_groups{};
     uint32_t m_num_groups{};
+    bool m_use_composite_sdpa = false;
     std::shared_ptr<ModuleBase> m_q_linear;
     std::shared_ptr<ModuleBase> m_kv_linear;
     std::shared_ptr<ModuleBase> m_out_linear;

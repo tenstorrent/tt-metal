@@ -30,7 +30,11 @@ private:
 class DistributedGPTBlock : public modules::ModuleBase {
 public:
     explicit DistributedGPTBlock(
-        uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
+        uint32_t embedding_size,
+        uint32_t num_heads,
+        float dropout_prob,
+        bool use_composite_layernorm = false,
+        bool use_composite_sdpa = false);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
