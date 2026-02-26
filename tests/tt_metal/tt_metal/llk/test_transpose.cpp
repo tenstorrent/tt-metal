@@ -214,6 +214,7 @@ void run_single_core_transpose(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
