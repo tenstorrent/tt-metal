@@ -105,6 +105,11 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::vector<uint32_t> core_bank_ids(num_cores, 0);
 
     if (use_strided_l1) {
+        TT_ASSERT(
+            num_cores >= num_l1_banks,
+            "Strided L1 mode requires at least as many cores ({}) as L1 banks ({})",
+            num_cores,
+            num_l1_banks);
         strided_tiles_max = (num_pages + num_l1_banks - 1) / num_l1_banks;
         strided_tiles_min = num_pages / num_l1_banks;
         const auto remainder = num_pages % num_l1_banks;
@@ -113,7 +118,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             const auto& bank_ids =
                 device->allocator()->get_bank_ids_from_logical_core(tt::tt_metal::BufferType::L1, core);
-            const auto bank_id = bank_ids.empty() ? i : bank_ids[0];
+            TT_ASSERT(!bank_ids.empty(), "Core ({}, {}) has no L1 bank assigned", core.x, core.y);
+            const auto bank_id = bank_ids[0];
             core_bank_ids[i] = bank_id;
 
             // Group 1 (primary) gets strided_tiles_max tiles.
