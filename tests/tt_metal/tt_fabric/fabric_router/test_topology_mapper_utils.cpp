@@ -3418,10 +3418,32 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Print the physical multi-mesh graph
-    physical_multi_mesh_graph.mesh_level_graph_.print_adjacency_map();
+    // THere should be 12 indvidual meshes connected, verify that this is the case
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 12u);
+
+    // Each oft he mesh level graphs should have connections to other nodes
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    // Check that each graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        adjacency_graph.print_adjacency_map();
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graphs
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 32 nodes in the graph
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 32u);
+
+        // Check that each node should have 2 - 4 neighbors
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 2 channels per direction
+        }
     }
 }
 
@@ -3461,10 +3483,94 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Triple
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    physical_multi_mesh_graph.mesh_level_graph_.print_adjacency_map();
+    // THere should be 12 indvidual meshes connected, verify that this is the case
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
+
+    // Each oft he mesh level graphs should have connections to other nodes
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    // Check that each graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        adjacency_graph.print_adjacency_map();
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graphs
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 32 nodes in the graph
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 4u * 32u);  // 4 pods * 32 ASICs per pod
+
+        // Check that each node should have 2 - 3 neighbors
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 2 channels per direction
+        }
     }
 }
 
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Blitz2x4) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses triple_pod_16x8 MGD with matching PGD and 3_pod_16x8_bh_galaxy cluster descriptor
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using bh_glx_split_4x2 which has 48 meshes of 4x2 (8 nodes each)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) / "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // THere should be 12 indvidual meshes connected, verify that this is the case
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 48u);
+
+    // Each oft he mesh level graphs should have connections to other nodes
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    // Check that each graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graphs
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 32 nodes in the graph
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
+
+        // Check that each node should have 2 - 3 neighbors
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+}
 }  // namespace tt::tt_metal::experimental::tt_fabric
