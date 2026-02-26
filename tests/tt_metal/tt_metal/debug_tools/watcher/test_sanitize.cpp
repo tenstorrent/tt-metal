@@ -229,14 +229,17 @@ void RunTestOnCore(
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
-        case SanitizeNOCMulticastInvalidRange:
-            // Use invalid multicast range: start > end (for NOC0, this is invalid)
+        case SanitizeNOCMulticastInvalidRange: {
+            // Use actual Tensix worker cores with an invalid multicast range (start > end for NOC0).
             use_multicast_semaphore_inc = true;
-            output_buf_noc_xy.x = 5;  // start_x
-            output_buf_noc_xy.y = 5;  // start_y
-            mcast_dst_end_x = 2;      // end_x < start_x (invalid for NOC0)
-            mcast_dst_end_y = 2;      // end_y < start_y (invalid for NOC0)
+            auto grid_size = device->compute_with_storage_grid_size();
+            CoreCoord mcast_start = device->worker_core_from_logical_core({grid_size.x - 1, grid_size.y - 1});
+            CoreCoord mcast_end = device->worker_core_from_logical_core({0, 0});
+            output_buf_noc_xy = mcast_start;
+            mcast_dst_end_x = mcast_end.x;
+            mcast_dst_end_y = mcast_end.y;
             break;
+        }
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -449,12 +452,10 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCMulticastInvalidRange: {
-            // For multicast, the error message format is different - it shows a range
-            // The start coords are output_buf_noc_xy (5,5), end coords are mcast_dst_end (2,2)
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
-                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
-                "DRAM[addr=0x{:08x}] (multicast invalid range).",
+                "bytes from local L1[{:#08x}] to Tensix core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "L1[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
                 (is_eth_core) ? "acteth" : "worker",
                 core.x,
