@@ -241,7 +241,7 @@ void calculate_recip_first_column() {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
 
-            if constexpr (APPROX) {
+            if constexpr (APPROX != ckernel::ApproximationMode::Precise) {
                 sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
             } else {
                 if constexpr (DST_ACCUM_MODE) {
@@ -991,7 +991,8 @@ void correction_block(
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
         copy_tile(cb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
+        MATH(
+            (fused_max_sub_exp_add_tile<ckernel::use_approximate_enum<EXP_APPROX_MODE>(), vector_mode>(0, scale_bf16)));
         pack_tile(dst_reg_0, cb_exp_max_diff);
         pack_tile(dst_reg_1, cb_exp_max_diff_2);
         pack_tile(dst_reg_2, cb_cur_max);
