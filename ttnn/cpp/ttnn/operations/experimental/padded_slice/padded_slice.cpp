@@ -5,7 +5,6 @@
 #include "device/padded_slice_device_operation.hpp"
 #include <array>
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"

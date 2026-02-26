@@ -32,13 +32,15 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(7);  // number of row tiles
     constexpr uint32_t num_blocks = get_compile_time_arg_val(8);  // number of column tiles
     constexpr bool final_reduction = get_compile_time_arg_val(9);
+    constexpr bool dense = get_compile_time_arg_val(10);
+    constexpr bool untilize = get_compile_time_arg_val(11);
 
     constexpr int vector_mode = VectorMode::RC_custom;
 
     binary_op_init_common(cb_l1, cb_l1, cb_l_out);
     exp_tile_init<EXP_APPROX_MODE, false>();
 
-    sdpa_tail<EXP_APPROX_MODE, final_reduction, block_size, num_blocks, scale_fp32, vector_mode>(
+    sdpa_tail<EXP_APPROX_MODE, final_reduction, block_size, num_blocks, scale_fp32, vector_mode, dense, untilize>(
         cb_ms1,     // worker max (ms1)
         cb_ms2,     // prev max (m2)
         cb_ms_out,  // cur max output (m = max(m1, m2))
