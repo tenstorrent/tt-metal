@@ -446,13 +446,13 @@ def run_test_linear(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "M, K, N, force_transpose, use_bias, activation",
+    "M, K, N, force_transpose, use_bias, activation, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (32768, 4096, 4096, True, False, None),
-        (75776, 5120, 3840, True, True, None),
-        (75776, 5120, 1280, True, True, None),
-        (75776, 5120, 3456, True, True, "gelu"),
-        (3072, 5120, 3456, True, True, "gelu"),
+        (32768, 4096, 4096, True, False, None, 8, 4, 8, 1, 2),
+        (75776, 5120, 3840, True, True, None, 8, 4, 8, 1, 2),
+        (75776, 5120, 1280, True, True, None, 8, 4, 8, 1, 2),
+        (75776, 5120, 3456, True, True, "gelu", 8, 4, 8, 1, 2),
+        (3072, 5120, 3456, True, True, "gelu", 8, 4, 8, 1, 2),
     ],
     ids=[
         "4k4k4k",
