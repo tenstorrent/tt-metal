@@ -8,7 +8,6 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
-#include <tt_stl/optional_reference.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -40,10 +39,8 @@ class MeshDevice;
  * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
  *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
  *   HostTensor.
- * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
+ * - Initialized: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the device and underlying storage (MeshBuffer).
- * - Deallocated: The device memory is deallocated and the MeshTensor is in a default constructed state, pointer to
- *   Device and MeshBuffer will be null.
  */
 class MeshTensor {
     using attribute_type = TensorAttributes<DeviceStorage>;
@@ -62,12 +59,13 @@ public:
     // directly. As this will lead to leaks of the MeshBuffer unique ownership.
     explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+        // This can be removed if the constructor is made private.
+        // mesh_buffer being non-null is an invariant of MeshTensor
+        TT_ASSERT(storage.mesh_buffer != nullptr, "MeshBuffer must be allocated");
     }
 
     /**
      * Release ownership of the underlying device memory.
-     * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
-     * MeshBuffer.
      */
     ~MeshTensor() = default;
 
@@ -97,39 +95,14 @@ public:
 
     // End speical member functions
 
-    // Deallocation related:
-
-    /**
-     * Release ownership of the underlying device memory.
-     *
-     * pre-condition: The device tensor must not be in a default constructed state.
-     */
-    void deallocate() {
-        auto& device_storage = get_storage();
-        // This implicitly deallocates the root mesh buffer if we are the sole owner.
-        // An explicit deallocation call is not performed, as current day MeshBuffer could still be shared by other
-        // owners. See: #38375
-        device_storage.reset_root_mesh_buffer();
-    }
-
-    /**
-     * Check if the device tensor owns any device memory.
-     *
-     * pre-condition: The device tensor must not be in a default constructed state.
-     */
-    bool is_allocated() const { return mesh_buffer().has_value(); }
-
     /**
      * Return the underlying device storage MeshBuffer.
-     * empty optional when the device tensor is in deacllocated state via deallocate().
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const {
-        if (auto ptr = mesh_buffer_ptr()) {
-            return (*ptr);
-        }
-        return std::nullopt;
+    const distributed::MeshBuffer& mesh_buffer() const {
+        // MeshBuffer is non-null by invariant of this struct.
+        return *mesh_buffer_ptr();
     }
 
     /**
@@ -137,25 +110,15 @@ public:
      * This should go away as this breaks unique ownership semantics easily.
      * See: TODO(River): create an issue for `let's-not-pass-MeshBuffer-as-shared-ptr-everywhere`.
      */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_ptr() const {
-        if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
-            return mesh_buffer;
-        }
-        return nullptr;
-    }
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_ptr() const { return get_storage().mesh_buffer; }
 
     /**
      * Get the device the allocated device memory is on.
-     * Returns an empty optional when owned device memory is released via deallocate().
+     * Equivalent to `mesh_buffer().device()`.
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshDevice> get_device() const {
-        if (auto buffer = mesh_buffer()) {
-            return *buffer->device();
-        }
-        return std::nullopt;
-    }
+    distributed::MeshDevice* get_device() const { return mesh_buffer().device(); }
 
     // Getters:
 
@@ -184,15 +147,6 @@ public:
         return impl->storage_;
     }
 
-private:
-    // Mutable version of get_storage().
-    DeviceStorage& get_storage() {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        return impl->storage_;
-    }
-
-public:
     // Derivables:
 
     DataType dtype() const { return tensor_spec().data_type(); }
