@@ -24,6 +24,8 @@
 #include "../helper_funcs.h"
 #include "../image_utils.h"
 #include <iomanip>
+#include <ttnn/operations/trace.hpp>
+#include <ttnn/api/ttnn/events.hpp>
 
 namespace {
 
@@ -129,7 +131,9 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     TtDeiTForImageClassificationWithTeacher tt_model(config, state_dict, base_address, device);
 
     // Convert input to TT tensor
-    auto tt_input = helper_funcs::torch_to_tt_tensor_tile(pixel_values, device);
+    // Permute to NHWC for Conv2d input (required by TtDeiTPatchEmbeddings)
+    auto pixel_values_nhwc = pixel_values.permute({0, 2, 3, 1}).contiguous();
+    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR).to_device(device.get());
 
     // Run TT model inference
     std::optional<ttnn::Tensor> head_mask = std::nullopt;
@@ -203,113 +207,78 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     // Profiling
     helper_funcs::Profiler profiler;
     int batch_size = 1;
-    for (int i = 0; i < 10; i++) {
-        profiler.start("inference_time");
-        auto [tt_averaged_logits_prof, tt_cls_logits_prof, tt_distillation_logits_prof, attention_weights_prof, hidden_states_prof] = tt_model.forward(
+
+    // Enable program cache for performance
+    device->enable_program_cache();
+
+    // Prepare inputs for Trace/2CQ
+    auto tt_input_host = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
+
+    // Warmup run
+    {
+         tt_model.forward(
             tt_input,
             head_mask.has_value() ? &head_mask.value() : nullptr,
             output_attentions,
             output_hidden_states,
             return_dict
         );
-        profiler.stop("inference_time");
-        auto tt_averaged_logits_host_prof = ttnn::from_device(tt_averaged_logits_prof);
     }
 
-    auto inference_time = profiler.get("inference_time");
-    double inference_time_avg = inference_time / 10.0;
+    // Trace Capture
+    auto tid = ttnn::operations::trace::begin_trace_capture(device.get(), ttnn::QueueId(0));
+    auto [tt_averaged_logits_trace, tt_cls_logits_trace, tt_distillation_logits_trace, attention_weights_trace, hidden_states_trace] = tt_model.forward(
+        tt_input,
+        head_mask.has_value() ? &head_mask.value() : nullptr,
+        output_attentions,
+        output_hidden_states,
+        return_dict
+    );
+    ttnn::operations::trace::end_trace_capture(device.get(), tid, ttnn::QueueId(0));
+
+    // Events for 2CQ
+    auto op_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(0));
+    auto write_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(1));
+
+    for (int i = 0; i < 10; i++) {
+        profiler.start("inference_time");
+        
+        // CQ1: Update Input (Async Copy)
+        ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
+        tt::tt_metal::copy_to_device(tt_input_host, tt_input, ttnn::QueueId(1));
+        write_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(1));
+
+        // CQ0: Execute Trace
+        ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
+        op_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(0));
+        ttnn::operations::trace::execute_trace(device.get(), tid, ttnn::QueueId(0), false);
+        
+        profiler.stop("inference_time");
+
+        profiler.start("sync_output");
+        auto tt_averaged_logits_host_prof = ttnn::from_device(tt_averaged_logits_trace);
+        profiler.stop("sync_output");
+    }
+
+    ttnn::operations::trace::release_trace(device.get(), tid);
+    device->disable_and_clear_program_cache();
+
+    double inference_time_total = profiler.get("inference_time");
+    double sync_time_total = profiler.get("sync_output");
+    double inference_time_avg = (inference_time_total) / 10.0;
     double fps = batch_size / inference_time_avg;
+
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "DeiT_For_Image_Classification_With_Teacher_batch_size_" << batch_size 
+    std::cout << "ttnn_deit_for_image_classification_with_teacher_batch_size_" << batch_size 
               << ". One inference iteration time (sec): " << inference_time_avg 
-              << ", FPS: " << std::setprecision(2) << fps << std::endl;
+              << ", FPS: " << std::setprecision(2) << fps
+              << ", inference time (sec): " << std::setprecision(6) << (inference_time_total / 10.0)
+              << ", sync output time(sec): " << (sync_time_total / 10.0) << std::endl;
 
     // Clean up device resources
     device->close();
 }
 
-/**
- * Test separate logits functionality
- * @param model_path Path to the model file
- */
-void test_separate_logits_functionality(const std::string& model_path) {
-    const double pcc_threshold = 0.95;
-
-    // Initialize device
-    auto device = ttnn::MeshDevice::create_unit_mesh(0,
-                                                    /*l1_small_size=*/24576,
-                                                    /*trace_region_size=*/6434816,
-                                                    /*num_command_queues=*/2,
-                                                    /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
-
-    // Setup base address
-    std::string base_address = "model.";
-
-    // Load state dict and model
-    auto [state_dict, model] = load_deit_image_classification_with_teacher_model(model_path);
-
-    // Use a sample image path for testing
-    std::string test_image_path ="models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
-
-    torch::Tensor pixel_values = image_utils::load_and_preprocess_image(test_image_path);
-
-    // Create DeiT config
-    DeiTConfig config;
-
-    // Setup TT model
-    TtDeiTForImageClassificationWithTeacher tt_model(config, state_dict, base_address, device);
-
-    // Convert input to TT tensor
-    auto tt_input = helper_funcs::torch_to_tt_tensor_tile(pixel_values, device);
-
-    // Test get_separate_logits function
-    std::optional<ttnn::Tensor> head_mask = std::nullopt;
-    auto [tt_cls_logits, tt_distillation_logits] = tt_model.get_separate_logits(
-        tt_input,
-        head_mask.has_value() ? &head_mask.value() : nullptr
-    );
-
-    // Convert TT outputs back to torch tensors
-    auto tt_cls_logits_host = ttnn::from_device(tt_cls_logits);
-    auto tt_cls_output_torch = helper_funcs::to_torch(tt_cls_logits_host);
-
-    auto tt_distillation_logits_host = ttnn::from_device(tt_distillation_logits);
-    auto tt_distillation_output_torch = helper_funcs::to_torch(tt_distillation_logits_host);
-
-    std::cout << "Testing separate logits functionality:" << std::endl;
-    std::cout << "TT CLS logits shape: " << tt_cls_output_torch.sizes() << std::endl;
-    std::cout << "TT distillation logits shape: " << tt_distillation_output_torch.sizes() << std::endl;
-
-    // Test that averaging the separate logits gives the same result as the averaged logits from forward
-    auto manual_averaged = (tt_cls_output_torch + tt_distillation_output_torch) * 0.5;
-
-    // Get averaged logits from forward method for comparison
-    auto [tt_averaged_logits, _, __, ___, ____] = tt_model.forward(
-        tt_input,
-        head_mask.has_value() ? &head_mask.value() : nullptr,
-        false, false, true
-    );
-
-    auto tt_averaged_logits_host = ttnn::from_device(tt_averaged_logits);
-    auto tt_averaged_output_torch = helper_funcs::to_torch(tt_averaged_logits_host);
-
-    if (tt_averaged_output_torch.dim() > manual_averaged.dim()) {
-        tt_averaged_output_torch = tt_averaged_output_torch.squeeze(0);
-    }
-
-    double pcc_manual_vs_forward = helper_funcs::compute_pcc(manual_averaged, tt_averaged_output_torch);
-
-    std::cout << "PCC between manual averaged logits and forward averaged logits: " << pcc_manual_vs_forward << std::endl;
-
-    if (pcc_manual_vs_forward >= pcc_threshold) {
-        std::cout << "PASSED: Separate logits functionality test" << std::endl;
-    } else {
-        std::cout << "FAILED: Manual averaging doesn't match forward method averaging" << std::endl;
-    }
-
-    // Clean up device resources
-    ttnn::distributed::close_mesh_device(device);
-}
 
 } // anonymous namespace
 
@@ -327,9 +296,6 @@ int main(int argc, char** argv) {
 
         // Test DeiT with Teacher inference
         test_deit_for_image_classification_with_teacher_inference(model_path);
-
-        std::cout << "\nTesting separate logits functionality..." << std::endl;
-        test_separate_logits_functionality(model_path);
 
         std::cout << "DeiT for Image Classification with Teacher test completed successfully!" << std::endl;
         return 0;

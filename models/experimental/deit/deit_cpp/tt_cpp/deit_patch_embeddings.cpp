@@ -3,16 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deit_patch_embeddings.h"
+#include "../helper_funcs.h"
 #include <stdexcept>
 #include <iostream>
+#include <variant>
+#include <tuple>
+#include <array>
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     const DeiTConfig& config,
     std::unordered_map<std::string, torch::Tensor>& state_dict,
-    const std::string& base_address
-) : projection_(torch::nn::Conv2dOptions(config.num_channels, config.hidden_size, config.patch_size)
-                .stride(config.patch_size)
-                .padding(0)) {
+    const std::string& base_address,
+    std::shared_ptr<ttnn::MeshDevice> device
+) : device_(device) {
     // Extract configuration parameters
     auto image_size = config.image_size;
     auto patch_size = config.patch_size;
@@ -37,21 +44,36 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
         throw std::runtime_error("Missing projection bias in state_dict: " + bias_key);
     }
 
-    // Load weights and bias into the Conv2d module
+    // Load weights and bias
     auto weight_torch = state_dict[weight_key];
     auto bias_torch = state_dict[bias_key];
 
-    // Set the weights and bias for the Conv2d module
-    projection_->weight.data() = weight_torch;
-    projection_->bias.data() = bias_torch;
+    // Convert to TTNN tensors
+    // weight shape: (out_channels, in_channels, kernel_h, kernel_w)
+    // ttnn::conv2d requires weights on host in ROW_MAJOR layout
+    weight_ = helper_funcs::from_torch(weight_torch, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
+    
+    // Bias must be 4D [1, 1, 1, out_channels]
+    auto bias_torch_reshaped = bias_torch.reshape({1, 1, 1, -1});
+    bias_ = helper_funcs::from_torch(bias_torch_reshaped, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
+
+    // Initialize configs
+    conv_config_.weights_dtype = ttnn::DataType::BFLOAT16;
+
+    compute_config_ = ttnn::init_device_compute_kernel_config(
+        device_->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4
+    );
 }
 
-torch::Tensor TtDeiTPatchEmbeddings::forward(const torch::Tensor& pixel_values) {
-    // Validate input dimensions
-    auto input_shape = pixel_values.sizes();
-    int num_channels = input_shape[1];
-    int height = input_shape[2];
-    int width = input_shape[3];
+ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
+    // Validate input dimensions (expect NHWC)
+    auto input_shape = pixel_values.logical_shape();
+    int batch_size = input_shape[0];
+    int height = input_shape[1];
+    int width = input_shape[2];
+    int num_channels = input_shape[3];
 
     // Check channel dimension
     if (num_channels != num_channels_) {
@@ -69,14 +91,57 @@ torch::Tensor TtDeiTPatchEmbeddings::forward(const torch::Tensor& pixel_values) 
         );
     }
 
-    // Perform 2D convolution: x = self.projection(pixel_values)
-    auto x = projection_->forward(pixel_values);
+    // Perform 2D convolution
+    // output shape: (batch_size, height/patch_size, width/patch_size, hidden_size)
+    auto result = ttnn::conv2d(
+        pixel_values,
+        weight_,
+        device_.get(),
+        num_channels_,
+        hidden_size_,
+        batch_size,
+        height,
+        width,
+        std::array<uint32_t, 2>{static_cast<uint32_t>(patch_size_.first), static_cast<uint32_t>(patch_size_.second)}, // kernel_size
+        std::array<uint32_t, 2>{static_cast<uint32_t>(patch_size_.first), static_cast<uint32_t>(patch_size_.second)}, // stride
+        std::array<uint32_t, 2>{0, 0}, // padding
+        std::array<uint32_t, 2>{1, 1}, // dilation
+        1,      // groups
+        ttnn::DataType::BFLOAT16, // dtype
+        bias_,
+        conv_config_,
+        compute_config_,
+        std::nullopt, // memory_config
+        std::nullopt, // dram_slice_config
+        true,         // return_output_dim
+        true          // return_weights_and_bias
+    );
 
-    // Flatten and transpose: .flatten(2).transpose(1, 2)
-    // flatten(2) flattens from dimension 2 onwards
-    x = x.flatten(2);
-    // transpose(1, 2) swaps dimensions 1 and 2
-    x = x.transpose(1, 2);
+    // Extract results from variant
+    // We expect the 4th alternative: tuple<Tensor, tuple<H,W>, tuple<Tensor, opt<Tensor>>>
+    auto& result_tuple = std::get<3>(result);
+    auto output_tensor = std::get<0>(result_tuple);
+    auto dims = std::get<1>(result_tuple);
+    auto output_height = std::get<0>(dims);
+    auto output_width = std::get<1>(dims);
+    auto weights_and_bias = std::get<2>(result_tuple);
+    auto weight_tensor = std::get<0>(weights_and_bias);
+    auto bias_tensor = std::get<1>(weights_and_bias);
 
-    return x;
+    // Update weight and bias (in case they were modified/moved by conv2d)
+    weight_ = weight_tensor;
+    if (bias_tensor.has_value()) {
+        bias_ = bias_tensor.value();
+    }
+
+    // Reshape to (batch_size, 1, num_patches, hidden_size) to match ttnn 4D requirement
+    // num_patches = output_height * output_width
+    auto output_reshaped = ttnn::reshape(output_tensor, ttnn::Shape{
+        static_cast<uint32_t>(batch_size), 
+        1, 
+        static_cast<uint32_t>(output_height * output_width), 
+        static_cast<uint32_t>(hidden_size_)
+    });
+
+    return output_reshaped;
 }
