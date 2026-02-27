@@ -16,6 +16,9 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import SharedExpertWeights, prepare_shared_expert_weights
 
+# If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
+USE_RANDOM_WEIGHTS = False
+
 # HF state dict shapes (out_features, in_features) for reference random weights. Align with test_prepare_weights.
 _REF_HF_Q_B = (24576, 1536)
 _REF_HF_O_PROJ = (7168, 16384)
@@ -112,9 +115,46 @@ def _add_reference_global_weights(state: dict[str, torch.Tensor], seed: int = 42
     state["lm_head.weight"] = torch.randn(129280, _REF_K, generator=g, dtype=torch.bfloat16)
 
 
+def _resolve_hf_model_path() -> Path:
+    """Resolve HuggingFace model path from DEEPSEEK_V3_HF_MODEL; skip if unset or invalid."""
+    raw = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    if not raw or not raw.strip():
+        pytest.skip("DEEPSEEK_V3_HF_MODEL is not set; use random_weights=True or set env for real-weights tests")
+    path = Path(raw.strip()).resolve()
+    index_path = path / "model.safetensors.index.json"
+    if not index_path.is_file():
+        pytest.skip(f"model.safetensors.index.json not found at {index_path}")
+    return path
+
+
 def _state_dict_key(layer_idx: int, suffix: str) -> str:
     """State dict key under model.layers.{layer_idx}."""
     return f"model.layers.{layer_idx}.{suffix}"
+
+
+class _StateDictWithOverlay:
+    """Read-through overlay over a read-only mapping; supports __setitem__ for test patching (e.g. gate weight/bias)."""
+
+    def __init__(self, base):
+        self._base = base
+        self._overlay = {}
+
+    def __getitem__(self, key: str):
+        if key in self._overlay:
+            return self._overlay[key]
+        return self._base[key]
+
+    def __setitem__(self, key: str, value) -> None:
+        self._overlay[key] = value
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._overlay or key in self._base
+
+    def keys(self):
+        return set(self._base) | set(self._overlay)
+
+    def __iter__(self):
+        return iter(self.keys())
 
 
 class SharedExpertWeightBundle(NamedTuple):
@@ -130,15 +170,16 @@ class SharedExpertWeightBundle(NamedTuple):
 def get_reference_model_state_dict():
     """Return a callable that yields a reference state_dict in HF key convention.
 
-    Today the callable returns deterministic random weights (random_weight=True).
-    In a future phase, random_weight=False may return a LazyStateDict over real HF weights.
+    When random_weights=True (or USE_RANDOM_WEIGHTS=True): returns a dict of deterministic
+    random weights. When random_weights=False: loads from DEEPSEEK_V3_HF_MODEL via
+    LazyStateDict and returns a mutable overlay so tests can patch gate weight/bias.
 
     Usage:
         get = get_reference_model_state_dict
-        state = get(layer_idx=0, is_moe=True, seed=0, num_routed_experts=256, include_global=False)
+        state = get(layer_idx=0, is_moe=True, num_routed_experts=256, include_global=False)
+        # state supports [] and []= (overlay when using HF).
     """
 
-    # Phase 1: only random weights; random_weight=False reserved for LazyStateDict later
     def get(
         layer_idx: int = 0,
         *,
@@ -146,21 +187,21 @@ def get_reference_model_state_dict():
         seed: int = 42,
         include_global: bool = False,
         num_routed_experts: int = 4,
-        random_weight: bool = True,
-    ) -> dict[str, torch.Tensor]:
-        if not random_weight:
-            raise NotImplementedError(
-                "get_reference_model_state_dict(..., random_weight=False) for real HF weights is not implemented yet"
+        random_weights: bool = USE_RANDOM_WEIGHTS,
+    ):
+        if random_weights:
+            state = _reference_layer_state_dict(
+                layer_idx,
+                is_moe=is_moe,
+                seed=seed,
+                num_routed_experts=num_routed_experts,
             )
-        state = _reference_layer_state_dict(
-            layer_idx,
-            is_moe=is_moe,
-            seed=seed,
-            num_routed_experts=num_routed_experts,
-        )
-        if include_global:
-            _add_reference_global_weights(state, seed=seed)
-        return state
+            if include_global:
+                _add_reference_global_weights(state, seed=seed)
+            return state
+        path = _resolve_hf_model_path()
+        lazy = LazyStateDict(path)
+        return _StateDictWithOverlay(lazy)
 
     return get
 
