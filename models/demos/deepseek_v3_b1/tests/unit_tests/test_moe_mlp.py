@@ -140,9 +140,15 @@ ROUTED_EXPERT_LAYER_IDX = 0
 # ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
-def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None):
+def create_shared_expert_tensors(
+    device, M, K_gate, mcast_grid, mesh_mapper=None, *, get_reference_model_state_dict=None
+):
     """
     Create all tensors needed by SharedExpertOp.
+
+    When get_reference_model_state_dict is provided, the shared expert weights are taken
+    from that reference layer (same seed as routed path in fused tests). Otherwise
+    weights are generated with SharedExpert.SEED.
 
     Args:
         device: TT device or mesh device
@@ -150,6 +156,8 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         K_gate: Gate/Up input dimension (7168)
         mcast_grid: CoreRangeSet for mcast destination (same as routed input mcast)
         mesh_mapper: Optional mesh mapper for multi-device replication
+        get_reference_model_state_dict: Optional callable from conftest; when set, used to
+            build state dict for prepare_shared_expert_weights (same layer as routed in fused tests).
 
     Returns:
         SharedExpertTensors with all ttnn tensors, torch tensors, and validation data.
@@ -164,24 +172,46 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
 
-    # Create torch data — generate full TP-width weights with unique data per shard
     bdw = BlitzDecodeWeights(device)
     moe_tp = bdw.moe_tp
     K_down_full = K_down * moe_tp
 
-    torch.manual_seed(SharedExpert.SEED)
-    torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
-    torch_gate_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
-    torch_up_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
-    torch_down_weights = torch.randn((K_down_full, N), dtype=torch.bfloat16)
-    torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
+    gate_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.gate_proj.weight"
+    up_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.up_proj.weight"
+    down_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.down_proj.weight"
 
-    # Minimal state dict in HF layout for prepare_shared_expert_weights (gate/up/down in out_features, in_features)
-    state_dict = {
-        f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.gate_proj.weight": torch_gate_weights.T.clone(),
-        f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.up_proj.weight": torch_up_weights.T.clone(),
-        f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.down_proj.weight": torch_down_weights.T.clone(),
-    }
+    if get_reference_model_state_dict is not None:
+        # Use same layer/seed as routed path so fused test has one consistent reference layer
+        state_dict = get_reference_model_state_dict(
+            layer_idx=SHARED_EXPERT_LAYER_IDX,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            include_global=False,
+        )
+        torch_gate_weights = state_dict[gate_key].T.contiguous()
+        torch_up_weights = state_dict[up_key].T.contiguous()
+        torch_down_weights = state_dict[down_key].T.contiguous()
+        # Reference state dict has full logical (2048); slice to per-TP for single-device golden
+        if moe_tp == 1 and torch_gate_weights.shape[1] == K_down_full * 8:
+            torch_gate_weights = torch_gate_weights[:, :K_down_full].contiguous()
+            torch_up_weights = torch_up_weights[:, :K_down_full].contiguous()
+            torch_down_weights = torch_down_weights[:K_down_full, :].contiguous()
+        torch.manual_seed(RoutedExpert.SEED)
+        torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
+        torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
+    else:
+        torch.manual_seed(SharedExpert.SEED)
+        torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
+        torch_gate_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
+        torch_up_weights = torch.randn((K_gate, K_down_full), dtype=torch.bfloat16)
+        torch_down_weights = torch.randn((K_down_full, N), dtype=torch.bfloat16)
+        torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
+        state_dict = {
+            gate_key: torch_gate_weights.T.clone(),
+            up_key: torch_up_weights.T.clone(),
+            down_key: torch_down_weights.T.clone(),
+        }
+
     shared_weights = prepare_shared_expert_weights(
         bdw, state_dict, layer_idx=SHARED_EXPERT_LAYER_IDX, is_moe=True, move_to_device=True
     )
@@ -207,7 +237,13 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
 # Helper: create all routed-expert tensors
 # ============================================================================
 def create_routed_expert_tensors(
-    device, use_hardcoded_expert_index=False, mesh_mapper=None, create_final_output=True, enable_routing=True
+    device,
+    use_hardcoded_expert_index=False,
+    mesh_mapper=None,
+    create_final_output=True,
+    enable_routing=True,
+    *,
+    get_reference_model_state_dict=None,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -215,12 +251,18 @@ def create_routed_expert_tensors(
     When enable_routing=False, skips routing-specific tensors (gate MM weights,
     gate bias/indices, gate output scores/indices) and uses a single expert.
 
+    When get_reference_model_state_dict is provided (and enable_routing=True), the
+    reference state dict is used as the base; gate weight and bias are patched
+    with the test-generated tensors for golden matching.
+
     Args:
         device: TT device or mesh device
         use_hardcoded_expert_index: Whether to use hardcoded expert index (routing only)
         mesh_mapper: Optional mesh mapper for multi-device replication
         create_final_output: If True, create final_output_tensor
         enable_routing: If True, create routing tensors. If False, skip them.
+        get_reference_model_state_dict: Optional callable from conftest fixture; when set,
+            used to build base state dict (then gate weight/bias are patched).
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -318,41 +360,58 @@ def create_routed_expert_tensors(
     down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_down_proj_N = down_proj_N_padded // num_banks
 
-    # ── Build state dict: when enable_routing include attention + gate keys for prepare_attention_weights ──
+    # ── Build state dict: use reference fixture when provided, else inline (attention + gate + experts) ──
     bdw = BlitzDecodeWeights(device)
-    state_dict = {}
-    if enable_routing:
-        # Keys required by prepare_attention_weights / _get_layer_raw_tensors (dummy shapes; only gate_mm consumed)
-        layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
-        state_dict[f"{layer_key}.self_attn.q_a_proj.weight"] = torch.zeros(1536, K, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.q_b_proj.weight"] = torch.zeros(24576, 1536, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.kv_a_proj_with_mqa.weight"] = torch.zeros(576, K, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.kv_b_proj.weight"] = torch.zeros(32768, 512, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.o_proj.weight"] = torch.zeros(K, 16384, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.input_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.q_a_layernorm.weight"] = torch.zeros(1536, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.self_attn.kv_a_layernorm.weight"] = torch.zeros(512, dtype=torch.bfloat16)
-        state_dict[f"{layer_key}.post_attention_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
+    layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
+    if get_reference_model_state_dict is not None and enable_routing:
+        state_dict = get_reference_model_state_dict(
+            layer_idx=ROUTED_EXPERT_LAYER_IDX,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            num_routed_experts=num_experts,
+            include_global=False,
+        )
         state_dict[f"{layer_key}.mlp.gate.weight"] = torch_gate_mm_weights.T.clone()
         state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"] = torch_bias.reshape(256).clone()
-    expert_weights_dict = {}
-    up_proj_weights_dict = {}
-    down_proj_weights_dict = {}
-    for e in range(num_experts):
-        logger.info(f"Generating routed expert {e + 1}/{num_experts} experts")
-
-        # Computation format: gate/up (K, N), down (down_proj_K, down_proj_N). HF format: (out, in).
-        gate_w = torch.randn(gate_proj_K, gate_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
-        state_dict[f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.experts.{e}.gate_proj.weight"] = gate_w.T.clone()
-        expert_weights_dict[e] = gate_w.reshape(1, 1, gate_proj_K, gate_proj_N)
-
-        up_w = torch.randn(gate_proj_K, gate_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
-        state_dict[f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.experts.{e}.up_proj.weight"] = up_w.T.clone()
-        up_proj_weights_dict[e] = up_w.reshape(1, 1, gate_proj_K, gate_proj_N)
-
-        down_w = torch.randn(down_proj_K, down_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
-        state_dict[f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.experts.{e}.down_proj.weight"] = down_w.T.clone()
-        down_proj_weights_dict[e] = down_w.reshape(1, 1, down_proj_K, down_proj_N)
+        expert_weights_dict = {}
+        up_proj_weights_dict = {}
+        down_proj_weights_dict = {}
+        for e in range(num_experts):
+            # HF layout: gate/up (out,in)=(2048,7168), down (7168,2048); golden wants (1,1,K,N)
+            w_g = state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous()
+            expert_weights_dict[e] = w_g.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_u = state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"].T.contiguous()
+            up_proj_weights_dict[e] = w_u.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
+            down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
+    else:
+        state_dict = {}
+        if enable_routing:
+            state_dict[f"{layer_key}.self_attn.q_a_proj.weight"] = torch.zeros(1536, K, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.q_b_proj.weight"] = torch.zeros(24576, 1536, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.kv_a_proj_with_mqa.weight"] = torch.zeros(576, K, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.kv_b_proj.weight"] = torch.zeros(32768, 512, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.o_proj.weight"] = torch.zeros(K, 16384, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.input_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.q_a_layernorm.weight"] = torch.zeros(1536, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.self_attn.kv_a_layernorm.weight"] = torch.zeros(512, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.post_attention_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
+            state_dict[f"{layer_key}.mlp.gate.weight"] = torch_gate_mm_weights.T.clone()
+            state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"] = torch_bias.reshape(256).clone()
+        expert_weights_dict = {}
+        up_proj_weights_dict = {}
+        down_proj_weights_dict = {}
+        for e in range(num_experts):
+            logger.info(f"Generating routed expert {e + 1}/{num_experts} experts")
+            gate_w = torch.randn(gate_proj_K, gate_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
+            state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"] = gate_w.T.clone()
+            expert_weights_dict[e] = gate_w.reshape(1, 1, gate_proj_K, gate_proj_N)
+            up_w = torch.randn(gate_proj_K, gate_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
+            state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"] = up_w.T.clone()
+            up_proj_weights_dict[e] = up_w.reshape(1, 1, gate_proj_K, gate_proj_N)
+            down_w = torch.randn(down_proj_K, down_proj_N, dtype=torch.bfloat16).clamp(-2, 2)
+            state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"] = down_w.T.clone()
+            down_proj_weights_dict[e] = down_w.reshape(1, 1, down_proj_K, down_proj_N)
 
     routed_weights = prepare_routed_expert_weights(
         bdw,
@@ -488,7 +547,7 @@ def extract_routed_expert_output(
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
     M = RoutedExpert.M
@@ -498,10 +557,14 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
-    r = create_routed_expert_tensors(device, use_hardcoded_expert_index)
+    r = create_routed_expert_tensors(
+        device, use_hardcoded_expert_index, get_reference_model_state_dict=get_reference_model_state_dict
+    )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(device, M, K, mcast_grid)
+    s = create_shared_expert_tensors(
+        device, M, K, mcast_grid, get_reference_model_state_dict=get_reference_model_state_dict
+    )
 
     # ── Create sdpa_kv_cache_buffer for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -640,7 +703,9 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -665,11 +730,22 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
-        submesh, use_hardcoded_expert_index, mesh_mapper=mesh_mapper, create_final_output=False
+        submesh,
+        use_hardcoded_expert_index,
+        mesh_mapper=mesh_mapper,
+        create_final_output=False,
+        get_reference_model_state_dict=get_reference_model_state_dict,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
+    s = create_shared_expert_tensors(
+        submesh,
+        M,
+        K,
+        mcast_grid,
+        mesh_mapper=mesh_mapper,
+        get_reference_model_state_dict=get_reference_model_state_dict,
+    )
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
     device_grid_size = submesh.compute_with_storage_grid_size()

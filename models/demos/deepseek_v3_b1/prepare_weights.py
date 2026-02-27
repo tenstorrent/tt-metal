@@ -224,6 +224,68 @@ def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     return kv_b1, kv_b2
 
 
+# Per-TP attention tensor dimensions (match BlitzDecodeWeights configs for single device)
+_MLA_TP1_Q_B_WIDTH = 12288
+_MLA_TP1_O_PROJ_HEIGHT = 8192
+_MLA_TP1_KV_B1_HEIGHT = 8192
+_MLA_TP1_KV_B2_WIDTH = 8192
+
+# Per-TP shared expert dimensions (gate/up (7168, 256), down (256, 7168) for moe_tp=1)
+_MOE_TP1_SHARED_GATE_UP_N = 256
+_MOE_TP1_SHARED_DOWN_K = 256
+
+
+def _slice_attention_weights_for_mla_tp(
+    q_b: torch.Tensor,
+    o_proj: torch.Tensor,
+    kv_b1: torch.Tensor,
+    kv_b2: torch.Tensor,
+    mla_tp: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """When state dict has full (2-TP) logical shapes and mla_tp==1, slice to single-TP.
+
+    Single-device tests use mla_tp=1; the reference state dict uses full logical
+    shapes (24576 q_b, 16384 o_proj, etc.). Slice to per-TP so BlitzDecodeWeights
+    receives the shapes it expects.
+    """
+    if mla_tp > 1:
+        return q_b, o_proj, kv_b1, kv_b2
+    # Full logical: q_b (1536, 24576), o_proj (16384, 7168), kv_b1 (16384, 512), kv_b2 (512, 16384)
+    if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+        q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+    if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+        o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
+    if kv_b1.shape[0] == _MLA_TP1_KV_B1_HEIGHT * 2:
+        kv_b1 = kv_b1[:_MLA_TP1_KV_B1_HEIGHT, :].contiguous()
+    if kv_b2.shape[1] == _MLA_TP1_KV_B2_WIDTH * 2:
+        kv_b2 = kv_b2[:, :_MLA_TP1_KV_B2_WIDTH].contiguous()
+    return q_b, o_proj, kv_b1, kv_b2
+
+
+def _slice_shared_expert_weights_for_moe_tp(
+    shared_gate: torch.Tensor,
+    shared_up: torch.Tensor,
+    shared_down: torch.Tensor,
+    moe_tp: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """When state dict has full (8-TP) logical shapes and moe_tp==1, slice to single-TP.
+
+    Single-device tests use moe_tp=1; the reference state dict uses full logical
+    shapes (gate/up width 2048, down height 2048). Slice to per-TP so BlitzDecodeWeights
+    receives (7168, 256) and (256, 7168).
+    """
+    if moe_tp > 1:
+        return shared_gate, shared_up, shared_down
+    full_n = _MOE_TP1_SHARED_GATE_UP_N * 8  # 2048
+    if shared_gate.shape[1] == full_n:
+        shared_gate = shared_gate[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
+    if shared_up.shape[1] == full_n:
+        shared_up = shared_up[:, :_MOE_TP1_SHARED_GATE_UP_N].contiguous()
+    if shared_down.shape[0] == full_n:
+        shared_down = shared_down[:_MOE_TP1_SHARED_DOWN_K, :].contiguous()
+    return shared_gate, shared_up, shared_down
+
+
 def _get_layer_raw_tensors(
     state_dict: dict[str, torch.Tensor], layer_idx: int
 ) -> tuple[
@@ -366,6 +428,8 @@ def prepare_attention_weights(
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
         state_dict, layer_idx
     )
+    # Single-device (mla_tp=1) expects per-TP shapes; slice if state dict has full logical (2-TP) size
+    q_b, o_proj, kv_b1, kv_b2 = _slice_attention_weights_for_mla_tp(q_b, o_proj, kv_b1, kv_b2, bdw.mla_tp)
     logger.debug("  load raw tensors: {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
@@ -440,6 +504,10 @@ def prepare_shared_expert_weights(
         shared_gate = state_dict[_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
         shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
         shared_down = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
+        # Single-device (moe_tp=1) expects per-TP shapes; slice if state dict has full logical (8-TP) size
+        shared_gate, shared_up, shared_down = _slice_shared_expert_weights_for_moe_tp(
+            shared_gate, shared_up, shared_down, bdw.moe_tp
+        )
         shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_moe_shared_expert_weights(
             shared_gate, shared_up, shared_down, move_to_device=move_to_device
         )
