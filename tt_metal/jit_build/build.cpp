@@ -67,12 +67,6 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
-    }
-}
-
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
@@ -107,24 +101,6 @@ void JitBuildEnv::init(
     this->arch_ = config.arch;
     this->max_cbs_ = config.max_cbs;
 
-#ifndef GIT_COMMIT_HASH
-    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
-#else
-    std::string git_hash(GIT_COMMIT_HASH);
-
-    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-    std::filesystem::path root_path(this->out_root_);
-    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
-        });
-    } else {
-        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
-    }
-
-    this->out_root_ = this->out_root_ + git_hash + "/";
-#endif
-
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
@@ -151,6 +127,20 @@ void JitBuildEnv::init(
     }
     if (!sfpi_found) {
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
+    }
+
+    // Read the sfpi version file tracked in the repo.  This captures the
+    // toolchain version (e.g. "sfpi_version='7.25.0'", "sfpi_build='252'")
+    // so that upgrading sfpi invalidates the build cache.
+    std::string sfpi_version_contents;
+    {
+        std::string sfpi_version_path = this->root_ + "tt_metal/sfpi-version";
+        std::ifstream ifs(sfpi_version_path);
+        if (ifs.is_open()) {
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            sfpi_version_contents = oss.str();
+        }
     }
 
     // Flags
@@ -303,6 +293,7 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
+    hasher.update(sfpi_version_contents);
     build_key_ = hasher.digest();
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
@@ -418,6 +409,55 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
+
+    // Compute a hash of all effective compilation/linking parameters.
+    // This captures HAL-populated flags (defines, includes, common_flags, linker_flags, etc.)
+    // that are not part of the env-level build_key_.  When any of these change between runs
+    // (e.g. after a code change that modifies HAL output), the hash changes and cached
+    // objects are invalidated, preventing stale binaries from being reused.
+    {
+        tt::FNV1a hasher;
+        hasher.update(env_.gpp_);
+        hasher.update(cflags_);
+        hasher.update(defines_);
+        hasher.update(includes_);
+        hasher.update(lflags_);
+        hasher.update(linker_script_);
+        hasher.update(extra_link_objs_);
+        for (const auto& src : srcs_) {
+            hasher.update(src);
+        }
+        hasher.update(default_compile_opt_level_);
+        hasher.update(default_linker_opt_level_);
+        build_state_hash_ = hasher.digest();
+    }
+}
+
+static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
+
+bool JitBuildState::build_state_matches(const string& out_dir) const {
+    std::ifstream file(out_dir + string(BUILD_STATE_HASH_FILE));
+    if (!file.is_open()) {
+        return false;
+    }
+    uint64_t stored_hash{};
+    file >> stored_hash;
+    if (file.fail() || stored_hash != build_state_hash_) {
+        log_debug(
+            tt::LogBuildKernels,
+            "Build state hash mismatch in {}: stored={}, current={}",
+            out_dir,
+            stored_hash,
+            build_state_hash_);
+        return false;
+    }
+    return true;
+}
+
+void JitBuildState::write_build_state_hash(const string& out_dir) const {
+    jit_build::utils::FileRenamer tmp(out_dir + string(BUILD_STATE_HASH_FILE));
+    std::ofstream file(tmp.path());
+    file << build_state_hash_;
 }
 
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
@@ -507,7 +547,7 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings) const {
+    const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
     // ZoneScoped;
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
@@ -518,7 +558,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (need_compile(out_dir, this->objs_[i])) {
+        if (state_changed || need_compile(out_dir, this->objs_[i])) {
             compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
@@ -637,7 +677,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     const size_t num_objs = this->objs_.size();
 
     fs::create_directories(out_dir);
-    auto compiled = compile(out_dir, settings);
+
+    // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
+    // have changed, force full recompilation and relinking.
+    bool state_changed = !build_state_matches(out_dir);
+
+    auto compiled = compile(out_dir, settings, state_changed);
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -664,12 +709,15 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     for (const auto* target : link_targets) {
         string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
         fs::create_directories(target_out_dir);
-        if (compiled.any() || target->need_link(target_out_dir)) {
+        if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
             target->link(target_out_dir, settings, link_objs);
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
+            // Record the build state used for linking so that future runs can detect
+            // when link-affecting flags (lflags, linker script, etc.) change.
+            target->write_build_state_hash(target_out_dir);
         }
     }
 
