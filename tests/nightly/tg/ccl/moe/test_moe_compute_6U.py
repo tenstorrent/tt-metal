@@ -15,6 +15,7 @@ from models.common.utility_functions import comp_pcc
 
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
+    # "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
 )
 
 
@@ -278,8 +279,11 @@ def prepare_output_tensor_from_combine_writer(
         hidden // output_shard_width_dim,
     )
 
-    breakpoint()
+    # breakpoint() #
     shaped_torch_output = output_shard_tensor.view(output_shape)
+    torch.set_printoptions(profile="full")
+    with open("tensor_output_1x8.txt", "w") as f:
+        f.write(str(output_shard_tensor))
 
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape(
         [experts_per_device, total_tokens, hidden]
@@ -936,12 +940,14 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
+        # pytest.param((1, 16), (1, 16), id="1x16_grid"),
         pytest.param((1, 8), (1, 8), id="1x8_grid"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
+# @pytest.mark.parametrize("experts", [2 * 16])  # 16 experts for 8 devices = 2 experts per device
 @pytest.mark.parametrize("experts", [2 * 8])  # 16 experts for 8 devices = 2 experts per device
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
@@ -976,6 +982,7 @@ def test_moe_compute(
     4. Runs the moe operation
     5. Verifies the outputs against a golden reference
     """
+    print("NUMBER OF EXPERTS: ", experts)
     torch.manual_seed(2003)
     random.seed(2003)
 
@@ -1267,6 +1274,7 @@ def test_moe_compute(
                 )
 
             # run the op
+            # breakpoint()
             (
                 l1_per_expert_total_tokens_output_tensor,
                 l1_expert_activation_output_tensor,
@@ -1285,6 +1293,7 @@ def test_moe_compute(
                 output_width_shard_dim=output_width_shard_dim,
                 cluster_axis=cluster_axis,
             )
+            # breakpoint()
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
