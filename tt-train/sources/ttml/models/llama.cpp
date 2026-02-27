@@ -194,7 +194,7 @@ ttml::autograd::TensorPtr Llama::operator()(
     if (padded_seq_len != actual_seq_len) {
         // Pad the sequence dimension (last dimension) with zeros
         // Create a new tensor instead of modifying in-place
-        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+        ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
             {0, 0},                               // batch dimension
             {0, 0},                               // first spatial dimension
             {0, 0},                               // second spatial dimension
@@ -211,13 +211,13 @@ ttml::autograd::TensorPtr Llama::operator()(
     if (padded_seq_len != actual_seq_len) {
         // Slice back to original sequence length (sequence dimension is now at index 2)
         // Create a new tensor instead of modifying in-place
-        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> slice_end = {
+        ttsl::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> slice_end = {
             tok_emb_out->get_value().logical_shape()[0],
             tok_emb_out->get_value().logical_shape()[1],
             actual_seq_len,
             tok_emb_out->get_value().logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
         auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
         out = autograd::create_tensor(out_tensor);
     }

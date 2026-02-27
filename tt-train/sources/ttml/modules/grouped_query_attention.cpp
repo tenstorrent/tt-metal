@@ -86,12 +86,12 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const auto& k_cache = kv_cache->get_k_cache(layer_idx);
     const auto& v_cache = kv_cache->get_v_cache(layer_idx);
 
-    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-    const ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
     const auto cache_shape = k_cache.logical_shape();
     // Use mask's key sequence length (last dimension) which is padded_whole_len
     // This matches the key sequence length expected by the attention operation
-    const ttnn::SmallVector<uint32_t> token_end = {
+    const ttsl::SmallVector<uint32_t> token_end = {
         cache_shape[0], cache_shape[1], mask->get_value().logical_shape()[-1], cache_shape[3]};
 
     const tt::tt_metal::Tensor& k_cache_slice = ttnn::slice(k_cache, token_start, token_end, step);
