@@ -325,6 +325,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
+    reset_util.ensure_device_health()
     # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
@@ -615,13 +616,6 @@ def run_sweeps(
     max_test_cases_per_module = 0
     # Track test status counts across the entire run (only meaningful for non-dry runs)
     status_counts = {}
-
-    # One-time device reset at the start of the job to ensure clean state
-    try:
-        reset_util = tt_smi_util.ResetUtil(config.arch_name)
-        reset_util.reset()
-    except Exception as e:
-        logger.warning(f"Initial tt-smi reset failed: {e}. Continuing anyway.")
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
