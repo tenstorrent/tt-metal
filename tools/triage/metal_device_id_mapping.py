@@ -8,17 +8,19 @@ Usage:
     metal_device_id_mapping
 
 Description:
-    Mapping between Metal device ID and Unique ID.
+    Mapping between Metal device ID, Unique ID and TT-Exalens device ID.
 
     This mapping is necessary when TT_METAL_VISIBLE_DEVICES is used. When TT_METAL_VISIBLE_DEVICES
     restricts devices, Inspector RPC uses remapped metal device IDs (starting from 0), while
     tt-exalens uses the original device IDs from the full device set. This causes a
-    mismatch between Metal device IDs and Exalens device IDs.
+    mismatch between Metal device IDs and Exalens device IDs. This also can happen if workflow breaks
+    few devices and then UMD does not return theirs device IDs upon tt-exalens start-up.
 
 Owner:
     adjordjevic-TT
 """
 
+from ttexalens.device import Device
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.context import Context
@@ -31,14 +33,16 @@ script_config = ScriptConfig(
 
 
 class MetalDeviceIdMapping:
-    def __init__(self, inspector_data: InspectorData):
+    def __init__(self, inspector_data: InspectorData, devices: list[Device]):
         unique_ids_result = inspector_data.getMetalDeviceIdMappings()
         self._metal_device_id_to_unique_id: dict[int, int] = {}
         self._unique_id_to_metal_device_id: dict[int, int] = {}
+        self._metal_device_id_to_device_id: dict[int, int] = {}
 
         for mapping in unique_ids_result.mappings:
             metal_device_id = mapping.metalDeviceId
             unique_id = mapping.uniqueId
+            device_id = next((device.id for device in devices if device.unique_id == unique_id), None)
             log_check(
                 metal_device_id not in self._metal_device_id_to_unique_id, "Invalid Inspector data. Duplicated chip id"
             )
@@ -47,6 +51,8 @@ class MetalDeviceIdMapping:
             )
             self._metal_device_id_to_unique_id[metal_device_id] = unique_id
             self._unique_id_to_metal_device_id[unique_id] = metal_device_id
+            if device_id is not None:
+                self._metal_device_id_to_device_id[metal_device_id] = device_id
 
     def get_unique_id(self, metal_device_id: int) -> int:
         log_check(
@@ -67,11 +73,19 @@ class MetalDeviceIdMapping:
     def has_unique_id(self, unique_id: int) -> bool:
         return unique_id in self._unique_id_to_metal_device_id
 
+    def get_device_id(self, metal_device_id: int) -> int | None:
+        return self._metal_device_id_to_device_id.get(metal_device_id, None)
+
+    def mismatch_exists(self) -> bool:
+        return any(
+            device_id != metal_device_id for metal_device_id, device_id in self._metal_device_id_to_device_id.items()
+        )
+
 
 @triage_singleton
 def run(args, context: Context) -> MetalDeviceIdMapping:
     inspector_data = get_inspector_data(args, context)
-    return MetalDeviceIdMapping(inspector_data)
+    return MetalDeviceIdMapping(inspector_data, context.devices.values())
 
 
 if __name__ == "__main__":
