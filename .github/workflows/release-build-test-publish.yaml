@@ -157,6 +157,9 @@ jobs:
           new-tag: ${{ inputs.tag-version || 'latest' }}
 
   create-docker-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
     needs:
       - build-artifact
       - parse-platform
@@ -164,11 +167,12 @@ jobs:
     secrets: inherit
     if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
-      os: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
+      platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
+      image: ${{ matrix.image }}
 
   # Only run docs release once per run on the main platform
   release-docs:

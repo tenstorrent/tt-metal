@@ -11,10 +11,10 @@ on:
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: "ubuntu-22.04"
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
+          - "ubuntu-22.04"
+          - "ubuntu-24.04"
         description: "Platform to build and test"
 jobs:
   build-artifact:
@@ -25,7 +25,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
   create-image-tag-name:
     runs-on: ubuntu-latest
@@ -37,6 +37,9 @@ jobs:
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
     uses: ./.github/workflows/publish-release-image.yaml
     permissions:
       packages: write
@@ -49,4 +52,5 @@ jobs:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      os: ubuntu-22.04
+      platform: ${{ inputs.platform }}
+      image: ${{ matrix.image }}
