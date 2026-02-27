@@ -14,9 +14,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
@@ -28,9 +28,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U08411R54Q2 # Chris Maryan
@@ -42,9 +42,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U08411R54Q2 # Chris Maryan
@@ -56,9 +56,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U08411R54Q2 # Chris Maryan
@@ -70,9 +70,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U08411R54Q2 # Chris Maryan
@@ -84,9 +84,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U08411R54Q2 # Chris Maryan
@@ -98,9 +98,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -112,9 +112,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -126,9 +126,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -140,9 +140,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -154,9 +154,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U06UEFWB4P9 # Colman Glagovich
@@ -168,9 +168,9 @@
   skus:
     wh_n300_civ2:
       timeout: 15
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 15
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 15
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -182,9 +182,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -196,9 +196,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
