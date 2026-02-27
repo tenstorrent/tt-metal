@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <utility>
+#include <cstdint>
 #include <vector>
 
 #include <umd/device/types/core_coordinates.hpp>
@@ -13,6 +12,7 @@
 #include "dispatch_settings.hpp"
 
 namespace tt::tt_metal {
+class Hal;
 enum class CommandQueueDeviceAddrType : uint8_t;
 }  // namespace tt::tt_metal
 
@@ -30,7 +30,8 @@ public:
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs);
+    // Create a DispatchMemMap
+    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster);
 
     uint32_t prefetch_q_entries() const;
 
@@ -78,11 +79,6 @@ public:
     uint32_t get_prefetcher_l1_size() const;
 
 private:
-    // Reset the instance using the settings for the core_type and num_hw_cqs.
-    void reset(const CoreType& core_type, uint32_t num_hw_cqs);
-
-    std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const;
-
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;
@@ -92,8 +88,13 @@ private:
 
     DispatchSettings settings;
 
-    uint32_t hw_cqs{0};  // 0 means uninitialized
-    CoreType last_core_type{CoreType::WORKER};
+    uint32_t host_alignment_ = 0;
+    uint32_t l1_alignment_ = 0;
+    uint32_t l1_size_ = 0;
+    uint32_t noc_overlay_start_addr_ = 0;
+    uint32_t noc_stream_reg_space_size_ = 0;
+    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;
+    uint32_t dispatch_stream_base_ = 0;
 };
 
 }  // namespace tt::tt_metal
