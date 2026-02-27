@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(11);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
     constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(14);
+    constexpr uint32_t slice_Ht = get_compile_time_arg_val(15);
 
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);

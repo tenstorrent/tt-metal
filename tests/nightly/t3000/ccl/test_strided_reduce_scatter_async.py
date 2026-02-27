@@ -836,6 +836,143 @@ def run_reduce_scatter_impl(
             ),
             id="experimental_strided_large_input_shape_8_cores_8_N_blocks_1_chunk",
         ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Ht=296 is not divisible by mm_cores_y=7.
+                # padded_slice_Ht=301, slice_Ht_per_core=43.
+                # 43 % mm_block_ht=8 = 3, so the last M-block per core is partial (3 rows).
+                # Core 6: rows 258-295 real (38 rows) + rows 296-300 ghost (5 rows);
+                # ghost rows bleed across M-block boundaries within the last core.
+                rs_input_shape=[2, 1, 9472, 5120],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=7,
+                mm_block_ht=8,
+                mm_block_wt=8,
+                mm_N_full_block_wt=20,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_large_input_shape_7_cores_non_divisible_Ht_and_block",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Ht=296 is not divisible by mm_cores_y=7 (same padding as above).
+                # num_workers_per_link=4 → effective_advance_by_tiles=8, which increases the
+                # chance that tile1 lands in-bounds while tile2 lands out-of-bounds, exercising
+                # the tile1_in_bounds && can_use_two_tiles_in_packet && !tile2_in_bounds writer path.
+                rs_input_shape=[2, 1, 9472, 5120],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=7,
+                mm_block_ht=8,
+                mm_block_wt=8,
+                mm_N_full_block_wt=20,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=4,
+            ),
+            id="experimental_strided_large_7_cores_non_divisible_Ht_multi_worker",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Ht=3 tiles is not divisible by mm_cores_y=2.
+                # padded_slice_Ht=4, slice_Ht_per_core=2.
+                # Core 0: rows 0-1 (real). Core 1: row 2 (real) + row 3 (ghost).
+                rs_input_shape=[8, 1, 96, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=2,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_divisible_slice_Ht_partial_last_core",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Ht=6 tiles is not divisible by mm_cores_y=4.
+                # padded_slice_Ht=8, slice_Ht_per_core=2.
+                # Cores 0-2: 2 real rows each. Core 3: 0 real rows, 2 ghost rows (all skipped).
+                rs_input_shape=[8, 1, 192, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=4,
+                mm_block_ht=2,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_divisible_slice_Ht_all_ghost_last_core",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Ht=7 is not divisible by mm_cores_y=2, and after padding
+                # slice_Ht_per_core=4 is not divisible by mm_block_ht=3.
+                # padded_slice_Ht=8, slice_Ht_per_core=4, mm_M_unit_blocks_per_core=div_up(4,3)=2.
+                # Core 0: rows 0-3 real → M-block 0 full (3 rows), M-block 1 partial (1 real row).
+                # Core 1: rows 4-6 real + row 7 ghost →
+                #   M-block 0 partial (3 real rows), M-block 1 entirely ghost (1 ghost row).
+                rs_input_shape=[8, 1, 224, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=3,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_divisible_slice_Ht_and_slice_Ht_per_core",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -933,16 +1070,17 @@ def test_strided_reduce_scatter_async(
 )
 @pytest.mark.parametrize(
     # Shape [4,1,512,2048] dim=3 with ring_size=8 gives:
-    #   input_Ht = 16 tiles, slice_Wt = 8 tiles
+    #   slice_Ht = 16 tiles, slice_Wt = 8 tiles
     #
     # Constraints:
-    #   slice_Ht (16) % mm_cores_y == 0
     #   slice_Wt (8) % mm_N_full_block_wt == 0
-    #   NOTE: slice_Ht_per_core does NOT need to be divisible by mm_block_ht;
-    #         the last M-block per core may be partial.
+    #   NOTE: slice_Ht does NOT need to be divisible by mm_cores_y — ghost rows are skipped.
+    #         slice_Ht_per_core does NOT need to be divisible by mm_block_ht either.
     #
     # Derived values:
-    #   mm_M_unit_blocks_per_core = ceil((16 / mm_cores_y) / mm_block_ht)
+    #   padded_slice_Ht = round_up(16, mm_cores_y)
+    #   slice_Ht_per_core = padded_slice_Ht / mm_cores_y
+    #   mm_M_unit_blocks_per_core = ceil(slice_Ht_per_core / mm_block_ht)
     #   N_blocks_per_slice = 8 / mm_N_full_block_wt
     #   chunk_width_in_tiles = chunk_width_in_mm_blocks * mm_block_wt
     #   chunks_per_N_block = ceil(mm_N_full_block_wt / chunk_width_in_tiles)
@@ -976,6 +1114,13 @@ def test_strided_reduce_scatter_async(
         (2, 3, 2, 4, 1),
         # Partial last M-block: 4 cores, slice_Ht_per_core=4, mm_block_ht=3 → 1 full + 1 partial (1 row)
         (4, 3, 2, 4, 1),
+        # Non-divisible slice_Ht/mm_cores_y: padded=18, per_core=6, ghost=2;
+        # core 2: 4 real + 2 ghost rows; 6%4=2 → partial last M-block
+        (3, 4, 2, 4, 1),
+        # Non-divisible: padded=20, per_core=4; core 4: all 4 rows ghost; 4%3=1 → partial M-block
+        (5, 3, 2, 4, 1),
+        # Non-divisible: padded=18, per_core=3; core 5: 1 real + 2 ghost; exact M-block (3%3=0)
+        (6, 3, 2, 4, 1),
     ],
     ids=[
         "finest_granularity",
@@ -992,6 +1137,9 @@ def test_strided_reduce_scatter_async(
         "partial_M_block_1core",
         "partial_M_block_2cores",
         "partial_M_block_4cores",
+        "non_div_Ht_3cores_partial_Mblock",
+        "non_div_Ht_5cores_all_ghost_last",
+        "non_div_Ht_6cores_exact_Mblock_ghost_tail",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep(
@@ -1038,13 +1186,16 @@ def test_strided_reduce_scatter_blocking_sweep(
 )
 @pytest.mark.parametrize(
     # Shape [4,1,4096,4096] dim=3 with ring_size=8 gives:
-    #   input_Ht = 128 tiles, slice_Wt = 16 tiles
+    #   slice_Ht = 128 tiles, slice_Wt = 16 tiles
     #
     # Constraints:
-    #   slice_Ht (128) % mm_cores_y == 0
     #   slice_Wt (16) % mm_N_full_block_wt == 0
-    #   NOTE: slice_Ht_per_core does NOT need to be divisible by mm_block_ht;
-    #         the last M-block per core may be partial.
+    #   NOTE: slice_Ht does NOT need to be divisible by mm_cores_y — ghost rows are skipped.
+    #         slice_Ht_per_core does NOT need to be divisible by mm_block_ht either.
+    #
+    # Derived values:
+    #   padded_slice_Ht = round_up(128, mm_cores_y)
+    #   slice_Ht_per_core = padded_slice_Ht / mm_cores_y
     "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
     [
         # Coarsest: single M-block (128 rows), single N-block, single chunk
@@ -1075,6 +1226,12 @@ def test_strided_reduce_scatter_blocking_sweep(
         (4, 5, 2, 4, 1),
         # Partial last M-block: 1 core, slice_Ht_per_core=128, mm_block_ht=6 → 21 full + 1 partial (2 rows)
         (1, 6, 2, 8, 1),
+        # Non-divisible: padded=130, per_core=26, last core has 24 real + 2 ghost; 26%6=2 → partial M-block
+        (5, 6, 2, 8, 1),
+        # Non-divisible: padded=129, per_core=43, last core has 42 real + 1 ghost; 43%5=3 → partial M-block
+        (3, 5, 2, 8, 1),
+        # Non-divisible: padded=132, per_core=22, last core has 18 real + 4 ghost; 22%5=2 → partial M-block
+        (6, 5, 2, 8, 1),
     ],
     ids=[
         "coarsest_single_block",
@@ -1091,6 +1248,9 @@ def test_strided_reduce_scatter_blocking_sweep(
         "partial_M_block_8cores",
         "partial_M_block_4cores",
         "partial_M_block_1core",
+        "non_div_Ht_5cores_partial_Mblock",
+        "non_div_Ht_3cores_partial_Mblock",
+        "non_div_Ht_6cores_partial_Mblock",
     ],
 )
 # @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
@@ -1116,6 +1276,92 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         enable_trace=False,
         num_iters=1,
         small_random_ints=False,
+        use_barrier=True,
+        use_persistent_buffers=True,
+        use_strided=True,
+        verify_output_shape=True,
+        verify_output_pcc=True,
+        mm_cores_y=mm_cores_y,
+        mm_block_ht=mm_block_ht,
+        mm_block_wt=mm_block_wt,
+        mm_N_full_block_wt=mm_N_full_block_wt,
+        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    # Shape [4,1,416,2048] dim=3 with ring_size=8 gives:
+    #   slice_Ht = 13 tiles (prime — not divisible by 2, 3, 4, 5, 6, 7, or 8)
+    #   slice_Wt = 8 tiles
+    #
+    # Every mm_cores_y > 1 case exercises the ghost-row path:
+    #   padded_slice_Ht = round_up(13, mm_cores_y)
+    #   slice_Ht_per_core = padded_slice_Ht / mm_cores_y
+    #   ghost rows on last core(s) = padded_slice_Ht - 13
+    #
+    # Constraint: slice_Wt (8) % mm_N_full_block_wt == 0
+    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
+    [
+        # padded=14, per_core=7, ghost=1; 7%3=1 → partial last M-block on every core
+        # core 1: rows 7-12 real (6) + row 13 ghost
+        (2, 3, 2, 4, 1),
+        # padded=16, per_core=4, ghost=3; core 3: only row 12 real + rows 13-15 ghost
+        # M-block 1 on core 3 is entirely ghost
+        (4, 3, 2, 4, 1),
+        # padded=14, per_core=2, ghost=1; core 6: row 12 real + row 13 ghost (mixed M-block)
+        (7, 2, 2, 8, 1),
+        # padded=15, per_core=5, ghost=2; core 2: rows 10-12 real (3) + rows 13-14 ghost
+        # 5%4=1 → partial last M-block; ghost rows trail into last M-block
+        (3, 4, 2, 4, 1),
+        # padded=16, per_core=2, ghost=3; core 6: row 12 real + row 13 ghost;
+        # core 7: rows 14-15 all ghost
+        (8, 2, 2, 4, 1),
+        # padded=14, per_core=7, block_ht=7 → 1 M-block per core (exact fit);
+        # core 1: 6 real rows + 1 ghost — ghost hides within the single M-block
+        (2, 7, 2, 4, 1),
+        # padded=16, per_core=4, block_ht=2 → 2 M-blocks per core;
+        # core 3: row 12 real + rows 13-15 ghost → M-block 0 mixed, M-block 1 all ghost
+        (4, 2, 2, 4, 1),
+    ],
+    ids=[
+        "2cores_partial_last_Mblock",
+        "4cores_all_ghost_Mblock",
+        "7cores_prime_divisor",
+        "3cores_partial_last_Mblock",
+        "8cores_ghost_bleed_across_cores",
+        "2cores_exact_block_ghost_tail",
+        "4cores_ghost_spans_Mblocks",
+    ],
+)
+def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(
+    mesh_device,
+    mm_cores_y,
+    mm_block_ht,
+    mm_block_wt,
+    mm_N_full_block_wt,
+    chunk_width_in_mm_blocks,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        [4, 1, 416, 2048],
+        3,  # dim
+        1,  # num_links
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        rs_topology=ttnn.Topology.Ring,
+        enable_trace=False,
+        num_iters=1,
+        small_random_ints=True,
         use_barrier=True,
         use_persistent_buffers=True,
         use_strided=True,
