@@ -25,26 +25,27 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-
-
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     // TT_FATAL(sd_id == tt::tt_metal::SubDeviceId{0}, "Currently only subdevice 0 is supported");
 
-    uint32_t axis = 0; // Assuming sharding on the first dimension for now
-    // uint32_t num_links_ = common::get_num_links(*mesh_device, axis);
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
-    log_debug(tt::LogOp, "num_links: {}", num_links);
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, /*topology*/ std::nullopt, axis);
-    log_debug(tt::LogOp, "Selected topology: {}", topology_);
+    // Enable fabric initialization for testing, but keep sends disabled (local dispatch only)
+    // TODO: Add topology and num_links as optional API parameters when fabric support is ready
+
+    std::optional<uint32_t> axis = 0;
+    uint32_t num_links = 1;
+    auto topology = tt::tt_fabric::Topology::Linear;
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
+
+    log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links, axis, topology_);
+
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
-
-    // const auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(input_tensor, weights_tensor, indices_tensor, num_links, axis);
-    // TT_THROW("cb_sizes: {}, cb_page_sizes: {}", cb_sizes, cb_page_sizes);
-    // TT_THROW("num_links {}; topology {}; memory_config {}; subdevice_id {}", num_links, topology_, memory_config_, sd_id);
+    // const auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(input_tensor, weights_tensor, indices_tensor,
+    // num_links, axis); TT_THROW("cb_sizes: {}, cb_page_sizes: {}", cb_sizes, cb_page_sizes); TT_THROW("num_links {};
+    // topology {}; memory_config {}; subdevice_id {}", num_links, topology_, memory_config_, sd_id);
     // TODO: Implement parameter validation
     // TODO: Get device and subdevice info
     // TODO: Call device operation
@@ -65,7 +66,7 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
         max_dispatched_tokens_per_expert,
         axis,
         num_links,
-        topology_,
+        topology_,  // Dummy value - will be ignored when num_links=0
         memory_config_,
         subdevice_core_range_set);
 }
