@@ -376,6 +376,7 @@ class CCLManager:
             "num_buffers_per_channel": 2,
         }
 
+    # TODO: Merge with utils.tensor.to_torch
     def device_to_host(
         self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = True
     ) -> torch.Tensor:
