@@ -105,7 +105,6 @@ private:
     RunMode run_mode = RunMode::NORMAL;
     std::stack<node_id> current_op_id;
     std::unordered_map<std::int64_t, node_id> buffer_id_to_counter;
-    std::unordered_map<std::int64_t, node_id> tensor_id_to_counter;
     node_id last_finished_op_id = -1;
     std::vector<Vertex> graph;
     std::vector<node_id> current_input_tensors;
@@ -124,8 +123,9 @@ private:
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
     // Per-operation buffer snapshots (function_start counter -> buffers)
     std::unordered_map<node_id, std::vector<ttnn::reports::BufferInfo>> per_op_buffers_;
-    // Per-operation buffer page snapshots (function_start counter -> pages)
-    std::unordered_map<node_id, std::vector<ttnn::reports::BufferPageInfo>> per_op_buffer_pages_;
+    // Buffer pages keyed by address (captured once per unique buffer allocation).
+    // Much smaller than per-operation snapshots: ~300 entries vs ~6M per-op rows.
+    std::unordered_map<uint64_t, std::vector<ttnn::reports::BufferPageInfo>> buffer_pages_by_address_;
 
     node_id add_tensor(const Tensor& t);
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);

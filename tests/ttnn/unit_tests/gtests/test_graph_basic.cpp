@@ -203,14 +203,14 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
         }
         auto json_trace = capture.end_graph_capture();
 
-        // Note: High-level function tracing (ttnn::softmax) was removed from decorators.hpp
-        // Now only device operations are captured
         EXPECT_EQ(
             ttnn::graph::extract_calltrace(json_trace),
             std::vector<std::string>(
                 {"tt::tt_metal::create_device_tensor",
                  "SoftmaxDeviceOperation",
-                 "tt::tt_metal::create_device_tensor"}));
+                 "tt::tt_metal::create_device_tensor",
+                 "Tensor::deallocate",
+                 "Tensor::deallocate"}));
     }
 
     // check original again to ensure it's not affected by the thrown exceptions
