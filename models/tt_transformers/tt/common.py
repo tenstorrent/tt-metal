@@ -220,24 +220,10 @@ def preprocess_inputs_prefill(
         max_prefill_len > 0
     ), f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
 
-    encoded_prompts = []
-
-    for idx, prompt in enumerate(input_prompts):
-        tokens = model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
-
-        tokenizer = model_args[idx % len(model_args)].tokenizer
-
-        print("\n========== TOKEN DEBUG ==========")
-        print("Prompt repr:", repr(prompt))
-        print("Prompt len:", len(prompt))
-        print("Tokenizer class:", tokenizer.__class__.__name__)
-        print("tokenizer.vocab_size:", tokenizer.vocab_size)
-        print("len(tokenizer):", len(tokenizer))
-        print("First 64 tokens:", tokens[:64])
-        print("Max token id:", max(tokens))
-        print("=================================\n")
-
-        encoded_prompts.append(tokens)
+    encoded_prompts = [
+        model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+        for idx, prompt in enumerate(input_prompts)
+    ]
 
 
     # Print the length of encoded prompts
@@ -312,16 +298,6 @@ def preprocess_inputs_prefill(
 
         input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
         input_tokens_prefill.append(input_tokens_prefill_i)
-
-        # DEBUG: verify raw padded ids at a specific prompt position
-        debug_pos = 16
-        if debug_pos < input_tokens_prefill_i.shape[1]:
-            print("RAW padded ids @16:", int(input_tokens_prefill_i[0, debug_pos].item()))
-            print("RAW first 32 ids:", input_tokens_prefill_i[0, :32].tolist())
-            print("RAW nonpad count (approx):", int((input_tokens_prefill_i[0] != input_tokens_prefill_i[0, -1]).sum().item()))
-        else:
-            print("RAW padded ids @16: OOR (shape:", tuple(input_tokens_prefill_i.shape), ")")
-        
 
         # Keep the correct decoding position of each user
         decoding_pos.append(len(encoded))
@@ -871,7 +847,6 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()        
-        
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,

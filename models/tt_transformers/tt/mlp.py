@@ -133,7 +133,7 @@ class MLP(LightweightModule):
             w1 -> gate_proj
             w2 -> down_proj
             w3 -> up_proj
-            HF reference: down_proj(act(gate_proj(x)) * up_proj(x))
+            HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
         Phi-1 2-layer path (no w3):
             w1 -> fc1

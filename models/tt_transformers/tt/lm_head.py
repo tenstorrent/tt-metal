@@ -61,7 +61,6 @@ class LMHead(LightweightModule):
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
-        torch_output_weights = torch_output_weights[:, : self.vocab_size]
 
         # Pad the output weights to the padded vocab size with zeros
         if self.vocab_size < self.padded_vocab_size:

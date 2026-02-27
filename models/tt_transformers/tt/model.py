@@ -150,10 +150,9 @@ class Transformer(LightweightModule):
             final_norm_impl,
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=prefetcher,
             TG=args.is_galaxy,
-            # no ag_config_key needed unless you have a specific one for final norm
         )
-
 
         self.lm_head = LMHead(
             args=args,
@@ -180,9 +179,7 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
-        # DEBUG: block selection contract
-                
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):                
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,
@@ -249,12 +246,12 @@ class Transformer(LightweightModule):
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
@@ -263,8 +260,7 @@ class Transformer(LightweightModule):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        
+        )        
 
         # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
@@ -435,8 +431,6 @@ class Transformer(LightweightModule):
         Concatenate the output of the devices into a single host tensor.
         """
         torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
-
-        # Decide concat dims FIRST
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
         else:
@@ -444,7 +438,6 @@ class Transformer(LightweightModule):
 
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-
         if is_log_probs:
             row_concatenated = []
             for row in mesh_shape:
@@ -453,9 +446,7 @@ class Transformer(LightweightModule):
         else:
             row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
 
-        full = torch.cat(row_concatenated, dim=row_dim)
-
-        return full
+        return torch.cat(row_concatenated, dim=row_dim)
 
 
     def process_output_prefill(self, tt_out, last_token_idx, tokenizer=None, debug=True):
@@ -465,9 +456,7 @@ class Transformer(LightweightModule):
         """
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
     
-        full_logits = self.concat_host_output(tt_out)  # (B, 1, seq, vocab)
-    
-        return full_logits[0, 0, last_token_idx, : self.vocab_size]
+        return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
     
 
     def process_output_prefill_hidden_states(self, tt_out, last_token_idx):

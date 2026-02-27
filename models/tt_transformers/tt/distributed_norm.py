@@ -50,7 +50,6 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
-        self._use_tg_rmsnorm_kernels = TG and hasattr(norm, "weight_distributed") and hasattr(norm, "_distributed_rmsnorm")
 
     def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""

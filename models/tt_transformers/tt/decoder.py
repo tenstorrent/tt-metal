@@ -142,14 +142,7 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
-
-  
-
         
-
-        
-    
-
         if self.is_phi1:
             self.ff_norm = None
             self.pre_ff_norm = None
@@ -164,16 +157,16 @@ class TransformerBlock(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key=ffn_norm_key,
+                weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
+                **extra_rmsnorm_kwargs,
             ),
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="FFN_LN_AG_CONFIG",
         )    

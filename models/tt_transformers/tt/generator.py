@@ -157,8 +157,7 @@ class Generator(WarmupForwardMixin):
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)        
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
@@ -241,8 +240,7 @@ class Generator(WarmupForwardMixin):
 
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
-        )
-        
+        )        
 
         ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
 
@@ -281,8 +279,7 @@ class Generator(WarmupForwardMixin):
             )
             self.warmup_model_prefill(kv_cache, enable_trace, sampling_on_device_enabled, sampling_on_device_enabled)
 
-        batch_size, batch_seq_len = tokens.shape
-        
+        batch_size, batch_seq_len = tokens.shape        
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Output shape depends on whether we're returning logits or hidden states
@@ -297,8 +294,7 @@ class Generator(WarmupForwardMixin):
             output_tokens = torch.zeros(batch_size, 1, dtype=torch.int64)
             output_log_probs = torch.ones(batch_size, 1, dtype=torch.float32)
         sampling_executed = False
-        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
-        
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)        
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
@@ -382,10 +378,7 @@ class Generator(WarmupForwardMixin):
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
                     empty_slots=[user_id % max_batch_size_per_model],
-                )
-
-            
-            
+                )            
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
@@ -609,8 +602,7 @@ class Generator(WarmupForwardMixin):
                     return tt_logits
                 else:
                     del tt_logits
-        else:
-            
+        else:            
             (
                 prefill_input,
                 rot_mats_global_prefill,
@@ -764,7 +756,6 @@ class Generator(WarmupForwardMixin):
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
-
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)

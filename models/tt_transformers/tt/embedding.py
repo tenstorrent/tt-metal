@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -20,12 +19,8 @@ class Embedding(LightweightModule):
 
         self.mesh_device = mesh_device
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
-        self._debug_cpu_weight = state_dict[base_name].detach().cpu()        
         torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
         cache_name = None if args.dummy_weights else weight_cache_path / base_name
-        
-        if base_name in state_dict:
-            w = state_dict[base_name]
         self.weights = ttnn.as_tensor(
             torch_weight,
             dtype=dtype,

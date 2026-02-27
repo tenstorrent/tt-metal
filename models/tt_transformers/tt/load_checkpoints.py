@@ -371,21 +371,16 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
-
         elif "q_proj.bias" in key or "k_proj.bias" in key:
+            # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
-
-        elif "q_norm.weight" in key or "k_norm.weight" in key:
-            # keep as-is unless you're *sure* Phi-1 needs this;
-            # for non-Phi models your existing behavior is fine
+        elif "q_norm.weight" in key or "k_norm.weight" in key:            
             converted_weights[key] = reverse_permute_1d(tensor)
-
         else:
+            # Keep all other weights unchanged
             converted_weights[key] = tensor
-
     return converted_weights
-
 
 
 def fuse_mlp_meta(state_dict):
@@ -447,27 +442,6 @@ def fuse_qkv_meta(state_dict):
 
 def _is_hf_llama_vision(config):
     return hasattr(config, "text_config") and hasattr(config.text_config, "cross_attention_layers")
-
-def dump_keys(keys, path, title):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(title + "\n")
-        f.write(f"Total keys: {len(keys)}\n\n")
-
-        # show likely output-projection keys
-        for p in ["c_proj", "o_proj", "out_proj", "wo", "attn", "attention"]:
-            hits = [k for k in keys if p in k]
-            f.write(f"-- contains '{p}' ({len(hits)} hits) --\n")
-            for k in hits[:200]:
-                f.write(k + "\n")
-            f.write("\n")
-
-        # show first-layer-ish sample
-        layer0 = [k for k in keys if re.search(r"(\.0\.|h\.0|layers\.0)", k)]
-        f.write(f"-- layer0-ish sample ({len(layer0)} hits) --\n")
-        for k in layer0[:300]:
-            f.write(k + "\n")
-        f.write("\n")    
 
 
 def reindex_layers(state_dict, config):
@@ -723,14 +697,18 @@ def flatten_conv_linear(state_dict):
 
 
 def map_hf_to_meta_keys(loaded_weights):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    
     hf_model = os.getenv("HF_MODEL", "").strip()
     is_phi1 = hf_model in {"microsoft/Phi-1"}
-    with open("loaded_weights.txt", "w") as f:
-        f.write(f"loaded_weights{loaded_weights}\n")
 
     if is_phi1:
         replacements = [
-            ("model.", ""),                    # if your keys start with model.
+            ("model.", ""),
             ("model.layers.", "layers."),
 
             ("embed_tokens", "tok_embeddings"),
@@ -856,7 +834,6 @@ def reverse_permute(tensor, n_heads, dim1, dim2):
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
 
 
 def reverse_permute_1d(tensor):

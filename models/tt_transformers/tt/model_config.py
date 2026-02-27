@@ -2630,7 +2630,6 @@ class ModelArgs:
 
         self._set_model_specific_params()
 
-
     @property
     def use_scaled_rope(self):
         return self.rope_scaling is not None
@@ -2913,7 +2912,6 @@ class ModelArgs:
                     raise
 
             state_dict = model.state_dict()
-
         else:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
@@ -2925,11 +2923,8 @@ class ModelArgs:
             )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
-
             state_dict = model.state_dict()
-
-            # IMPORTANT: compute MoE flag AFTER the possible fallback
-            self.is_mixture_of_experts = any(".experts." in k for k in state_dict.keys())
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -2938,21 +2933,19 @@ class ModelArgs:
             else:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
-            self.fuse_qkv = any("qkv" in layer_name for layer_name in state_dict.keys())
-            self.fuse_mlp = any("gate_up" in layer_name for layer_name in state_dict.keys())
+            self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
+            self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
-            if any(r in k for r in remv):
+            if any([r in k for r in remv]):
                 state_dict.pop(k)
-
         if getattr(self, "is_mixture_of_experts", False):
             self.moe = True
             self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
-
         return state_dict
 
     # =========================================================================
@@ -3352,6 +3345,9 @@ class ModelArgs:
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
                 local_files_only=os.getenv("CI") == "true",
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
                 trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
