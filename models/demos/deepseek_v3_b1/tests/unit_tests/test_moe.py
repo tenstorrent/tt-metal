@@ -274,7 +274,13 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
 # ============================================================================
 # Helper: create all routed-expert tensors
 # ============================================================================
-def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper=None):
+def create_routed_expert_tensors(
+    device,
+    use_hardcoded_expert_index,
+    mesh_mapper=None,
+    input_core=None,
+    mcast_output_core_grid=None,
+):
     """
     Create all tensors needed for MoE routed expert test.
     Directly extracted from the working inline test setup.
@@ -283,6 +289,8 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
         device: TT device or mesh device
         use_hardcoded_expert_index: Whether to use hardcoded expert index (1 expert vs 256)
         mesh_mapper: Optional mesh mapper for multi-device replication
+        input_core: Optional sender/input core override. Defaults to (grid_x - 1, 9).
+        mcast_output_core_grid: Optional mcast destination grid override. Defaults to rectangle [(0,0) -> input_core].
 
     Returns:
         dict with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -325,7 +333,7 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
 
     # Input tensor: sharded on sender core OUTSIDE the compute grid
     device_grid_size = device.compute_with_storage_grid_size()
-    input_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
+    input_core = input_core if input_core is not None else ttnn.CoreCoord(device_grid_size.x - 1, 9)
     input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
     input_shard_spec = ttnn.ShardSpec(
         input_core_grid,
@@ -384,8 +392,13 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index, mesh_mapper
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
-    # Mcast output tensor: sharded on rectangular grid from (0,0) to sender core
-    mcast_output_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
+    # Mcast output tensor: default rectangular grid from (0,0) to sender core.
+    # Tests can override this to exclude reserved pipeline cores.
+    mcast_output_core_grid = (
+        mcast_output_core_grid
+        if mcast_output_core_grid is not None
+        else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
+    )
     mcast_output_shard_spec = ttnn.ShardSpec(
         mcast_output_core_grid,
         (M, K),
