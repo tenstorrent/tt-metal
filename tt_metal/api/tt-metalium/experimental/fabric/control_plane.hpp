@@ -258,6 +258,13 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
+    // Exchange router port directions data with all hosts via MPI (no lock held during MPI)
+    std::vector<RouterPortDirectionsData> exchange_router_data_with_all_hosts(
+        const RouterPortDirectionsData& local_data) const;
+
+    // Merge router port directions data from remote hosts into local map (called under lock)
+    void merge_router_port_directions_from_remote_hosts(const std::vector<RouterPortDirectionsData>& remote_data_list);
+
     // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
@@ -356,6 +363,16 @@ private:
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
 
+    // Lock Ordering Hierarchy (to prevent deadlocks):
+    // 1. routing_tables_mutex_ (higher-level, shorter hold times)
+    // 2. global_bindings_mutex_ (lower-level, nested inside routing_tables if needed)
+    // 3. asic_id_to_fabric_node_cache_mutex_ (independent, only for cache)
+    //
+    // CRITICAL: MPI collective operations (broadcast, all_gather, barrier) must NEVER
+    // be called while holding any of these locks. All ranks must participate in MPI
+    // collectives, and holding locks during blocking MPI calls can cause deadlocks
+    // when other ranks are waiting for the lock.
+    //
     // Mutex to protect routing tables during initialization and concurrent access
     // Use shared_mutex for reader-writer pattern: multiple readers, exclusive writer
     mutable std::shared_mutex routing_tables_mutex_;
@@ -391,6 +408,30 @@ private:
         const IntraMeshConnectivity& intra_mesh_connectivity,
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode);
+
+    // Compute local plane counts without MPI (Phase 1 of three-phase pattern)
+    struct LocalPlaneCounts {
+        MeshId mesh_id;
+        std::vector<size_t> row_min_planes;
+        std::vector<size_t> col_min_planes;
+        size_t rows_min;
+        size_t cols_min;
+    };
+    std::vector<LocalPlaneCounts> compute_local_plane_counts(
+        const IntraMeshConnectivity& intra_mesh_connectivity,
+        tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricReliabilityMode reliability_mode);
+
+    // Synchronize plane counts across all hosts via MPI (Phase 2 - NO locks held)
+    std::vector<LocalPlaneCounts> synchronize_plane_counts_across_hosts(
+        std::vector<LocalPlaneCounts> local_counts) const;
+
+    // Commit plane counts to routing tables (Phase 3 - called under lock)
+    void commit_plane_counts_to_routing_tables(
+        const std::vector<LocalPlaneCounts>& global_counts,
+        const IntraMeshConnectivity& intra_mesh_connectivity,
+        tt_fabric::FabricConfig fabric_config);
+
     void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
