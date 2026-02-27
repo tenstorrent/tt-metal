@@ -427,12 +427,15 @@ void MetalContext::teardown() {
     // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
     // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
     // when context is re-initialized).
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_.clear();
+        l1_bank_offset_map_.clear();
+        dram_bank_to_noc_xy_.clear();
+        l1_bank_to_noc_xy_.clear();
+        worker_logical_col_to_virtual_col_.clear();
+        worker_logical_row_to_virtual_row_.clear();
+    }
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
@@ -522,26 +525,29 @@ void MetalContext::reinitialize_for_real_hardware() {
 
     // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
     // must be cleared after switching to the new cluster configuration.
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
+    {
+        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+        dram_bank_offset_map_.clear();
+        l1_bank_offset_map_.clear();
+        dram_bank_to_noc_xy_.clear();
+        l1_bank_to_noc_xy_.clear();
+        worker_logical_col_to_virtual_col_.clear();
+        worker_logical_row_to_virtual_row_.clear();
 
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
+        dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+        l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+        dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+        l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+        worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+        worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+        for (ChipId device_id : cluster_->all_chip_ids()) {
+            dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+            l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+            dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+            l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+            worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+            worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
+        }
     }
 
     teardown_dispatch_state();
@@ -1384,6 +1390,9 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
+    // Hold lock while reading bank tables to prevent races with teardown/reinit
+    std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1468,6 +1477,9 @@ void MetalContext::initialize_device_bank_to_noc_tables(
 
 void MetalContext::initialize_worker_logical_to_virtual_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core) {
+    // Hold lock while reading worker tables to prevent races with teardown/reinit
+    std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
+
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
