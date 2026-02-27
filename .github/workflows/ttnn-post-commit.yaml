@@ -105,7 +105,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ 'harbor.ci.tenstorrent.net/{0}', inputs.docker-image || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
