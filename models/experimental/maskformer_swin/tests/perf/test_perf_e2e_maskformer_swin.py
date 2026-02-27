@@ -167,7 +167,9 @@ def test_maskformer_swin_b_e2e_trace_2cq(device):
         in_features=int(pixel_cfg.input_channels[-1]),
         maskformer_config=dict(ref_cfg) if isinstance(ref_cfg, dict) else None,
     )
-    transformer_decoder = MaskFormerTransformerDecoder.from_huggingface(tt_state_dict, config=transformer_cfg, device=device)
+    transformer_decoder = MaskFormerTransformerDecoder.from_huggingface(
+        tt_state_dict, config=transformer_cfg, device=device
+    )
 
     heads_cfg = MaskFormerHeadsConfig(
         num_classes=len(ref_cfg.get("id2label", {})),
@@ -346,9 +348,7 @@ def test_maskformer_swin_b_e2e_trace_2cq(device):
                 if x.get_layout() != ttnn.TILE_LAYOUT:
                     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 if lateral_proj.get_layout() != ttnn.TILE_LAYOUT:
-                    lateral_proj = ttnn.to_layout(
-                        lateral_proj, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )
+                    lateral_proj = ttnn.to_layout(lateral_proj, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 x = ttnn.add(x, lateral_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=True)
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -593,6 +593,7 @@ def test_maskformer_swin_b_e2e_trace_2cq(device):
         print("[maskformer][e2e][trace+2cq] trace capture done", flush=True)
 
         if os.environ.get("MASKFORMER_E2E_TRACE_PRINT_CAPTURE_OUTPUT", "0").strip() == "1":
+
             def _tensor_brief(t):
                 parts = []
                 try:
