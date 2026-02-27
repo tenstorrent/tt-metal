@@ -175,9 +175,11 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
 inline void llk_pack_untilize_init(
     std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    static_assert(dense == false, "Dense is only supported on BH");
     const std::uint32_t output_id = get_output_id(output);
 
     LLK_ASSERT(
@@ -195,7 +197,8 @@ template <
     bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset = 0>
+    uint32_t tile_dst_ct_offset = 0,
+    bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
@@ -203,6 +206,7 @@ inline void llk_pack_untilize(
     const std::uint32_t num_faces = 4,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    static_assert(dense == false, "Dense is only supported on BH");
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -218,11 +222,7 @@ inline void llk_pack_untilize(
             "");
 
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr,
-            pack_dst_format[output_id],
-            face_r_dim,
-            num_faces,
-            block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

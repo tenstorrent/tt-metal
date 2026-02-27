@@ -128,7 +128,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
 
     grid_size = device.compute_with_storage_grid_size()
     position_ids = torch.ones(batch_size, dtype=torch.int32) * decode_position
-    position_replicated = torch.full((grid_size.x * grid_size.y, 1), decode_position, dtype=torch.int32)
+    position_replicated = position_ids.repeat(grid_size.x * grid_size.y, 1)
     pos_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
     )
