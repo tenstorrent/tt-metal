@@ -218,7 +218,8 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t mm_block_wt,
-    const uint32_t slice_Ht_per_core) {
+    const uint32_t slice_Ht_per_core,
+    const uint32_t slice_Ht) {
     // Strided reader compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     return {
@@ -245,6 +246,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         chunks_per_mm_N_full_block,  // [20] chunks_per_mm_N_full_block
         mm_block_wt,                 // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
         slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
+        slice_Ht,           // [23] slice_Ht (total height in tiles across all MM cores)
     };
 }
 
@@ -271,7 +273,8 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
-    const uint32_t slice_Ht_per_core) {
+    const uint32_t slice_Ht_per_core,
+    const uint32_t slice_Ht) {
     // Strided writer compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
@@ -299,7 +302,8 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         chunk_width_in_tiles,           // [20] chunk_width_in_tiles
         chunks_per_mm_N_full_block,     // [21] chunks_per_mm_N_full_block
         slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        // [23+] fabric_mux CT args appended after (num_ct_args = 28 in writer kernel)
+        slice_Ht,           // [23] slice_Ht (total height in tiles across all MM cores)
+        // [24+] fabric_mux CT args appended after (num_ct_args = 29 in writer kernel)
     };
 }
 
@@ -318,7 +322,8 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t slice_Wt,
     const uint32_t N_full_block_wt,
-    const uint32_t slice_Ht_per_core) {
+    const uint32_t slice_Ht_per_core,
+    const uint32_t slice_Ht) {
     // Strided reduction compile args - include MM blocking parameters
     return {
         input_cb_index,              // [0]  input_cb_id
@@ -336,6 +341,7 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         slice_Wt,                    // [12] slice_Wt
         N_full_block_wt,             // [13] mm_N_full_block_wt
         slice_Ht_per_core,  // [14] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
+        slice_Ht,           // [15] slice_Ht (total height in tiles across all MM cores)
     };
 }
 
@@ -533,13 +539,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
     const uint32_t chunks_per_mm_N_full_block_val = tt::div_up(mm_N_full_block_wt_val, chunk_width_in_tiles_val);
 
-    // Introduce checks for current assumptions
-    TT_FATAL(
-        slice_Ht % mm_cores_y_val == 0,
-        "slice_Ht ({}) must be divisible by mm_cores_y_val ({})",
-        slice_Ht,
-        mm_cores_y_val);
-    uint32_t slice_Ht_per_core = slice_Ht / mm_cores_y_val;
+    // Pad slice_Ht up to the next multiple of mm_cores_y_val so the division is exact.
+    // The last core may receive up to (padded_slice_Ht - slice_Ht) ghost rows; the
+    // kernels skip those via the slice_row < slice_Ht bounds check.
+    const uint32_t padded_slice_Ht = tt::round_up(slice_Ht, mm_cores_y_val);
+    uint32_t slice_Ht_per_core = padded_slice_Ht / mm_cores_y_val;
     uint32_t mm_M_unit_blocks_per_core = tt::div_up(slice_Ht_per_core, mm_block_ht_val);
     TT_FATAL(
         slice_Wt % mm_N_full_block_wt_val == 0,
@@ -663,7 +667,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
             mm_block_wt_val,
-            slice_Ht_per_core);
+            slice_Ht_per_core,
+            slice_Ht);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -711,7 +716,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
-            slice_Ht_per_core);
+            slice_Ht_per_core,
+            slice_Ht);
 
     append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -767,7 +773,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunks_per_mm_N_full_block_val,
             slice_Wt,
             mm_N_full_block_wt_val,
-            slice_Ht_per_core);
+            slice_Ht_per_core,
+            slice_Ht);
 
     std::string sender_reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
