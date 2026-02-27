@@ -82,6 +82,28 @@ def test_packed_size_savings():
     ), f"Mixed ({ct.data_bytes}) should be <= uniform bfp8 ({uniform_bfp8_bytes})"
 
 
+def test_4d_tensor_round_trip():
+    """CompressedTensor should handle 4D tensors (batch dims folded into height)."""
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 64, 128)  # batch=2x3, 2x4 tiles per batch → total 12x4 tile grid
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    ct = CompressedTensor.from_torch(x, assigner)
+
+    print(f"{ct}")
+    print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
+    assert ct.tiles_h == (2 * 3 * 64) // 32  # 12
+    assert ct.tiles_w == 128 // 32  # 4
+    assert ct.num_tiles == 48
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D round-trip PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
 # ---------------------------------------------------------------------------
 # On-device tests
 # ---------------------------------------------------------------------------
@@ -262,6 +284,24 @@ def test_device_block_sharded(device):
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low after block-sharded round-trip"
 
 
+def test_4d_tensor_on_device(device):
+    """4D compressed tensor placed on device and read back."""
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 64, 128)
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    ct = CompressedTensor.from_torch(x, assigner, device=device)
+
+    print(f"{ct}")
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D device round-trip PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
 # ---------------------------------------------------------------------------
 # Uneven shard tests (tile grid doesn't divide evenly across cores)
 # ---------------------------------------------------------------------------
@@ -388,4 +428,110 @@ def test_device_uneven_block_shard(device):
     recovered = ct.to_torch()
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"Uneven block-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+def test_device_4d_uneven_height_shard(device):
+    """4D tensor (2,3,96,128) height-sharded across 4 cores.
+
+    tiles_h = (2*3*96)/32 = 18 rows, div_up(18,4) = 5 rows/shard.
+    First 2 cores get 5 tile rows, last 2 get 4 tile rows.
+    """
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 96, 128)  # tiles_h=18, tiles_w=4
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    data_mem = _make_sharded_mem_config(
+        (2 * 3 * 96, 128),  # flattened 2D shape for shard computation
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        grid,
+    )
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert ct.tiles_h == 18
+    assert ct.tiles_w == 4
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D uneven height-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+def test_device_4d_uneven_width_shard(device):
+    """4D tensor (2,3,64,160) width-sharded across 3 banks.
+
+    tiles_w = 160/32 = 5 cols, div_up(5,3) = 2 cols/shard.
+    First 2 banks get 2 tile cols, last bank gets 1.
+    """
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 64, 160)  # tiles_h=12, tiles_w=5
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
+    data_mem = _make_sharded_mem_config(
+        (2 * 3 * 64, 160),
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        grid,
+    )
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert ct.tiles_h == 12
+    assert ct.tiles_w == 5
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D uneven width-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+def test_device_4d_uneven_block_shard(device):
+    """4D tensor (2,3,96,160) block-sharded on a 2x3 grid.
+
+    tiles_h = (2*3*96)/32 = 18, tiles_w = 160/32 = 5.
+    Height: div_up(18,2) = 9 rows/shard. Width: div_up(5,3) = 2 cols/shard.
+    Core (0,0) gets 9x2=18 tiles, core (2,1) gets 0x1=0 tiles.
+    """
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 96, 160)  # tiles_h=18, tiles_w=5
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))])
+    data_mem = _make_sharded_mem_config(
+        (2 * 3 * 96, 160),
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        grid,
+    )
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert ct.tiles_h == 18
+    assert ct.tiles_w == 5
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D uneven block-shard PCC: {pcc:.6f}")
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
