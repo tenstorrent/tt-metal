@@ -5,7 +5,6 @@
 import math
 
 import torch
-import os
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -13,6 +12,8 @@ from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
+from models.tt_transformers.tt.model_config import is_phi1
+
 
 
 class Attention(LightweightModule):
@@ -41,11 +42,7 @@ class Attention(LightweightModule):
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
-
-        # Check the HF_MODEL environment variable
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
-        self.is_phi1 = hf_model in {"microsoft/Phi-1"}        
+        self.is_phi1 = is_phi1()      
         # Phi-1 uses partial rotary: rotary_dim = head_dim * partial_rotary_factor (0.5 => 32 when head_dim=64)
         if self.is_phi1:
             self.rotary_dim = self.head_dim // 2

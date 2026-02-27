@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
-
+from models.tt_transformers.tt.model_config import is_phi1
 import ttnn
 
 
@@ -203,9 +203,6 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
-    # Phi 1 case
-    hf_model = os.getenv("HF_MODEL", "").strip()
-    is_phi1 = hf_model == "microsoft/Phi-1"
     
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
@@ -288,7 +285,7 @@ def preprocess_inputs_prefill(
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Initial prefill tensors full of pad tokens
-        if is_phi1:
+        if is_phi1():
             pad_id = getattr(tokenizer, "pad_token_id", None)
             if pad_id is None:
                 pad_id = getattr(tokenizer, "eos_token_id", 0)

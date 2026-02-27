@@ -9,6 +9,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.model_config import is_phi1
 
 
 class MLP(LightweightModule):
@@ -93,13 +94,9 @@ class MLP(LightweightModule):
         ff2_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
-        # Check the HF_MODEL environment variable
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
-        is_phi1 = hf_model in {"microsoft/Phi-1"}
         # Phi-1 uses a *2-layer* MLP (fc1 -> act -> fc2) i.e. it does NOT have the gated-SiLU "w3/up_proj" path.
         # In our meta-style state_dict mapping, that shows up as feed_forward.w1 + feed_forward.w2 without feed_forward.w3.
-        self.is_two_layer_mlp = is_phi1
+        self.is_two_layer_mlp = is_phi1()
 
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, dims=w1_dims

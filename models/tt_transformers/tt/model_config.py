@@ -962,6 +962,7 @@ class ModelArgs:
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
+            self.is_phi1 = is_phi1()
 
             # model specific CCL configs
             default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
@@ -3330,12 +3331,9 @@ class ModelArgs:
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
-        
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        is_phi1 = hf_model == "microsoft/Phi-1"
 
         # Force Phi-1 tokenizer from the same repo as weights
-        if is_phi1:
+        if self.is_phi1:
             self.TOKENIZER_PATH = "microsoft/Phi-1"
 
         tokenizer = None
@@ -3412,10 +3410,7 @@ class ModelArgs:
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
 
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        is_phi1 = hf_model == "microsoft/Phi-1"
-
-        if is_phi1 and tokenizer.pad_token_id is None:
+        if self.is_phi1 and tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token  
                   
         return tokenizer
@@ -4248,3 +4243,15 @@ def determine_device_name(mesh_device):
         return dict_device_names[num_devices]
     else:
         raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+
+
+@lru_cache()
+def get_hf_model() -> str:
+    """Return normalized HF model name from env."""
+    return os.getenv("HF_MODEL", "").strip()
+
+
+@lru_cache()
+def is_phi1() -> bool:
+    """Flag for Phi-1 family models."""
+    return get_hf_model() in {"microsoft/Phi-1"}

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import torch
 from tqdm import tqdm
 
@@ -19,6 +18,8 @@ from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.model_config import is_phi1
+
 
 
 class Transformer(LightweightModule):
@@ -106,9 +107,6 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-        
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        is_phi1 = (hf_model == "microsoft/Phi-1")
 
         final_norm_impl = (
             LayerNorm(
@@ -127,7 +125,7 @@ class Transformer(LightweightModule):
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             )
-            if is_phi1
+            if is_phi1()
             else RMSNorm(
                 device=mesh_device,
                 dim=args.dim,

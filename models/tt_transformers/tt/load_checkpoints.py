@@ -12,6 +12,7 @@ from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
+from models.tt_transformers.tt.model_config import get_hf_model, is_phi1
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -356,11 +357,6 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
 
 def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace Q/K weights to Meta format for RoPE compatibility."""
-    hf_model = os.getenv("HF_MODEL", "").strip()
-    is_phi1 = hf_model in {"microsoft/Phi-1"}  # extend if needed
-
-    # Phi-1 uses partial rotary: only first half of head_dim is rotated
-    rotary_dim = head_dim // 2 if is_phi1 else head_dim
 
     converted_weights = {}
     for key, tensor in loaded_weights.items():
@@ -702,11 +698,8 @@ def map_hf_to_meta_keys(loaded_weights):
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
-    
-    hf_model = os.getenv("HF_MODEL", "").strip()
-    is_phi1 = hf_model in {"microsoft/Phi-1"}
 
-    if is_phi1:
+    if is_phi1():
         replacements = [
             ("model.", ""),
             ("model.layers.", "layers."),
@@ -822,10 +815,6 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             # Keep all other weights unchanged
             converted_weights[key] = tensor
     return converted_weights
-
-def _is_phi1():
-    hf_model = os.getenv("HF_MODEL", "").strip()
-    return hf_model in {"microsoft/Phi-1"}
 
 
 def reverse_permute(tensor, n_heads, dim1, dim2):
