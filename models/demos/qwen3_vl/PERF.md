@@ -9,7 +9,7 @@ Performance collected from [demo/demo.py](demo/demo.py) with the `batch-1` test 
 | Batch size | 1 | 1 |
 | Prompt file | `demo/sample_prompts/text_only.json` | `demo/sample_prompts/demo.json` |
 | Image resolution | N/A | 2048×1365 pixels (demo.jpeg) |
-| Vision tokens | N/A | ~14,308 tokens (98×146 patches, 14×14 patch size, 2×2 spatial merge) |
+| Vision tokens | N/A | ~2752 tokens (86×128 patches, 16×16 patch size, 2×2 spatial merge) |
 | Input sequence length (ISL) | Short text prompt | ~14,308 vision tokens + text prompt |
 | Output sequence length (OSL) | Up to 200 tokens | Up to 200 tokens |
 | Max sequence length | 4096 | 4096 |
