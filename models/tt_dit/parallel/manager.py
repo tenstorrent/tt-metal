@@ -382,7 +382,7 @@ class CCLManager:
         """Move a ttnn device tensor to a torch host tensor.
         Args:
             tensor: The ttnn tensor to move to host
-            mesh_dims: The dimensions to mesh. Provided dimensions will be concatenated along the corresponding mesh axis.
+            mesh_dims: The dimension to gather per mesh axis. use None to skip gathering for that mesh axis. e.g [None,2] will gather along the second dimension for the mesh axis 1.
             use_persistent_buffer: Whether to use a persistent buffer for the all gather operation.
         Returns:
             The torch host tensor
