@@ -41,7 +41,7 @@ static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
  */
 template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
-    // helper lambda to transform TensorSpec to MeshTensor
+    // helper lambda to transform TensorSpec to DeviceTensor
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
             return create_device_tensor(arg, device);
