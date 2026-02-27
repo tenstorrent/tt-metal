@@ -18,36 +18,17 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-// SDPA-specific custom unpack path used to improve sub+bcast(col) performance.
-template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_sub_bcast_col_mop_config_custom_(const std::uint32_t num_faces = 4, const bool narrow_tile = false)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-
-    static constexpr std::uint32_t unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
-    const std::uint32_t outerloop                    = 2;
-    const std::uint32_t innerloop                    = 2;
-    ckernel_template tmp(outerloop, innerloop, unpack_srca);
-    tmp.set_start_op(unpack_srcb);
-    tmp.set_end_op(narrow_tile ? unpack_srcb : unpack_srcb_set_z);
-    tmp.program();
-}
-
 // SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
     const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
     // Force both unpackers to unpack entire tile
     TTI_SETADCXX(p_setadc::UNP0, 1023, 0x0);
     TTI_SETADCXX(p_setadc::UNP1, 1023, 0x0);
-
-    _llk_unpack_AB_sub_bcast_col_mop_config_custom_<BType>(num_faces, narrow_tile);
 }
 
 // SDPA-specific custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
@@ -88,4 +69,9 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
+}
+
+inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
+{
+    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }
