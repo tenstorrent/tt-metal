@@ -274,6 +274,7 @@ void JitBuildEnv::init(
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
+        root_ + "tt_metal/third_party/tt_llk/common",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 
