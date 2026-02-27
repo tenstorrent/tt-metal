@@ -614,11 +614,7 @@ class MaskFormerPixelDecoder:
         input_nhw = int(B) * int(H) * int(W)
         # Native group_norm currently requires NHW to be tile-aligned (divisible by 32).
         # For 320x320 MaskFormer pixel decoder, the 10x10 and 20x20 sites are not tile-aligned.
-        if (
-            self._prefer_native_group_norm
-            and site in self._native_gn_torch_params
-            and (input_nhw % 32 == 0)
-        ):
+        if self._prefer_native_group_norm and site in self._native_gn_torch_params and (input_nhw % 32 == 0):
             try:
                 dtype = self.dtype or get_default_dtype()
                 dtype_key = str(dtype)
@@ -837,10 +833,7 @@ class MaskFormerPixelDecoder:
         xg_sq = xg * xg
         mean_sq_tile = ttnn.mean(xg_sq, dim=[1, 3], keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mean_sq = mean_sq_tile
-        if (
-            getattr(mean_sq_tile, "get_layout", None) is not None
-            and mean_sq_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT
-        ):
+        if getattr(mean_sq_tile, "get_layout", None) is not None and mean_sq_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             mean_sq = ttnn.to_layout(mean_sq_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if hasattr(ttnn, "deallocate"):
                 try:
