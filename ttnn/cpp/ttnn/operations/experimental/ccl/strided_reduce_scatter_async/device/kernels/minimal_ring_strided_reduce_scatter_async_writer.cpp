@@ -52,7 +52,7 @@ constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
 
-constexpr uint32_t num_ct_args = 28;
+constexpr uint32_t num_ct_args = 29;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -286,6 +286,7 @@ void kernel_main() {
                                             ? std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet)
                                             : 1;
                                     tiles_remaining_in_step -= tiles_to_put_in_current_packet;
+                                    const bool can_use_two_tiles_in_packet = tiles_to_put_in_current_packet == 2;
 
                                     // Gather phase: compute tile indices for every slot in this packet.
                                     // The reader always advances l1_write_addr regardless of validity,

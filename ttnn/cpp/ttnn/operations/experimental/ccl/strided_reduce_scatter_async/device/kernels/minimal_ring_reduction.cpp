@@ -18,6 +18,7 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
     constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
     constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(6);
+<<<<<<< HEAD
     constexpr uint32_t mm_block_ht = get_compile_time_arg_val(7);
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(8);
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(9);
@@ -33,6 +34,16 @@ void kernel_main() {
     constexpr uint32_t addcmul_a_cb = get_compile_time_arg_val(17);
     constexpr uint32_t addcmul_b_cb = get_compile_time_arg_val(18);
 #endif
+=======
+    constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(7);
+    constexpr uint32_t mm_block_ht = get_compile_time_arg_val(8);
+    constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
+    constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(11);
+    constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
+    constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(14);
+    constexpr uint32_t slice_Ht = get_compile_time_arg_val(15);
+>>>>>>> b56ae1d9f9 (handle any M continue -- requires cleanup)
 
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
