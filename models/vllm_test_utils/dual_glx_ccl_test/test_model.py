@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,9 +23,9 @@ if _tests_dir.exists():
 import ttnn
 
 
-class DummyT3000MultiProcessModel(GenerativeTestModelBase):
+class DummyDualGlxModel(GenerativeTestModelBase):
     """
-    Dummy model class for testing simulated multihost on T3000 with 2x4 MeshDevice.
+    Dummy model class for testing multihost on dual galaxy with 8x8 MeshDevice.
     This model runs a reduce scatter async test instead of actual inference.
     """
 
@@ -33,7 +33,7 @@ class DummyT3000MultiProcessModel(GenerativeTestModelBase):
         # Accept arbitrary kwargs so the signature supports `vllm_config=...`
         # (used by vLLM interface checks) without impacting TT initialization.
         self.mesh_device = mesh_device
-        self.submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+        self.submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
         self.max_batch_size = max_batch_size
         self.vocab_size = vocab_size
 
@@ -43,10 +43,10 @@ class DummyT3000MultiProcessModel(GenerativeTestModelBase):
         return cls(mesh_device, max_batch_size, vocab_size)
 
     def prefill_forward(self, *args, **kwargs):
-        logger.info("Dummy prefill: running reduce scatter async test (for 2x4 MeshDevice)")
+        logger.info("Dummy prefill: running reduce scatter async test (for 8x8 MeshDevice)")
         # Import lazily so this test model can be imported/inspected by vLLM
         # without requiring the full test dependency stack.
-        from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+        from tests.nightly.tg.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 
         run_reduce_scatter_impl(
             self.submesh_device,
@@ -60,11 +60,8 @@ class DummyT3000MultiProcessModel(GenerativeTestModelBase):
             mem_config_rs=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_topology=ttnn.Topology.Linear,
             enable_trace=False,
-            num_iters=3,
-            ones_tensor=False,
-            use_barrier=True,
-            use_persistent_buffers=False,
-            cluster_axis=1,
+            num_iters=1,
+            cluster_axis=None,
         )
         logger.info("Minimal reduce scatter async test completed")
         tokens = kwargs.get("tokens")

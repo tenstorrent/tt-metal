@@ -7,7 +7,9 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
+#include <ttnn/tensor/types.hpp>
 
 #include "pad.hpp"
 
@@ -159,6 +161,12 @@ ttnn::Tensor pad_impl(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    if (input_tensor.dtype() == DataType::BFLOAT8_B && input_tensor.layout() == Layout::TILE) {
+        auto bfloat16_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+        auto padded_tensor =
+            pad_impl(bfloat16_tensor, padding, value, use_multicore, memory_config_arg, sub_core_grids);
+        return ttnn::typecast(padded_tensor, DataType::BFLOAT8_B);
+    }
     const int original_rank = input_tensor.logical_shape().rank();
 
     TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
