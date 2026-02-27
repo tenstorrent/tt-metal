@@ -276,9 +276,6 @@ ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN umask 000 && uv pip install $WHEEL_FILENAME
 
-# Install uv into the venv for runtime use
-RUN umask 000 && uv pip install --python "$PYTHON_ENV_DIR/bin/python" uv
-
 #############################################################
 
 FROM base AS release-models
@@ -311,8 +308,6 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
     && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
-
-RUN find /opt/venv -name EXTERNALLY-MANAGED -print -delete || true
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
