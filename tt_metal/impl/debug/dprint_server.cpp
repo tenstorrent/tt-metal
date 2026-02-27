@@ -1478,11 +1478,12 @@ DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) {
     if (rtoptions.get_use_device_print()) {
         impl_ = std::make_unique<DevicePrintImpl>(rtoptions);
     } else {
-        log_warning(
-            tt::LogMetal,
-            "DPRINT is deprecated and will be removed in a future release. "
-            "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1"
-            " and using DEVICE_PRINT() macro when writing kernels.");
+        // TODO: Enable this warning once DPRINT is fully deprecated and removed from the codebase.
+        // log_warning(
+        //     tt::LogMetal,
+        //     "DPRINT is deprecated and will be removed in a future release. "
+        //     "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1"
+        //     " and using DEVICE_PRINT() macro when writing kernels.");
         impl_ = std::make_unique<DPrintImpl>(rtoptions);
     }
 }
