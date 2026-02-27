@@ -946,9 +946,7 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        kv_rope_reshard_config = ReshardConfig(
-            memory_config=kv_rope_mem_cfg,
-        )
+        kv_rope_reshard_config = kv_rope_mem_cfg
         kv_rope_permute_config = PermuteConfig(
             dims=(0, 2, 1, 3),
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -1684,16 +1682,14 @@ class MLA1D(AbstractModule):
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
         # KV: 1,1,32,512 8x2 [32,32]
 
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,512 L1 interleaved
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
         # TODO: merge the following two once illia has his pr
         tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2
+            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
         )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -1701,13 +1697,12 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # TODO: remove the to memory config after illia's pr is merged
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
+        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
@@ -1786,15 +1781,18 @@ class MLA1D(AbstractModule):
 
         # Q Rope: wkv_b1
         # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=cfg["wkv_b1_in0_memory_config"]
+        )  # [1, num_heads_local, bsz, qk_nope_head_dim]
         # 1,16,32,128 L1 interleaved
 
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,16,32,512 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, bsz, num_heads_local, kv_lora_rank]
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, bsz, num_heads_local, kv_lora_rank]
         # 1,32,16,512 L1 interleaved
 
         # Q RoPE
@@ -1851,21 +1849,18 @@ class MLA1D(AbstractModule):
         # 1,4,128,512 L1 interleaved
         # wkv_b2: DP
 
-        attn_out = ttnn.transpose(attn_out, 1, 2)  # [1, num_heads, bsz, kv_lora_rank]
-        # 1,128,4,512 L1 interleaved
-
-        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
+        attn_out = ttnn.transpose(
+            attn_out, 1, 2, memory_config=cfg["wkv_b2_in0_memory_config"]
+        )  # [1, num_heads, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
-        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b2 output
 
         # 1,128,4,128 L1 interleaved = [1, num_heads, bsz, v_head_dim]
-        v_out = ttnn.transpose(v_out, 1, 2)
-        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        v_out = ttnn.to_memory_config(
+        v_out = ttnn.transpose(
             v_out,
+            1,
+            2,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
