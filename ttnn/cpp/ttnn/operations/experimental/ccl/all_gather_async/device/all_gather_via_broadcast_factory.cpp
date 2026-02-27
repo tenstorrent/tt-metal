@@ -6,6 +6,9 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <bit>
+#include <numeric>
+
 namespace ttnn {
 
 using namespace ccl;
