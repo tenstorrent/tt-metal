@@ -335,6 +335,8 @@ class TtSDXLPipeline(LightweightModule):
             assert self.pipeline_config.encoders_on_device, "Host text encoders are used; compile is not needed"
             assert self.tt_text_encoder_2 is not None, "Text encoder is not loaded on the device"
 
+            logger.info("Disabling throttle before compiling encoders")
+            prev_throttle = os.environ.pop("TT_MM_THROTTLE_PERF", None)
             warmup_tt_text_encoders(
                 self.tt_text_encoder,
                 self.tt_text_encoder_2,
@@ -343,6 +345,9 @@ class TtSDXLPipeline(LightweightModule):
                 self.ttnn_device,
                 self.batch_size,
             )
+            if prev_throttle is not None:
+                os.environ["TT_MM_THROTTLE_PERF"] = prev_throttle
+                logger.info(f"Enabling throttle after compiling encoders, throttle level: {prev_throttle}")
 
             self.encoders_compiled = True
 
