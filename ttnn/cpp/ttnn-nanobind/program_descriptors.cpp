@@ -409,15 +409,6 @@ void py_module_types(nb::module_& mod) {
                     True if a buffer pointer is set, False otherwise.
             )pbdoc")
         .def(
-            "clear_buffer",
-            [](tt::tt_metal::CBDescriptor& self) { self.buffer = nullptr; },
-            R"pbdoc(
-                Clear the pinned buffer, making this CB use dynamically allocated L1 space.
-
-                Use this when creating intermediate CBs in fused kernels where the CB
-                should not be pinned to any specific tensor's L1 address.
-            )pbdoc")
-        .def(
             "has_global_circular_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.global_circular_buffer != nullptr; },
             R"pbdoc(
