@@ -136,11 +136,16 @@ struct Broadcast {
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+                        // tt_memmove<true, false, false, 0>(
+                        //     get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+                        invalidate_l1_cache();
+                        memmove(
+                            (void*)(get_write_ptr(CTArgs::cb0_id)),
+                            (void*)(recv.read_ptr),
+                            (size_t)(args.socket_page_size));
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
-                        socket_notify_sender(recv);
+                        socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
                     } else {
 #endif

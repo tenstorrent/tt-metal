@@ -354,7 +354,7 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
-void socket_notify_sender(const SocketReceiverInterface& socket) {
+void socket_notify_sender(const SocketReceiverInterface& socket, uint8_t noc = noc_index) {
     if (socket.is_h2d) {
         volatile tt_l1_ptr receiver_socket_md* socket_config =
             reinterpret_cast<volatile tt_l1_ptr receiver_socket_md*>(socket.config_addr);
@@ -368,7 +368,7 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
     } else {
         auto upstream_bytes_acked_noc_addr =
             get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
-        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked, 0xF, noc);
     }
 }
 
