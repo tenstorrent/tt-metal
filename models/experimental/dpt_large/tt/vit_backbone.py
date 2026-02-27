@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import logging
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -14,11 +13,14 @@ from .tt_modules import build_attn_padding_key_mask_4d, build_attn_padding_mask_
 from .config import DPTLargeConfig
 from .perf_counters import inc_vit_backbone_fallback
 
-LOG = logging.getLogger(__name__)
+try:
+    import ttnn  # type: ignore
+except (ImportError, OSError):  # pragma: no cover
+    ttnn = None  # type: ignore
 
 try:
     from transformers import DPTConfig, DPTForDepthEstimation
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     DPTConfig = None
     DPTForDepthEstimation = None
 
@@ -74,7 +76,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             hf_cfg = getattr(self.model, "config", None)
             if hf_cfg is not None and hasattr(hf_cfg, "num_hidden_layers"):
                 self.config.num_hidden_layers = int(hf_cfg.num_hidden_layers)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
         # TT-specific members
@@ -98,55 +100,50 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self._tt_trace_region_size = 8 * 1024 * 1024
         req_exec_mode = str(getattr(self.config, "tt_execution_mode", "eager")).lower()
         self._tt_num_command_queues = 2 if req_exec_mode == "trace_2cq" else 1
-        try:
-            import ttnn  # noqa: F401
+        if ttnn is not None:
             from .tt_modules import TTTransformerBlock, TTPatchEmbedding
 
-            # Use config.device for TT accelerator selection so the host can remain on CPU.
-            if tt_device_override is not None:
-                self.tt_device = tt_device_override
-                self._owns_tt_device = False
-            elif self.config.enable_tt_device and self.config.device != "cpu":
-                # `fallback_ops` conversion wrappers expect MeshDevice-based tensors.
-                if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
-                    try:
-                        self.tt_device = ttnn.open_mesh_device(
-                            mesh_shape=ttnn.MeshShape(1, 1),
-                            physical_device_ids=[0],
-                            l1_small_size=self._tt_l1_small_size,
-                            trace_region_size=self._tt_trace_region_size,
-                            num_command_queues=self._tt_num_command_queues,
-                        )
-                    except Exception:
-                        try:
-                            self.tt_device = ttnn.open_mesh_device(
-                                mesh_shape=ttnn.MeshShape(1, 1),
-                                l1_small_size=self._tt_l1_small_size,
-                                trace_region_size=self._tt_trace_region_size,
-                                num_command_queues=self._tt_num_command_queues,
-                            )
-                        except Exception:
-                            self.tt_device = ttnn.open_mesh_device(
-                                mesh_shape=ttnn.MeshShape(1, 1),
-                                l1_small_size=self._tt_l1_small_size,
-                            )
-                else:
-                    self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
-                self._owns_tt_device = True
-
             try:
+                # Use config.device for TT accelerator selection so the host can remain on CPU.
+                if tt_device_override is not None:
+                    self.tt_device = tt_device_override
+                    self._owns_tt_device = False
+                elif self.config.enable_tt_device and self.config.device != "cpu":
+                    if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
+                        mesh_shape = ttnn.MeshShape(1, 1)
+                        kwargs = {
+                            "mesh_shape": mesh_shape,
+                            "l1_small_size": self._tt_l1_small_size,
+                            "trace_region_size": self._tt_trace_region_size,
+                            "num_command_queues": self._tt_num_command_queues,
+                        }
+                        try:
+                            self.tt_device = ttnn.open_mesh_device(physical_device_ids=[0], **kwargs)
+                        except TypeError:
+                            try:
+                                self.tt_device = ttnn.open_mesh_device(**kwargs)
+                            except TypeError:
+                                # Backward compat for runtimes without trace/2CQ kwargs.
+                                kwargs.pop("trace_region_size", None)
+                                kwargs.pop("num_command_queues", None)
+                                self.tt_device = ttnn.open_mesh_device(**kwargs)
+                    else:
+                        self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
+                    self._owns_tt_device = True
+
+                if self.tt_device is not None and hasattr(ttnn, "SetDefaultDevice"):
+                    try:
+                        ttnn.SetDefaultDevice(self.tt_device)
+                    except RuntimeError:
+                        pass
+
                 if self.tt_device is not None:
-                    ttnn.SetDefaultDevice(self.tt_device)
-            except Exception:
-                pass
-            if self.tt_device is not None:
-                self.TTTransformerBlock = TTTransformerBlock
-                self.TTPatchEmbedding = TTPatchEmbedding
-                # Pass through TT layer config only for perf encoder path
-                self.tt_prog_cfg = self.tt_layer_cfg if getattr(self.config, "tt_perf_encoder", False) else None
-                # When running the interleaved (SDPA) perf path, prefer using the full device
-                # compute grid for SDPA program configs to maximize core utilization.
-                try:
+                    self.TTTransformerBlock = TTTransformerBlock
+                    self.TTPatchEmbedding = TTPatchEmbedding
+                    # Pass through TT layer config only for perf encoder path.
+                    self.tt_prog_cfg = self.tt_layer_cfg if getattr(self.config, "tt_perf_encoder", False) else None
+                    # When running the interleaved (SDPA) perf path, prefer using the full device
+                    # compute grid for SDPA program configs to maximize core utilization.
                     if (
                         self.tt_layer_cfg is not None
                         and self.tt_prog_cfg is not None
@@ -155,11 +152,11 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     ):
                         g = self.tt_device.compute_with_storage_grid_size()
                         self.tt_layer_cfg.sdpa_grid = (int(g.x), int(g.y))
-                except Exception:
-                    pass
-        except Exception:
-            self.tt_device = None
-            self._owns_tt_device = False
+            except Exception:
+                self.tt_device = None
+                self._owns_tt_device = False
+                if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                    raise
 
         if self.tt_device:
             sd = self.model.state_dict()
@@ -167,14 +164,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             if self.tt_layer_cfg and getattr(self.config, "tt_perf_encoder", False):
                 memcfg = self.tt_layer_cfg.memcfg()
                 if not bool(getattr(self.tt_layer_cfg, "shard_tokens", True)):
-                    try:
-                        import ttnn  # type: ignore
-
-                        memcfg_dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-                        if memcfg_dram is not None:
-                            memcfg = memcfg_dram
-                    except Exception:
-                        pass
+                    memcfg_dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) if ttnn is not None else None
+                    if memcfg_dram is not None:
+                        memcfg = memcfg_dram
             # patch embedding conv
             self.tt_patch = self.TTPatchEmbedding(
                 sd["dpt.embeddings.patch_embeddings.projection.weight"],
@@ -183,7 +175,6 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 stride=self.config.patch_size,
                 padding=0,
                 output_mem=memcfg,
-                allow_cpu_fallback=bool(getattr(self.config, "allow_cpu_fallback", True)),
             )
             self.tt_blocks = [
                 self.TTTransformerBlock(
@@ -195,22 +186,17 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     device=self.tt_device,
                     output_mem=memcfg,
                     program_config=self.tt_prog_cfg,
-                    allow_cpu_fallback=bool(getattr(self.config, "allow_cpu_fallback", True)),
                 )
                 for i in range(self.config.num_hidden_layers)
             ]
             self.tt_pos_embed = sd["dpt.embeddings.position_embeddings"]
             self.tt_cls_token = sd["dpt.embeddings.cls_token"]
             # Avoid first-iteration host work and host->device copies on the hot path.
-            try:
-                import ttnn  # type: ignore
-
+            if ttnn is not None:
                 h_out = int(self.config.image_size // int(self.config.patch_size))
                 w_out = int(self.config.image_size // int(self.config.patch_size))
                 _ = self._pos_embed_tt_for_hw(h_out, w_out, ttnn=ttnn)
                 _ = self._cls_token_tt(batch=1, ttnn=ttnn)
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------ backbone implementations
     def _pos_embed_for_hw(
@@ -298,6 +284,65 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self._tt_cls_cache[b] = cls_tt
         return cls_tt
 
+    def _tt_deallocate(self, *tensors) -> None:
+        if ttnn is None or not hasattr(ttnn, "deallocate"):
+            return
+        for t in tensors:
+            if t is None:
+                continue
+            try:
+                ttnn.deallocate(t)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _tt_to_memory_config(self, x, *, memory_config, dtype=None):
+        if dtype is None:
+            return ttnn.to_memory_config(x, memory_config=memory_config)
+        try:
+            return ttnn.to_memory_config(x, memory_config=memory_config, dtype=dtype)
+        except TypeError:
+            return ttnn.to_memory_config(x, memory_config=memory_config)
+
+    def _tt_is_sharded(self, x) -> bool:
+        if ttnn is None:
+            return False
+        if hasattr(ttnn, "is_sharded"):
+            try:
+                return bool(ttnn.is_sharded(x))
+            except RuntimeError:
+                return False
+        is_sharded_fn = getattr(x, "is_sharded", None)
+        if callable(is_sharded_fn):
+            try:
+                return bool(is_sharded_fn())
+            except RuntimeError:
+                return False
+        return False
+
+    def _tt_tokens_to_interleaved_dram(self, tokens_tt4):
+        if ttnn is None:
+            return tokens_tt4
+        if not self._tt_is_sharded(tokens_tt4):
+            return tokens_tt4
+        if hasattr(ttnn, "sharded_to_interleaved"):
+            try:
+                return ttnn.sharded_to_interleaved(tokens_tt4, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            except TypeError:
+                return ttnn.sharded_to_interleaved(tokens_tt4, ttnn.DRAM_MEMORY_CONFIG)
+        return self._tt_to_memory_config(tokens_tt4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+    def _tt_tokens_rank4(self, tokens):
+        if ttnn is None:
+            raise RuntimeError("ttnn is required for TT token reshaping")
+        shape = tuple(int(v) for v in tuple(getattr(tokens, "shape", ())))
+        if len(shape) == 3:
+            b, n, c = shape
+            tokens = ttnn.reshape(tokens, (int(b), 1, int(n), int(c)))
+            shape = (int(b), 1, int(n), int(c))
+        if len(shape) != 4 or int(shape[1]) != 1:
+            raise RuntimeError(f"Unexpected TT token shape: {shape}")
+        return tokens, shape
+
     def _forward_cpu_backbone(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Reference CPU backbone using HF DPT encoder."""
         patch = self.config.patch_size
@@ -333,7 +378,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         Expected input:
             tt_in: ttnn.Tensor [B, C, H, W] on `self.tt_device`.
         """
-        import ttnn  # type: ignore
+        if ttnn is None:
+            raise RuntimeError("ttnn is required for TT encoder execution")
 
         if self.tt_device is None or self.tt_patch is None or not self.tt_blocks:
             raise RuntimeError("TT encoder is not initialized")
@@ -346,69 +392,31 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         w_cfg = int(self.config.image_size // patch)
 
         # Form tokens and add CLS + positional embeddings fully on device.
-        try:
-            B = int(x.shape[0])
-            C = int(x.shape[1])
-            h_out = int(x.shape[2])
-            w_out = int(x.shape[3])
+        B = int(x.shape[0])
+        C = int(x.shape[1])
+        h_out = int(x.shape[2])
+        w_out = int(x.shape[3])
 
-            # Sanity: for bring-up we expect square grids matching config.
-            if (h_out, w_out) != (h_cfg, w_cfg):
-                h_out, w_out = h_cfg, w_cfg
+        # Sanity: for bring-up we expect square grids matching config.
+        if (h_out, w_out) != (h_cfg, w_cfg):
+            h_out, w_out = h_cfg, w_cfg
 
-            patch_nhwc = ttnn.permute(x, (0, 2, 3, 1))  # [B,H,W,C]
-            patch_nhwc = ttnn.to_layout(patch_nhwc, ttnn.ROW_MAJOR_LAYOUT)
-            patch_tokens = ttnn.reshape(patch_nhwc, (int(B), int(h_out) * int(w_out), int(C)))  # [B,N,C]
-            cls_tt = self._cls_token_tt(batch=int(B), ttnn=ttnn)  # [B,1,C]
-            tokens_tt3 = ttnn.concat([cls_tt, patch_tokens], dim=1)  # [B,N+1,C]
-            # Free large patch-embedding intermediates early; keeping them alive
-            # can exhaust compute L1 and trigger static CB vs L1-buffer clashes
-            # during LayerNorm compilation under trace capture on N300.
-            patch_tokens = None
-            try:
-                ttnn.deallocate(patch_nhwc)
-            except Exception:
-                pass
-            try:
-                ttnn.deallocate(x)
-            except Exception:
-                pass
-            pos_tt = self._pos_embed_tt_for_hw(int(h_out), int(w_out), ttnn=ttnn)  # [1,N+1,C]
-            tokens_tile = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
-            pos_tile = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
-            tokens_tile = ttnn.add(tokens_tile, pos_tile, dtype=ttnn.bfloat16)
-            tokens_tt3 = ttnn.to_layout(tokens_tile, ttnn.ROW_MAJOR_LAYOUT)
-            try:
-                ttnn.deallocate(tokens_tile)
-            except Exception:
-                pass
-            try:
-                ttnn.deallocate(pos_tile)
-            except Exception:
-                pass
-        except Exception:
-            inc_vit_backbone_fallback()
-            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
-                raise
-            # Conservative fallback: materialize patch embeddings on host, build the
-            # token embedding sequence on host, then move back to device.
-            x_host = x.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch()  # [B, C, H_out, W_out]
-            B, C, H, W = x_torch.shape
-            h_out, w_out = int(H), int(W)
-            patch_tokens_torch = x_torch.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N, C]
-            cls = self.tt_cls_token.expand(B, -1, -1)  # [B, 1, C]
-            tokens_torch = torch.cat([cls, patch_tokens_torch], dim=1)  # [B, N+1, C]
-            pos_embed = self._pos_embed_for_hw(H, W, dtype=tokens_torch.dtype, device=tokens_torch.device)
-            tokens_torch = tokens_torch + pos_embed
-            tokens_tt3 = ttnn.from_torch(
-                tokens_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-            )
+        patch_nhwc = ttnn.permute(x, (0, 2, 3, 1))  # [B,H,W,C]
+        patch_nhwc = ttnn.to_layout(patch_nhwc, ttnn.ROW_MAJOR_LAYOUT)
+        patch_tokens = ttnn.reshape(patch_nhwc, (int(B), int(h_out) * int(w_out), int(C)))  # [B,N,C]
+        cls_tt = self._cls_token_tt(batch=int(B), ttnn=ttnn)  # [B,1,C]
+        tokens_tt3 = ttnn.concat([cls_tt, patch_tokens], dim=1)  # [B,N+1,C]
+        # Free large patch-embedding intermediates early; keeping them alive
+        # can exhaust compute L1 and trigger static CB vs L1-buffer clashes
+        # during LayerNorm compilation under trace capture on N300.
+        patch_tokens = None
+        self._tt_deallocate(patch_nhwc, x)
+        pos_tt = self._pos_embed_tt_for_hw(int(h_out), int(w_out), ttnn=ttnn)  # [1,N+1,C]
+        tokens_tile = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
+        pos_tile = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
+        tokens_tile = ttnn.add(tokens_tile, pos_tile, dtype=ttnn.bfloat16)
+        tokens_tt3 = ttnn.to_layout(tokens_tile, ttnn.ROW_MAJOR_LAYOUT)
+        self._tt_deallocate(tokens_tile, pos_tile)
 
         # Perf path only: pad sequence to tile multiple for sharded program configs.
         orig_len = int(tokens_tt3.shape[1])
@@ -440,54 +448,48 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         if not should_shard_tokens:
             # Keep tokens interleaved in DRAM to avoid sharded LayerNorm static-CB/L1 clashes on N300.
             try:
-                try:
-                    tokens_tt = ttnn.to_memory_config(
-                        tokens_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
-                    )
-                except TypeError:
-                    tokens_tt = ttnn.to_memory_config(tokens_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            except Exception:
+                tokens_tt = self._tt_to_memory_config(
+                    tokens_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+                )
+            except RuntimeError:
                 pass
         tokens_shard_mc = None
         tokens_shard_dtype = None
-        try:
-            if should_shard_tokens:
-                grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
-                cache_key = (int(seq_len), int(C), int(grid_x), int(grid_y))
-                tokens_shard_mc = self._tokens_shard_mc_cache.get(cache_key)
-                if tokens_shard_mc is None and hasattr(ttnn, "create_sharded_memory_config"):
-                    core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
-                    shape_for_shard = getattr(tokens_tt, "padded_shape", None) or getattr(tokens_tt, "shape", None)
-                    tokens_shard_mc = ttnn.create_sharded_memory_config(
-                        shape_for_shard,
-                        core_grid=core_grid,
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        if should_shard_tokens and hasattr(ttnn, "create_sharded_memory_config"):
+            grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
+            cache_key = (int(seq_len), int(C), int(grid_x), int(grid_y))
+            tokens_shard_mc = self._tokens_shard_mc_cache.get(cache_key)
+            if tokens_shard_mc is None:
+                core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                shape_for_shard = getattr(tokens_tt, "padded_shape", None) or getattr(tokens_tt, "shape", None)
+                tokens_shard_mc = ttnn.create_sharded_memory_config(
+                    shape_for_shard,
+                    core_grid=core_grid,
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                self._tokens_shard_mc_cache[cache_key] = tokens_shard_mc
+
+            # Default to BF16 for stability during trace bring-up on N300.
+            tokens_shard_dtype = ttnn.bfloat16
+            shape_tokens = tuple(int(v) for v in tuple(getattr(tokens_tt, "shape", ())))
+            if len(shape_tokens) >= 1 and int(shape_tokens[0]) > 1 and hasattr(ttnn, "bfloat8_b"):
+                tokens_shard_dtype = ttnn.bfloat8_b
+
+            try:
+                tokens_tt = self._tt_to_memory_config(
+                    tokens_tt, memory_config=tokens_shard_mc, dtype=tokens_shard_dtype
+                )
+            except RuntimeError:
+                # Best-effort: if sharding fails, keep tokens interleaved and continue.
+                tokens_shard_mc = None
+                tokens_shard_dtype = None
+                try:
+                    tokens_tt = self._tt_to_memory_config(
+                        tokens_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
                     )
-                    self._tokens_shard_mc_cache[cache_key] = tokens_shard_mc
-                if tokens_shard_mc is not None:
-                    # Default to BF16 for stability during trace bring-up on N300.
-                    #
-                    # When per-chip batch > 1 (Stage-3 DP batching), sharded LayerNorm can hit
-                    # static-CB vs L1-buffer clashes because the block-sharded token shards are
-                    # larger. Prefer BF8 activations on supported runtimes in that mode to reduce
-                    # shard buffer size and relieve L1 pressure.
-                    tokens_shard_dtype = ttnn.bfloat16
-                    try:
-                        b = int(getattr(tokens_tt, "shape", (1,))[0])
-                        if b > 1 and hasattr(ttnn, "bfloat8_b"):
-                            tokens_shard_dtype = ttnn.bfloat8_b
-                    except Exception:
-                        tokens_shard_dtype = ttnn.bfloat16
-                    tokens_tt = ttnn.to_memory_config(
-                        tokens_tt, memory_config=tokens_shard_mc, dtype=tokens_shard_dtype
-                    )
-        except Exception:
-            inc_vit_backbone_fallback()
-            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
-                raise
-            tokens_shard_mc = None
-            tokens_shard_dtype = None
+                except RuntimeError:
+                    pass
 
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
         if tokens_shard_mc is not None:
@@ -499,11 +501,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             # Key-only masks keep memory low and avoid allocating (B,1,N,N).
             # Expand batch dim to match the token batch size when needed.
             key_only_mask = tokens_shard_mc is not None
-            batch = 1
-            try:
-                batch = int(getattr(tokens_tt, "shape", (1,))[0])
-            except Exception:
-                batch = 1
+            shape_tokens = tuple(int(v) for v in tuple(getattr(tokens_tt, "shape", ())))
+            batch = int(shape_tokens[0]) if len(shape_tokens) >= 1 else 1
             cache_key = (int(seq_len), int(orig_len), int(1 if key_only_mask else 0), int(batch))
             attn_mask_tt = self._attn_mask_cache.get(cache_key)
             if attn_mask_tt is None:
@@ -543,7 +542,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 mc_tokens = None
                 try:
                     mc_tokens = ttnn.get_memory_config(tokens_tt)
-                except Exception:
+                except RuntimeError:
                     mc_tokens = None
                 if mc_tokens is not None:
                     try:
@@ -565,93 +564,31 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             layer_out_idx = int(idx) + 1
             h_tt = tokens_by_layer[layer_out_idx]
             if return_tt:
-                try:
-                    tokens_tt4 = h_tt
-                    try:
-                        # Ensure tokens are rank-4 before any sharded->interleaved
-                        # conversion; some TTNN versions are sensitive to rank-3 here.
-                        shape0 = tuple(int(v) for v in tuple(getattr(tokens_tt4, "shape", ())))
-                        if len(shape0) == 3:
-                            b0, n0, c0 = shape0
-                            tokens_tt4 = ttnn.reshape(tokens_tt4, (int(b0), 1, int(n0), int(c0)))
-
-                        is_sharded = False
-                        if hasattr(ttnn, "is_sharded"):
-                            is_sharded = bool(ttnn.is_sharded(tokens_tt4))
-                        elif hasattr(tokens_tt4, "is_sharded"):
-                            is_sharded = bool(tokens_tt4.is_sharded())
-                        if is_sharded:
-                            # Token tensors are sharded across blocks in perf mode. The
-                            # output-layer reassembly path uses slice/reshape/permute,
-                            # which is most stable on interleaved tensors across TTNN versions.
-                            if hasattr(ttnn, "sharded_to_interleaved"):
-                                tokens_tt4 = ttnn.sharded_to_interleaved(
-                                    tokens_tt4, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
-                                )
-                            else:
-                                tokens_tt4 = ttnn.to_memory_config(
-                                    tokens_tt4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
-                                )
-                    except Exception:
-                        pass
-                    shape = tuple(int(v) for v in tuple(getattr(tokens_tt4, "shape", ())))
-                    if len(shape) == 3:
-                        b, n, c = shape
-                        tokens_tt4 = ttnn.reshape(tokens_tt4, (int(b), 1, int(n), int(c)))
-                        shape = (int(b), 1, int(n), int(c))
-                    if len(shape) != 4 or int(shape[1]) != 1:
-                        raise RuntimeError(f"Unexpected TT token shape: {shape}")
-
-                    b, _one, n_total, c = shape
-                    if pad_seq and int(orig_len) < int(n_total):
-                        tokens_tt4 = ttnn.slice(
-                            tokens_tt4,
-                            (0, 0, 0, 0),
-                            (int(b), 1, int(orig_len), int(c)),
-                        )
-                        n_total = int(orig_len)
-                    token_maps[idx + 1] = tokens_tt4
-
-                    # Drop CLS and reshape patch tokens -> NCHW feature map on device.
-                    if n_total <= 1:
-                        raise RuntimeError(f"Unexpected token sequence length: {n_total}")
-                    patch_tt4 = ttnn.slice(
+                tokens_tt4, shape = self._tt_tokens_rank4(h_tt)
+                tokens_tt4 = self._tt_tokens_to_interleaved_dram(tokens_tt4)
+                b, _one, n_total, c = shape
+                if pad_seq and int(orig_len) < int(n_total):
+                    tokens_tt4 = ttnn.slice(
                         tokens_tt4,
-                        (0, 0, 1, 0),
-                        (int(b), 1, int(n_total), int(c)),
-                    )  # [B,1,H*W,C]
-                    n_patches = int(n_total) - 1
-                    if n_patches != int(h_out) * int(w_out):
-                        raise RuntimeError(
-                            f"Unexpected patch count: got {n_patches}, expected {int(h_out) * int(w_out)}"
-                        )
-                    nhwc = ttnn.reshape(patch_tt4, (int(b), int(h_out), int(w_out), int(c)))
-                    feats[idx + 1] = ttnn.permute(nhwc, (0, 3, 1, 2))
-                except Exception:
-                    inc_vit_backbone_fallback()
-                    if not bool(getattr(self.config, "allow_cpu_fallback", True)):
-                        raise
-                    # Conservative fallback: materialize tokens/features on host to
-                    # keep correctness if runtime reshape/slice semantics change.
-                    h_host = h_tt.cpu()
-                    if hasattr(h_host, "layout") and h_host.layout == ttnn.TILE_LAYOUT:
-                        h_host = h_host.to(ttnn.ROW_MAJOR_LAYOUT)
-                    tokens_layer = h_host.to_torch()
-                    if tokens_layer.dim() == 4:
-                        if tokens_layer.shape[1] != 1:
-                            raise RuntimeError(f"Unexpected TT token shape: {tuple(tokens_layer.shape)}")
-                        tokens_layer = tokens_layer[:, 0, :, :]
-                    elif tokens_layer.dim() != 3:
-                        raise RuntimeError(f"Unexpected token rank from TT backbone: {tuple(tokens_layer.shape)}")
-                    if pad_seq:
-                        tokens_layer = unpad_tokens_3d(tokens_layer, orig_len)
-                    token_maps[idx + 1] = tokens_layer
+                        (0, 0, 0, 0),
+                        (int(b), 1, int(orig_len), int(c)),
+                    )
+                    n_total = int(orig_len)
+                token_maps[idx + 1] = tokens_tt4
 
-                    patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
-                    b_t, n_t, c_t = patch_tokens.shape
-                    if n_t != int(h_out) * int(w_out):
-                        raise RuntimeError(f"Unexpected patch token length: {n_t} vs {int(h_out) * int(w_out)}")
-                    feats[idx + 1] = patch_tokens.transpose(1, 2).reshape(b_t, c_t, int(h_out), int(w_out))
+                # Drop CLS and reshape patch tokens -> NCHW feature map on device.
+                if int(n_total) <= 1:
+                    raise RuntimeError(f"Unexpected token sequence length: {n_total}")
+                patch_tt4 = ttnn.slice(
+                    tokens_tt4,
+                    (0, 0, 1, 0),
+                    (int(b), 1, int(n_total), int(c)),
+                )  # [B,1,H*W,C]
+                n_patches = int(n_total) - 1
+                if n_patches != int(h_out) * int(w_out):
+                    raise RuntimeError(f"Unexpected patch count: got {n_patches}, expected {int(h_out) * int(w_out)}")
+                nhwc = ttnn.reshape(patch_tt4, (int(b), int(h_out), int(w_out), int(c)))
+                feats[idx + 1] = ttnn.permute(nhwc, (0, 3, 1, 2))
             else:
                 # Non-perf mode isn't expected to be used with TT tracing. Keep the
                 # host path for compatibility.
@@ -678,26 +615,39 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
     def _forward_tt_encoder(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """General TT encoder path using TTTransformerBlock stack for small and large configs."""
-        import ttnn  # type: ignore
-
-        if self.tt_device is None or self.tt_patch is None or not self.tt_blocks:
+        if ttnn is None or self.tt_device is None or self.tt_patch is None or not self.tt_blocks:
             # Fallback to CPU backbone if TT is unavailable or misconfigured.
             return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
 
         # Pixel input: torch [B, C, H, W] -> TT tensor.
-        tt_in = ttnn.from_torch(
-            pixel_values,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.tt_device,
-        )
-        return self._forward_tt_encoder_from_tt_input(tt_in, return_tt=return_tt)
+        try:
+            tt_in = ttnn.from_torch(
+                pixel_values,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.tt_device,
+            )
+            return self._forward_tt_encoder_from_tt_input(tt_in, return_tt=return_tt)
+        except (RuntimeError, TypeError, ValueError):
+            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                raise
+            inc_vit_backbone_fallback()
+            self.used_tt_encoder_last_forward = False
+            return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
 
     def forward_tt_input(self, tt_pixel_values, return_tt: bool = False) -> ViTBackboneOutputs:
         """Forward assuming inputs are already a device-side TT tensor."""
         if not self._use_tt_encoder():
             raise RuntimeError("TT device is not available but forward_tt_input was requested")
-        return self._forward_tt_encoder_from_tt_input(tt_pixel_values, return_tt=return_tt)
+        try:
+            return self._forward_tt_encoder_from_tt_input(tt_pixel_values, return_tt=return_tt)
+        except (RuntimeError, TypeError, ValueError):
+            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                raise
+            inc_vit_backbone_fallback()
+            pv = ttnn.to_torch(tt_pixel_values) if ttnn is not None else tt_pixel_values
+            self.used_tt_encoder_last_forward = False
+            return self._forward_cpu_backbone(pv, return_tt=return_tt)
 
     def forward(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Unified backbone forward that can use either HF CPU encoder or a TT encoder."""
@@ -711,17 +661,27 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         try:
             if self.tt_device is None:
                 return
-            import ttnn  # type: ignore
+            if ttnn is None:
+                self.tt_device = None
+                return
 
             try:
                 if self._owns_tt_device:
+                    # Avoid leaving TTNN's global default device pointing at a closed handle.
+                    # The repo's pytest fixtures call `ttnn.GetDefaultDevice()` between tests;
+                    # a stale default-device pointer can segfault the interpreter.
+                    if hasattr(ttnn, "SetDefaultDevice"):
+                        try:
+                            ttnn.SetDefaultDevice(None)
+                        except RuntimeError:
+                            pass
                     if hasattr(ttnn, "MeshDevice") and isinstance(self.tt_device, ttnn.MeshDevice):
                         ttnn.close_mesh_device(self.tt_device)
                     else:
                         ttnn.close_device(self.tt_device)
             finally:
                 self.tt_device = None
-        except Exception:
+        except (RuntimeError, TypeError, AttributeError):
             # Best-effort cleanup; avoid raising during interpreter shutdown.
             self.tt_device = None
 

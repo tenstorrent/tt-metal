@@ -8,8 +8,6 @@ from typing import Optional, Sequence, Tuple
 
 import torch
 
-from .perf_counters import inc_upsample_host_fallback
-
 try:
     import ttnn  # type: ignore
 except Exception:  # pragma: no cover
@@ -157,6 +155,93 @@ def tt_canonicalize_nchw_spatial(
     raise RuntimeError(f"{op_name}: unexpected spatial shape={tuple(x.shape)} expected HxW={exp_h}x{exp_w}")
 
 
+_UPSAMPLE_GRID_CACHE: dict[tuple[int, int, int, int, int, int, int, bool], object] = {}
+
+
+def _grid_sample_upsample_nhwc(
+    x_nhwc,
+    *,
+    output_hw: Tuple[int, int],
+    align_corners: bool,
+    memory_config,
+    op_name: str,
+):
+    """
+    Device-side bilinear upsample via `ttnn.grid_sample` with a cached precomputed grid.
+
+    This supports `align_corners=True` semantics without host interpolation.
+    """
+    _require_ttnn()
+    if not hasattr(ttnn, "grid_sample") or not hasattr(ttnn, "prepare_grid_sample_grid"):
+        raise RuntimeError(f"{op_name}: ttnn.grid_sample/prepare_grid_sample_grid is unavailable in this runtime")
+
+    # x_nhwc: [B, H, W, C]
+    b, in_h, in_w, c = _shape4(x_nhwc)
+    out_h, out_w = int(output_hw[0]), int(output_hw[1])
+    if out_h <= 0 or out_w <= 0:
+        raise RuntimeError(f"{op_name}: invalid output HxW={out_h}x{out_w}")
+
+    # Resolve device for caching/moving the precomputed grid.
+    tt_device = None
+    try:
+        tt_device = x_nhwc.device()
+    except Exception:
+        tt_device = None
+    if tt_device is None:
+        raise RuntimeError(f"{op_name}: expected a TT device tensor for grid_sample upsample")
+
+    cache_key = (id(tt_device), int(b), int(in_h), int(in_w), int(out_h), int(out_w), int(c), bool(align_corners))
+    cached = _UPSAMPLE_GRID_CACHE.get(cache_key)
+    if cached is None:
+        if out_w == 1:
+            xs = torch.zeros((1,), dtype=torch.float32)
+        elif align_corners:
+            xs = torch.linspace(-1.0, 1.0, out_w, dtype=torch.float32)
+        else:
+            xs = (2.0 * (torch.arange(out_w, dtype=torch.float32) + 0.5) / float(out_w)) - 1.0
+
+        if out_h == 1:
+            ys = torch.zeros((1,), dtype=torch.float32)
+        elif align_corners:
+            ys = torch.linspace(-1.0, 1.0, out_h, dtype=torch.float32)
+        else:
+            ys = (2.0 * (torch.arange(out_h, dtype=torch.float32) + 0.5) / float(out_h)) - 1.0
+
+        try:
+            grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        except TypeError:  # pragma: no cover
+            grid_y, grid_x = torch.meshgrid(ys, xs)
+        grid = torch.stack((grid_x, grid_y), dim=-1)  # [H_out, W_out, 2]
+        grid = grid.unsqueeze(0).repeat(int(b), 1, 1, 1).contiguous()  # [B, H_out, W_out, 2]
+
+        grid_tt_host = ttnn.from_torch(
+            grid,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        precomputed_host = ttnn.prepare_grid_sample_grid(
+            grid_tt_host,
+            [int(b), int(in_h), int(in_w), int(c)],
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=bool(align_corners),
+            output_dtype=ttnn.bfloat16,
+        )
+        cached = precomputed_host.to(tt_device)
+        _UPSAMPLE_GRID_CACHE[cache_key] = cached
+
+    return ttnn.grid_sample(
+        x_nhwc,
+        cached,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=bool(align_corners),
+        use_precomputed_grid=True,
+        batch_output_channels=False,
+        memory_config=memory_config,
+    )
+
+
 def tt_upsample_nchw(
     x,
     *,
@@ -187,64 +272,76 @@ def tt_upsample_nchw(
     out_h = h * sf_h
     out_w = w * sf_w
 
-    # TTNN bilinear interpolation follows align_corners=False semantics. For
-    # DPT paths that require align_corners=True, execute an exact host
-    # interpolation and convert back to TT tensor to preserve numerical parity.
-    if mode == "bilinear" and align_corners is True and not approx_align_corners:
-        inc_upsample_host_fallback()
-        x_torch = ttnn.to_torch(x).to(dtype=torch.float32)
-        y_torch = torch.nn.functional.interpolate(
-            x_torch,
-            size=(out_h, out_w),
-            mode="bilinear",
-            align_corners=True,
-        )
-        tt_device = None
-        try:
-            tt_device = x.device()
-        except Exception:
-            tt_device = None
-        return ttnn.from_torch(
-            y_torch.to(dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=tt_device,
-        )
-
     if memory_config is None:
         # Keep upsample outputs interleaved by default to avoid width-sharded
         # transpose constraints and large L1 halo allocations on N300.
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    try:
-        y_nhwc = ttnn.upsample(
-            input_tensor=x_nhwc,
-            scale_factor=sf,
-            mode=mode,
-            memory_config=memory_config,
-        )
-    except RuntimeError as exc:
-        # Some L1 configurations can OOM due to halo buffers; fall back to DRAM
-        # rather than failing the entire model path.
-        if memory_config != ttnn.DRAM_MEMORY_CONFIG and "Out of Memory" in str(exc):
+    if mode == "bilinear" and align_corners is True and not approx_align_corners:
+        # Exact align_corners=True semantics on-device via grid_sample. If grid_sample is
+        # unavailable or fails, fall back to TTNN upsample (approximate semantics) to
+        # avoid host-side interpolation.
+        try:
+            y_nhwc = _grid_sample_upsample_nhwc(
+                x_nhwc,
+                output_hw=(int(out_h), int(out_w)),
+                align_corners=True,
+                memory_config=memory_config,
+                op_name=f"{op_name}.grid_sample",
+            )
+        except RuntimeError as exc:
+            if memory_config != ttnn.DRAM_MEMORY_CONFIG and "Out of Memory" in str(exc):
+                y_nhwc = _grid_sample_upsample_nhwc(
+                    x_nhwc,
+                    output_hw=(int(out_h), int(out_w)),
+                    align_corners=True,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    op_name=f"{op_name}.grid_sample_dram",
+                )
+            else:
+                y_nhwc = ttnn.upsample(
+                    input_tensor=x_nhwc,
+                    scale_factor=sf,
+                    mode="bilinear",
+                    memory_config=memory_config,
+                )
+        except Exception:
+            y_nhwc = ttnn.upsample(
+                input_tensor=x_nhwc,
+                scale_factor=sf,
+                mode="bilinear",
+                memory_config=memory_config,
+            )
+    else:
+        try:
             y_nhwc = ttnn.upsample(
                 input_tensor=x_nhwc,
                 scale_factor=sf,
                 mode=mode,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=memory_config,
             )
-        else:
-            # Bilinear upsample can require large L1 halo buffers on N300.
-            # Fall back to nearest on TT to keep the practical hot path alive.
-            if mode == "bilinear" and "Out of Memory" in str(exc):
+        except RuntimeError as exc:
+            # Some L1 configurations can OOM due to halo buffers; fall back to DRAM
+            # rather than failing the entire model path.
+            if memory_config != ttnn.DRAM_MEMORY_CONFIG and "Out of Memory" in str(exc):
                 y_nhwc = ttnn.upsample(
                     input_tensor=x_nhwc,
                     scale_factor=sf,
-                    mode="nearest",
-                    memory_config=memory_config,
+                    mode=mode,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
-                raise
+                # Bilinear upsample can require large L1 halo buffers on N300.
+                # Fall back to nearest on TT to keep the practical hot path alive.
+                if mode == "bilinear" and "Out of Memory" in str(exc):
+                    y_nhwc = ttnn.upsample(
+                        input_tensor=x_nhwc,
+                        scale_factor=sf,
+                        mode="nearest",
+                        memory_config=memory_config,
+                    )
+                else:
+                    raise
     # Some TTNN upsample configurations return sharded outputs; permute/transpose
     # can be invalid for those shard specs. Ensure interleaved before NCHW permute.
     y_nhwc = _ensure_interleaved(y_nhwc)

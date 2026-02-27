@@ -18,6 +18,12 @@ https://huggingface.co/Intel/dpt-large
 The model card notes the expected inference resolution is `384x384` (the original training uses random
 `384` square crops).
 
+## Dependencies
+
+- Runtime: TT-Metalium / TT-NN (`ttnn`) built for Wormhole B0.
+- Python: `torch`, `transformers`, `Pillow`, `numpy`.
+- Weights: `Intel/dpt-large` is public on Hugging Face (no token required).
+
 ## Demo
 
 Canonical bounty commands (minimal surface):
@@ -73,7 +79,30 @@ barrier (`ttnn.synchronize_device`) so it is stable across runs and does not inc
 `cpu().to_torch()` and normalization.
 
 When `--dump-perf` is enabled, the runner enables strict mode and fails if any TTNN program-config fast path
-throws and falls back silently. In perf runs, `program_config_fallback_total` must be `0`.
+throws and falls back silently. In strict perf runs, the perf JSON `fallback_counts` must report **no host fallbacks**:
+
+- `vit_backbone_fallback_count == 0`
+- `reassembly_readout_fallback_count == 0`
+- `upsample_host_fallback_count == 0` (exact `align_corners=True` runs on device via `ttnn.grid_sample`; perf runs may set `tt_approx_align_corners=True` to use `ttnn.upsample` for performance/trace stability)
+- `program_config_fallback_total == 0`
+
+In traced modes (`trace`/`trace_2cq`), `full_trace_unavailable_reason` must be empty/`None` (no trace->eager fallback).
+
+### Pytest Perf Smoke (384x384)
+
+The lightweight perf smoke test writes `generated/dpt_large_tt_perf_smoke_<execution_mode>.json`:
+
+```sh
+pytest -q models/experimental/dpt_large/tests/test_tt_perf.py -s
+```
+
+Representative results on Wormhole N300 (`image_size=384`, `batch_size=1`):
+
+| execution_mode | avg_inference_s | fps |
+|---|---:|---:|
+| `eager` | `0.06887` | `14.52` |
+| `trace` | `0.06840` | `14.62` |
+| `trace_2cq` | `0.06874` | `14.55` |
 
 ## Memory Layout & Sharding Strategy (Stage 2)
 
@@ -155,7 +184,7 @@ Hardware PCC test (TT vs CPU reference):
 pytest -q models/experimental/dpt_large/tests/test_tt_pcc.py
 ```
 
-Hardware perf smoke test (writes `generated/dpt_large_tt_perf_smoke.json`):
+Hardware perf smoke test (writes `generated/dpt_large_tt_perf_smoke_<execution_mode>.json`):
 
 ```sh
 pytest -q models/experimental/dpt_large/tests/test_tt_perf.py -s

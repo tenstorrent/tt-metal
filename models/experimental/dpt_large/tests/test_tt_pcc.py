@@ -58,11 +58,14 @@ def test_tt_pipeline_pcc_vs_cpu_reference(tmp_path):
         tt_device_fusion=True,
         tt_perf_encoder=True,
         tt_perf_neck=True,
+        tt_approx_align_corners=True,
     )
 
     try:
         cpu = DPTFallbackPipeline(config=cfg_cpu, pretrained=True, device="cpu")
-        tt_ctx = DPTTTPipeline(config=cfg_tt, pretrained=True, device="cpu")
+        tt_ctx = DPTTTPipeline(
+            config=cfg_tt, pretrained=True, device="cpu", hf_model=cpu._model, hf_processor=cpu._processor
+        )
     except Exception as exc:
         pytest.skip(f"Could not initialize pretrained DPT-Large pipelines: {exc}")
 
@@ -73,6 +76,8 @@ def test_tt_pipeline_pcc_vs_cpu_reference(tmp_path):
         assert tt_pipe.last_perf is not None
         assert tt_pipe.last_perf.get("mode") == "tt"
         assert tt_pipe.backbone.used_tt_encoder_last_forward
+        counts = tt_pipe.last_perf.get("fallback_counts", {})
+        assert int(counts.get("upsample_host_fallback_count", 0)) == 0
 
     assert np.isfinite(depth_cpu).all()
     assert np.isfinite(depth_tt).all()
