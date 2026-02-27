@@ -684,8 +684,15 @@ public:
         if (filename.empty()) {
             return;
         }
-        mock_cluster_desc_path =
-            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+
+        std::string root = get_root_dir();
+        // Remove trailing slash if present to avoid double slashes
+        if (!root.empty() && root.back() == '/') {
+            root.pop_back();
+        }
+
+        mock_cluster_desc_path = root + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+
         // Set target device to Mock if simulator is not enabled
         if (simulator_path.empty()) {
             runtime_target_device_ = tt::TargetDevice::Mock;
