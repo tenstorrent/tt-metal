@@ -166,7 +166,7 @@ TransformerConfig read_config(const YAML::Node &config) {
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =
-            experimental_config["use_composite_layernorm"].as<bool>(false);
+            experimental_config["use_composite_layernorm"].as<bool>();
     }
     return transformer_config;
 }

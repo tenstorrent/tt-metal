@@ -24,8 +24,7 @@ DistributedLlamaMLP::DistributedLlamaMLP(
         hidden_size = *intermediate_dim;
     } else {
         const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4U * embedding_size) * (2.0F / 3.0F));
-        const uint32_t rounded_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
-        hidden_size = rounded_size;
+        hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
     }
     m_w1 = std::make_shared<ColumnParallelLinear>(
         embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false, tp_axis);

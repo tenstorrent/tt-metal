@@ -36,6 +36,7 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
     m_num_local_heads = m_num_heads / tp_size;
     m_num_local_groups = m_num_groups / tp_size;
 
+    // create layers
     m_q_linear = std::make_shared<ColumnParallelLinear>(
         m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
@@ -46,6 +47,7 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
         m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
+    // register modules
     create_name("grouped_query_attention");
     register_module(m_q_linear, "q_linear");
     register_module(m_kv_linear, "kv_linear");
