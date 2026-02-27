@@ -949,11 +949,6 @@ class Attention(LightweightModule):
         kv_cache=None,
     ):
 
-        #with open("x_11SH_meta2.txt", "w") as f:
-        #    shards = ttnn.get_device_tensors(x_11SH)
-        #    f.write(f"num_device_tensors={len(shards)}\n")
-        #    f.write("\n".join(repr(getattr(s, "device", None)()) if hasattr(s, "device") else "no_device" for s in shards))
-
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -976,10 +971,7 @@ class Attention(LightweightModule):
         )
 
         # FIXME: surely ttnn.linear bias should work?
-        #with open("/tmp/phi1_bias_dbg.txt", "a") as f:
-            #f.write(f"xqkv: shape={tuple(xqkv_fused.shape)} dtype={xqkv_fused.dtype} layout={xqkv_fused.layout} mem={xqkv_fused.memory_config()} dist={getattr(xqkv_fused,'distributed_tensor_config',lambda:None)()}\n")
-            #f.write(f"bias: shape={tuple(self.wqkv_bias_prefill.shape)} dtype={self.wqkv_bias_prefill.dtype} layout={self.wqkv_bias_prefill.layout} mem={self.wqkv_bias_prefill.memory_config()} dist={getattr(self.wqkv_bias_prefill,'distributed_tensor_config',lambda:None)()}\n")
-
+        
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 

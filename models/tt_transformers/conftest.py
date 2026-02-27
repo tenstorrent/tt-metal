@@ -27,16 +27,3 @@ def device_params(request, galaxy_type):
             )
 
     return params
-# --- Loguru -> pytest capture helper ---
-# Ensures Loguru logs (including logger.exception tracebacks) show up in pytest output.
-# Helpful when model init fails before pytest prints anything useful.
-import sys
-from loguru import logger
-
-
-@pytest.fixture(autouse=True, scope="session")
-def _enable_loguru_for_pytest():
-    # Avoid duplicate handlers if other code already configured Loguru
-    logger.remove()
-    # Send logs to stderr so pytest captures them; include tracebacks for easier debugging
-    logger.add(sys.stderr, level="DEBUG", backtrace=True, diagnose=True)

@@ -2503,101 +2503,97 @@ class ModelArgs:
         return
 
     def _set_params_from_dict(self, config):
-        import inspect
-        import traceback
+        eos_token_id = config.get("eos_token_id", None)
+        self.image_token_index = config.get("image_token_index", None)
 
-        try:
-            eos_token_id = config.get("eos_token_id", None)
-            self.image_token_index = config.get("image_token_index", None)
+        # Try to get text_config, if it doesn't exist everything is text config
+        text_config = config.get("text_config", config)
+        self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
+        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
-            # Try to get text_config, if it doesn't exist everything is text config
-            text_config = config.get("text_config", config)
-            self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
-            layer_types = text_config["layer_types"] if "layer_types" in text_config else None
+        # Common params with different names between Meta and HF
+        self.dim = text_config.get("dim", text_config.get("hidden_size"))
+        self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
+        self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
+        self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
 
-            # Common params with different names between Meta and HF
-            self.dim = text_config.get("dim", text_config.get("hidden_size"))
-            self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
-            self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
-            self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
-            # multimodal llama additionally adds cross attention layers
-            # they are calculated in HF but not calculated in Meta
-            self.n_layers -= len(text_config.get("cross_attention_layers", ()))
+        self.sliding_window_pattern = (
+            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
 
-            self.sliding_window_pattern = (
-                [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        self.full_model_n_layers = self.n_layers
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.vocab_size = text_config["vocab_size"]
+        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
+        self.max_context_len = text_config.get("max_position_embeddings")
+
+        # Handle different MLP dimension specifications
+        if "intermediate_size" in text_config:
+            self.hidden_dim = text_config["intermediate_size"]
+            self.ffn_dim_multiplier = None
+            self.multiple_of = None
+
+            # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
+            local_params = self.__get_llama_local_params_name(self.model_name)
+            if local_params in self.LOCAL_LLAMA_PARAMS:
+                params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
+                if os.path.exists(params_file):
+                    with open(params_file, "r") as f:
+                        params = json.load(f)
+                    self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+                    self.multiple_of = params["multiple_of"]
+        else:
+            self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
+            self.multiple_of = text_config["multiple_of"]
+            self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+
+        if "_name_or_path" in config and config["_name_or_path"]:
+            normalized_path = os.path.normpath(config["_name_or_path"])
+            # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+            if "snapshots" in normalized_path:
+                full_model_name = normalized_path.split(os.path.sep)[-3]
+                self.model_name = full_model_name.split("--")[-1]
+            else:
+                self.model_name = os.path.basename(normalized_path)
+            logger.info(f"Model name from config: {self.model_name}")
+
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
+            raise AssertionError(
+                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-            self.full_model_n_layers = self.n_layers
-            self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
-            self.vocab_size = text_config["vocab_size"]
-            self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-            self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
-            self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
-            self.max_context_len = text_config.get("max_position_embeddings")
+        self.unpadded_hidden_dim = self.hidden_dim
+        # Don't need to pad for CPU runs
+        if self.num_devices:
+            # Default padding cores for each model, 0 if not set here
+            default_padded_cores = {
+                "Qwen2.5-VL-72B": 32,
+                "Qwen2.5-VL-32B": 16,
+                "Qwen2.5-72B": 32,
+                "Qwen2.5-7B": 16,
+                "QwQ-32B": 16,
+            }.get(self.base_model_name, 0)
 
-            # Handle different MLP dimension specifications
-            if "intermediate_size" in text_config:
-                self.hidden_dim = text_config["intermediate_size"]
-                self.ffn_dim_multiplier = None
-                self.multiple_of = None
+            # Override MLP padding cores from env var
+            mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
 
-                # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
-                local_params = self.__get_llama_local_params_name(self.model_name)
-                if local_params in self.LOCAL_LLAMA_PARAMS:
-                    params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
-                    if os.path.exists(params_file):
-                        with open(params_file, "r") as f:
-                            params = json.load(f)
-                        self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
-                        self.multiple_of = params["multiple_of"]
-            else:
-                self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
-                self.multiple_of = text_config["multiple_of"]
-                self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
-
-            if "_name_or_path" in config and config["_name_or_path"]:
-                normalized_path = os.path.normpath(config["_name_or_path"])
-                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
-                if "snapshots" in normalized_path:
-                    full_model_name = normalized_path.split(os.path.sep)[-3]
-                    self.model_name = full_model_name.split("--")[-1]
-                else:
-                    self.model_name = os.path.basename(normalized_path)
-                logger.info(f"Model name from config: {self.model_name}")
-
-            if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
-                raise AssertionError(
-                    "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+            # Only pad if MLP_PADDED_CORES is non-zero
+            if mlp_padded_cores > 0:
+                padded_hidden_dim = nearest_multiple(
+                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
                 )
-
-            self.unpadded_hidden_dim = self.hidden_dim
-            # Don't need to pad for CPU runs
-            if self.num_devices:
-                # Default padding cores for each model, 0 if not set here
-                default_padded_cores = {
-                    "Qwen2.5-VL-72B": 32,
-                    "Qwen2.5-VL-32B": 16,
-                    "Qwen2.5-72B": 32,
-                    "Qwen2.5-7B": 16,
-                    "QwQ-32B": 16,
-                }.get(self.base_model_name, 0)
-
-                # Override MLP padding cores from env var
-                mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
-
-                # Only pad if MLP_PADDED_CORES is non-zero
-                if mlp_padded_cores > 0:
-                    padded_hidden_dim = nearest_multiple(
-                        self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                if padded_hidden_dim != self.hidden_dim:
+                    logger.info(
+                        f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
                     )
-                    if padded_hidden_dim != self.hidden_dim:
-                        logger.info(
-                            f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
-                        )
-                        self.hidden_dim = padded_hidden_dim
+                    self.hidden_dim = padded_hidden_dim
 
-            self.layer_types = text_config.get("layer_types", None)
+        self.layer_types = text_config.get("layer_types", None)
 
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
@@ -2613,15 +2609,15 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-            rope_scaling_params = text_config.get("rope_scaling", None)
-            self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
-            self.rope_scaling = (
-                rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
-                if rope_scaling_params
-                else None
-            )
+        rope_scaling_params = text_config.get("rope_scaling", None)
+        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        self.rope_scaling = (
+            rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
+            if rope_scaling_params
+            else None
+        )
 
-            self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -2629,41 +2625,11 @@ class ModelArgs:
         self._set_vision_params(config)
         self.is_multimodal = "vision_config" in config or self.is_vision()
 
-            self.state_dict_text_prefix = self._get_text_prefix()
-            self.state_dict_vision_prefix = self._get_vision_prefix()
-            
+        self.state_dict_text_prefix = self._get_text_prefix()
+        self.state_dict_vision_prefix = self._get_vision_prefix()
 
+        self._set_model_specific_params()
 
-            self._set_model_specific_params()
-
-        except Exception as e:
-            # Find the line *inside this function* that failed and print it.
-            tb = traceback.extract_tb(e.__traceback__)
-            frame = next((f for f in reversed(tb) if f.name == "_set_params_from_dict"), tb[-1])
-
-            # Try to show the exact source line
-            try:
-                src_lines, start_lineno = inspect.getsourcelines(self._set_params_from_dict)
-                idx = frame.lineno - start_lineno
-                bad_line = src_lines[idx].rstrip() if 0 <= idx < len(src_lines) else "<source line unavailable>"
-            except Exception:
-                bad_line = "<source line unavailable>"
-
-            # Print/log a very explicit message (works even if logger isn't configured)
-            msg = (
-                f"ERROR in _set_params_from_dict at {frame.filename}:{frame.lineno}\n"
-                f"  {type(e).__name__}: {e}\n"
-                f"  failing line: {bad_line}\n"
-                f"  config keys: {list(config.keys()) if isinstance(config, dict) else type(config)}\n"
-                f"  text_config keys: {list(config.get('text_config', config).keys()) if isinstance(config.get('text_config', config), dict) else type(config.get('text_config', config))}\n"
-            )
-            try:
-                logger.error(msg)
-                logger.exception("Full traceback:")
-            except Exception:
-                print(msg)
-
-            raise
 
     @property
     def use_scaled_rope(self):
@@ -2976,8 +2942,6 @@ class ModelArgs:
             self.fuse_mlp = any("gate_up" in layer_name for layer_name in state_dict.keys())
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
-            #with open("state_dict_log.txt", "a") as f:
-                #f.write(f"state dic after convert_hf_to_meta: {state_dict}\n")
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2989,8 +2953,6 @@ class ModelArgs:
             self.moe = True
             self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
 
-        #with open("state_dict_log.txt", "a") as f:
-            #f.write(f"state dic at the end (before return): {state_dict}\n")
         return state_dict
 
     # =========================================================================

@@ -354,48 +354,6 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
             converted_weights[key] = tensor
     return converted_weights
 
-def reverse_permute_partial_qk_weight(tensor, head_dim: int, rotary_dim: int):
-    """
-    Phi-style partial rotary:
-    - tensor is [n_heads*head_dim, hidden]
-    - reverse_permute ONLY the first rotary_dim of each head, keep the rest unchanged
-    """
-    assert rotary_dim % 2 == 0, "rotary_dim must be even for reverse_permute"
-    n_heads = tensor.shape[0] // head_dim
-    hidden = tensor.shape[1]
-
-    t = tensor.view(n_heads, head_dim, hidden)
-    rot = t[:, :rotary_dim, :]
-    passthrough = t[:, rotary_dim:, :]
-
-    rot_flat = rot.reshape(n_heads * rotary_dim, hidden)
-    rot_perm = reverse_permute(rot_flat, n_heads, n_heads * rotary_dim, hidden)
-    rot_perm = rot_perm.view(n_heads, rotary_dim, hidden)
-
-    out = torch.cat([rot_perm, passthrough], dim=1).reshape(n_heads * head_dim, hidden)
-    return out
-
-
-def reverse_permute_partial_qk_bias(tensor, head_dim: int, rotary_dim: int):
-    """
-    Phi-style partial rotary bias:
-    - tensor is [n_heads*head_dim]
-    - reverse_permute ONLY the first rotary_dim of each head, keep the rest unchanged
-    """
-    assert rotary_dim % 2 == 0, "rotary_dim must be even for reverse_permute"
-    n_heads = tensor.shape[0] // head_dim
-
-    t = tensor.view(n_heads, head_dim)
-    rot = t[:, :rotary_dim]
-    passthrough = t[:, rotary_dim:]
-
-    rot_flat = rot.reshape(n_heads * rotary_dim, 1)
-    rot_perm = reverse_permute(rot_flat, n_heads, n_heads * rotary_dim, 1).squeeze(-1)
-    rot_perm = rot_perm.view(n_heads, rotary_dim)
-
-    out = torch.cat([rot_perm, passthrough], dim=1).reshape(n_heads * head_dim)
-    return out
-
 def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace Q/K weights to Meta format for RoPE compatibility."""
     hf_model = os.getenv("HF_MODEL", "").strip()
@@ -887,39 +845,16 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             converted_weights[key] = tensor
     return converted_weights
 
-
-def _reverse_permute_llama(tensor, n_heads, dim1, dim2):
-    # Current behavior (your "actual" LLaMA-style reverse permute)
-    return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
-
-def _reverse_permute_neox(tensor, n_heads, dim1, dim2):
-    # NeoX-style (inverse axis-swap vs llama)
-    # [n_heads, head_dim/2, 2, dim2] -> swap -> [n_heads, 2, head_dim/2, dim2]
-    return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
 def _is_phi1():
     hf_model = os.getenv("HF_MODEL", "").strip()
     return hf_model in {"microsoft/Phi-1"}
 
 
 def reverse_permute(tensor, n_heads, dim1, dim2):
-    """
-    For non-Phi models: keep existing LLaMA/Meta-style conversion (half-split <-> interleaved pairs).
-    For Phi-1 (NeoX-style assumption): no-op (already in expected pairwise layout).
-    """
-    #if _is_phi1():
-    #    return tensor
     return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 
 def permute(tensor, n_heads, dim1, dim2):
-    """
-    Inverse of reverse_permute().
-    If Phi-1 path is identity, its inverse is also identity.
-    """
-    #if _is_phi1():
-    #   return tensor
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 

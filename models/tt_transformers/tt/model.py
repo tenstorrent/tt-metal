@@ -126,11 +126,24 @@ class Transformer(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
-            TG=args.is_galaxy,
+            )
+            if is_phi1
+            else RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps if args.norm_eps is not None else 1e-5,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", None),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
+            )
         )
 
         self.norm = DistributedNorm(
