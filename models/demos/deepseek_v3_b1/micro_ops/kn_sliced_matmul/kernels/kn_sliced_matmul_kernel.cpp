@@ -26,13 +26,11 @@ void kernel_main() {
     using KNSlicedMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
     deepseek_b1_ops::KNSlicedMatmul::ReaderArgs matmul_args{};
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true> matmul;
-    matmul(matmul_args);
 
 #elif defined(COMPILE_FOR_BRISC)
     using KNSlicedMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
     deepseek_b1_ops::KNSlicedMatmul::WriterArgs matmul_args{};
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true> matmul;
-    matmul(matmul_args);
 
 #elif defined(COMPILE_FOR_TRISC)
     using KNSlicedMatmulCTArgs =
@@ -46,6 +44,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("act_total_tiles"),
     };
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true, /*pop_act=*/true, /*pop_weights=*/false> matmul;
-    matmul(matmul_args);
+    deepseek_compute_kernel_init();
 #endif
+    matmul(matmul_args);
 }

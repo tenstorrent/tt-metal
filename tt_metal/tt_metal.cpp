@@ -25,6 +25,7 @@
 #include <optional>
 #include <unordered_set>
 #include <utility>
+#include <type_traits>
 #include <variant>
 
 #include "buffer_types.hpp"
@@ -90,28 +91,27 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
-                                              bool& local_noc0_usage,
-                                              bool& local_noc1_usage) {
-        int noc_value;
-        switch (programmable_core) {
-            case HalProgrammableCoreType::TENSIX:
-                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                break;
-            case HalProgrammableCoreType::ACTIVE_ETH:
-            case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                break;
-            default:
-                TT_THROW(
-                    "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    enchantum::to_string(programmable_core));
-        }
-        local_noc0_usage = noc_value == 0;
-        local_noc1_usage = noc_value == 1;
-        data_movement_config_status.noc0_in_use = local_noc0_usage;
-        data_movement_config_status.noc1_in_use = local_noc1_usage;
-    };
+    auto set_global_and_local_noc_usage =
+        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
+            int noc_value;
+            switch (programmable_core) {
+                case HalProgrammableCoreType::TENSIX:
+                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                    break;
+                case HalProgrammableCoreType::ACTIVE_ETH:
+                case HalProgrammableCoreType::IDLE_ETH:
+                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                    break;
+                default:
+                    TT_THROW(
+                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                        enchantum::to_string(programmable_core));
+            }
+            local_noc0_usage = noc_value == 0;
+            local_noc1_usage = noc_value == 1;
+            data_movement_config_status.noc0_in_use = local_noc0_usage;
+            data_movement_config_status.noc1_in_use = local_noc1_usage;
+        };
 
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
@@ -411,6 +411,8 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     }
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
+
+void ReleaseOwnership() { MetalContext::destroy_instance(); }
 
 void print_page(
     uint32_t dev_page_id,
@@ -743,6 +745,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 
         detail::CompileProgram(device, program);
+        program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
         }
@@ -767,7 +770,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+                auto runtime_id = program.get_runtime_id();
+                kg->launch_msg.view().kernel_config().host_assigned_id() =
+                    runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -796,17 +801,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    std::unordered_set<CoreCoord> not_done_cores;
-    const auto& hal = MetalContext::instance().hal();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal.get_core_type(index);
-        for (const auto& logical_core : logical_cores) {
-            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            not_done_cores.insert(physical_core);
-        }
-    }
-    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -826,6 +821,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto device_id = device->id();
 
     program.impl().allocate_circular_buffers(device);
+    program.impl().validate_circular_buffer_core_ranges(device);
     program.impl().validate_circular_buffer_region(device);
     program.impl().allocate_dataflow_buffers(device);
     program.impl().validate_dataflow_buffer_region(device);
@@ -1147,6 +1143,12 @@ KernelHandle CreateEthernetKernel(
         kernel->add_defines(fabric_defines);
     }
 
+    // Disable watcher on ethernet cores if requested
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.watcher_eth_disabled()) {
+        kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
+    }
+
     TT_FATAL(
         ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
@@ -1233,57 +1235,83 @@ KernelHandle CreateEthernetKernel(
     return program.impl().add_kernel(kernel, eth_core_type);
 }
 
+void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
+    for (const auto& [key, value] : defines) {
+        if (value.find('\0') != std::string::npos) {
+            throw std::invalid_argument("Define value for key '" + key + "' contains null character");
+        }
+    }
+}
+
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
-
-    // Validate the defines in the config
-    std::visit(
-        [](const auto& cfg) {
-            for (const auto& [key, value] : cfg.defines) {
-                if (value.find('\0') != std::string::npos) {
-                    throw std::invalid_argument(
-                        "Define value for key '" + key + "' contains null character");
-                }
-            }
-        },
-        config);
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
 
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
 
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, config);
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> cfg_variant = std::visit(
+        [&](const auto& cfg) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> { return cfg; },
+        config);
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, cfg_variant);
+
     return kernel;
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernelFromString(
     Program& program,
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 CBHandle CreateCircularBuffer(
@@ -1325,6 +1353,11 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
+}
+
+uint32_t CreateSemaphore(
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
+    return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
 }
 
 uint32_t CreateSemaphore(
@@ -1370,6 +1403,17 @@ GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
+
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
+}
+}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);

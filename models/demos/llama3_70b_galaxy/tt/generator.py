@@ -6,25 +6,25 @@ import ttnn
 import torch
 from loguru import logger
 from typing import List
+
 from collections import defaultdict
 from dataclasses import fields, replace
 
-from llama_models.llama3.api.datatypes import (
-    InterleavedTextMedia,
-    StopReason,
-)
-
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,
     get_block_size,
+    InterleavedTextMedia,
 )
-from models.common.sampling.generator import format_sampling_params
-from models.tt_transformers.tt.generator import SamplingParams
+
+from models.common.llama_models import (
+    StopReason,
+    ChatPrediction,
+    CompletionPrediction,
+)
+
+from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.warmup import WarmupForwardMixin
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -41,7 +41,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -176,7 +176,7 @@ class Generator:
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_toks = torch.zeros(batch, 1, 1)
+        output_toks = torch.zeros(batch)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
@@ -281,7 +281,7 @@ class Generator:
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
                     tt_tok_tensor = torch.stack(tt_tok, dim=0)
-                    output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
+                    output_toks = tt_tok_tensor[empty_slots].reshape(batch)
                 else:
                     output_toks[id] = tt_tok
 
@@ -297,6 +297,7 @@ class Generator:
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+        prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
@@ -361,11 +362,16 @@ class Generator:
             if isinstance(tt_sampled, list):
                 tt_sampled = tt_sampled[0]
 
-            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
+            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
+            output_toks = sampled_tensor[empty_slots]
+
+            if tt_log_probs is not None:
+                tt_lp = tt_log_probs
+                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -376,6 +382,8 @@ class Generator:
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        if prefill_log_probs is not None:
+            return output_toks, prefill_log_probs
         return output_toks
 
     def prefill_forward_single_user_text(
@@ -501,7 +509,7 @@ class Generator:
 
         return tt_out_trace
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -855,7 +863,7 @@ class Generator:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)

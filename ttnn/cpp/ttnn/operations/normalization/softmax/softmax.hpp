@@ -6,12 +6,10 @@
 
 #include "device/softmax_operation_types.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
 
 #include <optional>
-
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 

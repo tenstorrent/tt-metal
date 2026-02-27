@@ -10,11 +10,6 @@
 
 namespace ttnn::prim {
 
-InterleavedToShardedDeviceOperation::program_factory_t InterleavedToShardedDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return InterleavedToShardedProgramFactory{};
-}
-
 void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -87,12 +82,10 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
 tt::stl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         operation_attributes.keep_l1_aligned,
-        program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),

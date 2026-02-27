@@ -35,6 +35,7 @@ FabricBuilder::FabricBuilder(
 void FabricBuilder::discover_channels() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
+    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
@@ -68,8 +69,8 @@ void FabricBuilder::discover_channels() {
         channels_by_direction_[direction] = active_eth_chans;
 
         // Identify and cache dispatch links
-        uint32_t dispatch_link_idx =
-            tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
+        uint32_t dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
+            control_plane, is_galaxy_cluster, local_node_, neighbor_fabric_node_id, device_);
         for (const auto& eth_chan : active_eth_chans) {
             if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
                 dispatch_links_.insert(eth_chan);

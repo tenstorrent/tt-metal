@@ -364,7 +364,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "format_descriptors",
             &tt::tt_metal::CBDescriptor::format_descriptors,
-            "Collection of format descriptors for different sections of the buffer");
+            "Collection of format descriptors for different sections of the buffer")
+        .def_rw(
+            "address_offset",
+            &tt::tt_metal::CBDescriptor::address_offset,
+            "Byte offset from buffer base address for CB placement (default 0)");
 
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
@@ -372,6 +376,9 @@ void py_module_types(nb::module_& mod) {
         &tt::tt_metal::cb_descriptor_from_sharded_tensor,
         nb::arg("cb_index"),
         nb::arg("tensor"),
+        nb::arg("address_offset") = 0,
+        nb::arg("total_size") = 0,
+        nb::arg("core_ranges") = nb::none(),
         R"pbdoc(
             Create a CBDescriptor from a sharded tensor.
 
@@ -381,23 +388,46 @@ void py_module_types(nb::module_& mod) {
             Args:
                 cb_index: The circular buffer index (CB ID)
                 tensor: A sharded tensor to derive CB configuration from
+                address_offset: Byte offset from buffer base address for CB placement (default 0)
+                total_size: Total CB size in bytes (default 0 = use tensor's full bank size)
+                core_ranges: Optional CoreRangeSet override (default None = use tensor's shard grid)
 
             Returns:
                 CBDescriptor with all fields (total_size, core_ranges, format_descriptors, buffer)
                 automatically populated from the tensor
 
             Example:
-                >>> # Assuming device_input_tensor is a sharded tensor
-                >>> cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                ...     0,
-                ...     device_input_tensor
+                >>> # Basic usage (full tensor)
+                >>> cb_desc = ttnn.cb_descriptor_from_sharded_tensor(0, device_input_tensor)
+                >>>
+                >>> # Place CB at offset within a pre-allocated buffer
+                >>> cb_k = ttnn.cb_descriptor_from_sharded_tensor(
+                ...     0, kv_cache, address_offset=0, total_size=k_size
                 ... )
-                >>> # Use cb_desc in ProgramDescriptor
-                >>> program_desc = ttnn.ProgramDescriptor()
-                >>> program_desc.cbs = [cb_desc]
+                >>> cb_v = ttnn.cb_descriptor_from_sharded_tensor(
+                ...     1, kv_cache, address_offset=v_offset, total_size=v_size
+                ... )
 
             Note:
                 The tensor must be sharded (have a shard specification), otherwise this will raise an error.
+        )pbdoc");
+
+    // Helper function for getting the L1 byte address of a CB descriptor
+    mod.def(
+        "get_cb_address",
+        &tt::tt_metal::get_cb_address,
+        nb::arg("descriptor"),
+        R"pbdoc(
+            Get the L1 byte address of a CB descriptor.
+
+            Returns buffer base address + address_offset when a buffer is present,
+            or just address_offset when no buffer is set (manually placed CB).
+
+            Args:
+                descriptor: A CBDescriptor to get the address from
+
+            Returns:
+                The L1 byte address of the circular buffer
         )pbdoc");
 
     // Bind KernelDescriptor related types

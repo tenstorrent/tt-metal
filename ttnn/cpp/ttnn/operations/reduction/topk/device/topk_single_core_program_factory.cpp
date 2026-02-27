@@ -19,6 +19,7 @@ namespace ttnn::prim {
 TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
     using namespace tt::constants;
+
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& value_tensor = std::get<0>(output_tensors);
@@ -71,7 +72,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     // Pipeline Flow:
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel
     const uint32_t num_cb_unit = 2;                         // Base unit for double buffering
-    const uint32_t cb_in_units = 2 * num_cb_unit;           // 4 units total for input double buffering
+    const uint32_t cb_in_units = num_cb_unit;               // 2 units total for input double buffering
     const uint32_t input_cb_tile_count = cb_in_units;       // Input stream buffer size
     const uint32_t transposed_cb_tile_count = 4;            // Transposed data staging
     const uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // Intermediate TopK results (double-buffered)
@@ -81,7 +82,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const uint32_t input_cb_index = tt::CBIndex::c_0;
     const tt::tt_metal::CircularBufferConfig input_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            input_cb_tile_count * value_tile_size, {{input_cb_index, input_cb_data_format}})
+            input_cb_tile_count * input_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
 
@@ -95,7 +96,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     constexpr uint32_t transposed_val_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig transposed_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            transposed_cb_tile_count * value_tile_size, {{transposed_val_cb_index, input_cb_data_format}})
+            transposed_cb_tile_count * input_tile_size, {{transposed_val_cb_index, input_cb_data_format}})
             .set_page_size(transposed_val_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_val_cb_config);
 
@@ -109,7 +110,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     constexpr uint32_t result_prep_val_cb_index = tt::CBIndex::c_4;
     const tt::tt_metal::CircularBufferConfig result_prep_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            result_prep_cb_tile_count * value_tile_size, {{result_prep_val_cb_index, input_cb_data_format}})
+            result_prep_cb_tile_count * input_tile_size, {{result_prep_val_cb_index, input_cb_data_format}})
             .set_page_size(result_prep_val_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_val_cb_config);
 
@@ -171,7 +172,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {
+    const std::vector<uint32_t> compute_args = {
         input_cb_index,                            // Input values
         index_cb_index,                            // Input indices
         transposed_val_cb_index,                   // Transposed values
