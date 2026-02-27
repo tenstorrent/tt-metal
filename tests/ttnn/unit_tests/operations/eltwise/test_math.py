@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_llk_assert_enabled
 
 from loguru import logger
 
@@ -54,6 +54,8 @@ def test_lgamma(device, h, w):
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.uint32])
 def test_eq(device, h, w, output_dtype):
+    if output_dtype == ttnn.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch.manual_seed(0)
 
     same = 50

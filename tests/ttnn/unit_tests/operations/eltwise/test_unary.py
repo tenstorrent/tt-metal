@@ -16,7 +16,13 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range_dtype,
     compare_pcc,
 )
-from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import (
+    torch_random,
+    is_wormhole_b0,
+    is_blackhole,
+    is_llk_assert_enabled,
+    skip_with_llk_assert,
+)
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -201,6 +207,7 @@ def run_identity_test(device, h, w, data_type):
         assert_equal(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
@@ -672,6 +679,8 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     ],
 )
 def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, ttnn_function, device):
+    if ttnn_dtype == ttnn.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     in_data = torch.randint(low, high, input_shapes, dtype=torch_dtype)
     zeroize_prob = 0.50
     if zeroize_prob > 0:
@@ -1520,6 +1529,7 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -2005,6 +2015,8 @@ def test_unary_bitcast_ttnn(
     input_shapes, input_vals, torch_input_dtype, torch_output_dtype, ttnn_input_dtype, ttnn_output_dtype, device
 ):
     """Test bitcast operation - reinterprets bit pattern without conversion"""
+    if (ttnn_input_dtype == ttnn.uint32 or ttnn_output_dtype == ttnn.uint32) and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     # Create PyTorch reference
     x_torch = torch.tensor(input_vals, dtype=torch_input_dtype)
     y_torch = x_torch.view(torch_output_dtype)
