@@ -890,10 +890,12 @@ class MoeRoutedExpertOp:
         mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
-        # Full device grid
-        full_device_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-        )
+        # Worker core grid: default to full device grid unless caller overrides.
+        full_device_grid = worker_core_grid
+        if full_device_grid is None:
+            full_device_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+            )
 
         expert_scale_mcast_sender_semaphore_addr = mcast_data_sender_semaphore_addr  # Reuse sender semaphore
 
@@ -2270,6 +2272,7 @@ class MoeSharedExpertOp:
         sender_core,
         sender_core_grid,
         mcast_grid,
+        num_dram_worker_cores,
         k_parallel=8,
         n_parallel=8,
         shared_output_tensor=None,  # Deprecated: CB 38 now backed by sdpa_out_interm_buffer
@@ -2478,9 +2481,6 @@ class MoeSharedExpertOp:
         # ==================================================================
         # Output Mcast (sender → all cores, DRAM cores receive into add_cb_in1)
         # ==================================================================
-        mcast_total_cores = mcast_grid.num_cores()
-        num_phantom_cores = sender_core.y  # col 12, rows 0..(sender.y-1)
-        num_dram_worker_cores = mcast_total_cores - num_matmul_cores - num_phantom_cores - 1
         output_mcast_params = MoeSharedExpertOp.setup_output_mcast(
             gather_dst_num_pages=output_gather_params["dst_num_pages"],
             tile_size=tile_1x32_size,
@@ -4098,6 +4098,7 @@ class MoeOp:
             sender_core=routed_ctx.sender_core,
             sender_core_grid=routed_ctx.input_core_grid,
             mcast_grid=routed_ctx.mcast_grid,
+            num_dram_worker_cores=routed_ctx.gate_proj_core_ranges.num_cores(),
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
             ag_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER],
