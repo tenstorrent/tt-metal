@@ -132,31 +132,6 @@ def _state_dict_key(layer_idx: int, suffix: str) -> str:
     return f"model.layers.{layer_idx}.{suffix}"
 
 
-class _StateDictWithOverlay:
-    """Read-through overlay over a read-only mapping; supports __setitem__ for test patching (e.g. gate weight/bias)."""
-
-    def __init__(self, base):
-        self._base = base
-        self._overlay = {}
-
-    def __getitem__(self, key: str):
-        if key in self._overlay:
-            return self._overlay[key]
-        return self._base[key]
-
-    def __setitem__(self, key: str, value) -> None:
-        self._overlay[key] = value
-
-    def __contains__(self, key: str) -> bool:
-        return key in self._overlay or key in self._base
-
-    def keys(self):
-        return set(self._base) | set(self._overlay)
-
-    def __iter__(self):
-        return iter(self.keys())
-
-
 class SharedExpertWeightBundle(NamedTuple):
     """Bundle of prepared shared-expert weights on device and raw torch tensors for golden."""
 
@@ -172,12 +147,11 @@ def get_reference_model_state_dict():
 
     When random_weights=True (or USE_RANDOM_WEIGHTS=True): returns a dict of deterministic
     random weights. When random_weights=False: loads from DEEPSEEK_V3_HF_MODEL via
-    LazyStateDict and returns a mutable overlay so tests can patch gate weight/bias.
+    LazyStateDict (read-only; tests never mutate it).
 
     Usage:
         get = get_reference_model_state_dict
         state = get(layer_idx=0, is_moe=True, num_routed_experts=256, include_global=False)
-        # state supports [] and []= (overlay when using HF).
     """
 
     def get(
@@ -200,8 +174,7 @@ def get_reference_model_state_dict():
                 _add_reference_global_weights(state, seed=seed)
             return state
         path = _resolve_hf_model_path()
-        lazy = LazyStateDict(path)
-        return _StateDictWithOverlay(lazy)
+        return LazyStateDict(path)
 
     return get
 

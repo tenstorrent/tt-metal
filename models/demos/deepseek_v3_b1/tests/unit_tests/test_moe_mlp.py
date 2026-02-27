@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import USE_RANDOM_WEIGHTS
 
 
 # ============================================================================
@@ -240,16 +239,12 @@ def create_routed_expert_tensors(
     enable_routing=True,
     *,
     get_reference_model_state_dict,
-    random_weights: bool | None = None,
 ):
     """
     Create all tensors needed for MoE routed expert test.
 
-    The state_dict used for weight preparation is always the one returned by
-    get_reference_model_state_dict. When random_weights=True (or default from
-    conftest), gate weight and bias are patched with test-generated tensors so
-    golden matches device. When random_weights=False (HF weights), gate and
-    bias are taken from the state dict so the op is validated with real HF weights.
+    The state_dict from get_reference_model_state_dict is never mutated. Gate weight
+    and bias are always read from it for both device preparation and golden reference.
 
     When enable_routing=False, skips routing-specific tensors (gate MM weights,
     gate bias/indices, gate output scores/indices) and uses a single expert.
@@ -260,10 +255,8 @@ def create_routed_expert_tensors(
         mesh_mapper: Optional mesh mapper for multi-device replication
         create_final_output: If True, create final_output_tensor
         enable_routing: If True, create routing tensors. If False, skip them.
-        get_reference_model_state_dict: Required callable from conftest fixture; returns
-            state dict (gate weight/bias are patched only when random_weights=True).
-        random_weights: If True, use deterministic random weights and patch gate/bias for
-            golden. If False, use HF weights (no patch). If None, use conftest.USE_RANDOM_WEIGHTS.
+        get_reference_model_state_dict: Required callable from conftest; returns
+            state dict (read-only when using HF weights).
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -291,18 +284,11 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    if random_weights is None:
-        random_weights = USE_RANDOM_WEIGHTS
-
-    # Create input tensor (and when enable_routing: gate/bias for state_dict and golden)
+    # Create input tensor; gate weight/bias are always read from state dict when enable_routing
     torch.manual_seed(RoutedExpert.SEED)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gate_mm_weights = None
     torch_bias = None
-    if enable_routing:
-        if random_weights:
-            torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
-            torch_bias = torch.randn((1, 8, 32), dtype=torch.bfloat16)
 
     # Define core grid for compute (first column, 8 cores)
     compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
@@ -365,7 +351,7 @@ def create_routed_expert_tensors(
     down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_down_proj_N = down_proj_N_padded // num_banks
 
-    # ── Build state dict from reference fixture; patch gate weight/bias only when random_weights ──
+    # ── Build state dict from reference fixture; gate weight/bias always from state dict ──
     bdw = BlitzDecodeWeights(device)
     layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
     state_dict = get_reference_model_state_dict(
@@ -374,7 +360,6 @@ def create_routed_expert_tensors(
         seed=RoutedExpert.SEED,
         num_routed_experts=num_experts,
         include_global=False,
-        random_weights=random_weights,
     )
     # Expected HF expert shapes: gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
     expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
@@ -384,15 +369,10 @@ def create_routed_expert_tensors(
     assert state_dict[f"{expert0_prefix}up_proj.weight"].shape == expected_gate_up
     assert state_dict[f"{expert0_prefix}down_proj.weight"].shape == expected_down
     if enable_routing:
-        if random_weights:
-            state_dict[f"{layer_key}.mlp.gate.weight"] = torch_gate_mm_weights.T.clone()
-            state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"] = torch_bias.reshape(256).clone()
-        else:
-            # Use HF gate weight and bias for both device and golden (validate op with real weights)
-            gate_key = f"{layer_key}.mlp.gate.weight"
-            bias_key = f"{layer_key}.mlp.gate.e_score_correction_bias"
-            torch_gate_mm_weights = state_dict[gate_key].T.contiguous()
-            torch_bias = state_dict[bias_key].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        gate_key = f"{layer_key}.mlp.gate.weight"
+        bias_key = f"{layer_key}.mlp.gate.e_score_correction_bias"
+        torch_gate_mm_weights = state_dict[gate_key].T.contiguous()
+        torch_bias = state_dict[bias_key].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
     expert_weights_dict = {}
     up_proj_weights_dict = {}
     down_proj_weights_dict = {}
