@@ -634,6 +634,13 @@ class TTNNSpeechT5Attention:
                 value = ttnn.transpose(value, 0, 2)
                 value = ttnn.transpose(value, 1, 2)
 
+                # SDPA decode only supports bfloat16 — cast if running in FP32 mode
+                original_dtype = query.dtype
+                if original_dtype != ttnn.bfloat16:
+                    query = ttnn.typecast(query, ttnn.bfloat16)
+                    key = ttnn.typecast(key, ttnn.bfloat16)
+                    value = ttnn.typecast(value, ttnn.bfloat16)
+
                 # CRITICAL: Convert to sharded (required by paged_update_cache)
                 query = ttnn.interleaved_to_sharded(query, sdpa_batch_sharded_memcfg)
                 key = ttnn.interleaved_to_sharded(key, sdpa_batch_sharded_memcfg)
@@ -665,6 +672,10 @@ class TTNNSpeechT5Attention:
 
                 # Concatenate heads
                 attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+                # Cast back to original dtype if we downcast for SDPA
+                if original_dtype != ttnn.bfloat16:
+                    attn_output = ttnn.typecast(attn_output, original_dtype)
 
             else:
                 # Standard self-attention (prefill mode)

@@ -36,7 +36,7 @@ from models.experimental.speecht5_tts.reference import (
     load_postnet_from_huggingface as load_postnet_ref,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import TTNNSpeechT5Encoder, preprocess_encoder_parameters
-from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder_manual_attn import (
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import (
     TTNNSpeechT5Decoder,
     preprocess_decoder_parameters,
     init_kv_cache,
@@ -46,7 +46,7 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     preprocess_postnet_parameters,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import TTNNEncoderConfig
-from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder_manual_attn import TTNNDecoderConfig
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import TTNNDecoderConfig
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import TTNNPostNetConfig
 
 
