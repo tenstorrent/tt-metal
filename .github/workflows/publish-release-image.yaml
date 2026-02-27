@@ -38,7 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
-      tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -79,7 +78,6 @@ jobs:
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         id: build-push
