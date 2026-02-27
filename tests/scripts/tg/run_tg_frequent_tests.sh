@@ -70,6 +70,7 @@ run_tg_tests() {
     pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_decoder or test_wan_encoder) and 4x8 and real_weights and check_output and _1f"; fail+=$?
+    pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
 
   elif [[ "$1" == "qwenimage" ]]; then
     echo "LOG_METAL: running QwenImage run_tg_frequent_tests"

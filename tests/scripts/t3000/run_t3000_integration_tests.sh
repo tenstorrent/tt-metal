@@ -410,6 +410,7 @@ run_t3000_wan22_tests() {
   pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
   pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_decoder or test_wan_encoder) and 2x4 and real_weights and check_output and _1f"; fail+=$?
+  pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
