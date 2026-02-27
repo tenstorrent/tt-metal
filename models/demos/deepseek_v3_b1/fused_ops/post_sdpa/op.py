@@ -112,7 +112,7 @@ class PostSDPA:
         return reduced
 
     @staticmethod
-    def op(
+    def get_program_context(
         input_tensor_mesh,
         weights1_tensor,
         weights2_tensor,
@@ -140,45 +140,14 @@ class PostSDPA:
         sdpa_per_device_chunk_size=0,
     ):
         """
-        Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
-
-        Args:
-            input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across kv_b2 matmul1 cores)
-                               When sdpa_enabled, this receives scatter output from SDPA phase
-            weights1_tensor: First weights tensor [512, 8192] (width-sharded across matmul1 cores)
-            weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 112 cores)
-            gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
-            gather2_output_tensor: Intermediate tensor mesh [1, 7168] for gather2/CCL (on gather core per device)
-            intermediate_tensor: CCL intermediate tensor mesh for receiving remote data (None when ccl_enabled=False)
-            output_tensor: Final output tensor mesh [1, 7168] (None when ccl_enabled=False)
-            semaphores: List of two global semaphores for CCL synchronization (None when ccl_enabled=False)
-            cluster_axis: Axis for TP all-reduce at the end (default 0, typically 1 for column-wise reduction)
-            residual_tensor_mesh: Optional tensor mesh for residuals [1, 7168] (ignored when ccl_enabled=False)
-            fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
-            ccl_enabled: Whether to enable CCL all-reduce after gather2 (default True)
-            sdpa_kv_cache_buffer: Optional SDPA kv-cache buffer for CB overlap (height-sharded on full
-                device grid, 156672 B/core). When provided, non-tensor-backed CBs (2, 4, 6, 8, 11, 13)
-                are overlapped into the kv-cache L1 buffer to save memory.
-
-            SDPA Reduce-to-All parameters (all None to skip SDPA phase):
-            sdpa_input_l_mesh: L input tensor mesh [8, 4096] (width-sharded across 8 SDPA workers)
-            sdpa_input_ms_mesh: MS input tensor mesh [8, 256] (width-sharded across 8 SDPA workers)
-            sdpa_output_l_mesh: L output tensor mesh [8, 4096] (width-sharded across 8 SDPA workers)
-            sdpa_r1_recv_mesh: R1 receive buffer mesh for SDPA CCL
-            sdpa_r2_recv_mesh: R2 receive buffer mesh for SDPA CCL
-            sdpa_forwarder_scratch_mesh: Forwarder scratch buffer mesh
-            sdpa_semaphores: List of two global semaphores for SDPA CCL
-            sdpa_scale_fp32: Scale value for SDPA reduction (default 1.0)
-            sdpa_cluster_axis: Axis for SDPA all-reduce (default 0, typically reduces across rows)
-            sdpa_position_id_tensor_mesh: Optional position ID tensor mesh (HEIGHT_SHARDED int32 [1,1]
-                per SDPA worker core). When provided with sdpa_per_device_chunk_size > 0, enables
-                position-based device validity masking.
-            sdpa_per_device_chunk_size: Chunk size per device for position validity. Device d in the
-                ring is valid iff position_id >= d * per_device_chunk_size. Default 0 (disabled).
+        Compute per-device program context for the post_sdpa fused operation.
 
         Returns:
-            When ccl_enabled=True: output_tensor mesh with all-reduced result
-            When ccl_enabled=False: gather2_output_tensor mesh with per-device gather2 result
+            Tuple of (full_device_grid, per_device_contexts) where:
+            - full_device_grid: CoreRangeSet covering all cores used
+            - per_device_contexts: List of dicts, one per device, each containing
+              compile-time args, CB/semaphore descriptors, core descriptors, and
+              pre-computed runtime args for CCL and SDPA fabric setup.
         """
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -475,10 +444,9 @@ class PostSDPA:
         gather2_completion_semaphore_id = 6  # Gather2 signals, CCL sender waits
         # CCL uses global semaphores (passed via runtime args)
 
-        # Create mesh program descriptor
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        per_device_contexts = []
 
-        # For each device in the mesh, create appropriate program
+        # For each device in the mesh, compute program context
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
@@ -1290,131 +1258,38 @@ class PostSDPA:
                 ]
 
                 # ========================================================================
-                # Kernel descriptor
+                # Pre-compute CCL runtime args (fabric setup deferred to op())
                 # ========================================================================
-                unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_sdpa/kernels/post_sdpa_kernel.cpp",
-                    core_ranges=full_grid,
-                    ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-                    brisc_named_compile_time_args=brisc_named_compile_time_args,
-                    trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4,
-                        math_approx_mode=False,
-                        fp32_dest_acc_en=fp32_dest_acc_en,
-                        dst_full_sync_en=fp32_dest_acc_en,
-                    ),
-                    defines=kernel_defines,
-                    unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
-                    per_core_compile_time_descriptors=per_core_compile_time_descriptors,
-                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
-                )
-
-                # Get kernel descriptors
-                kernel_result = unified_kernel.get_kernel_descriptors()
-
-                # ========================================================================
-                # Program descriptor
-                # ========================================================================
-                program = ttnn.ProgramDescriptor(
-                    kernels=kernel_result.kernels,
-                    cbs=cb_list,
-                    semaphores=semaphore_list,
-                )
-
-                # ========================================================================
-                # CCL runtime args and fabric (only when CCL is enabled)
-                # ========================================================================
+                ccl_ctx = None
                 if ccl_enabled:
-                    # Get kernel indices for runtime args
-                    ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                    ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
-
-                    # === COMMON RUNTIME ARGS ===
-                    # Sender NCRISC common runtime args (arg 0)
                     ccl_sender_ncrisc_common_rt_args = [
-                        gather2_receiver_data_addr,  # tensor_address
+                        gather2_receiver_data_addr,
                     ]
-
-                    # Sender BRISC common runtime args (args 0-1)
                     ccl_sender_brisc_common_rt_args = [
-                        intermediate_tensor_device.buffer_address(),  # receiver_base_address
-                        ccl_sender_semaphore_addr,  # receive_semaphore_addr
+                        intermediate_tensor_device.buffer_address(),
+                        ccl_sender_semaphore_addr,
                     ]
-
-                    # Receiver NCRISC common runtime args (arg 0)
                     ccl_receiver_ncrisc_common_rt_args = [
-                        ccl_receiver_semaphore_addr,  # sender_semaphore_addr
+                        ccl_receiver_semaphore_addr,
                     ]
-
-                    # === PER-CORE RUNTIME ARGS (empty, fabric args appended later) ===
-                    ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
-
-                    ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
-
-                    ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
-
-                    # Set runtime args and common runtime args for CCL kernels
-                    program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
-                    program.kernels[
-                        ccl_sender_group.ncrisc_kernel_index
-                    ].common_runtime_args = ccl_sender_ncrisc_common_rt_args
-                    program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
-                    program.kernels[
-                        ccl_sender_group.brisc_kernel_index
-                    ].common_runtime_args = ccl_sender_brisc_common_rt_args
-                    program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
-                    program.kernels[
-                        ccl_receiver_group.ncrisc_kernel_index
-                    ].common_runtime_args = ccl_receiver_ncrisc_common_rt_args
-
-                    # ========================================================================
-                    # Fabric connection setup
-                    # ========================================================================
                     fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                    neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
-                    neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
-                    # Setup sender fabric connection
-                    sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                    sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
-                        ccl_sender_core.y
-                    ]
-                    sender_fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id,
-                        [neighbor_fabric_node_id],
-                        [ccl_sender_link],
-                        program,
-                        sender_brisc_kernel_idx,
-                        ccl_sender_core,
-                    )
-                    sender_brisc_rt_args_ref.extend(sender_fabric_args)
-
-                    # Setup receiver fabric connection
-                    receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                    receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[
-                        gather_core.x
-                    ][gather_core.y]
-                    receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id,
-                        [neighbor_fabric_node_id],
-                        [ccl_receiver_link],
-                        program,
-                        receiver_ncrisc_kernel_idx,
-                        gather_core,
-                    )
-                    receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
+                    neighbor_coord_obj = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
+                    neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord_obj)
+                    ccl_ctx = {
+                        "sender_ncrisc_common_rt_args": ccl_sender_ncrisc_common_rt_args,
+                        "sender_brisc_common_rt_args": ccl_sender_brisc_common_rt_args,
+                        "receiver_ncrisc_common_rt_args": ccl_receiver_ncrisc_common_rt_args,
+                        "sender_link": ccl_sender_link,
+                        "receiver_link": ccl_receiver_link,
+                        "fabric_node_id": fabric_node_id,
+                        "neighbor_fabric_node_id": neighbor_fabric_node_id,
+                    }
 
                 # ========================================================================
-                # SDPA runtime args and fabric (only when SDPA is enabled)
+                # Pre-compute SDPA runtime args (fabric setup deferred to op())
                 # ========================================================================
+                sdpa_ctx = None
                 if sdpa_enabled:
-                    # Note: SDPA worker and forwarder groups are looked up by iterating
-                    # kernel_result.groups below (not via get_group_by_arg) because
-                    # per_core_compile_time_descriptors may split cores into separate groups.
-
                     # Get per-device SDPA tensors
                     sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
                     sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
@@ -1621,82 +1496,279 @@ class PostSDPA:
                                 ]
                             )
 
-                    # Set SDPA worker runtime args
-                    # Each group may only cover a subset of worker cores, so filter
-                    # RuntimeArgs to avoid setting args for cores outside the kernel's core_ranges.
-                    for group in kernel_result.groups:
-                        if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
-                            crs = group.core_range_set
-                            program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
-                                sdpa_worker_ncrisc_rt_args, crs
-                            )
-                            program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
-                                sdpa_worker_brisc_rt_args, crs
-                            )
-                            if sdpa_worker_trisc_rt_args is not None:
-                                program.kernels[group.trisc_kernel_index].runtime_args = _filter_runtime_args(
-                                    sdpa_worker_trisc_rt_args, crs
-                                )
-
-                    # SDPA forwarder runtime args (using setup_fabric_connection like original SDPA op)
-                    # Key: Build RuntimeArgs completely FIRST, then assign to program.kernels AFTER
-                    sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
-                    sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
-
-                    # forwarder_buffer_base and ncrisc_buffer_offset already defined above
-                    # Use the new semaphore IDs (matching what we defined above)
-
+                    # Pre-compute forwarder base args (fabric args added in op())
+                    sdpa_forwarder_brisc_base_args = {}
+                    sdpa_forwarder_ncrisc_base_args = {}
                     for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
-                        # BRISC handles FWD direction - set base args first
-                        sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = [
+                        sdpa_forwarder_brisc_base_args[(fwd_core.x, fwd_core.y)] = [
                             forwarder_buffer_base,
-                            0,  # buffer_offset (BRISC uses first half)
+                            0,
                             sdpa_fwd_r1_sem_id,
                             sdpa_fwd_r2_sem_id,
                         ]
-                        # Get fabric args using setup_fabric_connection (like original SDPA op)
-                        brisc_fabric_args = ttnn.setup_fabric_connection(
-                            src_fabric_node_id=sdpa_fabric_node_id,
-                            dst_fabric_node_id=fwd_fabric_node_id,
-                            link_idx=fwd_idx,
-                            program_descriptor=program,
-                            worker_core=fwd_core,
-                        )
-                        sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
-
-                        # NCRISC handles BWD direction - set base args first
-                        sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = [
+                        sdpa_forwarder_ncrisc_base_args[(fwd_core.x, fwd_core.y)] = [
                             forwarder_buffer_base,
-                            ncrisc_buffer_offset,  # buffer_offset (NCRISC uses second half)
+                            ncrisc_buffer_offset,
                             sdpa_bwd_r1_sem_id,
                             sdpa_bwd_r2_sem_id,
                         ]
-                        # Get fabric args using setup_fabric_connection (like original SDPA op)
-                        ncrisc_fabric_args = ttnn.setup_fabric_connection(
-                            src_fabric_node_id=sdpa_fabric_node_id,
-                            dst_fabric_node_id=bwd_fabric_node_id,
-                            link_idx=fwd_idx,
-                            program_descriptor=program,
-                            worker_core=fwd_core,
+
+                    sdpa_ctx = {
+                        "worker_ncrisc_rt_args": sdpa_worker_ncrisc_rt_args,
+                        "worker_brisc_rt_args": sdpa_worker_brisc_rt_args,
+                        "worker_trisc_rt_args": sdpa_worker_trisc_rt_args,
+                        "forwarder_brisc_base_args": sdpa_forwarder_brisc_base_args,
+                        "forwarder_ncrisc_base_args": sdpa_forwarder_ncrisc_base_args,
+                        "fabric_node_id": sdpa_fabric_node_id,
+                        "fwd_fabric_node_id": fwd_fabric_node_id,
+                        "bwd_fabric_node_id": bwd_fabric_node_id,
+                    }
+
+                per_device_contexts.append(
+                    {
+                        "coord": coord,
+                        "ncrisc_named_compile_time_args": ncrisc_named_compile_time_args,
+                        "brisc_named_compile_time_args": brisc_named_compile_time_args,
+                        "trisc_named_compile_time_args": trisc_named_compile_time_args,
+                        "kernel_defines": kernel_defines,
+                        "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "cb_list": cb_list,
+                        "semaphore_list": semaphore_list,
+                        "fp32_dest_acc_en": fp32_dest_acc_en,
+                        "ccl_enabled": ccl_enabled,
+                        "sdpa_enabled": sdpa_enabled,
+                        "ccl_sender_core": ccl_sender_core,
+                        "gather_core": gather_core,
+                        "sdpa_forwarder_cores": sdpa_forwarder_cores if sdpa_enabled else None,
+                        "ccl": ccl_ctx,
+                        "sdpa": sdpa_ctx if sdpa_enabled else None,
+                    }
+                )
+
+        return full_grid, per_device_contexts
+
+    @staticmethod
+    def op(
+        input_tensor_mesh,
+        weights1_tensor,
+        weights2_tensor,
+        gather1_output_tensor,
+        gather2_output_tensor,
+        intermediate_tensor=None,
+        output_tensor=None,
+        semaphores=None,
+        cluster_axis=0,
+        residual_tensor_mesh=None,
+        fp32_dest_acc_en=False,
+        ccl_enabled=True,
+        sdpa_kv_cache_buffer=None,
+        sdpa_input_l_mesh=None,
+        sdpa_input_ms_mesh=None,
+        sdpa_output_l_mesh=None,
+        sdpa_r1_recv_mesh=None,
+        sdpa_r2_recv_mesh=None,
+        sdpa_forwarder_scratch_mesh=None,
+        sdpa_semaphores=None,
+        sdpa_scale_fp32=1.0,
+        sdpa_cluster_axis=0,
+        sdpa_position_id_tensor_mesh=None,
+        sdpa_per_device_chunk_size=0,
+    ):
+        """
+        Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
+
+        Returns:
+            When ccl_enabled=True: output_tensor mesh with all-reduced result
+            When ccl_enabled=False: gather2_output_tensor mesh with per-device gather2 result
+        """
+        sdpa_enabled = sdpa_input_l_mesh is not None
+        sdpa_position_enabled = (
+            sdpa_enabled and sdpa_position_id_tensor_mesh is not None and sdpa_per_device_chunk_size > 0
+        )
+
+        full_device_grid, per_device_contexts = PostSDPA.get_program_context(
+            input_tensor_mesh,
+            weights1_tensor,
+            weights2_tensor,
+            gather1_output_tensor,
+            gather2_output_tensor,
+            intermediate_tensor,
+            output_tensor,
+            semaphores,
+            cluster_axis,
+            residual_tensor_mesh,
+            fp32_dest_acc_en,
+            ccl_enabled,
+            sdpa_kv_cache_buffer,
+            sdpa_input_l_mesh,
+            sdpa_input_ms_mesh,
+            sdpa_output_l_mesh,
+            sdpa_r1_recv_mesh,
+            sdpa_r2_recv_mesh,
+            sdpa_forwarder_scratch_mesh,
+            sdpa_semaphores,
+            sdpa_scale_fp32,
+            sdpa_cluster_axis,
+            sdpa_position_id_tensor_mesh,
+            sdpa_per_device_chunk_size,
+        )
+
+        mesh_device = input_tensor_mesh.device()
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+
+        for ctx in per_device_contexts:
+            coord = ctx["coord"]
+
+            unified_kernel = UnifiedKernelDescriptor(
+                kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_sdpa/kernels/post_sdpa_kernel.cpp",
+                core_ranges=full_device_grid,
+                ncrisc_named_compile_time_args=ctx["ncrisc_named_compile_time_args"],
+                brisc_named_compile_time_args=ctx["brisc_named_compile_time_args"],
+                trisc_named_compile_time_args=ctx["trisc_named_compile_time_args"],
+                trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=ctx["fp32_dest_acc_en"],
+                    dst_full_sync_en=ctx["fp32_dest_acc_en"],
+                ),
+                defines=ctx["kernel_defines"],
+                unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
+                per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
+                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            )
+
+            kernel_result = unified_kernel.get_kernel_descriptors()
+
+            program = ttnn.ProgramDescriptor(
+                kernels=kernel_result.kernels,
+                cbs=ctx["cb_list"],
+                semaphores=ctx["semaphore_list"],
+            )
+
+            # ==================================================================
+            # CCL runtime args and fabric connection setup
+            # ==================================================================
+            if ctx["ccl"]:
+                ccl = ctx["ccl"]
+                ccl_sender_core = ctx["ccl_sender_core"]
+                gather_core = ctx["gather_core"]
+
+                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
+                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
+
+                ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
+                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
+                ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
+                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
+                ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
+                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
+
+                program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
+                program.kernels[ccl_sender_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "sender_ncrisc_common_rt_args"
+                ]
+                program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
+                program.kernels[ccl_sender_group.brisc_kernel_index].common_runtime_args = ccl[
+                    "sender_brisc_common_rt_args"
+                ]
+                program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
+                program.kernels[ccl_receiver_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "receiver_ncrisc_common_rt_args"
+                ]
+
+                fabric_node_id = ccl["fabric_node_id"]
+                neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
+
+                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
+                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                    ccl_sender_core.y
+                ]
+                sender_fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_node_id,
+                    [neighbor_fabric_node_id],
+                    [ccl["sender_link"]],
+                    program,
+                    sender_brisc_kernel_idx,
+                    ccl_sender_core,
+                )
+                sender_brisc_rt_args_ref.extend(sender_fabric_args)
+
+                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
+                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
+                    gather_core.y
+                ]
+                receiver_fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_node_id,
+                    [neighbor_fabric_node_id],
+                    [ccl["receiver_link"]],
+                    program,
+                    receiver_ncrisc_kernel_idx,
+                    gather_core,
+                )
+                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
+
+            # ==================================================================
+            # SDPA runtime args and fabric connection setup
+            # ==================================================================
+            if ctx["sdpa"]:
+                sdpa = ctx["sdpa"]
+                sdpa_forwarder_cores = ctx["sdpa_forwarder_cores"]
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
+                        crs = group.core_range_set
+                        program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa["worker_ncrisc_rt_args"], crs
                         )
-                        sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
-
-                    # Assign to program.kernels AFTER all args are built (critical!)
-                    # Iterate over all matching groups because per_core_compile_time_descriptors
-                    # may split the two forwarder cores into separate kernel groups.
-                    for group in kernel_result.groups:
-                        if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                            crs = group.core_range_set
-                            program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
-                                sdpa_forwarder_brisc_rt_args, crs
-                            )
-                            program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
-                                sdpa_forwarder_ncrisc_rt_args, crs
+                        program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa["worker_brisc_rt_args"], crs
+                        )
+                        if sdpa["worker_trisc_rt_args"] is not None:
+                            program.kernels[group.trisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa["worker_trisc_rt_args"], crs
                             )
 
-                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+                sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
+                sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
 
-        # Execute generic_op
+                for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    brisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
+
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
+                        crs = group.core_range_set
+                        program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa_forwarder_brisc_rt_args, crs
+                        )
+                        program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa_forwarder_ncrisc_rt_args, crs
+                        )
+
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
         io_tensors = [
             input_tensor_mesh,
             weights1_tensor.fused_tensor,
