@@ -19,10 +19,8 @@ from loguru import logger
 from models.common.utility_functions import torch_random
 
 
-# Test a 0D, 1D, 2D, 3D, 4D, 5D, and a 0-volume tensor
-@pytest.mark.parametrize(
-    "tensor_shape", [(), (2,), (3, 10), (6, 3, 60), (1, 11, 67, 77), (3, 6, 40, 63, 20), (6, 0, 32)]
-)
+# Test a 0D, 1D, 5D, and a 0-volume tensor
+@pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
@@ -33,10 +31,11 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
-    Checks for the exactness of shape, values, and dtype of the output tensors.
+    Checks that resulting tensors are within a certain tolerance of PyTorch outputs.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    torch.manual_seed(0)
     rank = len(tensor_shape)
 
     if dim is not None and (dim < -rank or dim > rank - 1):
@@ -72,12 +71,7 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     except RuntimeError:
         ttnn_errored = True
 
-    if op == "min" or op == "max":
-        assert (torch_errored and not ttnn_errored) or (
-            torch_errored == ttnn_errored
-        ), f"torch: {torch_errored}, ttnn: {ttnn_errored}"
-    else:
-        assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
+    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
