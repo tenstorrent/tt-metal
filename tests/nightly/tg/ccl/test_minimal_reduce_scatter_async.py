@@ -387,7 +387,7 @@ def test_reduce_scatter_async_wan(
             repl_dim, shard_dim = (i, j) if cluster_axis == 1 else (j, i)
             eq, mess = comp_pcc(torch_ref_list[shard_dim], ttnn.to_torch(tt_outs[d]))
             if not eq:
-                errors.append(f"Device {dev}: {mess}")
+                errors.append(f"Device {d}: {mess}")
             d += 1
     assert not errors, f"PCC check failed on {len(errors)} device(s):\n" + "\n".join(errors)
 
