@@ -121,7 +121,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
-        mlp_out = ttnn.sum(combined_out, dim=0, keepdim=True)
+        mlp_out = ttnn.sum(mlp_out, dim=0, keepdim=True)
         combined_out = ttnn.add(mlp_out, shared_expert_out)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
