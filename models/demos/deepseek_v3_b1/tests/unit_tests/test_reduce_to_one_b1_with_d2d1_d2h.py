@@ -234,7 +234,8 @@ def test_reduce_to_one_b1_with_d2d1_d2h(
         downstream_socket=host_io.get_upstream_socket(),  # Gets from HostInterface
         upstream_core_coord=d2d0_output_mesh_core,  # D2D_0 output core (sender)
         downstream_core_coord=None,  # Using downstream_socket instead
-        mesh_device=submesh_device,
+        sender_mesh=MeshWrapper(submesh_device),
+        receiver_mesh=MeshWrapper(submesh_device),
     )
     logger.info("Created SocketInterface for D2D_1 cross-device forwarding (ROOT1 → EXIT)")
 

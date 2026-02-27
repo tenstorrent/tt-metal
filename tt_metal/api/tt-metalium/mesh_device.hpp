@@ -249,6 +249,14 @@ public:
     void reshape(const MeshShape& new_shape);
     const MeshDeviceView& get_view() const;
 
+    // Returns the system mesh ID from the underlying view.
+    // This ID is programmed in the Mesh Graph Descriptor that a user provides for a Multi-Mesh Topology.
+    // This value defaults to zero, for all workloads running within a single process.
+    // For distributed Multi-Mesh workloads, this value represents which Fabric Mesh the MeshDevice belongs to,
+    // in the Logical Graph.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/38385
+    uint32_t get_system_mesh_id() const;
+
     std::string to_string() const;
     bool is_parent_mesh() const;
 
