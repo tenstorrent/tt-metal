@@ -10,10 +10,7 @@
 
 // Printing tiles from CBs requires reading CB config from generated files
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
-#include "chlkc_pack_data_format.h"
-#include "chlkc_pack_tile_dims.h"
+#include "chlkc_descriptors.h"
 #endif
 
 // Macros for printing circular buffer internals
@@ -60,6 +57,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
     uint32_t bit_offset = 0;
     uint32_t mask = 0;
     switch (data_format) {
+#ifndef ARCH_QUASAR
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
             adjusted_idx = idx / 4;
@@ -74,6 +72,7 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
             break;
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b:
+#endif
         default:
             adjusted_idx = idx / 1;
             bit_offset = (idx % 1) * 8;
@@ -81,6 +80,97 @@ inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t* dat
             break;
     }
     return (data[adjusted_idx] >> bit_offset) & mask;
+}
+
+// Size of datum in bytes, dprint-specific to support device-side and bfp* DataFormats
+static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
+    switch (format) {
+        case CommonDataFormat::Float32:
+#ifdef ARCH_QUASAR
+        case CommonDataFormat::Tf32:
+#else
+        case CommonDataFormat::UInt32:
+#endif
+        case CommonDataFormat::Int32: return 4;
+
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::UInt16:
+#endif
+        case CommonDataFormat::Float16:
+        case CommonDataFormat::Float16_b: return 2;
+
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Bfp2:
+        case CommonDataFormat::Bfp2_b:
+        case CommonDataFormat::Bfp4:
+        case CommonDataFormat::Bfp4_b:
+        case CommonDataFormat::Bfp8:
+        case CommonDataFormat::Bfp8_b:
+#endif
+        case CommonDataFormat::Int8:
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Lf8:
+#endif
+        case CommonDataFormat::UInt8: return 1;  // Round up to 1 byte
+        case CommonDataFormat::Invalid:
+        default: return 0;  // Invalid/Unknown
+    }
+}
+
+static constexpr bool is_bfp(const CommonDataFormat& format) {
+    switch (format) {
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Bfp2:
+        case CommonDataFormat::Bfp2_b:
+        case CommonDataFormat::Bfp4:
+        case CommonDataFormat::Bfp4_b:
+        case CommonDataFormat::Bfp8:
+        case CommonDataFormat::Bfp8_b: return true;
+#endif
+        case CommonDataFormat::Float16:
+        case CommonDataFormat::Float16_b:
+        case CommonDataFormat::Float32:
+        case CommonDataFormat::Int8:
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Lf8:
+#endif
+        case CommonDataFormat::UInt8:
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::UInt16:
+        case CommonDataFormat::UInt32:
+#endif
+        case CommonDataFormat::Int32:
+        case CommonDataFormat::Invalid:
+        default: return false;
+    }
+}
+
+static constexpr bool is_supported_format(const CommonDataFormat& format) {
+    switch (format) {
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Bfp4_b:
+        case CommonDataFormat::Bfp8_b:
+#endif
+        case CommonDataFormat::Float16_b:
+        case CommonDataFormat::Float32:
+        case CommonDataFormat::Int8:
+        case CommonDataFormat::UInt8:
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::UInt16:
+        case CommonDataFormat::UInt32:
+#endif
+        case CommonDataFormat::Int32: return true;
+#ifndef ARCH_QUASAR
+        case CommonDataFormat::Bfp2:
+        case CommonDataFormat::Bfp2_b:
+        case CommonDataFormat::Bfp4:
+        case CommonDataFormat::Bfp8:
+        case CommonDataFormat::Lf8:
+#endif
+        case CommonDataFormat::Float16:
+        case CommonDataFormat::Invalid:
+        default: return false;
+    }
 }
 
 inline tile_info_t get_tile_info(

@@ -5,7 +5,6 @@
 #include <optional>
 
 #include "bcast_to.hpp"
-#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 
@@ -50,8 +49,8 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace ttnn::operations::experimental {
-Tensor BcastTo::invoke(
+namespace ttnn::experimental {
+Tensor broadcast_to(
     const Tensor& input,
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
@@ -59,4 +58,4 @@ Tensor BcastTo::invoke(
     CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
     return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

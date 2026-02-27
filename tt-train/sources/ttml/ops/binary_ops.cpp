@@ -8,6 +8,7 @@
 #include <memory>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
+#include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
 
@@ -54,6 +55,14 @@ ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& i
 }
 
 }  // namespace
+
+autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
+    auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
+    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    auto links = autograd::get_links(a);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
@@ -171,6 +180,10 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
+}
+
+autograd::TensorPtr add(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
+    return a + b;
 }
 
 autograd::TensorPtr add(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
