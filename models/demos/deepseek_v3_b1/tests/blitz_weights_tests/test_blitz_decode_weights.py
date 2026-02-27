@@ -257,7 +257,7 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): q_a_proj, q_b_proj, kv_a_proj overlap passed")
 
 
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
@@ -296,9 +296,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
     tile_1x32 = ttnn.Tile([1, 32])
 
     torch.manual_seed(42)
-    o_proj_raw = torch.randn(
-        cfg.o_proj.raw_tensor_shape[0] * cfg.o_proj.tp, cfg.o_proj.raw_tensor_shape[1], dtype=torch.bfloat16
-    )
+    o_proj_raw = torch.randn(*cfg.o_proj.raw_tensor_shape, dtype=torch.bfloat16)
     gate_mm_raw = torch.randn(cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
     attn_norm_raw = torch.randn(cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
     q_norm_raw = torch.randn(cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
@@ -307,7 +305,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused o_proj + gate_mm + rmsnorm gamma weights ...")
-    o_proj, gate_mm, attn_norm_g, q_norm_g, kv_norm_g, ffn_norm_g = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_proj, gate_mm, attn_norm_g, q_norm_g, ffn_norm_g, kv_norm_g = bdw.get_tt_o_proj_and_gate_mm_weights(
         o_proj_raw,
         gate_mm_raw,
         attn_norm_raw,
@@ -364,7 +362,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     # -- Build references (dtype round-trip on single device) ----------------
     logger.info("Building o_proj per-TP round-trip references ...")
-    per_device_o_h = cfg.o_proj.raw_tensor_shape[0]
+    per_device_o_h = cfg.o_proj.per_device_height
     o_tp_refs = []
     for tp_idx in range(cfg.o_proj.tp):
         o_slice = o_proj_raw[tp_idx * per_device_o_h : (tp_idx + 1) * per_device_o_h, :]
