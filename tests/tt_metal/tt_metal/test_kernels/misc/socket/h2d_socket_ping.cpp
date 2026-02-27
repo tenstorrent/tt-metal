@@ -10,7 +10,7 @@
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t measurement_buffer_addr = get_compile_time_arg_val(2);
+    // arg 2 (measurement_buffer_addr) reserved for ABI compatibility; latency measured on host
     constexpr uint32_t num_iterations = get_compile_time_arg_val(3);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
@@ -23,16 +23,9 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < num_iterations; i++) {
-        uint64_t start_timestamp = get_timestamp();
-
         socket_wait_for_pages(receiver_socket, 1);
         socket_pop_pages(receiver_socket, 1);
         socket_notify_sender(receiver_socket);
-
-        uint64_t end_timestamp = get_timestamp();
-
-        *reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr + i * sizeof(uint64_t)) =
-            end_timestamp - start_timestamp;
     }
 
     update_socket_config(receiver_socket);
