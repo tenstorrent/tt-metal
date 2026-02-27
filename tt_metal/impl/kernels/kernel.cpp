@@ -845,7 +845,7 @@ std::vector<uint32_t> QuasarDataMovementKernel::get_processor_indices_for_binary
     const auto& hal = MetalContext::instance().hal();
     auto core_type = this->get_kernel_programmable_core_type();
     auto proc_class = this->get_kernel_processor_class();
-    if (this->is_legacy_kernel_) {
+    if (config_.is_legacy_kernel) {
         uint32_t idx = hal.get_processor_index(core_type, proc_class, this->get_kernel_processor_type(binary_index));
         return {idx};
     }
@@ -864,7 +864,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
 
-    if (this->is_legacy_kernel_) {
+    if (config_.is_legacy_kernel) {
         std::vector<const JitBuildState*> targets;
         targets.reserve(this->dm_cores_.size());
         for (const auto& proc : this->dm_processors_) {
@@ -888,7 +888,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    if (this->is_legacy_kernel_) {
+    if (config_.is_legacy_kernel) {
         for (const DataMovementProcessor& processor : this->dm_processors_) {
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
             const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -934,7 +934,7 @@ bool QuasarDataMovementKernel::configure(
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
-    if (this->is_legacy_kernel_) {
+    if (config_.is_legacy_kernel) {
         for (int i = 0; i < this->expected_num_binaries(); i++) {
             llrt::write_binary_to_address(
                 *binaries[i],
@@ -960,12 +960,12 @@ std::string_view QuasarDataMovementKernel::get_linker_opt_level() const { return
 std::string QuasarDataMovementKernel::config_hash() const {
     // DataMovementProcessor values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->dm_processors_.begin(), this->dm_processors_.end()));
-    const char* suffix = this->is_legacy_kernel_ ? "_legacy" : "_shared";
+    const char* suffix = config_->is_legacy_kernel_ ? "_legacy" : "_shared";
     return fmt::format("{}{}", fmt::join(this->dm_processors_, "_"), suffix);
 }
 
 uint8_t QuasarDataMovementKernel::expected_num_binaries() const {
-    return this->is_legacy_kernel_ ? static_cast<uint8_t>(this->dm_processors_.size()) : 1;
+    return config_->is_legacy_kernel_ ? static_cast<uint8_t>(this->dm_processors_.size()) : 1;
 }
 
 uint32_t QuasarComputeKernel::get_kernel_processor_type(int index) const {

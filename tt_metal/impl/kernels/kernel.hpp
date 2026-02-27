@@ -404,8 +404,7 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_processors_,
-        bool is_legacy_kernel) :
+        const std::set<DataMovementProcessor>& dm_processors_) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -424,7 +423,6 @@ public:
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
-        this->is_legacy_kernel_ = is_legacy_kernel;
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -454,8 +452,6 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-
-    bool is_legacy_kernel_;
 };
 
 class QuasarComputeKernel : public Kernel {

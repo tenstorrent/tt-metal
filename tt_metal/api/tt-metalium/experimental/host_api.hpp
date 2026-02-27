@@ -46,6 +46,9 @@ struct QuasarDataMovementConfig {
     //     CreateKernel(program, "kernel.cpp", core, QuasarDataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
+
+    bool is_legacy_kernel = false;
+    
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };

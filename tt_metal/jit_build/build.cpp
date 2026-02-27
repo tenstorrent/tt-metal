@@ -320,16 +320,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     default_compile_opt_level_("Os"),
     default_linker_opt_level_("Os") {
 
-    bool is_legacy_kernel = true;
-    char* env_var = std::getenv("USE_LEGACY_KERNELS");
-    if (env_var != nullptr && std::strcmp(env_var, "0") == 0) {
-        is_legacy_kernel = false;
-    } else if (env_var != nullptr && std::strcmp(env_var, "1") == 0) {
-        is_legacy_kernel = true;
-    } else if (env_var != nullptr) {
-        TT_THROW("Invalid value for USE_LEGACY_KERNELS: {}", env_var);
-    }
-
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
@@ -346,7 +336,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
     HalJitBuildQueryInterface::Params params{
         build_config.is_fw,
-        is_legacy_kernel,
         build_config.core_type,
         build_config.processor_class,
         static_cast<uint32_t>(build_config.processor_id),
