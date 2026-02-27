@@ -677,17 +677,6 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    auto optimizer_type = optimizer_node["type"].as<std::string>("AdamW");
-    if (optimizer_type == "NoOp") {
-        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!is_three_tier_training(multihost_config)) {
-        fmt::print("Optimizer: {}\n", optimizer_type);
-        fmt::print("    Learning rate: {}\n", optimizer_node["lr"].as<float>(1e-3F));
-        fmt::print("    Weight decay: {}\n", optimizer_node["weight_decay"].as<float>(1e-2F));
-    } else {
-        fmt::println("Remote optimizer configured!");
-    }
-
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
@@ -700,6 +689,16 @@ int main(int argc, char **argv) {
     };
 
     auto optimizer = select_optimizer();
+
+    if (optimizer->get_name() == "NoOp") {
+        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
+    } else if (!is_three_tier_training(multihost_config)) {
+        fmt::print("Optimizer: {}\n", optimizer->get_name());
+        // TODO: Replace with print_stats() after #38756 is resolved
+        fmt::print("    Learning rate: {}\n", optimizer->get_lr());
+    } else {
+        fmt::println("Remote optimizer configured!");
+    }
     auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
 
     if (is_three_tier_training(multihost_config)) {
