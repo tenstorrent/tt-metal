@@ -264,6 +264,10 @@ def run_avg_pool2d(
 
     ttnn_output = ttnn.to_torch(ttnn_output)
 
+    # DRAM slicing returns (N, H, W, C) while golden returns (1, 1, NHW, C) - normalize shape
+    if ttnn_output.shape != torch_output.shape:
+        ttnn_output = ttnn_output.reshape(1, 1, -1, in_c)
+
     # apply correction to TORCH output for asymmetric padding when needed
     # This requires NCHW format, so convert only when correction is needed
     if torch_needs_correction:
