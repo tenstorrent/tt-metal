@@ -78,21 +78,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         Returns:
             ModelState containing shared tensors
         """
-        num_devices = mesh_device.get_num_devices()
-        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
-
-        expert_mapping_tensors = ttnn.from_torch(
-            torch.eye(num_devices, dtype=torch.int32)
-            .repeat_interleave(num_experts_per_device, dim=0)
-            .unsqueeze(0)
-            .unsqueeze(0),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
 
         remap_topk_mask = ttnn.from_torch(
             torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
@@ -104,7 +90,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         return {
-            "expert_mapping_tensors": expert_mapping_tensors,
+            "expert_mapping_tensor": expert_mapping_tensor,
             "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
@@ -155,6 +141,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+
+        expert_mapping_tensor = cls._create_expert_mapping_tensor(hf_config, mesh_device, mode)
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -221,6 +209,55 @@ class MoE(SharedStateAddOn, AbstractModule):
                     {ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}
                 )
 
+                preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
+                    torch.zeros([DISPATCH_DEVICES, BATCH, HIDDEN_SIZE], dtype=torch.bfloat16),
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+                )
+
+                preallocated_dispatch_output_expert_indices = ttnn.from_torch(
+                    torch.zeros([DISPATCH_DEVICES, BATCH, hf_config.num_experts_per_tok], dtype=torch.uint16),
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint16,
+                    memory_config=ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(
+                            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                            [BATCH, hf_config.num_experts_per_tok],
+                            ttnn.ShardOrientation.ROW_MAJOR,
+                        ),
+                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+                )
+
+                preallocated_dispatch_output_expert_scores = ttnn.from_torch(
+                    torch.zeros([DISPATCH_DEVICES, BATCH, hf_config.num_experts_per_tok], dtype=torch.bfloat16),
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(
+                            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                            [BATCH, hf_config.num_experts_per_tok],
+                            ttnn.ShardOrientation.ROW_MAJOR,
+                        ),
+                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+                )
+
+                preallocated_dispatch_output_tensors = (
+                    preallocated_dispatch_output_sparse_buffer,
+                    preallocated_dispatch_output_expert_indices,
+                    preallocated_dispatch_output_expert_scores,
+                )
+
                 # Construct the config
                 return {
                     "mesh_device": MeshDeviceStub(mesh_device.shape),
@@ -229,6 +266,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     "hidden_size": hf_config.hidden_size,
                     "num_experts_per_tok": hf_config.num_experts_per_tok,
                     "num_dispatch_devices": mesh_device.shape[0],
+                    "expert_mapping_tensor": expert_mapping_tensor,
                     "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                     "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
                     "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
@@ -239,6 +277,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                         cluster_axis=0,
                         worker_mode=ttnn.WorkerMode.DIRECT,
                         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+                        output_tensors=preallocated_dispatch_output_tensors,
                     ),
                     "selective_reduce_combine": SelectiveReduceCombineConfig(
                         hidden_size=hf_config.hidden_size,
@@ -286,6 +325,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     "hidden_size": hf_config.hidden_size,
                     "num_experts_per_tok": hf_config.num_experts_per_tok,
                     "num_dispatch_devices": mesh_device.shape[0],
+                    "expert_mapping_tensor": expert_mapping_tensor,
                     "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                     "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
                     "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
@@ -328,6 +368,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
+                "expert_mapping_tensor": expert_mapping_tensor,
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
                 "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
@@ -356,6 +397,54 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                 ),
             }
+
+    @classmethod
+    def _create_expert_mapping_tensor(hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str):
+        num_devices = mesh_device.get_num_devices()
+        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+
+        if mode == "decode":
+            # TODO: (GR)
+            is_quad_ring = True
+
+            # optimized ops only functional for quad torus
+            if is_quad_ring:
+                expert_mapping_tensor = ttnn.from_torch(
+                    torch.eye(num_devices, dtype=torch.int32)
+                    .repeat_interleave(num_experts_per_device, dim=0)
+                    .transpose(0, 1),
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    dtype=ttnn.uint16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            else:
+                expert_mapping_tensor = ttnn.from_torch(
+                    torch.eye(num_devices, dtype=torch.int32)
+                    .repeat_interleave(num_experts_per_device, dim=0)
+                    .unsqueeze(0)
+                    .unsqueeze(0),
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    dtype=ttnn.uint16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+        else:
+            expert_mapping_tensor = ttnn.from_torch(
+                torch.eye(num_devices, dtype=torch.int32)
+                .repeat_interleave(num_experts_per_device, dim=0)
+                .unsqueeze(0)
+                .unsqueeze(0),
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                dtype=ttnn.uint16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        return expert_mapping_tensor
 
     @classmethod
     def decode_model_config(
@@ -527,8 +616,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 x_rm,
                 tt_dispatch_input_expert_indices_tensor,
                 tt_dispatch_input_expert_scores_tensor,
-                cfg["expert_mapping_tensors"],
-                output_tensors=tt_dispatch_preallocated_output_tensors,
+                cfg["expert_mapping_tensor"],
                 **ccl.populate_all_to_all_dispatch_metadata_args(cfg["all_to_all_dispatch_metadata"]),
             )
 
@@ -569,7 +657,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
                 x_rm,
                 topk_experts_indices_rm,
-                cfg["expert_mapping_tensors"],
+                cfg["expert_mapping_tensor"],
                 **cfg["all_to_all_dispatch"],
             )
 
@@ -585,7 +673,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
             _, sparsity_t = ttnn.moe_expert_token_remap(
                 remap_topk_mask,
-                cfg["expert_mapping_tensors"],
+                cfg["expert_mapping_tensor"],
                 all_to_all_dispatch_metadata_tensors,
                 reduction_size=cfg["sparsity_block_size"],
             )
@@ -601,7 +689,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
                 experts_output,
                 all_to_all_dispatch_metadata_tensors,
-                cfg["expert_mapping_tensors"],
+                cfg["expert_mapping_tensor"],
                 **cfg["all_to_all_combine"],
             )
 
@@ -685,7 +773,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
                 x_chunk,
                 topk_indices_chunk,
-                cfg["expert_mapping_tensors"],
+                cfg["expert_mapping_tensor"],
                 **cfg["all_to_all_dispatch"],
             )
             ttnn.deallocate(x_chunk)
@@ -715,7 +803,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
                 experts_output,
                 all_to_all_dispatch_metadata_tensors,
-                cfg["expert_mapping_tensors"],
+                cfg["expert_mapping_tensor"],
                 **cfg["all_to_all_combine"],
             )
             ttnn.deallocate(experts_output)
