@@ -60,10 +60,7 @@ void kernel_main() {
         index++;
         uint32_t total_bytes_into_page = offset + index * input_elem_size_bytes;
         bool end_of_block = index == rows_per_block;
-        // Advance at buffer page boundary; if buffer has alignment padding (logical_row < page_size), advance at
-        // logical row
-        bool end_of_page = (total_bytes_into_page == aligned_input_page_size) ||
-                           (input_page_size < aligned_input_page_size && total_bytes_into_page == input_page_size);
+        bool end_of_page = (total_bytes_into_page == input_page_size);
         if (end_of_block || end_of_page) {
             offset += input_block_size_bytes;
             if (end_of_page) {
