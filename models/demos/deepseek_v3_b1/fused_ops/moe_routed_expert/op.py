@@ -17,7 +17,7 @@ This implements the MoE routed expert computation:
 """
 
 import math
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -26,6 +26,10 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
+
+if TYPE_CHECKING:
+    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 # Device roles for ReduceToOneB1
 MESH_LEAF = 0
@@ -433,7 +437,7 @@ def setup_sram_matmul(
     in0_cb,
     in1_cb,
     out_cb,
-    weights_tensor,
+    weights_overlapped: "OverlappedTensor",
     output_tensor,
     k_num_tiles,
     fused_activation=0,
@@ -442,13 +446,13 @@ def setup_sram_matmul(
     Set up parameters for an SRAM matmul operation.
 
     SRAM matmul computes: output = input @ weights with optional fused activation.
-    Weights and output are sharded in L1 (SRAM).
+    Weights are provided as an OverlappedTensor backed by a fused device buffer.
 
     Args:
         in0_cb: Input CB index (receives mcasted input)
         in1_cb: Weights CB index
         out_cb: Output CB index
-        weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
+        weights_overlapped: OverlappedTensor describing the weights sub-tensor
         output_tensor: Output tensor (WIDTH_SHARDED in L1)
         k_num_tiles: K dimension in tiles
         fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
@@ -456,17 +460,12 @@ def setup_sram_matmul(
     Returns:
         Dictionary with matmul parameters and CB descriptors
     """
-    # Get per-core output width in tiles from weights tensor
-    weights_tile = weights_tensor.get_tile()
-    weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
-    weights_shard_width = weights_shard_shape[1]
-    out_w = weights_shard_width // weights_tile.tile_shape[1]
-
-    # Get core grid from weights tensor
-    core_grid = weights_tensor.memory_config().shard_spec.grid
-
-    # CB descriptors
-    weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
+    tile = ttnn.Tile(weights_overlapped.tile_shape)
+    shard_width = weights_overlapped.shard_shape[1]
+    out_w = shard_width // tile.tile_shape[1]
+    core_grid = weights_overlapped.core_range_set
+    fused_tensor_device0 = ttnn.get_device_tensors(weights_overlapped.fused_tensor)[0]
+    weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(in1_cb, weights_overlapped, fused_tensor_device0)
     output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
 
     return {
@@ -1005,7 +1004,7 @@ class MoeRoutedExpert:
             in0_cb=gate_mm_input_cb,
             in1_cb=gate_mm_weights_cb,
             out_cb=gate_mm_output_cb,
-            weights_tensor=gate_mm_weights_tensor,
+            weights_overlapped=gate_mm_weights_tensor,
             output_tensor=gate_mm_output_tensor,
             k_num_tiles=num_tiles_k,
             fused_activation=MoeRoutedExpert.ACTIVATION_SIGMOID,
@@ -1785,7 +1784,7 @@ class MoeRoutedExpert:
         io_tensors = [
             input_tensor,
             mcast_output_tensor,
-            gate_mm_weights_tensor,
+            gate_mm_weights_tensor.fused_tensor,
             gate_mm_output_tensor,
             gate_input_tensor,
             gate_bias_tensor,

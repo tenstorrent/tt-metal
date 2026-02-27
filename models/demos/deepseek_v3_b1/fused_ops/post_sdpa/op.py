@@ -6,24 +6,24 @@
 Post SDPA fused operation with CCL All-Reduce.
 
 This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
-- Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
+- Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (kv_b2 grid: 5x8 + 12x2)
 - Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast)
-- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-8 full 12 + row 9 cols 0-3)
+- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
 - Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices and reduce (local + remote + residual)
 
 The 13x10 mcast grid contains 130 cores, but only 112 are active for matmul2.
-The 8 inactive cores (row 9 cols 4-11) receive mcast data but skip matmul via is_matmul2_core=false.
+The 18 inactive cores receive mcast data but skip matmul via is_matmul2_core=false.
 
 CCL All-Reduce uses:
 - CCL Receiver core = Gather core (12, 9) - already has local data after Gather2
 - CCL Sender core = Adjacent core (11, 9) - reads from gather core, sends via fabric
 
 CB Layout:
-- CB 0: matmul1_in0 (8x8 grid)
-- CB 1: matmul1_in1 (8x8 grid)
-- CB 2: matmul1_out (8x8 grid)
+- CB 0: matmul1_in0 (kv_b2 grid: 5x8 + 12x2)
+- CB 1: matmul1_in1 (kv_b2 grid: 5x8 + 12x2)
+- CB 2: matmul1_out (kv_b2 grid: 5x8 + 12x2)
 - CB 3: gather1_dst = mcast_src (gather core)
 - CB 4: mcast_dst = matmul2_in0 (13x10 grid)
 - CB 5: matmul2_in1 (112 active matmul2 cores)
@@ -40,10 +40,16 @@ CB Layout:
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+    KVB12_PROJ_SingleDeviceOverlapSpec,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
+)
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -56,6 +62,15 @@ def _get_element_size_bytes(dtype):
     if dtype == ttnn.float32:
         return 4
     raise ValueError(f"Unsupported dtype for sdpa: {dtype}")
+
+
+def _filter_runtime_args(rt_args, core_range_set):
+    """Return a new RuntimeArgs containing only entries for cores in core_range_set."""
+    filtered = ttnn.RuntimeArgs()
+    for coord, args in rt_args:
+        if core_range_set.contains(coord):
+            filtered[coord.x][coord.y] = list(args)
+    return filtered
 
 
 class PostSDPA:
@@ -120,7 +135,6 @@ class PostSDPA:
         sdpa_forwarder_scratch_mesh=None,
         sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
-        sdpa_forwarder_cores=None,
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
         sdpa_per_device_chunk_size=0,
@@ -129,9 +143,9 @@ class PostSDPA:
         Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
 
         Args:
-            input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across 8x8 matmul1 cores)
+            input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across kv_b2 matmul1 cores)
                                When sdpa_enabled, this receives scatter output from SDPA phase
-            weights1_tensor: First weights tensor [512, 8192] (width-sharded across 8x8)
+            weights1_tensor: First weights tensor [512, 8192] (width-sharded across matmul1 cores)
             weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 112 cores)
             gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
             gather2_output_tensor: Intermediate tensor mesh [1, 7168] for gather2/CCL (on gather core per device)
@@ -155,7 +169,6 @@ class PostSDPA:
             sdpa_forwarder_scratch_mesh: Forwarder scratch buffer mesh
             sdpa_semaphores: List of two global semaphores for SDPA CCL
             sdpa_scale_fp32: Scale value for SDPA reduction (default 1.0)
-            sdpa_forwarder_cores: List of 2 CoreCoord for SDPA forwarders
             sdpa_cluster_axis: Axis for SDPA all-reduce (default 0, typically reduces across rows)
             sdpa_position_id_tensor_mesh: Optional position ID tensor mesh (HEIGHT_SHARDED int32 [1,1]
                 per SDPA worker core). When provided with sdpa_per_device_chunk_size > 0, enables
@@ -174,6 +187,8 @@ class PostSDPA:
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        weights1_fused_tensors_per_device = ttnn.get_device_tensors(weights1_tensor.fused_tensor)
+        weights2_fused_tensors_per_device = ttnn.get_device_tensors(weights2_tensor.fused_tensor)
         gather2_output_tensors_per_device = ttnn.get_device_tensors(gather2_output_tensor)
         if ccl_enabled:
             intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
@@ -210,19 +225,17 @@ class PostSDPA:
             standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
 
         # ========================================================================
-        # Core grid configuration (same for all devices)
+        # Core grid configuration — derived from production weight overlap specs
         # ========================================================================
-        # Matmul1 grid: 8x8 = 64 cores
-        MATMUL1_GRID_START_X = 0
-        MATMUL1_GRID_START_Y = 0
-        MATMUL1_GRID_END_X = 7  # 8 columns (0-7)
-        MATMUL1_GRID_END_Y = 7  # 8 rows (0-7)
-        matmul1_grid = ttnn.CoreRange(
-            ttnn.CoreCoord(MATMUL1_GRID_START_X, MATMUL1_GRID_START_Y),
-            ttnn.CoreCoord(MATMUL1_GRID_END_X, MATMUL1_GRID_END_Y),
-        )
-        matmul1_core_grid = ttnn.CoreRangeSet([matmul1_grid])
-        num_matmul1_cores = matmul1_grid.grid_size().x * matmul1_grid.grid_size().y  # 64
+        # Matmul1 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
+        kv_b12_spec = KVB12_PROJ_SingleDeviceOverlapSpec()
+        matmul1_core_grid = kv_b12_spec.kv_b2_core_range_set
+        num_matmul1_cores = matmul1_core_grid.num_cores()  # 64
+
+        # Per-core gather1 sender index: contiguous 0..63 in row-major order.
+        # Needed because kv_b2 grid is non-rectangular (5×8 + 12×2).
+        matmul1_cores = ttnn.corerange_to_cores(matmul1_core_grid, row_wise=True)
+        gather1_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul1_cores)]
 
         # Gather/CCL receiver core: (12, 9)
         gather_core = ttnn.CoreCoord(12, 9)
@@ -244,23 +257,16 @@ class PostSDPA:
         mcast_core_grid = ttnn.CoreRangeSet([mcast_grid])
         num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 130
 
-        # Active Matmul2 cores: 112 cores (rows 0-8 full 12 cols + row 9 cols 0-3)
-        matmul2_grid_main = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0),
-            ttnn.CoreCoord(11, 8),  # 12 columns x 9 rows = 108 cores
-        )
-        matmul2_grid_extra = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 9),
-            ttnn.CoreCoord(3, 9),  # 4 columns x 1 row = 4 cores
-        )
-        matmul2_active_core_grid = ttnn.CoreRangeSet([matmul2_grid_main, matmul2_grid_extra])
-        num_matmul2_cores = 112  # 108 + 4 active cores
+        # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+        o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
+        matmul2_active_core_grid = o_proj_spec.o_proj_core_range_set
+        num_matmul2_cores = matmul2_active_core_grid.num_cores()  # 112
 
-        # Gather2 sender grid bounds (for offset calculation, use bounding box)
-        MATMUL2_GRID_START_X = 0
-        MATMUL2_GRID_START_Y = 0
-        MATMUL2_GRID_END_X = 11  # Same as mcast grid for offset calculation
-        MATMUL2_GRID_END_Y = 9
+        # Per-core gather2 sender index: contiguous 0..111 in row-major order.
+        # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
+        # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
+        matmul2_cores = ttnn.corerange_to_cores(matmul2_active_core_grid, row_wise=True)
+        gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul2_cores)]
 
         # Full grid (union of all cores for semaphore allocation)
         full_grid = matmul1_core_grid.merge(gather_core_grid).merge(mcast_core_grid).merge(ccl_sender_core_grid)
@@ -278,16 +284,14 @@ class PostSDPA:
 
             sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
 
-            # SDPA forwarder cores: (6,9), (7,9) - provided by caller or default
-            # Both must be on row 9 with x > 3 to be outside matmul2 grid (same compile-time args)
-            if sdpa_forwarder_cores is None:
-                sdpa_forwarder_cores = [ttnn.CoreCoord(6, 9), ttnn.CoreCoord(7, 9)]
-            sdpa_forwarder_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(sdpa_forwarder_cores[0], sdpa_forwarder_cores[0]),
-                    ttnn.CoreRange(sdpa_forwarder_cores[1], sdpa_forwarder_cores[1]),
-                ]
-            )
+            # SDPA forwarder grid: derived from the scratch buffer's shard spec so that
+            # the kernel runs on exactly the cores where the scratch buffer is allocated.
+            assert (
+                sdpa_forwarder_scratch_mesh is not None
+            ), "sdpa_forwarder_scratch_mesh must be provided when sdpa_enabled=True"
+            sdpa_forwarder_scratch_sample = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
+            sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
+            sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
 
             # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
             full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
@@ -405,9 +409,9 @@ class PostSDPA:
         # ========================================================================
         # CB indices
         # ========================================================================
-        matmul1_in0_cb = 0  # Matmul1 input (8x8)
-        matmul1_in1_cb = 1  # Matmul1 weights (8x8)
-        matmul1_out_cb = 2  # Matmul1 output (8x8)
+        matmul1_in0_cb = 0  # Matmul1 input (kv_b2 grid)
+        matmul1_in1_cb = 1  # Matmul1 weights (kv_b2 grid)
+        matmul1_out_cb = 2  # Matmul1 output (kv_b2 grid)
         gather1_dst_cb = 3  # Gather1 output = Mcast source (gather core)
         matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x10 mcast grid)
         matmul2_in1_cb = 5  # Matmul2 weights (112 active cores)
@@ -486,6 +490,8 @@ class PostSDPA:
 
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
+                weights1_fused_tensor_device = weights1_fused_tensors_per_device[device_idx]
+                weights2_fused_tensor_device = weights2_fused_tensors_per_device[device_idx]
                 gather2_output_tensor_device = gather2_output_tensors_per_device[device_idx]
                 if ccl_enabled:
                     output_tensor_device = output_tensors_per_device[device_idx]
@@ -544,10 +550,10 @@ class PostSDPA:
                     ("gather1_receiver_semaphore_id", gather1_noc0_receiver_semaphore_id),
                     ("gather1_src_cb", matmul1_out_cb),
                     ("gather1_src_num_pages", gather1_src_num_pages),
-                    ("gather1_sender_grid_start_x", MATMUL1_GRID_START_X),
-                    ("gather1_sender_grid_start_y", MATMUL1_GRID_START_Y),
-                    ("gather1_sender_grid_end_x", MATMUL1_GRID_END_X),
-                    ("gather1_sender_grid_end_y", MATMUL1_GRID_END_Y),
+                    ("gather1_sender_grid_start_x", 0),
+                    ("gather1_sender_grid_start_y", 0),
+                    ("gather1_sender_grid_end_x", 0),
+                    ("gather1_sender_grid_end_y", 0),
                     ("gather1_row_major", 1),
                     ("gather1_receiver_data_addr", gather1_receiver_data_addr),
                     # Mcast receiver
@@ -567,10 +573,10 @@ class PostSDPA:
                     ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
                     ("gather2_src_cb", matmul2_out_cb),
                     ("gather2_src_num_pages", gather2_src_num_pages),
-                    ("gather2_sender_grid_start_x", MATMUL2_GRID_START_X),
-                    ("gather2_sender_grid_start_y", MATMUL2_GRID_START_Y),
-                    ("gather2_sender_grid_end_x", MATMUL2_GRID_END_X),
-                    ("gather2_sender_grid_end_y", MATMUL2_GRID_END_Y),
+                    ("gather2_sender_grid_start_x", 0),
+                    ("gather2_sender_grid_start_y", 0),
+                    ("gather2_sender_grid_end_x", 0),
+                    ("gather2_sender_grid_end_y", 0),
                     ("gather2_row_major", 1),
                     ("gather2_receiver_data_addr", gather2_receiver_data_addr),
                     # CCL sender (NCRISC reads from gather core)
@@ -764,13 +770,15 @@ class PostSDPA:
                 # ========================================================================
                 running_address_offset = 0
 
-                # CB 0: Matmul1 input (from sharded tensor, 8x8 grid)
+                # CB 0: Matmul1 input (from sharded tensor, kv_b2 grid)
                 matmul1_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in0_cb, input_tensor_device)
 
-                # CB 1: Matmul1 weights (from sharded tensor, 8x8 grid)
-                matmul1_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in1_cb, weights1_tensor)
+                # CB 1: Matmul1 weights (from kv_b2 overlapped tensor)
+                matmul1_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul1_in1_cb, weights1_tensor, weights1_fused_tensor_device
+                )
 
-                # CB 2: Matmul1 output (4 tiles of 1x32 per core, 8x8 grid)
+                # CB 2: Matmul1 output (4 tiles of 1x32 per core, kv_b2 grid)
                 # When kv_cache buffer is available, overlap into it. Otherwise standalone.
                 matmul1_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul1_out_cb_format = ttnn.CBFormatDescriptor(
@@ -824,8 +832,10 @@ class PostSDPA:
                         format_descriptors=[matmul2_in0_cb_format],
                     )
 
-                # CB 5: Matmul2 weights (from sharded tensor, 112 active matmul2 cores)
-                matmul2_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_in1_cb, weights2_tensor)
+                # CB 5: Matmul2 weights (from o_proj overlapped tensor)
+                matmul2_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul2_in1_cb, weights2_tensor, weights2_fused_tensor_device
+                )
 
                 # CB 6: Matmul2 output (2 tiles of 1x32 per core, 112 active matmul2 cores)
                 matmul2_out_cb_format = ttnn.CBFormatDescriptor(
@@ -1163,12 +1173,6 @@ class PostSDPA:
                     semaphore_list.append(scatter_arrival_semaphore_descriptor)
 
                     # SDPA forwarder semaphores (workers signal these to forwarders)
-                    sdpa_forwarder_grid = ttnn.CoreRangeSet(
-                        [
-                            ttnn.CoreRange(sdpa_forwarder_cores[0], sdpa_forwarder_cores[0]),
-                            ttnn.CoreRange(sdpa_forwarder_cores[1], sdpa_forwarder_cores[1]),
-                        ]
-                    )
                     sdpa_fwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                         id=sdpa_fwd_r1_sem_id,
                         core_ranges=sdpa_forwarder_grid,
@@ -1266,6 +1270,26 @@ class PostSDPA:
                     )
 
                 # ========================================================================
+                # Per-core compile-time descriptors
+                # ========================================================================
+                # gather1_sender_idx: each matmul1 core needs a unique index for
+                # non-rectangular kv_b2 grid offset calculation (UsePerCoreSenderIdx=true)
+                # gather2_sender_idx: each matmul2 core needs a unique index for
+                # non-rectangular o_proj grid offset calculation (UsePerCoreSenderIdx=true)
+                per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather1_sender_idx",
+                        core_values=gather1_sender_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather2_sender_idx",
+                        core_values=gather2_sender_idx_per_core,
+                        other_value=0,
+                    ),
+                ]
+
+                # ========================================================================
                 # Kernel descriptor
                 # ========================================================================
                 unified_kernel = UnifiedKernelDescriptor(
@@ -1282,6 +1306,7 @@ class PostSDPA:
                     ),
                     defines=kernel_defines,
                     unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
+                    per_core_compile_time_descriptors=per_core_compile_time_descriptors,
                     noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
@@ -1386,9 +1411,9 @@ class PostSDPA:
                 # SDPA runtime args and fabric (only when SDPA is enabled)
                 # ========================================================================
                 if sdpa_enabled:
-                    # Get kernel groups for SDPA cores (both from unified kernel)
-                    # sdpa_worker_group = kernel_result.get_group_by_arg("is_sdpa_worker_core", 1)
-                    sdpa_forwarder_group = kernel_result.get_group_by_arg("is_sdpa_forwarder_core", 1)
+                    # Note: SDPA worker and forwarder groups are looked up by iterating
+                    # kernel_result.groups below (not via get_group_by_arg) because
+                    # per_core_compile_time_descriptors may split cores into separate groups.
 
                     # Get per-device SDPA tensors
                     sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
@@ -1476,12 +1501,9 @@ class PostSDPA:
                         # Determine which matmul1 cores this worker scatters to (8 rows per worker)
                         scatter_dest_noc_coords = []
                         for scatter_row in range(sdpa_scatter_num_rows):
-                            # Map worker_idx and scatter_row to matmul1 core (logical coordinates)
                             matmul1_core_idx = worker_idx * sdpa_scatter_num_rows + scatter_row
-                            matmul1_core_x = matmul1_core_idx % 8
-                            matmul1_core_y = matmul1_core_idx // 8
+                            matmul1_core_logical = matmul1_cores[matmul1_core_idx]
                             # Convert to NOC coordinates
-                            matmul1_core_logical = ttnn.CoreCoord(matmul1_core_x, matmul1_core_y)
                             matmul1_core_noc = device.worker_core_from_logical_core(matmul1_core_logical)
                             scatter_dest_noc_coords.append((matmul1_core_noc.x, matmul1_core_noc.y))
 
@@ -1600,12 +1622,21 @@ class PostSDPA:
                             )
 
                     # Set SDPA worker runtime args
+                    # Each group may only cover a subset of worker cores, so filter
+                    # RuntimeArgs to avoid setting args for cores outside the kernel's core_ranges.
                     for group in kernel_result.groups:
                         if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
-                            program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_worker_ncrisc_rt_args
-                            program.kernels[group.brisc_kernel_index].runtime_args = sdpa_worker_brisc_rt_args
+                            crs = group.core_range_set
+                            program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa_worker_ncrisc_rt_args, crs
+                            )
+                            program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa_worker_brisc_rt_args, crs
+                            )
                             if sdpa_worker_trisc_rt_args is not None:
-                                program.kernels[group.trisc_kernel_index].runtime_args = sdpa_worker_trisc_rt_args
+                                program.kernels[group.trisc_kernel_index].runtime_args = _filter_runtime_args(
+                                    sdpa_worker_trisc_rt_args, crs
+                                )
 
                     # SDPA forwarder runtime args (using setup_fabric_connection like original SDPA op)
                     # Key: Build RuntimeArgs completely FIRST, then assign to program.kernels AFTER
@@ -1651,18 +1682,25 @@ class PostSDPA:
                         sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
 
                     # Assign to program.kernels AFTER all args are built (critical!)
-                    program.kernels[sdpa_forwarder_group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    program.kernels[
-                        sdpa_forwarder_group.ncrisc_kernel_index
-                    ].runtime_args = sdpa_forwarder_ncrisc_rt_args
+                    # Iterate over all matching groups because per_core_compile_time_descriptors
+                    # may split the two forwarder cores into separate kernel groups.
+                    for group in kernel_result.groups:
+                        if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
+                            crs = group.core_range_set
+                            program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa_forwarder_brisc_rt_args, crs
+                            )
+                            program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa_forwarder_ncrisc_rt_args, crs
+                            )
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute generic_op
         io_tensors = [
             input_tensor_mesh,
-            weights1_tensor,
-            weights2_tensor,
+            weights1_tensor.fused_tensor,
+            weights2_tensor.fused_tensor,
             gather1_output_tensor,
             gather2_output_tensor,
         ]
