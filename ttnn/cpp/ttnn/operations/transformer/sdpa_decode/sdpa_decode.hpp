@@ -8,12 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn {
-namespace operations::transformer {
-
-}  // namespace operations::transformer
-
-namespace transformer {
+namespace ttnn::transformer {
 
 ttnn::Tensor scaled_dot_product_attention_decode(
     const ttnn::Tensor& input_tensor_q,
@@ -77,6 +72,4 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-}  // namespace transformer
-
-}  // namespace ttnn
+}  // namespace ttnn::transformer
