@@ -307,6 +307,24 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
             .stacking_level = stacking_level});
         graph[current_op_id.top()].connections.push_back(counter);
     }
+
+    // Capture buffer pages for this address once (at first allocation).
+    // Pages are stored per-address instead of per-operation to keep the
+    // JSON report small (~0.5 MB vs ~1 GB for per-operation snapshots).
+    uint64_t addr = buffer->address();
+    if (capture_buffer_pages_ && !captured_mesh_devices.empty() &&
+        buffer_pages_by_address_.find(addr) == buffer_pages_by_address_.end()) {
+        auto all_pages = ttnn::reports::get_buffer_pages(captured_mesh_devices);
+        std::vector<ttnn::reports::BufferPageInfo> pages_for_addr;
+        for (auto& page : all_pages) {
+            if (page.address == addr) {
+                pages_for_addr.push_back(std::move(page));
+            }
+        }
+        if (!pages_for_addr.empty()) {
+            buffer_pages_by_address_[addr] = std::move(pages_for_addr);
+        }
+    }
 }
 
 void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
@@ -532,9 +550,6 @@ void GraphProcessor::track_function_end_impl() {
     // Snapshot live buffer state after each top-level operation completes
     if (stacking_level == 1 && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
-        if (capture_buffer_pages_) {
-            per_op_buffer_pages_[function_start_id] = ttnn::reports::get_buffer_pages(captured_mesh_devices);
-        }
     }
 }
 
@@ -598,23 +613,12 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         }
     }
 
-    // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
-    std::uint64_t tensor_id = t.tensor_id;
-    if (tensor_id == tt::tt_metal::Tensor::INVALID_TENSOR_ID) {
-        log_debug(
-            tt::LogAlways,
-            "Tensor doesn't have tensor_id (sentinel value is INVALID_TENSOR_ID), generating new one. Ideally this "
-            "should not happen. "
-            "Please set tensor_id "
-            "for this tensor ahead of time.");
-        tensor_id = tt::tt_metal::Tensor::next_tensor_id();
-    }
-    node_id tensor_counter = tensor_id_to_counter.contains(tensor_id) ? tensor_id_to_counter[tensor_id] : graph.size();
+    node_id tensor_counter = graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
-        {kTensorId, fmt::format("{}", tensor_id)},
+        {kTensorId, fmt::format("{}", t.tensor_id)},
         {kDtype, fmt::format("{}", t.dtype())},
         {kLayout, fmt::format("{}", t.layout())},
     };
@@ -635,16 +639,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         params[kDeviceTensors] = device_tensors_json.dump();
     }
 
-    if (!tensor_id_to_counter.contains(tensor_id)) {
-        int stacking_level = static_cast<int>(current_op_id.size()) - 1;
-        graph.push_back(Vertex{
-            .counter = tensor_counter,
-            .node_type = kNodeTensor,
-            .params = std::move(params),
-            .connections = {},
-            .stacking_level = stacking_level});
-        tensor_id_to_counter[tensor_id] = tensor_counter;
-    }
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    graph.push_back(Vertex{
+        .counter = tensor_counter,
+        .node_type = kNodeTensor,
+        .params = std::move(params),
+        .connections = {},
+        .stacking_level = stacking_level});
 
     if (buffer == nullptr) {
         log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
@@ -730,11 +731,10 @@ void GraphProcessor::begin_capture(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
     graph.clear();
     buffer_id_to_counter.clear();
-    tensor_id_to_counter.clear();
     captured_device_info.clear();
     captured_mesh_devices.clear();
     per_op_buffers_.clear();
-    per_op_buffer_pages_.clear();
+    buffer_pages_by_address_.clear();
 
     // Clear timing stacks
     while (!function_start_times.empty()) {
@@ -862,10 +862,12 @@ nlohmann::json GraphProcessor::get_report() const {
         report["per_operation_buffers"] = std::move(per_op_json);
     }
 
-    // Per-operation buffer page snapshots (new field, backward compatible)
-    if (!per_op_buffer_pages_.empty()) {
-        nlohmann::json per_op_json = nlohmann::json::object();
-        for (const auto& [op_counter, pages] : per_op_buffer_pages_) {
+    // Buffer pages keyed by address (captured once per unique buffer allocation).
+    // The importer reconstructs per-operation buffer_pages by cross-referencing
+    // these with per_operation_buffers (which tracks active addresses per op).
+    if (!buffer_pages_by_address_.empty()) {
+        nlohmann::json bp_json = nlohmann::json::object();
+        for (const auto& [addr, pages] : buffer_pages_by_address_) {
             nlohmann::json pages_json = nlohmann::json::array();
             for (const auto& page : pages) {
                 pages_json.push_back(
@@ -879,9 +881,9 @@ nlohmann::json GraphProcessor::get_report() const {
                      {"page_size", page.page_size},
                      {"buffer_type", static_cast<int>(page.buffer_type)}});
             }
-            per_op_json[std::to_string(op_counter)] = std::move(pages_json);
+            bp_json[std::to_string(addr)] = std::move(pages_json);
         }
-        report["per_operation_buffer_pages"] = std::move(per_op_json);
+        report["buffer_pages_by_address"] = std::move(bp_json);
     }
 
     return report;
@@ -1009,10 +1011,10 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
         report["per_operation_buffers"] = std::move(per_op_json);
     }
 
-    // Per-operation buffer page snapshots (new field, backward compatible)
-    if (!processor->per_op_buffer_pages_.empty()) {
-        nlohmann::json per_op_json = nlohmann::json::object();
-        for (const auto& [op_counter, pages] : processor->per_op_buffer_pages_) {
+    // Buffer pages keyed by address (captured once per unique buffer allocation)
+    if (!processor->buffer_pages_by_address_.empty()) {
+        nlohmann::json bp_json = nlohmann::json::object();
+        for (const auto& [addr, pages] : processor->buffer_pages_by_address_) {
             nlohmann::json pages_json = nlohmann::json::array();
             for (const auto& page : pages) {
                 pages_json.push_back(
@@ -1026,9 +1028,9 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
                      {"page_size", page.page_size},
                      {"buffer_type", static_cast<int>(page.buffer_type)}});
             }
-            per_op_json[std::to_string(op_counter)] = std::move(pages_json);
+            bp_json[std::to_string(addr)] = std::move(pages_json);
         }
-        report["per_operation_buffer_pages"] = std::move(per_op_json);
+        report["buffer_pages_by_address"] = std::move(bp_json);
     }
 
     // Write to file

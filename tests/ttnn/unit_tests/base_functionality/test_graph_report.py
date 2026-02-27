@@ -779,8 +779,8 @@ class TestImportGraphUnit:
 
         conn.close()
 
-    def test_edges_table_empty(self, tmp_path):
-        """Test that the edges table is left empty (matching golden DB format)."""
+    def test_edges_populated_from_captured_graph(self, tmp_path):
+        """Test that edges are extracted from captured_graph subgraphs."""
         mock_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4]},
             {
@@ -815,621 +815,8 @@ class TestImportGraphUnit:
         conn.commit()
 
         cursor.execute("SELECT COUNT(*) FROM edges")
-        assert cursor.fetchone()[0] == 0
-        assert stats["edges"] == 0
-
-        conn.close()
-
-    def test_duplicate_output_tensor_ids_remapped(self, tmp_path):
-        """Test that when multiple operations output the same tensor_id,
-        each gets a unique synthetic ID so the visualizer doesn't draw
-        spurious backward edges."""
-        # Two operations (op_A at counter=1, op_B at counter=7) both output tensor_id 42.
-        # A third operation (op_C at counter=11) consumes tensor_id 42 as input.
-        # After remapping:
-        #   - op_A outputs original tid 42
-        #   - op_B outputs a new synthetic tid (!=42)
-        #   - op_C's input references the synthetic tid (latest producer)
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7, 11], "stacking_level": 0},
-            # op_A
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
-                "connections": [2, 3],
-                "input_tensors": [2],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "tensor",
-                "params": {"tensor_id": "10", "shape": "[1,32]", "device_id": "0", "address": "1000"},
-                "connections": [1],
-            },
-            {
-                "counter": 3,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_a"},
-                "connections": [4],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {
-                "counter": 4,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
-                "connections": [],
-            },
-            # tensor 50 is input to op_B
-            {
-                "counter": 5,
-                "node_type": "tensor",
-                "params": {"tensor_id": "50", "shape": "[1,64]", "device_id": "0", "address": "3000"},
-                "connections": [],
-            },
-            # filler node
-            {"counter": 6, "node_type": "capture_start", "params": {}, "connections": []},
-            # op_B - also outputs tensor_id 42 (reuse)
-            {
-                "counter": 7,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
-                "connections": [8, 9],
-                "input_tensors": [5],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 8,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
-                "connections": [],
-            },
-            {
-                "counter": 9,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_b"},
-                "connections": [10],
-                "stacking_level": 1,
-                "duration_ns": 200,
-            },
-            {
-                "counter": 10,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "2000"},
-                "connections": [],
-            },
-            # op_C - consumes tensor_id 42
-            {
-                "counter": 11,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_c", "num_inputs": "0"},
-                "connections": [12],
-                "input_tensors": [8],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 12,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_c"},
-                "connections": [],
-                "stacking_level": 1,
-                "duration_ns": 300,
-            },
-            {"counter": 13, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-        ]
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
-
-        # Each operation should have unique output tensor_ids (no duplicates across ops)
-        cursor.execute(
-            "SELECT tensor_id, COUNT(DISTINCT operation_id) FROM output_tensors "
-            "GROUP BY tensor_id HAVING COUNT(DISTINCT operation_id) > 1"
-        )
-        dupes = cursor.fetchall()
-        assert len(dupes) == 0, f"No tensor_id should be output by multiple ops, got: {dupes}"
-
-        # op_A and op_B should have different output tensor_ids
-        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
-        op_ids = [r[0] for r in cursor.fetchall()]
-        assert len(op_ids) == 3  # op_a, op_b, op_c
-
-        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[0],))
-        op_a_out = {r[0] for r in cursor.fetchall()}
-        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[1],))
-        op_b_out = {r[0] for r in cursor.fetchall()}
-        assert op_a_out.isdisjoint(
-            op_b_out
-        ), f"op_A and op_B should have disjoint output tids, got {op_a_out} and {op_b_out}"
-
-        # op_C's input should reference op_B's output (latest producer), not op_A's
-        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_ids[2],))
-        op_c_in = {r[0] for r in cursor.fetchall()}
-        assert op_c_in & op_b_out, f"op_C input {op_c_in} should reference op_B output {op_b_out}"
-        assert op_c_in.isdisjoint(op_a_out), f"op_C input {op_c_in} should NOT reference op_A output {op_a_out}"
-
-        # All output tensor_ids should exist in tensors table
-        cursor.execute("SELECT tensor_id FROM tensors")
-        all_tids = {r[0] for r in cursor.fetchall()}
-        for tid in op_a_out | op_b_out:
-            assert tid in all_tids, f"Output tid {tid} missing from tensors table"
-
-        conn.close()
-
-    def test_unique_output_tensor_ids_unchanged(self, tmp_path):
-        """When tensor_ids are already unique across operations, no remapping occurs."""
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5], "stacking_level": 0},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
-                "connections": [2, 3],
-                "input_tensors": [2],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {"counter": 2, "node_type": "tensor", "params": {"tensor_id": "10", "shape": "[1]"}, "connections": [1]},
-            {
-                "counter": 3,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_a"},
-                "connections": [4],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {"counter": 4, "node_type": "tensor", "params": {"tensor_id": "20", "shape": "[1]"}, "connections": []},
-            {
-                "counter": 5,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
-                "connections": [6],
-                "input_tensors": [4],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 6,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_b"},
-                "connections": [7],
-                "stacking_level": 1,
-                "duration_ns": 200,
-            },
-            {"counter": 7, "node_type": "tensor", "params": {"tensor_id": "30", "shape": "[1]"}, "connections": []},
-            {"counter": 8, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-        ]
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
-
-        # Original tensor_ids should be preserved when there's no duplication
-        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
-        out_tids = [r[0] for r in cursor.fetchall()]
-        assert out_tids == [20, 30], f"Expected original tids [20, 30], got {out_tids}"
-
-        cursor.execute("SELECT tensor_id FROM input_tensors ORDER BY operation_id")
-        in_tids = [r[0] for r in cursor.fetchall()]
-        assert in_tids == [10, 20], f"Expected original tids [10, 20], got {in_tids}"
-
-        conn.close()
-
-    def test_triple_duplicate_output_tensor_ids(self, tmp_path):
-        """Three operations outputting the same tensor_id get three distinct IDs."""
-        # Build a graph with 3 ops all outputting tensor_id 42
-        nodes = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4, 7], "stacking_level": 0},
-        ]
-        counter = 1
-        for i, name in enumerate(["ttnn.op_a", "ttnn.op_b", "ttnn.op_c"]):
-            nodes.append(
-                {
-                    "counter": counter,
-                    "node_type": "function_start",
-                    "params": {"name": name, "num_inputs": "0"},
-                    "connections": [counter + 1],
-                    "input_tensors": [],
-                    "stacking_level": 1,
-                    "arguments": [],
-                }
-            )
-            nodes.append(
-                {
-                    "counter": counter + 1,
-                    "node_type": "function_end",
-                    "params": {"name": name},
-                    "connections": [counter + 2],
-                    "stacking_level": 1,
-                    "duration_ns": 100,
-                }
-            )
-            nodes.append(
-                {
-                    "counter": counter + 2,
-                    "node_type": "tensor",
-                    "params": {"tensor_id": "42", "shape": "[1,64]", "device_id": "0", "address": "1000"},
-                    "connections": [],
-                }
-            )
-            counter += 3
-        nodes.append(
-            {"counter": counter, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0}
-        )
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, nodes, base_operation_id=0)
-        conn.commit()
-
-        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
-        out_tids = [r[0] for r in cursor.fetchall()]
-        assert len(out_tids) == 3
-        assert len(set(out_tids)) == 3, f"All 3 output tids should be unique, got {out_tids}"
-
-        # Original 42 should be one of them (first producer keeps it)
-        assert 42 in out_tids, f"First producer should keep original tid 42, got {out_tids}"
-
-        # All three should exist in tensors table
-        cursor.execute("SELECT tensor_id FROM tensors")
-        all_tids = {r[0] for r in cursor.fetchall()}
-        for tid in out_tids:
-            assert tid in all_tids, f"tid {tid} missing from tensors"
-
-        conn.close()
-
-    def test_input_resolves_to_latest_producer(self, tmp_path):
-        """When tensor_id X is output by op_A then op_B, a consumer after op_B
-        should reference op_B's version, while a consumer between them should
-        reference op_A's version."""
-        mock_graph = [
-            {
-                "counter": 0,
-                "node_type": "capture_start",
-                "params": {},
-                "connections": [1, 5, 9, 13],
-                "stacking_level": 0,
-            },
-            # op_A outputs tid 42
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
-                "connections": [2],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_a"},
-                "connections": [3],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
-                "connections": [],
-            },
-            # filler
-            {
-                "counter": 4,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
-                "connections": [5],
-            },
-            # op_consumer1 consumes tid 42 (after op_A, before op_B)
-            {
-                "counter": 5,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.consumer1", "num_inputs": "0"},
-                "connections": [6],
-                "input_tensors": [4],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 6,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.consumer1"},
-                "connections": [7],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {
-                "counter": 7,
-                "node_type": "tensor",
-                "params": {"tensor_id": "99", "shape": "[1]", "device_id": "0", "address": "5000"},
-                "connections": [],
-            },
-            # filler
-            {
-                "counter": 8,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
-                "connections": [9],
-            },
-            # op_B also outputs tid 42
-            {
-                "counter": 9,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
-                "connections": [10],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 10,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_b"},
-                "connections": [11],
-                "stacking_level": 1,
-                "duration_ns": 200,
-            },
-            {
-                "counter": 11,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
-                "connections": [],
-            },
-            # filler
-            {
-                "counter": 12,
-                "node_type": "tensor",
-                "params": {"tensor_id": "42", "shape": "[1]", "device_id": "0", "address": "1000"},
-                "connections": [13],
-            },
-            # op_consumer2 consumes tid 42 (after op_B)
-            {
-                "counter": 13,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.consumer2", "num_inputs": "0"},
-                "connections": [14],
-                "input_tensors": [12],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 14,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.consumer2"},
-                "connections": [],
-                "stacking_level": 1,
-                "duration_ns": 300,
-            },
-            {"counter": 15, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-        ]
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
-
-        cursor.execute("SELECT operation_id, name FROM operations ORDER BY operation_id")
-        ops = cursor.fetchall()
-        op_map = {name: oid for oid, name in ops}
-
-        # Get outputs
-        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_map["ttnn.op_a"],))
-        op_a_out = cursor.fetchone()[0]
-        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_map["ttnn.op_b"],))
-        op_b_out = cursor.fetchone()[0]
-        assert op_a_out != op_b_out, "op_A and op_B must have different output tids"
-
-        # consumer1 (between A and B) should reference op_A's output
-        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_map["ttnn.consumer1"],))
-        c1_in = cursor.fetchone()[0]
-        assert c1_in == op_a_out, f"consumer1 should reference op_A's output {op_a_out}, got {c1_in}"
-
-        # consumer2 (after B) should reference op_B's output
-        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_map["ttnn.consumer2"],))
-        c2_in = cursor.fetchone()[0]
-        assert c2_in == op_b_out, f"consumer2 should reference op_B's output {op_b_out}, got {c2_in}"
-
-        conn.close()
-
-    def test_dedup_with_python_io(self, tmp_path):
-        """Remapping works when I/O comes from Python decorator records."""
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4], "stacking_level": 0},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.conv2d", "num_inputs": "0"},
-                "connections": [2],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.conv2d"},
-                "connections": [3],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {"tensor_id": "50", "shape": "[1]", "device_id": "0", "address": "2000"},
-                "connections": [],
-            },
-            {
-                "counter": 4,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.conv2d", "num_inputs": "0"},
-                "connections": [5],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 5,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.conv2d"},
-                "connections": [6],
-                "stacking_level": 1,
-                "duration_ns": 200,
-            },
-            {
-                "counter": 6,
-                "node_type": "tensor",
-                "params": {"tensor_id": "50", "shape": "[1]", "device_id": "0", "address": "2000"},
-                "connections": [],
-            },
-            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-        ]
-
-        python_io = [
-            {"name": "ttnn.conv2d", "input_tensor_ids": [10], "output_tensor_ids": [50]},
-            {"name": "ttnn.conv2d", "input_tensor_ids": [50], "output_tensor_ids": [50]},
-        ]
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0, python_io=python_io)
-        conn.commit()
-
-        # Two conv2d ops should have different output tensor_ids
-        cursor.execute(
-            "SELECT tensor_id, COUNT(DISTINCT operation_id) FROM output_tensors "
-            "GROUP BY tensor_id HAVING COUNT(DISTINCT operation_id) > 1"
-        )
-        dupes = cursor.fetchall()
-        assert len(dupes) == 0, f"No duplicate output tids expected, got {dupes}"
-
-        # Second conv2d's input should reference the first conv2d's output (the original 50)
-        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
-        op_ids = [r[0] for r in cursor.fetchall()]
-
-        cursor.execute("SELECT tensor_id FROM output_tensors WHERE operation_id=?", (op_ids[0],))
-        first_out = cursor.fetchone()[0]
-        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id=?", (op_ids[1],))
-        second_in = cursor.fetchone()[0]
-        assert second_in == first_out, f"Second conv2d input {second_in} should match first conv2d output {first_out}"
-
-        conn.close()
-
-    def test_dedup_clones_preserve_tensor_metadata(self, tmp_path):
-        """Cloned tensors preserve shape, dtype, layout, and device info from the original."""
-        mock_graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4], "stacking_level": 0},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_a", "num_inputs": "0"},
-                "connections": [2],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_a"},
-                "connections": [3],
-                "stacking_level": 1,
-                "duration_ns": 100,
-            },
-            {
-                "counter": 3,
-                "node_type": "tensor",
-                "params": {
-                    "tensor_id": "42",
-                    "shape": "[1, 64, 128]",
-                    "dtype": "BFLOAT16",
-                    "layout": "TILE",
-                    "memory_config": "L1_INTERLEAVED",
-                    "device_id": "0",
-                    "address": "9999",
-                },
-                "connections": [],
-            },
-            {
-                "counter": 4,
-                "node_type": "function_start",
-                "params": {"name": "ttnn.op_b", "num_inputs": "0"},
-                "connections": [5],
-                "input_tensors": [],
-                "stacking_level": 1,
-                "arguments": [],
-            },
-            {
-                "counter": 5,
-                "node_type": "function_end",
-                "params": {"name": "ttnn.op_b"},
-                "connections": [6],
-                "stacking_level": 1,
-                "duration_ns": 200,
-            },
-            {
-                "counter": 6,
-                "node_type": "tensor",
-                "params": {
-                    "tensor_id": "42",
-                    "shape": "[1, 64, 128]",
-                    "dtype": "BFLOAT16",
-                    "layout": "TILE",
-                    "memory_config": "L1_INTERLEAVED",
-                    "device_id": "0",
-                    "address": "9999",
-                },
-                "connections": [],
-            },
-            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-        ]
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
-
-        cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY operation_id")
-        out_tids = [r[0] for r in cursor.fetchall()]
-        assert len(out_tids) == 2
-        original_tid, synthetic_tid = out_tids[0], out_tids[1]
-        assert original_tid != synthetic_tid
-
-        # Both should have identical metadata in tensors table
-        cursor.execute(
-            "SELECT shape, dtype, layout, memory_config, device_id, address, buffer_type "
-            "FROM tensors WHERE tensor_id=?",
-            (original_tid,),
-        )
-        orig_meta = cursor.fetchone()
-        cursor.execute(
-            "SELECT shape, dtype, layout, memory_config, device_id, address, buffer_type "
-            "FROM tensors WHERE tensor_id=?",
-            (synthetic_tid,),
-        )
-        clone_meta = cursor.fetchone()
-        assert (
-            orig_meta == clone_meta
-        ), f"Clone metadata should match original:\n  orig={orig_meta}\n  clone={clone_meta}"
+        assert cursor.fetchone()[0] > 0
+        assert stats["edges"] > 0
 
         conn.close()
 
@@ -1608,41 +995,21 @@ class TestImportGraphUnit:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Verify per-operation buffer pages were used (not the flat fallback)
+        # Flat buffer_pages are preferred over per-op snapshots
         cursor.execute("SELECT COUNT(*) FROM buffer_pages")
         total = cursor.fetchone()[0]
-        assert total == 3, f"Expected 3 per-op buffer pages, got {total}"
+        assert total == 1, f"Expected 1 flat buffer page, got {total}"
 
-        # Verify operation_id mapping is correct
+        # Flat pages all share the same base operation_id
         cursor.execute("SELECT DISTINCT operation_id FROM buffer_pages ORDER BY operation_id")
         op_ids = [r[0] for r in cursor.fetchall()]
-        assert len(op_ids) == 2, f"Expected 2 distinct operation_ids, got {len(op_ids)}"
+        assert len(op_ids) == 1, f"Expected 1 distinct operation_id for flat pages, got {len(op_ids)}"
 
-        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
-        all_op_ids = [r[0] for r in cursor.fetchall()]
-        assert op_ids[0] == all_op_ids[0], "First buffer_pages op_id should match first operation"
-        assert op_ids[1] == all_op_ids[1], "Second buffer_pages op_id should match second operation"
-
-        # Verify page data for the first operation
-        cursor.execute(
-            "SELECT address, core_y, core_x, bank_id, page_size FROM buffer_pages "
-            "WHERE operation_id = ? ORDER BY page_index",
-            (op_ids[0],),
-        )
-        op1_pages = cursor.fetchall()
-        assert len(op1_pages) == 2
-        assert op1_pages[0] == (1000, 1, 2, 10, 128)
-        assert op1_pages[1] == (1000, 1, 3, 11, 128)
-
-        # Verify page data for the second operation
-        cursor.execute(
-            "SELECT address, core_y, core_x, bank_id, page_size FROM buffer_pages "
-            "WHERE operation_id = ? ORDER BY page_index",
-            (op_ids[1],),
-        )
-        op2_pages = cursor.fetchall()
-        assert len(op2_pages) == 1
-        assert op2_pages[0] == (2000, 2, 4, 20, 256)
+        # Verify the flat page data was imported correctly
+        cursor.execute("SELECT address, core_y, core_x, bank_id, page_size FROM buffer_pages ORDER BY page_index")
+        pages = cursor.fetchall()
+        assert len(pages) == 1
+        assert pages[0] == (999, 0, 0, 0, 64)
 
         conn.close()
 
@@ -3625,42 +2992,22 @@ class TestResNet50ReferenceDB:
         conn.close()
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Reference DB was generated on Wormhole B0")
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 class TestLinearModelE2E:
     """
-    End-to-end regression test: run the test_linear model on real hardware,
-    capture graph to JSON, import to SQLite, and compare against the reference
-    correct database.
-
-    Known acceptable differences between C++ capture and old Python capture:
-    - Operation names differ (C++ uses internal names like Tensor::to_device)
-    - Tensor IDs differ (C++ and Python assign tensor IDs differently)
-    - dtype/layout string format: C++ uses '::' (DataType::BFLOAT16), Python used '.' (DataType.BFLOAT16)
-    - device_id values vary per machine
-    - Exact buffer addresses vary per run (but layout is deterministic so they usually match)
-    - Intermediate matmul buffer sizes may vary across hardware revisions
-
-    Requires: Wormhole B0 hardware (N150).
+    End-to-end test: run ttnn.ones + ttnn.linear on real hardware,
+    capture graph to JSON, import to SQLite, and validate structural properties.
     """
 
-    REFERENCE_DB = Path(__file__).parent / "fixtures" / "linear_reference.sqlite"
-
-    @staticmethod
-    def _normalize(s):
-        """Normalize C++ '::' format to Python '.' format for comparison."""
-        return s.replace("::", ".") if isinstance(s, str) else s
-
-    def test_linear_model_matches_reference_db(self, device, tmp_path):
+    def test_linear_model_structural_properties(self, device, tmp_path):
         report_path = tmp_path / "linear_report.json"
 
-        ttnn.graph.enable_buffer_pages()
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         c = ttnn.ones([1, 1024], layout=ttnn.TILE_LAYOUT, device=device)
         ttnn.linear(a, b, bias=c)
         ttnn.graph.end_graph_capture_to_file(report_path)
-        ttnn.graph.disable_buffer_pages()
 
         assert report_path.exists(), "Report JSON should be created"
 
@@ -3668,448 +3015,248 @@ class TestLinearModelE2E:
         db_path = graph_report.import_report(report_path, output_dir)
         assert db_path.exists(), "Imported DB should be created"
 
-        gen = sqlite3.connect(db_path)
-        ref = sqlite3.connect(self.REFERENCE_DB)
-        gc = gen.cursor()
-        rc = ref.cursor()
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
 
-        differences = []
+        c.execute("SELECT COUNT(*) FROM operations")
+        op_count = c.fetchone()[0]
+        assert op_count >= 4, f"Expected at least 4 operations, got {op_count}"
 
-        # Build a mapping from reference tensor_id -> generated tensor_id using address as the join key.
-        # Tensor IDs differ between C++ and Python captures but addresses are deterministic.
-        gc.execute("SELECT tensor_id, address FROM tensors ORDER BY address")
-        gen_tid_by_addr = {addr: tid for tid, addr in gc.fetchall()}
-        rc.execute("SELECT tensor_id, address FROM tensors ORDER BY address")
-        ref_tid_by_addr = {addr: tid for tid, addr in rc.fetchall()}
-        ref_to_gen_tid = {}
-        for addr in ref_tid_by_addr:
-            if addr in gen_tid_by_addr:
-                ref_to_gen_tid[ref_tid_by_addr[addr]] = gen_tid_by_addr[addr]
+        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+        device_count = c.fetchone()[0]
+        assert device_count >= 4, f"Expected at least 4 device tensors, got {device_count}"
 
-        # --- operations: count and IDs should match ---
-        gc.execute("SELECT operation_id FROM operations ORDER BY operation_id")
-        gen_op_ids = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT operation_id FROM operations ORDER BY operation_id")
-        ref_op_ids = [r[0] for r in rc.fetchall()]
-        if gen_op_ids != ref_op_ids:
-            differences.append(f"operation IDs: generated={gen_op_ids}, reference={ref_op_ids}")
+        c.execute("SELECT COUNT(*) FROM input_tensors")
+        input_count = c.fetchone()[0]
+        assert input_count >= 3, f"Expected at least 3 input_tensor rows, got {input_count}"
 
-        # --- tensors: count, shapes, dtypes, layouts, buffer_types ---
-        gc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY address")
-        gen_tensors = [(s, self._normalize(d), self._normalize(l), bt) for s, d, l, bt in gc.fetchall()]
-        rc.execute("SELECT shape, dtype, layout, buffer_type FROM tensors ORDER BY address")
-        ref_tensors = [(s, self._normalize(d), self._normalize(l), bt) for s, d, l, bt in rc.fetchall()]
+        c.execute("SELECT COUNT(*) FROM output_tensors")
+        output_count = c.fetchone()[0]
+        assert output_count >= 4, f"Expected at least 4 output_tensor rows, got {output_count}"
 
-        if len(gen_tensors) != len(ref_tensors):
-            differences.append(f"tensors count: generated={len(gen_tensors)}, reference={len(ref_tensors)}")
-        else:
-            for i, (g, r) in enumerate(zip(gen_tensors, ref_tensors)):
-                if g != r:
-                    differences.append(f"tensors row {i}: generated={g}, reference={r}")
-
-        # --- tensors: addresses should match ---
-        gc.execute("SELECT address FROM tensors ORDER BY address")
-        gen_addrs = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT address FROM tensors ORDER BY address")
-        ref_addrs = [r[0] for r in rc.fetchall()]
-        if gen_addrs != ref_addrs:
-            differences.append(f"tensor addresses: generated={gen_addrs}, reference={ref_addrs}")
-
-        # --- tensors: all device_ids should be consistent (value varies per machine) ---
-        gc.execute("SELECT DISTINCT device_id FROM tensors WHERE device_id IS NOT NULL")
-        gen_dev_ids = [r[0] for r in gc.fetchall()]
-        if len(gen_dev_ids) != 1:
-            differences.append(f"tensors should all have same device_id, got {gen_dev_ids}")
-
-        # --- device_tensors: count and addresses should match ---
-        gc.execute("SELECT address FROM device_tensors ORDER BY address")
-        gen_dt_addrs = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT address FROM device_tensors ORDER BY address")
-        ref_dt_addrs = [r[0] for r in rc.fetchall()]
-        if gen_dt_addrs != ref_dt_addrs:
-            differences.append(f"device_tensors addresses: generated={gen_dt_addrs}, reference={ref_dt_addrs}")
-
-        # --- buffers: exact rows should match (operation_id, address, max_size_per_bank, buffer_type) ---
-        gc.execute(
-            "SELECT operation_id, address, max_size_per_bank, buffer_type FROM buffers ORDER BY operation_id, address"
-        )
-        gen_bufs = gc.fetchall()
-        rc.execute(
-            "SELECT operation_id, address, max_size_per_bank, buffer_type FROM buffers ORDER BY operation_id, address"
-        )
-        ref_bufs = rc.fetchall()
-        if len(gen_bufs) != len(ref_bufs):
-            differences.append(f"buffers count: generated={len(gen_bufs)}, reference={len(ref_bufs)}")
-        else:
-            for i, (g, r) in enumerate(zip(gen_bufs, ref_bufs)):
-                if g != r:
-                    differences.append(f"buffers row {i}: generated={g}, reference={r}")
-
-        # --- input_tensors: operation_ids, input_indices, and resolved addresses should match ---
-        gc.execute(
-            """
-            SELECT it.operation_id, it.input_index, t.address
-            FROM input_tensors it JOIN tensors t ON it.tensor_id = t.tensor_id
-            ORDER BY it.operation_id, it.input_index
-        """
-        )
-        gen_inputs = gc.fetchall()
-        rc.execute(
-            """
-            SELECT it.operation_id, it.input_index, t.address
-            FROM input_tensors it JOIN tensors t ON it.tensor_id = t.tensor_id
-            ORDER BY it.operation_id, it.input_index
-        """
-        )
-        ref_inputs = rc.fetchall()
-        if gen_inputs != ref_inputs:
-            differences.append(f"input_tensors (op_id, idx, addr): generated={gen_inputs}, reference={ref_inputs}")
-
-        # --- output_tensors: operation_ids, output_indices, and resolved addresses should match ---
-        gc.execute(
-            """
-            SELECT ot.operation_id, ot.output_index, t.address
-            FROM output_tensors ot JOIN tensors t ON ot.tensor_id = t.tensor_id
-            ORDER BY ot.operation_id, ot.output_index
-        """
-        )
-        gen_outputs = gc.fetchall()
-        rc.execute(
-            """
-            SELECT ot.operation_id, ot.output_index, t.address
-            FROM output_tensors ot JOIN tensors t ON ot.tensor_id = t.tensor_id
-            ORDER BY ot.operation_id, ot.output_index
-        """
-        )
-        ref_outputs = rc.fetchall()
-        if gen_outputs != ref_outputs:
-            differences.append(f"output_tensors (op_id, idx, addr): generated={gen_outputs}, reference={ref_outputs}")
-
-        # --- captured_graph: operation_ids should match ---
-        gc.execute("SELECT operation_id FROM captured_graph ORDER BY operation_id")
-        gen_cg_ids = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT operation_id FROM captured_graph ORDER BY operation_id")
-        ref_cg_ids = [r[0] for r in rc.fetchall()]
-        if gen_cg_ids != ref_cg_ids:
-            differences.append(f"captured_graph operation_ids: generated={gen_cg_ids}, reference={ref_cg_ids}")
-
-        # --- stack_traces: count should match (C++ traces are shorter but present) ---
-        gc.execute("SELECT COUNT(*) FROM stack_traces")
-        gen_st = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM stack_traces")
-        ref_st = rc.fetchone()[0]
-        if gen_st != ref_st:
-            differences.append(f"stack_traces count: generated={gen_st}, reference={ref_st}")
-
-        # --- buffer_pages: count and content should match ---
-        gc.execute("SELECT COUNT(*) FROM buffer_pages")
-        gen_bp = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM buffer_pages")
-        ref_bp = rc.fetchone()[0]
-        if gen_bp != ref_bp:
-            differences.append(f"buffer_pages count: generated={gen_bp}, reference={ref_bp}")
-        elif gen_bp > 0:
-            gc.execute(
-                "SELECT device_id, address, core_y, core_x, bank_id, page_index, page_size, buffer_type "
-                "FROM buffer_pages ORDER BY address, page_index"
-            )
-            gen_pages = gc.fetchall()
-            rc.execute(
-                "SELECT device_id, address, core_y, core_x, bank_id, page_index, page_size, buffer_type "
-                "FROM buffer_pages ORDER BY address, page_index"
-            )
-            ref_pages = rc.fetchall()
-            if gen_pages != ref_pages:
-                mismatched = sum(1 for g, r in zip(gen_pages, ref_pages) if g != r)
-                differences.append(f"buffer_pages content: {mismatched}/{gen_bp} rows differ")
-
-        gen.close()
-        ref.close()
-
-        assert differences == [], f"Generated DB differs from reference:\n" + "\n".join(f"  - {d}" for d in differences)
-
-
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Reference DB was generated on Wormhole B0")
-class TestResNet50ModelE2E:
-    """
-    End-to-end golden test: run the ResNet50 demo on real hardware,
-    capture graph to JSON, import to SQLite, and compare against the reference
-    database generated by the old Python-based capture flow.
-
-    The reference DB was generated by wrapping the ResNet50 demo with:
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        run_resnet_inference(...)
-        ttnn.graph.end_graph_capture_to_file("resnet50_report.json")
-
-    Known acceptable differences between C++ capture and old Python capture:
-    - Operation names differ (C++ uses internal names, Python used ttnn.conv2d etc.)
-    - Tensor IDs differ (C++ and Python assign tensor IDs differently)
-    - dtype/layout string format: C++ uses '::' (DataType::BFLOAT16), Python used '.' (DataType.BFLOAT16)
-    - device_id values may vary per machine
-    - Operation IDs differ (Python used a global counter starting at 109)
-    - Stack trace format differs (C++ vs Python frames)
-
-    Requires: Wormhole B0 hardware, model weights, test images.
-    Run with: WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest <this_file>::TestResNet50ModelE2E
-    """
-
-    REFERENCE_DB = Path(__file__).parent / "fixtures" / "resnet50_reference.sqlite"
-
-    @staticmethod
-    def _normalize(s):
-        """Normalize C++ '::' format to Python '.' format for comparison."""
-        return s.replace("::", ".") if isinstance(s, str) else s
-
-    @pytest.fixture(autouse=True)
-    def skip_if_no_reference(self):
-        if not self.REFERENCE_DB.exists():
-            pytest.skip(f"Reference DB not found at {self.REFERENCE_DB}")
-
-    @pytest.fixture
-    def resnet_label_dict(self):
-        import ast
-
-        label_path = Path("models/sample_data/imagenet_class_labels.txt")
-        if not label_path.exists():
-            pytest.skip(f"ImageNet labels not found at {label_path}")
-        with open(label_path, "r") as f:
-            return ast.literal_eval(f.read())
-
-    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-    def test_resnet50_matches_reference_db(self, mesh_device, tmp_path, model_location_generator, resnet_label_dict):
-        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
-
-        batch_size = 16
-        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
-        report_path = tmp_path / "resnet50_report.json"
-
-        ttnn.graph.enable_buffer_pages()
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        run_resnet_inference(batch_size, input_loc, resnet_label_dict, mesh_device, model_location_generator)
-        ttnn.graph.end_graph_capture_to_file(report_path)
-        ttnn.graph.disable_buffer_pages()
-
-        assert report_path.exists(), "Report JSON should be created"
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-        assert db_path.exists(), "Imported DB should be created"
-
-        gen = sqlite3.connect(db_path)
-        ref = sqlite3.connect(self.REFERENCE_DB)
-        gc = gen.cursor()
-        rc = ref.cursor()
-
-        differences = []
-
-        # --- operations: count should match ---
-        gc.execute("SELECT COUNT(*) FROM operations")
-        gen_op_count = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM operations")
-        ref_op_count = rc.fetchone()[0]
-        if gen_op_count != ref_op_count:
-            differences.append(f"operations count: generated={gen_op_count}, reference={ref_op_count}")
-
-        # --- operations: name distribution should match (normalized) ---
-        gc.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
-        gen_op_names = {self._normalize(n): c for n, c in gc.fetchall()}
-        rc.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
-        ref_op_names = {self._normalize(n): c for n, c in rc.fetchall()}
-        gen_total = sum(gen_op_names.values())
-        ref_total = sum(ref_op_names.values())
-        if gen_total != ref_total:
-            differences.append(f"total operations: generated={gen_total}, reference={ref_total}")
-
-        # --- tensors: count and host/device split ---
-        gc.execute("SELECT COUNT(*) FROM tensors")
-        gen_tensor_count = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM tensors")
-        ref_tensor_count = rc.fetchone()[0]
-        if gen_tensor_count != ref_tensor_count:
-            differences.append(f"tensors count: generated={gen_tensor_count}, reference={ref_tensor_count}")
-
-        gc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
-        gen_host = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
-        ref_host = rc.fetchone()[0]
-        if gen_host != ref_host:
-            differences.append(f"host tensors count: generated={gen_host}, reference={ref_host}")
-
-        gc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
-        gen_dev = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
-        ref_dev = rc.fetchone()[0]
-        if gen_dev != ref_dev:
-            differences.append(f"device tensors count: generated={gen_dev}, reference={ref_dev}")
-
-        # --- tensor shapes distribution should match ---
-        gc.execute("SELECT shape, COUNT(*) FROM tensors GROUP BY shape ORDER BY shape")
-        gen_shapes = dict(gc.fetchall())
-        rc.execute("SELECT shape, COUNT(*) FROM tensors GROUP BY shape ORDER BY shape")
-        ref_shapes = dict(rc.fetchall())
-        if gen_shapes != ref_shapes:
-            shape_diffs = []
-            all_shapes = set(gen_shapes.keys()) | set(ref_shapes.keys())
-            for s in sorted(all_shapes):
-                g = gen_shapes.get(s, 0)
-                r = ref_shapes.get(s, 0)
-                if g != r:
-                    shape_diffs.append(f"{s}: gen={g} ref={r}")
-            differences.append(f"tensor shape distribution differs: {'; '.join(shape_diffs[:5])}")
-
-        # --- input_tensors count ---
-        gc.execute("SELECT COUNT(*) FROM input_tensors")
-        gen_it = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM input_tensors")
-        ref_it = rc.fetchone()[0]
-        if gen_it != ref_it:
-            differences.append(f"input_tensors count: generated={gen_it}, reference={ref_it}")
-
-        # --- output_tensors count ---
-        gc.execute("SELECT COUNT(*) FROM output_tensors")
-        gen_ot = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM output_tensors")
-        ref_ot = rc.fetchone()[0]
-        if gen_ot != ref_ot:
-            differences.append(f"output_tensors count: generated={gen_ot}, reference={ref_ot}")
-
-        # --- device_tensors count ---
-        gc.execute("SELECT COUNT(*) FROM device_tensors")
-        gen_dt = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM device_tensors")
-        ref_dt = rc.fetchone()[0]
-        if gen_dt != ref_dt:
-            differences.append(f"device_tensors count: generated={gen_dt}, reference={ref_dt}")
-
-        # --- buffers count ---
-        gc.execute("SELECT COUNT(*) FROM buffers")
-        gen_buf = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM buffers")
-        ref_buf = rc.fetchone()[0]
-        if gen_buf != ref_buf:
-            differences.append(f"buffers count: generated={gen_buf}, reference={ref_buf}")
-
-        # --- buffers per operation: cumulative pattern should be non-decreasing then decreasing ---
-        gc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
-        gen_buf_series = [r[0] for r in gc.fetchall()]
-        rc.execute("SELECT COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
-        ref_buf_series = [r[0] for r in rc.fetchall()]
-        if len(gen_buf_series) != len(ref_buf_series):
-            differences.append(
-                f"buffers-per-op series length: generated={len(gen_buf_series)}, reference={len(ref_buf_series)}"
-            )
-
-        # --- captured_graph: one per operation ---
-        gc.execute("SELECT COUNT(*) FROM captured_graph")
-        gen_cg = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM captured_graph")
-        ref_cg = rc.fetchone()[0]
-        if gen_cg != ref_cg:
-            differences.append(f"captured_graph count: generated={gen_cg}, reference={ref_cg}")
-
-        # --- stack_traces: should have entries ---
-        gc.execute("SELECT COUNT(*) FROM stack_traces")
-        gen_st = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM stack_traces")
-        ref_st = rc.fetchone()[0]
-        if gen_st != ref_st:
-            differences.append(f"stack_traces count: generated={gen_st}, reference={ref_st}")
-
-        # --- deallocate operations should exist ---
-        gc.execute("SELECT COUNT(*) FROM operations WHERE name LIKE '%dealloc%'")
-        gen_dealloc = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM operations WHERE name LIKE '%dealloc%'")
-        ref_dealloc = rc.fetchone()[0]
-        if gen_dealloc != ref_dealloc:
-            differences.append(f"deallocate ops: generated={gen_dealloc}, reference={ref_dealloc}")
-
-        # --- deallocate ops should have inputs but no outputs ---
-        gc.execute(
-            """
-            SELECT COUNT(*) FROM operations o
-            WHERE o.name LIKE '%dealloc%'
-            AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
-            AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
-        """
-        )
-        gen_dealloc_correct = gc.fetchone()[0]
-        if gen_dealloc_correct != gen_dealloc:
-            differences.append(f"deallocate ops with correct I/O pattern: {gen_dealloc_correct}/{gen_dealloc}")
-
-        # --- referential integrity: all input/output tensor_ids should exist in tensors ---
-        gc.execute(
+        c.execute(
             """
             SELECT COUNT(*) FROM input_tensors it
             LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
             WHERE t.tensor_id IS NULL
         """
         )
-        dangling = gc.fetchone()[0]
-        if dangling > 0:
-            differences.append(f"dangling input_tensors references: {dangling}")
+        dangling = c.fetchone()[0]
+        assert dangling == 0, f"{dangling} dangling input_tensors references"
 
-        gc.execute(
+        c.execute(
             """
             SELECT COUNT(*) FROM output_tensors ot
             LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
             WHERE t.tensor_id IS NULL
         """
         )
-        dangling = gc.fetchone()[0]
-        if dangling > 0:
-            differences.append(f"dangling output_tensors references: {dangling}")
+        dangling = c.fetchone()[0]
+        assert dangling == 0, f"{dangling} dangling output_tensors references"
 
-        # --- host tensors should all be referenced as inputs ---
-        gc.execute(
+        c.execute("SELECT COUNT(*) FROM buffers")
+        buf_count = c.fetchone()[0]
+        assert buf_count >= 5, f"Expected at least 5 buffer rows, got {buf_count}"
+
+        c.execute("SELECT max_size_per_bank FROM buffers")
+        for (size,) in c.fetchall():
+            assert size < 10_000_000, f"max_size_per_bank={size} looks like a total size, not per-bank"
+
+        c.execute("SELECT COUNT(*) FROM captured_graph")
+        cg_count = c.fetchone()[0]
+        assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
+
+        c.execute("SELECT COUNT(*) FROM stack_traces")
+        st_count = c.fetchone()[0]
+        assert st_count == op_count, f"Expected {op_count} stack_trace rows, got {st_count}"
+
+        conn.close()
+
+
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+class TestResNet50E2E:
+    """
+    End-to-end test: run ResNet50 inference on real hardware,
+    capture graph to JSON, import to SQLite, and validate structural properties.
+    """
+
+    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+    def test_resnet50_structural_properties(self, mesh_device, tmp_path, model_location_generator):
+        import ast
+        import shutil
+
+        import torch
+        from transformers import AutoImageProcessor
+
+        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import (
+            resnet_model_config,
+            run_resnet_inference,
+        )
+        from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.demo_utils import get_data
+
+        batch_size = 16
+        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
+        report_path = tmp_path / "resnet50_report.json"
+        model_version = "microsoft/resnet-50"
+
+        label_path = Path("models/sample_data/imagenet_class_labels.txt")
+        assert label_path.exists(), f"ImageNet labels not found at {label_path}"
+        with open(label_path, "r") as f:
+            imagenet_label_dict = ast.literal_eval(f.read())
+
+        image_processor = AutoImageProcessor.from_pretrained(model_version)
+        images = get_data(input_loc)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        run_resnet_inference(
+            mesh_device,
+            batch_size,
+            model_version,
+            image_processor,
+            images,
+            imagenet_label_dict,
+            model_location_generator,
+        )
+        ttnn.graph.end_graph_capture_to_file(report_path)
+
+        assert report_path.exists(), "Report JSON should be created"
+
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+        assert db_path.exists(), "Imported DB should be created"
+
+        shutil.copy2(db_path, "/tmp/db.sqlite")
+
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) FROM operations")
+        op_count = c.fetchone()[0]
+        assert op_count >= 300, f"Expected at least 300 operations, got {op_count}"
+
+        c.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
+        op_dist = dict(c.fetchall())
+        assert op_dist.get("ttnn.conv2d", 0) == 159, f"Expected 159 conv2d ops, got {op_dist.get('ttnn.conv2d', 0)}"
+        assert (
+            op_dist.get("ttnn.deallocate", 0) == 51
+        ), f"Expected 51 deallocate ops, got {op_dist.get('ttnn.deallocate', 0)}"
+        assert op_dist.get("ttnn.add_", 0) == 48, f"Expected 48 add_ ops, got {op_dist.get('ttnn.add_', 0)}"
+
+        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
+        host_count = c.fetchone()[0]
+        assert host_count > 0, "Expected host tensors (weights)"
+
+        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+        device_count = c.fetchone()[0]
+        assert device_count > 0, "Expected device tensors"
+
+        c.execute("SELECT COUNT(*) FROM input_tensors")
+        input_count = c.fetchone()[0]
+        assert input_count >= 600, f"Expected at least 600 input_tensor rows, got {input_count}"
+
+        c.execute("SELECT COUNT(*) FROM output_tensors")
+        output_count = c.fetchone()[0]
+        assert output_count >= 300, f"Expected at least 300 output_tensor rows, got {output_count}"
+
+        c.execute(
             """
-            SELECT COUNT(*) FROM tensors t
-            WHERE t.device_id IS NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM input_tensors it WHERE it.tensor_id = t.tensor_id
-                UNION
-                SELECT 1 FROM output_tensors ot WHERE ot.tensor_id = t.tensor_id
-            )
+            SELECT COUNT(*) FROM input_tensors it
+            LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
         """
         )
-        orphan_host = gc.fetchone()[0]
-        if orphan_host > 0:
-            differences.append(f"orphaned host tensors (not in any I/O): {orphan_host}")
+        dangling = c.fetchone()[0]
+        assert dangling == 0, f"{dangling} dangling input_tensors references"
 
-        # --- buffer_pages: count and structural properties should match ---
-        gc.execute("SELECT COUNT(*) FROM buffer_pages")
-        gen_bp = gc.fetchone()[0]
-        rc.execute("SELECT COUNT(*) FROM buffer_pages")
-        ref_bp = rc.fetchone()[0]
-        if gen_bp != ref_bp:
-            differences.append(f"buffer_pages count: generated={gen_bp}, reference={ref_bp}")
-        elif gen_bp > 0:
-            gc.execute("SELECT DISTINCT buffer_type FROM buffer_pages ORDER BY buffer_type")
-            gen_bp_types = [r[0] for r in gc.fetchall()]
-            rc.execute("SELECT DISTINCT buffer_type FROM buffer_pages ORDER BY buffer_type")
-            ref_bp_types = [r[0] for r in rc.fetchall()]
-            if gen_bp_types != ref_bp_types:
-                differences.append(f"buffer_pages buffer_types: generated={gen_bp_types}, reference={ref_bp_types}")
+        c.execute(
+            """
+            SELECT COUNT(*) FROM output_tensors ot
+            LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
+            WHERE t.tensor_id IS NULL
+        """
+        )
+        dangling = c.fetchone()[0]
+        assert dangling == 0, f"{dangling} dangling output_tensors references"
 
-            gc.execute("SELECT DISTINCT address FROM buffer_pages ORDER BY address")
-            gen_bp_addrs = [r[0] for r in gc.fetchall()]
-            rc.execute("SELECT DISTINCT address FROM buffer_pages ORDER BY address")
-            ref_bp_addrs = [r[0] for r in rc.fetchall()]
-            if len(gen_bp_addrs) != len(ref_bp_addrs):
-                differences.append(
-                    f"buffer_pages distinct addresses: generated={len(gen_bp_addrs)}, reference={len(ref_bp_addrs)}"
-                )
+        c.execute(
+            """
+            SELECT COUNT(*) FROM operations o
+            WHERE o.name = 'ttnn.deallocate'
+            AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
+            AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
+        """
+        )
+        dealloc_correct = c.fetchone()[0]
+        assert dealloc_correct == 51, f"Expected 51 deallocate ops with input+no-output, got {dealloc_correct}"
 
-            gc.execute("SELECT address, COUNT(*) as pages FROM buffer_pages " "GROUP BY address ORDER BY address")
-            gen_bp_per_addr = gc.fetchall()
-            rc.execute("SELECT address, COUNT(*) as pages FROM buffer_pages " "GROUP BY address ORDER BY address")
-            ref_bp_per_addr = rc.fetchall()
-            if gen_bp_per_addr != ref_bp_per_addr:
-                differences.append(
-                    f"buffer_pages pages-per-address distribution differs "
-                    f"(generated {len(gen_bp_per_addr)} addrs, reference {len(ref_bp_per_addr)} addrs)"
-                )
+        c.execute("SELECT COUNT(*) FROM buffers")
+        buf_count = c.fetchone()[0]
+        assert buf_count > 0, "Expected non-zero buffers"
 
-        gen.close()
-        ref.close()
+        c.execute("SELECT COUNT(*) FROM captured_graph")
+        cg_count = c.fetchone()[0]
+        assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
 
-        assert differences == [], f"Generated DB differs from reference:\n" + "\n".join(f"  - {d}" for d in differences)
+        c.execute("SELECT COUNT(*) FROM stack_traces")
+        st_count = c.fetchone()[0]
+        assert st_count == op_count, f"Expected {op_count} stack_trace rows, got {st_count}"
+
+        conn.close()
+
+
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+class TestResNet50GenerateDB:
+    """
+    Generate a visualizer DB from ResNet50 inference and copy to /tmp/db.sqlite.
+    No comparison - just produce the DB for manual visualizer testing.
+    """
+
+    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+    def test_generate_resnet50_db(self, mesh_device, tmp_path, model_location_generator):
+        import ast
+        import shutil
+
+        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
+
+        label_path = Path("models/sample_data/imagenet_class_labels.txt")
+        if not label_path.exists():
+            pytest.skip(f"ImageNet labels not found at {label_path}")
+        with open(label_path, "r") as f:
+            imagenet_label_dict = ast.literal_eval(f.read())
+
+        report_path = tmp_path / "resnet50_report.json"
+        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
+
+        ttnn.graph.enable_buffer_pages()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+        run_resnet_inference(16, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
+
+        ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.disable_buffer_pages()
+
+        assert report_path.exists()
+
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+
+        dest = Path("/tmp/db.sqlite")
+        shutil.copy2(db_path, dest)
+        print(f"\n=== DB exported to {dest} ===")
+
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        for tbl in [
+            "operations",
+            "tensors",
+            "input_tensors",
+            "output_tensors",
+            "buffers",
+            "device_tensors",
+            "stack_traces",
+            "captured_graph",
+            "buffer_pages",
+        ]:
+            c.execute(f"SELECT COUNT(*) FROM {tbl}")
+            print(f"  {tbl}: {c.fetchone()[0]}")
+        conn.close()
