@@ -6,6 +6,7 @@
 
 # Unless explicitly CIv2, the runner is on CIv1.
 # For CIv2 runners: unless explicitly hugepages, the runner is using viommu.
+# CIv1 runners do not use viommu.
 
 skus:
   wh_llmbox:
