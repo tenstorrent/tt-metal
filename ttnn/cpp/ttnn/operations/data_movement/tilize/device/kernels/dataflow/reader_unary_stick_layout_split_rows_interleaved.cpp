@@ -28,7 +28,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_tensor_args, src_addr, page_size);
 
-    uint64_t base_src_noc_addr[tile_height * num_pages_in_row];
+    uint64_t base_src_noc_addr[tile_height][num_pages_in_row];
 
     auto read_tiles = [&](const uint32_t& num_tiles) {
         cb_reserve_back(cb_id_in0, num_tiles);
