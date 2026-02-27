@@ -222,4 +222,60 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
     typedef uint32_t type;
 };
 
+template <typename AddrGenType>
+FORCE_INLINE void noc_async_write_sharded(
+    uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
+    if constexpr (AddrGenType::DSpec::tensor_shape_static) {
+        if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
+            constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
+            const uint32_t page_size = tensor.page_size;
+            uint32_t sharded_dest_id = dest_id * pages_per_shard_width + offset / page_size;
+            uint32_t sharded_offset = offset % page_size;
+            uint32_t num_pages = div_up(size + sharded_offset, page_size);
+            for (uint32_t i = 0; i < num_pages; i++) {
+                uint64_t dst_noc_addr = tensor.get_noc_addr(sharded_dest_id, sharded_offset);
+                uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
+                noc_async_write(l1_addr, dst_noc_addr, write_size);
+                sharded_dest_id++;
+                sharded_offset = 0;
+                l1_addr += write_size;
+            }
+        } else {
+            uint64_t dst_noc_addr = tensor.get_noc_addr(dest_id, offset);
+            noc_async_write(l1_addr, dst_noc_addr, size);
+        }
+    } else {
+        uint64_t dst_noc_addr = tensor.get_noc_addr(dest_id, offset);
+        noc_async_write(l1_addr, dst_noc_addr, size);
+    }
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void noc_async_read_sharded(
+    uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
+    if constexpr (AddrGenType::DSpec::tensor_shape_static) {
+        if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
+            constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
+            const uint32_t page_size = tensor.page_size;
+            uint32_t sharded_src_id = src_id * pages_per_shard_width + offset / page_size;
+            uint32_t sharded_offset = offset % page_size;
+            uint32_t num_pages = div_up(size + sharded_offset, page_size);
+            for (uint32_t i = 0; i < num_pages; i++) {
+                uint64_t src_noc_addr = tensor.get_noc_addr(sharded_src_id, sharded_offset);
+                uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
+                noc_async_read(src_noc_addr, l1_addr, read_size);
+                sharded_src_id++;
+                sharded_offset = 0;
+                l1_addr += read_size;
+            }
+        } else {
+            uint64_t src_noc_addr = tensor.get_noc_addr(src_id, offset);
+            noc_async_read(src_noc_addr, l1_addr, size);
+        }
+    } else {
+        uint64_t src_noc_addr = tensor.get_noc_addr(src_id, offset);
+        noc_async_read(src_noc_addr, l1_addr, size);
+    }
+}
+
 }  // namespace tt::data_movement::common
