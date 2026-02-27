@@ -70,13 +70,12 @@ enum class EnvVarID {
     // ========================================
     // DEBUG & TESTING
     // ========================================
-    TT_METAL_WATCHER_TEST_MODE,          // Enable watcher test mode
-    TT_METAL_KERNEL_MAP,                 // Enable kernel build mapping
-    TT_METAL_DISPATCH_DATA_COLLECTION,   // Enable dispatch debug data collection
-    TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
-    TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
-    TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
-    TT_METAL_DISABLE_XIP_DUMP,           // Disable XIP dump
+    TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
+    TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
+    TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
+    TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
     // ========================================
     // HARDWARE CONFIGURATION
@@ -504,12 +503,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (load firmware)
         // Usage: export TT_METAL_SKIP_LOADING_FW=1
         case EnvVarID::TT_METAL_SKIP_LOADING_FW: this->skip_loading_fw = true; break;
-
-        // TT_METAL_SKIP_DELETING_BUILT_CACHE
-        // Skip deleting built cache files on cleanup.
-        // Default: false (delete cache)
-        // Usage: export TT_METAL_SKIP_DELETING_BUILT_CACHE=1
-        case EnvVarID::TT_METAL_SKIP_DELETING_BUILT_CACHE: this->skip_deleting_built_cache = true; break;
 
         // ========================================
         // HARDWARE CONFIGURATION
