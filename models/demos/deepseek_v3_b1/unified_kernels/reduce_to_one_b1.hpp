@@ -149,7 +149,7 @@ struct ReduceToOneB1 {
         uint32_t fabric_core_noc_x;
         uint32_t fabric_core_noc_y;
         uint32_t my_slot_idx;
-        uint32_t worker_sem_id;
+        uint32_t worker_sem_addr;
         uint32_t dst_l1_addr;
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
@@ -254,12 +254,11 @@ struct ReduceToOneB1 {
                     return;
                 }
 
-                // Read worker semaphore IDs from runtime args
+                // Read worker semaphore addresses from runtime args
                 size_t arg_idx = CTArgs::fabric_rt_arg_base;
                 uint32_t worker_sem_addr[CTArgs::num_workers];
                 for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
-                    uint32_t sem_id = get_arg_val<uint32_t>(arg_idx++);
-                    worker_sem_addr[i] = get_semaphore(sem_id);
+                    worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
                 }
 
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
@@ -350,7 +349,7 @@ struct ReduceToOneB1 {
 
             // Non-ROOT1: send via fabric
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
-            const uint32_t arrival_sem_addr = get_semaphore(args.worker_sem_id);
+            const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
             // Get packet header from CB (persistent across iterations)
             uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
