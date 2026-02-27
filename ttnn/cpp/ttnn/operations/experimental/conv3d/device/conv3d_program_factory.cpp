@@ -28,10 +28,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
-    /*
-    First implementation just performs vol2col on a single core.
-    */
-
     auto input_tensor_shape = input_tensor.logical_shape();
     uint32_t N = input_tensor_shape[0];
     uint32_t T_in = input_tensor_shape[1];
@@ -111,10 +107,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
-    // NOTE: Should this be padded up to tile_size for tilize_block?
     uint32_t patch_size_bytes =
         tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per patch row
-    // NOTE: Also padded up to tile size
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
@@ -132,18 +126,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     log_debug(tt::LogOp, "Matmul M_t: {}", matmul_M_t);
     log_debug(tt::LogOp, "Matmul K_t: {}", matmul_K_t);
     log_debug(tt::LogOp, "Matmul N_t: {}", matmul_N_t);
-    // Log CB sizes
-    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, num_patches);
-
+    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
-
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
-
     log_debug(
         tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
-
-    log_debug(
-        tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_block_bytes, num_patches_tile_padded);
+    log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
@@ -533,56 +521,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
     const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
 
-    /*log_info(tt::LogOp, "Conv3D work distribution diagnostics:");
-    log_info(tt::LogOp, "  Grid: {}x{}, num_cores={}", grid_size.x, grid_size.y, num_cores);
-    log_info(tt::LogOp, "  Input: N={} T={} H={} W={} C={}", N, T_in, H_in, W_in, C_in);
-    log_info(tt::LogOp, "  Output: T={} H={} W={} C={}", T_out, H_out, W_out, C_out);
-    log_info(
-        tt::LogOp,
-        "  Blocks: C_in={} C_out={} T={} H={} W={}",
-        C_in_block,
-        C_out_block,
-        config.T_out_block,
-        config.H_out_block,
-        config.W_out_block);
-    log_info(
-        tt::LogOp,
-        "  Block counts: C_in={} C_out={} T={} H={} W={}",
-        C_in_num_blocks,
-        C_out_num_blocks,
-        T_out_blocks,
-        H_out_blocks,
-        W_out_blocks);
-    log_info(
-        tt::LogOp,
-        "  Parallel factors: C_in={} C_out={} T={} H={} W={}",
-        c_in_parallel_factor,
-        c_out_parallel_factor,
-        t_out_parallel_factor,
-        h_out_parallel_factor,
-        w_out_parallel_factor);
-    log_info(
-        tt::LogOp,
-        "  Per-core (ceil): c_in={} c_out={} t={} h={} w={}",
-        c_in_per_core,
-        c_out_per_core,
-        t_out_per_core,
-        h_out_per_core,
-        w_out_per_core);
-    log_info(
-        tt::LogOp,
-        "  Kernel: {}x{}x{}, stride: {}x{}x{}, padding: {}x{}x{}",
-        operation_attributes.kernel_size[0],
-        operation_attributes.kernel_size[1],
-        operation_attributes.kernel_size[2],
-        operation_attributes.stride[0],
-        operation_attributes.stride[1],
-        operation_attributes.stride[2],
-        operation_attributes.padding[0],
-        operation_attributes.padding[1],
-        operation_attributes.padding[2]);
-    log_info(tt::LogOp, "  num_patches (per spatial block): {}", num_patches);*/
-
     // Track cores that need to perform reduction together
     std::vector<std::vector<uint32_t>> reduction_groups(total_output_parallel);
 
@@ -652,39 +590,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                         (t_out_end > t_out_start) && (h_out_end > h_out_start) && (w_out_end > w_out_start);
 
         bool is_reducer = has_work && c_in_idx == 0;
-
-        // Diagnostic: compute per-core work metrics
-        /*if (has_work) {
-            uint32_t n_c_out = c_out_block_end - c_out_block_start;
-            uint32_t n_t_blocks = t_out_block_end - t_out_block_start;
-            uint32_t n_h_blocks = h_out_block_end - h_out_block_start;
-            uint32_t n_w_blocks = w_out_block_end - w_out_block_start;
-            uint32_t n_spatial = n_t_blocks * n_h_blocks * n_w_blocks;
-            uint32_t n_reader_iters = n_c_out * n_spatial;  // reader loops: c_out -> spatial
-            uint32_t n_output_positions =
-                (t_out_end - t_out_start) * (h_out_end - h_out_start) * (w_out_end - w_out_start);
-            log_info(
-                tt::LogOp,
-                "  Core ({},{}): c_out=[{},{}) t=[{},{}) h=[{},{}) w=[{},{})  "
-                "c_out_blks={} spatial_blks={}x{}x{}={} reader_iters={} out_positions={}",
-                core.x,
-                core.y,
-                c_out_block_start,
-                c_out_block_end,
-                t_out_start,
-                t_out_end,
-                h_out_start,
-                h_out_end,
-                w_out_start,
-                w_out_end,
-                n_c_out,
-                n_t_blocks,
-                n_h_blocks,
-                n_w_blocks,
-                n_spatial,
-                n_reader_iters,
-                n_output_positions);
-        }*/
 
         // Only include in reduction group if there's actual work to do
         if (has_work) {
