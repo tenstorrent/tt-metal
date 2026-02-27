@@ -104,7 +104,7 @@ static Tensor reduce_impl(
     const ttnn::SmallVector<int>& non_height_width_dims,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     auto input_shape = input_tensor_arg.logical_shape();
-    auto rank = input_shape.size();
+    auto rank = input_shape.rank();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
     Tensor output_tensor;
@@ -270,9 +270,13 @@ static Tensor std_var_impl(
     // If the input tensor is a rank 0 tensor, return NaN
     if (rank == 0) {
         // Create an output tensor with same shape and attributes as input tensor
-        auto output_tensor =
-            ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
-        output_tensor = ttnn::mul_sfpu(NAN, output_tensor, memory_config);
+        auto output_tensor = ttnn::full_like(
+            input_tensor_arg,
+            std::numeric_limits<float>::quiet_NaN(),
+            /*dtype=*/std::nullopt,
+            /*layout=*/std::nullopt,
+            /*device=*/std::nullopt,
+            memory_config);
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
@@ -371,6 +375,20 @@ Tensor reduce(
         height_width_dims = dims.second;
 
         if (!non_height_width_dims.empty()) {
+            auto rank = input_tensor_arg.logical_shape().rank();
+            auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+
+            // If the input is a rank 0 tensor (scalar), return a copy of it
+            if (rank == 0) {
+                // Return a copy of the input tensor.
+                return ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
+            }
+
+            // If the input is a zero volume tensor, return output with shape adjusted for keepdim
+            if (input_tensor_arg.logical_volume() == 0) {
+                return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
+            }
+
             input_tensor =
                 non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
 

@@ -741,6 +741,12 @@ def calculate_detailed_ulp_stats(expected, actual):
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    # 0-volume tensors are special because they don't have elements, so we can't compute PCC, etc.
+    # If one of the tensors is a 0-volume tensor, simply call torch.equal to check if they are equal
+    # (i.e. that both are 0-volume tensors and they have equal shapes).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
@@ -752,7 +758,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if torch.numel(golden) != 1:
         passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
         passing &= passing_pcc
-        output += f", {output_pcc}"
+        output += f", pcc={output_pcc}"
 
     return passing, output
 
