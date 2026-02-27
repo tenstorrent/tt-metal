@@ -467,12 +467,14 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        # Only use MLPerf HF cache on non-CIv2 runners (P150b uses LFC via TT_GH_CI_INFRA)
+        HF_HUB_CACHE: ${{ inputs.runner-label == 'P150b' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent ${{ inputs.runner-label == 'P150b' && '-e TT_GH_CI_INFRA=1' || '' }}"
     defaults:
       run:
         shell: bash
