@@ -208,8 +208,12 @@ def test_forward_pass(
     )
 
     # TTNN forward pass - collective operations handled inside forward functions
-    # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
-    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
+    # SharedExpert needs handle_tensor_parallel=True for standalone testing to enable CCLs
+    # NonExpert and MLP don't have this parameter and handle CCLs internally
+    if MLPClass.__name__ == "SharedExpert":
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
+    else:
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
