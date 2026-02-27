@@ -21,7 +21,7 @@ import json
 import os
 from triage import ScriptConfig, log_warning, run_script, log_check_location
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from run_checks import run as get_run_checks
+from run_checks import run as get_run_checks, RunChecks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
@@ -36,7 +36,7 @@ script_config = ScriptConfig(
 
 # RISC cores to check for each block type
 BLOCK_RISC_CORES = {
-    "functional_workers": ["brisc", "trisc0", "trisc1", "trisc2"],
+    "tensix": ["brisc", "trisc0", "trisc1", "trisc2"],
     "idle_eth": ["erisc", "erisc0", "erisc1"],
 }
 
@@ -54,7 +54,7 @@ def get_firmware_text_address(
 
 
 def collect_debug_bus_signals(
-    location: OnChipCoordinate, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
+    location: OnChipCoordinate, dispatcher_data: DispatcherData, elfs_cache: ElfsCache, run_checks: RunChecks
 ) -> dict | None:
     """
     Try to halt all RISC cores in a block. If all halt successfully, return None.
@@ -62,7 +62,7 @@ def collect_debug_bus_signals(
     """
     device = location._device
     noc_block = device.get_block(location)
-    block_type = device.get_block_type(location)
+    block_type = run_checks.get_block_type(location)
 
     # Get available RISC cores for this block
     available_riscs = noc_block.risc_names
@@ -131,7 +131,7 @@ def run(args, context: Context):
 
     # Use RunChecks infrastructure to iterate over blocks
     results = run_checks.run_per_block_check(
-        lambda location: collect_debug_bus_signals(location, dispatcher_data, elfs_cache),
+        lambda location: collect_debug_bus_signals(location, dispatcher_data, elfs_cache, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
@@ -144,9 +144,7 @@ def run(args, context: Context):
             # Build full structure using info from PerBlockCheckResult wrapper
             device = r.device_description.device
             location = r.location
-            block_type = (
-                device.get_block_type(location) if device.get_block_type(location) != "functional_workers" else "tensix"
-            )
+            block_type = run_checks.get_block_type(location)
             if block_type not in all_debug_bus_data[f"Device {device.id}"]:
                 all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
             all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = {
