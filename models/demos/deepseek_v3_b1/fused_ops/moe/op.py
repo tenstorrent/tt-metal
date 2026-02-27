@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
     MESH_LEAF,
@@ -757,8 +758,8 @@ class MoeRoutedExpertOp:
         if enable_routing:
             from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-            # 1. Routing matmul + sigmoid
-            logits = input_tensor.float() @ routing_weights_tensor.float()
+            # 1. Routing matmul + sigmoid (truncate to bfloat16 to approximate device accumulation)
+            logits = (input_tensor.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
             scores = torch.sigmoid(logits)
 
             # 2. Gate: top-8 selection with normalized scores
@@ -2934,6 +2935,36 @@ class MoeOp:
             "dst_num_pages": dst_num_pages,
             "dst_cb_descriptor": dst_cb_descriptor,
             "use_explicit_sender_index": use_explicit_sender_index,
+        }
+
+    @staticmethod
+    def _gate_mm_params_from_overlapped(
+        in0_cb,
+        in1_cb,
+        out_cb,
+        gate_mm_overlapped: OverlappedTensor,
+        k_num_tiles=0,
+        fused_activation=0,
+    ):
+        """Build gate_mm params from an OverlappedTensor (e.g. from prepare_attention_weights)."""
+        shard_h, shard_w = gate_mm_overlapped.shard_shape
+        tile_h, tile_w = gate_mm_overlapped.tile_shape
+        out_w = shard_w // tile_w
+        core_grid = gate_mm_overlapped.core_range_set
+        weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+            in1_cb, gate_mm_overlapped, gate_mm_overlapped.fused_tensor
+        )
+        return {
+            "in0_cb": in0_cb,
+            "in1_cb": in1_cb,
+            "out_cb": out_cb,
+            "k_num_tiles": k_num_tiles,
+            "out_w": out_w,
+            "fused_activation": fused_activation,
+            "core_grid": core_grid,
+            "num_cores": core_grid.num_cores(),
+            "weights_cb_descriptor": weights_cb_descriptor,
+            "output_cb_descriptor": None,
         }
 
     @staticmethod
