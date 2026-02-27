@@ -95,7 +95,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
-    tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), device_tensor.device_tensor());
+    tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), device_tensor.mesh_tensor());
 
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -109,7 +109,7 @@ void copy_to_device(
     TT_FATAL(
         device_tensor.storage_type() == StorageType::DEVICE, "copy_to_device: destination tensor must be on device");
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
-    tensor_impl::copy_to_device(queue, src, device_tensor.device_tensor(), region);
+    tensor_impl::copy_to_device(queue, src, device_tensor.mesh_tensor(), region);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -122,7 +122,7 @@ void copy_to_host(
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_to_host: source tensor must be on device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
-    tensor_impl::copy_to_host(queue, device_tensor.device_tensor(), dst, region, blocking);
+    tensor_impl::copy_to_host(queue, device_tensor.mesh_tensor(), dst, region, blocking);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -135,7 +135,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
 
-    tensor_impl::copy_to_host(mesh_cq, device_tensor.device_tensor(), host_tensor.host_tensor(), blocking);
+    tensor_impl::copy_to_host(mesh_cq, device_tensor.mesh_tensor(), host_tensor.host_tensor(), blocking);
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
@@ -148,7 +148,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = input_tensor.device()->mesh_command_queue(cq_id_int);
-    auto output = Tensor(tensor_impl::to_host(mesh_cq, input_tensor.device_tensor(), blocking));
+    auto output = Tensor(tensor_impl::to_host(mesh_cq, input_tensor.mesh_tensor(), blocking));
 
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -228,7 +228,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 
     Tensor output;
     if (is_device_tensor(input_tensor)) {
-        output = Tensor(tensor_impl::view(input_tensor.device_tensor(), new_logical_shape, new_padded_shape));
+        output = Tensor(tensor_impl::view(input_tensor.mesh_tensor(), new_logical_shape, new_padded_shape));
     } else {
         output = Tensor(tensor_impl::view(input_tensor.host_tensor(), new_logical_shape, new_padded_shape));
     }
