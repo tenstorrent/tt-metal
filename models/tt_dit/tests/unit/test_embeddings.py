@@ -704,23 +704,29 @@ def test_wan_patch_embed(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [[(4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
     ("B, seq_len, embed_dim"),
     [
         (1, 512, 4096),  # Wan2.2
     ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
+    ids=["t3k", "wh_glx", "bh_glx"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_wan_time_text_image_embedding(
     mesh_device: ttnn.MeshDevice,
     B: int,
     seq_len: int,
     embed_dim: int,
+    num_links: int,
 ) -> None:
-    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 1))
     torch_dtype = torch.float32
     torch.manual_seed(12334)
     # Create Torch model
@@ -736,11 +742,11 @@ def test_wan_time_text_image_embedding(
     ).to(torch_dtype)
     torch_model.eval()
 
-    mesh_axis = 1
+    mesh_axis = 0
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=4,
-        topology=ttnn.Topology.Ring,
+        num_links=num_links,
+        topology=ttnn.Topology.Linear,
     )
 
     # Create TT model
@@ -775,6 +781,7 @@ def test_wan_time_text_image_embedding(
     temb, timestep_proj, encoder_hidden_states = tt_model(tt_timestep, tt_encoder_hidden_states)
 
     # prepare data for comparison
+    breakpoint()
     timestep_proj_torch = timestep_proj_torch.unflatten(1, (6, -1))
     timestep_proj = unflatten(timestep_proj, -1, (6, -1))
     temb = ccl_manager.all_gather(temb, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
