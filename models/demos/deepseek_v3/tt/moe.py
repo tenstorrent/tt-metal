@@ -16,11 +16,13 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    AllToAllDispatchMetadataConfig,
     DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
+    SelectiveReduceCombineConfig,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -157,9 +159,12 @@ class MoE(SharedStateAddOn, AbstractModule):
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
+            SEQ_LEN = 1
             USERS_PER_ROW = 32
             HIDDEN_SIZE = hf_config.hidden_size
             TP_SIZE = mesh_device.shape[1]
+            DISPATCH_DEVICES = mesh_device.shape[0]
+            BATCH = USERS_PER_ROW * DISPATCH_DEVICES
 
             input_output_memory_config = ttnn.create_sharded_memory_config(
                 shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
@@ -193,6 +198,29 @@ class MoE(SharedStateAddOn, AbstractModule):
 
             # optimized ops only functional for quad torus
             if is_quad_ring:
+                combine_worker_cores = [
+                    ttnn.CoreCoord(5, 0),
+                    ttnn.CoreCoord(5, 1),
+                    ttnn.CoreCoord(5, 2),
+                    ttnn.CoreCoord(5, 3),
+                    ttnn.CoreCoord(5, 4),
+                    ttnn.CoreCoord(5, 5),
+                    ttnn.CoreCoord(5, 6),
+                    ttnn.CoreCoord(5, 7),
+                    ttnn.CoreCoord(6, 0),
+                    ttnn.CoreCoord(6, 1),
+                    ttnn.CoreCoord(6, 2),
+                    ttnn.CoreCoord(6, 3),
+                    ttnn.CoreCoord(6, 4),
+                    ttnn.CoreCoord(6, 5),
+                    ttnn.CoreCoord(6, 6),
+                    ttnn.CoreCoord(6, 7),
+                ]
+
+                combine_mux_core_range_set = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}
+                )
+
                 # Construct the config
                 return {
                     "mesh_device": MeshDeviceStub(mesh_device.shape),
@@ -202,17 +230,28 @@ class MoE(SharedStateAddOn, AbstractModule):
                     "num_experts_per_tok": hf_config.num_experts_per_tok,
                     "num_dispatch_devices": mesh_device.shape[0],
                     "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                    "all_to_all_dispatch_output_memory_config": memory_config,
-                    "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                    "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
                     "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                    "all_to_all_combine_output_memory_config": memory_config,
                     "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
                     "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
                     "input_memory_config": input_output_memory_config,
                     "output_memory_config": input_output_memory_config,
-                    "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                    "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                    "all_to_all_dispatch_metadata": AllToAllDispatchMetadataConfig(
+                        cluster_axis=0,
+                        worker_mode=ttnn.WorkerMode.DIRECT,
+                        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+                    ),
+                    "selective_reduce_combine": SelectiveReduceCombineConfig(
+                        hidden_size=hf_config.hidden_size,
+                        batch=BATCH,
+                        seq=SEQ_LEN,
+                        select_experts_k=hf_config.num_experts_per_tok,
+                        experts=hf_config.n_routed_experts,
+                        axis=0,
+                        token_parallel_core_dim=4,
+                        data_parallel_core_dim=4,
+                        worker_cores=combine_worker_cores,
+                        mux_core_range_set=combine_mux_core_range_set,
+                    ),
                     "optimized_sum_experts_output_memory_config": optimized_sum_experts_output_memory_config,
                     "sum_experts_output_memory_config": memory_config,
                     "optimized_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
@@ -248,11 +287,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     "num_experts_per_tok": hf_config.num_experts_per_tok,
                     "num_dispatch_devices": mesh_device.shape[0],
                     "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                    "all_to_all_dispatch_output_memory_config": memory_config,
-                    "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                    "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
                     "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                    "all_to_all_combine_output_memory_config": memory_config,
                     "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
                     "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
                     "input_memory_config": input_output_memory_config,
@@ -294,11 +329,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
                 "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
                 "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
                 "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
                 "input_memory_config": memory_config,

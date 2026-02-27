@@ -330,7 +330,7 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
 
     cluster_axis: int | None = None
     num_links: int | None = 4
-    worker_mode: ttnn.WorkerMode.DIRECT
+    worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
     output_tensors: list[ttnn.Tensor] | None = None
     cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
