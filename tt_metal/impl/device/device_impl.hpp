@@ -164,7 +164,7 @@ public:
     };
 
 private:
-    // Depracated ovverrides for sub_device_manager_tracker
+    // Deprecated overrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
