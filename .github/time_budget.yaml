@@ -69,8 +69,8 @@ metal_infra:
 ttnn:
   sanity:
     wh_n300_civ2: 535
-    bh_p100: 535
-    bh_p150b_civ2: 535
+    bh_p100a_civ2_viommu: 535
+    bh_p150b_civ2_viommu: 535
   unit:
     wh_llmbox: 50
   e2e:
