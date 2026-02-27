@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 
 import torch
@@ -36,6 +37,10 @@ from models.tt_transformers.tt.common import (
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
+
+
+def _deepseek_kvdbg_enabled() -> bool:
+    return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
 class Generator(WarmupForwardMixin):
@@ -356,6 +361,20 @@ class Generator(WarmupForwardMixin):
                 if page_table is not None
                 else None
             )
+            if page_table_user is not None and _deepseek_kvdbg_enabled():
+                sample = []
+                if page_table_user.numel():
+                    flat = page_table_user.reshape(-1)
+                    sample = flat[: min(16, flat.numel())].tolist()
+                logger.debug(
+                    "KVDBG deepseek prefill user global={} local={} seq_len={} cached={} page_table_shape={} sample={}",
+                    user_id,
+                    group_user_id,
+                    seq_len,
+                    num_cached_tokens,
+                    list(page_table_user.shape),
+                    sample,
+                )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
