@@ -157,6 +157,27 @@ def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
     return "unknown"
 
 
+def _kernel_overlaps_core_range(
+    kernel_desc: "ttnn.KernelDescriptor",
+    target_core_range: Optional[Any],
+) -> bool:
+    """Check whether *kernel_desc*'s core ranges overlap *target_core_range*.
+
+    Returns ``True`` when *target_core_range* is ``None`` (no filtering).
+    This is used to skip kernels that operate on disjoint core subsets
+    during tree / branch builds.  For example, a block-sharded LayerNorm
+    on a 2-row grid produces two riscv_0 kernels — a multicast sender on
+    row 0 and a receiver on row 1.  When the tree builder targets only
+    one branch (say row 0), the receiver kernel must be excluded so that
+    it does not overwrite the sender in the role-key map.
+    """
+    if target_core_range is None:
+        return True
+    target_coords = _core_range_set_to_coords(target_core_range)
+    kernel_coords = _core_range_set_to_coords(kernel_desc.core_ranges)
+    return bool(target_coords & kernel_coords)
+
+
 def _get_role_key(
     kernel_desc: "ttnn.KernelDescriptor",
     target_core_range: Optional[Any] = None,
@@ -183,4 +204,5 @@ __all__ = [
     "_get_node_core_range",
     "_get_risc_type",
     "_get_role_key",
+    "_kernel_overlaps_core_range",
 ]
