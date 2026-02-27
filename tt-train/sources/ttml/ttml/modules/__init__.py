@@ -4,26 +4,21 @@
 
 """Python modules package for ttml."""
 
-import sys
+# C++ bindings from _ttml.modules
+from .._ttml.modules import InferenceMode, LinearLayer, ModuleBase, RunMode
 
-# Import C++ bindings
-from .. import _ttml
-from .._recursive_import import _recursive_import_from_ttml
-
-if hasattr(_ttml, "modules"):
-    _recursive_import_from_ttml(_ttml.modules, sys.modules[__name__])
-
-from .._ttml.modules import RunMode, ModuleBase
-
+# Python implementations
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 __all__ = [
     "AbstractModuleBase",
+    "Buffer",
+    "InferenceMode",
+    "LinearLayer",
     "ModuleBase",
     "ModuleDict",
     "ModuleList",
     "Parameter",
-    "Buffer",
     "RunMode",
 ]

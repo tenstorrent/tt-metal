@@ -1,10 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ttml recursive import functionality.
+"""Tests for ttml import functionality.
 
-This module tests that all _ttml C++ extension symbols are properly imported
+This module tests that all _ttml C++ extension symbols are properly re-exported
 into the ttml Python package, with Python implementations taking precedence.
 """
 
@@ -23,8 +23,8 @@ def test_ttml_module_imported():
     assert hasattr(ttml, "_ttml")
 
 
-def test_recursive_import_top_level():
-    """Test that top-level symbols from _ttml are imported into ttml."""
+def test_explicit_import_top_level():
+    """Test that top-level symbols from _ttml are re-exported into ttml."""
     # Dynamically discover submodules from _ttml
     _ttml_attrs = dir(ttml._ttml)
 
@@ -44,7 +44,7 @@ def test_recursive_import_top_level():
         # If it exists in _ttml, it must be imported into ttml
         assert hasattr(
             ttml, submodule_name
-        ), f"ttml.{submodule_name} should exist if _ttml.{submodule_name} exists (recursive import failed)"
+        ), f"ttml.{submodule_name} should exist if _ttml.{submodule_name} exists"
         # Verify it's actually a module
         assert inspect.ismodule(
             getattr(ttml, submodule_name)
@@ -124,7 +124,7 @@ def test_private_symbols_not_imported():
     ttml_attrs = dir(ttml)
 
     # Check that private _ttml symbols are not directly exposed
-    # (except _ttml itself and _recursive_import which are implementation details)
+    # (except _ttml itself which is an implementation detail)
     private_from_ttml = [
         attr
         for attr in ttml_attrs
@@ -132,7 +132,6 @@ def test_private_symbols_not_imported():
         and attr
         not in (
             "_ttml",
-            "_recursive_import",
             "__name__",
             "__doc__",
             "__package__",
@@ -154,7 +153,6 @@ def test_private_symbols_not_imported():
             # unless it's a special case
             assert attr in (
                 "_ttml",
-                "_recursive_import",
             ), f"Private symbol {attr} from _ttml should not be imported"
 
 
@@ -196,12 +194,8 @@ def test_submodule_structure_preserved():
     assert inspect.ismodule(ttml.ops.binary), "ttml.ops.binary should be a module"
 
 
-def test_circular_dependency_prevention():
-    """Test that circular dependencies are prevented."""
-    # The recursive import should handle cycles gracefully
-    # This is tested implicitly by the fact that imports succeed
-    # without infinite recursion
-
+def test_module_identity():
+    """Test that module identity is stable across accesses."""
     # Try to access nested modules multiple times
     assert hasattr(ttml, "ops")
     ops1 = ttml.ops
@@ -259,9 +253,6 @@ def test_backward_compatibility():
 
 def test_readonly_attributes_handled():
     """Test that read-only attributes are handled gracefully."""
-    # The recursive import should skip attributes that can't be set
-    # This is tested implicitly - if there were issues, imports would fail
-
     # Try to access various attributes
     assert hasattr(ttml, "ops")
     ops = ttml.ops
