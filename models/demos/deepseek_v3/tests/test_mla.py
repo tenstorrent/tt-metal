@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,12 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
-from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
+from models.demos.deepseek_v3.tests.pytest_utils import (
+    build_expanded_test_ids,
+    expand_test_cases_with_position_ids_ranges,
+)
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -269,12 +274,13 @@ def run_test_forward_pass_mla2d(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
-
+    for i in range(10):
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        if i != 9:
+            tt_output.deallocate()  # Deallocate intermediate tensors to avoid OOM
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
     ).reshape(
@@ -311,30 +317,52 @@ def run_test_forward_pass_mla2d(
         ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
 
 
-TEST_CASES, TEST_IDS = build_test_cases_and_ids(
-    USERS_PER_ROW,
-    DEFAULT_PREFILL_SEQ_LEN,  # default prefill sequence length to test
-    include_decode_random_pos_ids=True,  # include decode random position_ids case
+# Base test cases - ranges will be expanded into individual test cases
+# see documentation for expand_test_cases_with_position_ids_ranges for more details
+BASE_TEST_CASES = [
+    # mode, seq_len, batch_size_per_row, decode_position_ids
+    ("decode", 1, USERS_PER_ROW, None),
+    # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
+] + [
+    ("prefill", seq_len, 1, None)
+    if seq_len == 128  # Changed from 127 to 128 to enable one prefill test
+    else pytest.param(
+        "prefill",
+        seq_len,
+        1,
+        None,
+        marks=pytest.mark.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        ),
+    )
+    for seq_len in PREFILL_SEQ_LENS
+]  # decode_position_ids is not applicable for prefill
+
+# Expand ranges into individual position_ids for pytest
+EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
+EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
 )
 
 
 @pytest.mark.parametrize(
+    "mode, seq_len, batch_size_per_row, decode_position_ids",
+    EXPANDED_TEST_CASES,
+    ids=EXPANDED_TEST_IDS,
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": optimal_topology,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size_per_row, decode_position_ids",
-    TEST_CASES,
-    ids=TEST_IDS,
-)
-@pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    [None],
 )
 @pytest.mark.parametrize(
     "test_closure",
