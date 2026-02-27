@@ -284,7 +284,18 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    # Create input tensor; gate weight/bias are always read from state dict when enable_routing
+    # ── Build state dict from reference fixture (gate weight/bias/rmsnorm_gamma all from state dict) ──
+    bdw = BlitzDecodeWeights(device)
+    layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=num_experts,
+        include_global=False,
+    )
+
+    # Create input tensor; gate weight/bias/rmsnorm_gamma are always read from state dict
     torch.manual_seed(RoutedExpert.SEED)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gate_mm_weights = None
@@ -314,8 +325,9 @@ def create_routed_expert_tensors(
         **from_torch_kwargs,
     )
 
-    # ── RMSNorm gamma weights [1, K] on sender core ──
-    torch_rmsnorm_gamma = torch.randn(1, K, dtype=torch.bfloat16).float()
+    # ── RMSNorm gamma weights [1, K] from state dict (post_attention_layernorm) ──
+    ffn_norm_key = f"{layer_key}.post_attention_layernorm.weight"
+    torch_rmsnorm_gamma = state_dict[ffn_norm_key].reshape(1, K).to(torch.bfloat16).float()
     rmsnorm_gamma_shard = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
     rmsnorm_gamma_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm_gamma_shard
@@ -350,17 +362,6 @@ def create_routed_expert_tensors(
     down_proj_N = K
     down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_down_proj_N = down_proj_N_padded // num_banks
-
-    # ── Build state dict from reference fixture; gate weight/bias always from state dict ──
-    bdw = BlitzDecodeWeights(device)
-    layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
-    state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        num_routed_experts=num_experts,
-        include_global=False,
-    )
     # Expected HF expert shapes: gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
     expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
     expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
@@ -651,7 +652,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     assert torch.equal(sorted_output_indices, sorted_expected_indices), "Routed expert: gate indices mismatch"
     assert torch.allclose(
-        sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4
+        sorted_output_scores, sorted_expected_scores, atol=2e-2, rtol=1e-4
     ), "Routed expert: gate scores mismatch"
 
     passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.97)

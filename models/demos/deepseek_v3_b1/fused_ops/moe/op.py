@@ -758,8 +758,8 @@ class MoeRoutedExpertOp:
         if enable_routing:
             from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-            # 1. Routing matmul + sigmoid
-            logits = input_tensor.float() @ routing_weights_tensor.float()
+            # 1. Routing matmul + sigmoid (truncate to bfloat16 to approximate device accumulation)
+            logits = (input_tensor.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
             scores = torch.sigmoid(logits)
 
             # 2. Gate: top-8 selection with normalized scores
