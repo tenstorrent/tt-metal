@@ -2274,14 +2274,15 @@ class TopKGolden:
             values = operand[operand_values_start_idx:operand_values_end_idx]
 
             # Get top-k values and their positions in the original array.
-            # largest=True means we want the largest k values.
-            # sorted=True means results are sorted in descending order.
-            topk_values, topk_positions = torch.topk(
+            # Use stable argsort so ties preserve original order.
+            # We always do stable sort, and within the test we can check that ties are handled correctly based on the original order of indices.
+            topk_positions = torch.argsort(
                 values,
-                K,
-                largest=(sort_direction == TopKSortDirection.Descending),
-                sorted=True,
-            )
+                descending=(sort_direction == TopKSortDirection.Descending),
+                stable=True,
+            )[:K]
+
+            topk_values = values[topk_positions]
 
             # Convert uint16 to int32 for indexing (PyTorch doesn't support uint16 indexing)
             topk_indices = uint16_indices.to(torch.int32)[topk_positions].to(

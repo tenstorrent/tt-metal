@@ -137,6 +137,7 @@ def validate_topk_indices(
     formats,
     input_dimensions=[32, 128],
     K=32,
+    stable_sort=False,
     atol=0.01,
 ):
     num_rows_tensor, num_cols_tensor = (
@@ -212,10 +213,15 @@ def validate_topk_indices(
                 return False
 
             if result_index != golden_index:
-                if torch.isclose(
-                    torch.tensor(result_value), torch.tensor(golden_value), atol=atol
+                if (
+                    torch.isclose(
+                        torch.tensor(result_value),
+                        torch.tensor(golden_value),
+                        atol=atol,
+                    )
+                    and stable_sort is False
                 ):
-                    # When doing topk, we can encounter cases where the values are extremely close/same.
+                    # When doing topk with unstable sort, we can encounter cases where the values are extremely close/same.
                     # in those cases golden has its own way of deciding which index to pick first, and hardware might pick a different one.
                     # What we get in the end is that the same values are in the topk, but maybe in a different order, which means different indices.
                     # This is not an issue, just the difference between golden and hardware when handling ties in values.
@@ -274,12 +280,14 @@ def get_value_tiles_from_topk_tensor(
     ],
     K=[32],  # TODO: Add more K values (like 16, 64).
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    stable_sort=[False, True],
 )
 def test_topk_sfpu(
     formats: InputOutputFormat,
     input_dimensions: list,
     K: int,
     sort_direction: TopKSortDirection,
+    stable_sort: bool,
     workers_tensix_coordinates: str,
 ):
 
@@ -292,6 +300,11 @@ def test_topk_sfpu(
         pytest.skip(
             "Skipping test for 32x1024 input on blackhole arch due to observed discrepancies."
         )
+
+    if stable_sort:
+        pytest.skip(
+            "Stable sort is currently not broken in LLK API."
+        )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -321,6 +334,7 @@ def test_topk_sfpu(
                 topk_k=K,
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
+                topk_stable_sort=stable_sort,
             ),
         ],
         runtimes=[
@@ -354,7 +368,7 @@ def test_topk_sfpu(
 
     if input_dimensions[1] == 128:  # TODO: Fix issue #1344 on tt-llk.
         assert validate_topk_indices(
-            res_tensor, golden_tensor, src_A, formats, input_dimensions, K
+            res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
         )
 
     # Get value tiles from result and golden tensors

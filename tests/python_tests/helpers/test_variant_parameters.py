@@ -294,6 +294,7 @@ class TOPK(TemplateParameter):
     topk_k: int = 0
     topk_matrix_width: int = 0
     topk_sort_direction: TopKSortDirection = TopKSortDirection.Descending
+    topk_stable_sort: bool = False
 
     def covert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -301,6 +302,7 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_LOGK = {int(math.log2(self.topk_k))};",
             f"constexpr std::uint32_t TOPK_NUM_ITERATIONS = {int(math.log2(self.topk_matrix_width // TILE_DIMENSIONS[1] // 2))};",
             f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
+            f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
         ]
         return "\n".join(lines)
 
@@ -308,10 +310,11 @@ class TOPK(TemplateParameter):
         lines: list[str] = [
             "std::uint32_t TOPK_K;",
             "std::uint32_t TOPK_LOGK;",
-            "std::uint32_t TOPK_SORT_DIRECTION;",
             "std::uint32_t TOPK_NUM_ITERATIONS;",
+            "std::uint32_t TOPK_SORT_DIRECTION;",
+            "bool TOPK_STABLE_SORT;",
         ]
-        return "\n".join(lines), "IV"
+        return "\n".join(lines), "IIII?"
 
 
 @dataclass
