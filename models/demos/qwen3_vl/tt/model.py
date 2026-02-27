@@ -120,6 +120,26 @@ class VisionTransformer(LightweightModule):
         x = self.args.prepare_residual_tensor_prefill(x)
         return x
 
+    def _slice_unpadded(self, x, unpadded_seq_len, padded_seq_len_list=None):
+        """Slice x along dim 2 to remove padding.
+
+        For a list of unpadded lengths (batched prefill), each image occupies
+        padded_seq_len_list[i] slots in dim 2; we extract the first
+        unpadded_seq_len[i] tokens from each and concatenate them.
+        For a scalar unpadded_seq_len, a simple prefix slice is performed.
+        """
+        if isinstance(unpadded_seq_len, (list, tuple)):
+            chunks = []
+            # for b, s,in enumerate(unpadded_seq_len):
+            #     chunks.append(x[b, :,  :s, :])
+            # return ttnn.concat(chunks, dim=0)
+            offset = 0
+            for s, ps in zip(unpadded_seq_len, padded_seq_len_list):
+                chunks.append(x[:, :, offset : offset + s, :])
+                offset += ps
+            return ttnn.concat(chunks, dim=2)
+        return x[:, :, :unpadded_seq_len, :]
+
     def forward(
         self,
         x,
@@ -127,14 +147,18 @@ class VisionTransformer(LightweightModule):
         rot_mats,
         batch_size=1,
         user_id_tensor=None,
+        padded_seq_len_list=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
 
         Args:
             x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim]
-            cu_seqlens (torch.Tensor): Cumulative sequence lengths
+            unpadded_seq_len (int | list[int]): Actual (unpadded) sequence length(s).
+                Pass a list for batched prefill; a scalar otherwise.
             rot_mats (list): Rotation matrices for positional embeddings
+            padded_seq_len_list (list[int] | None): Per-image padded slot counts,
+                required when unpadded_seq_len is a list.
 
         Returns:
             ttnn.Tensor: Output tensor
@@ -151,11 +175,15 @@ class VisionTransformer(LightweightModule):
             )
             if i in self.deepstack_visual_indices:
                 idx = self.deepstack_visual_indices.index(i)
-                deepstack_feature_list.append(self.deepstack_merger_list[idx](x[:, :, :unpadded_seq_len, :]))
+                # x_unpadded = ttnn.reshape(x, [batch_size, 1, x.shape[-2] // batch_size, -1])
+                x_unpadded = self._slice_unpadded(x, unpadded_seq_len, padded_seq_len_list)
+                deepstack_feature_list.append(self.deepstack_merger_list[idx](x_unpadded))
 
         # Merge patches - first remove any sequence length padding
-        x = x[:, :, :unpadded_seq_len, :]
+        # x = ttnn.reshape(x, [batch_size, 1, x.shape[-2] // batch_size, -1])
+        x = self._slice_unpadded(x, unpadded_seq_len, padded_seq_len_list)
         x = self.patch_merger(x)
+        # x = ttnn.reshape(x, [1, 1, x.shape[-2] * batch_size, -1])
         return x, deepstack_feature_list
 
 
@@ -213,6 +241,42 @@ class DropInVisionTransformer(torch.nn.Module):
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
 
+    def get_position_embeds(self, grid_thw: torch.Tensor):
+        cos_padded, sin_padded = [], []
+        for img in grid_thw:
+            seq_len = (img[1] * img[2]).item()
+            padded_seq_len = ((seq_len // 2048) + 1) * 2048
+            _, position_embeddings = qwen3_vision_transformer_preprocess(
+                seq_len=seq_len,
+                grid_thw=img.unsqueeze(0),
+                head_dim=self.model_args.head_dim,
+                spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
+            )
+
+            cos_orig, sin_orig = position_embeddings
+            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
+            # pad sequence length with cos = 1, sin = 0 (identity rotation)
+            cos_padded.append(
+                torch.nn.functional.pad(cos_orig, (0, 0, 0, padded_seq_len - seq_len), value=1)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            sin_padded.append(
+                torch.nn.functional.pad(sin_orig, (0, 0, 0, padded_seq_len - seq_len), value=0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+        return cos_padded, sin_padded
+
+    def get_padded_seq(self, grid_thw: torch.Tensor, batched_prefill=False):
+        seq_len, padded_seq_len = [], []
+        for img in grid_thw:
+            seq_len.append((img[1] * img[2]).item())
+            padded_seq_len.append(((seq_len[-1] // 2048) + 1) * 2048)
+        if batched_prefill:
+            padded_seq_len = [max(padded_seq_len)] * len(padded_seq_len)
+        return seq_len, padded_seq_len
+
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
         Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
@@ -232,73 +296,50 @@ class DropInVisionTransformer(torch.nn.Module):
         grid_thw_clone = grid_thw.clone()
         final_outputs = []
         deepstack_visual_embeds_list = [None] * len(self.deepstack_visual_indexes)
-        batch_size = grid_thw[0]
+        batch_size = grid_thw.shape[0]
         batched_prefill = True
         all_grid_thw = grid_thw
         if batched_prefill:
             all_grid_thw = all_grid_thw.unsqueeze(0)
-        # print(f"{all_grid_thw.shape=}")
+
+        cos_padded, sin_padded = self.get_position_embeds(grid_thw)
+        seq_len_list, padded_seq_len_list = self.get_padded_seq(grid_thw, batched_prefill=batched_prefill)
+
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
-        for grid_thw in all_grid_thw:
-            # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
-            # pixel_values = all_pixel_values[: grid_thw.prod(), :]
-            # all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
-            # print(f"{grid_thw.shape=}")
-            # print(f"{pixel_values.shape=}")
-            # print(f"{all_pixel_values.shape=}")
-            # # --- Preprocessing ---
-            # # 1. Calculate total unpadded sequence length
-            # print(f"{seq_len=}")
-            # print(f"{unpadded_seq_len=}")
-
+        for id, grid_thw in enumerate(all_grid_thw):
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-
             if not batched_prefill:
                 current_pixel_values = pixel_values[: grid_thw.prod(), :]
                 pixel_values = pixel_values[grid_thw.prod() :, :]
                 grid_thw = grid_thw.unsqueeze(0)
+                seq_len = seq_len_list[id]
+                padded_seq_len = padded_seq_len_list[id]
             else:
                 current_pixel_values = pixel_values
-            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
-
-            # 2. Use preprocessing function from reference/functional to get indices and embeddings
-            cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
-                seq_len=unpadded_seq_len,
-                grid_thw=grid_thw,
-                head_dim=self.model_args.head_dim,
-                spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
-            )
+                seq_len = seq_len_list
+                padded_seq_len = padded_seq_len_list
+            # unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
+            # seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(current_pixel_values)
             pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
 
-            # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
-            cos_orig, sin_orig = position_embeddings
-            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
-            # pad sequence length with cos = 1, sin = 0 (identity rotation)
-            cos_padded = (
-                torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            sin_padded = (
-                torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
+            if batched_prefill:
+                cos_padded = [torch.cat(cos_padded, dim=2)]
+                sin_padded = [torch.cat(sin_padded, dim=2)]
+
             # Convert to TT tensors on the mesh device
             cos = ttnn.from_torch(
-                cos_padded,
+                cos_padded[id],
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
             )
             sin = ttnn.from_torch(
-                sin_padded,
+                sin_padded[id],
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
@@ -307,14 +348,28 @@ class DropInVisionTransformer(torch.nn.Module):
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, seq_len)
+            if batched_prefill:
+                # For batched prefill, pad each image's patches individually to its padded_seq_len,
+                # then concatenate along dim 0 so the total shape is [sum(padded_seq_len_list), hidden_dim].
+                padded_chunks = []
+                offset = 0
+                for s, ps in zip(seq_len, padded_seq_len):
+                    chunk = patch_input[offset : offset + s, :]
+                    padded_chunks.append(torch.nn.functional.pad(chunk, (0, 0, 0, ps - s)))
+                    offset += s
+                patch_input = torch.cat(padded_chunks, dim=0)
+                total_padded_seq_len = sum(padded_seq_len)
+            else:
+                total_padded_seq_len = padded_seq_len
+            tt_input = self.tt_model.prepare_input(patch_input, total_padded_seq_len)
 
             # --- TT Model Execution ---
             tt_out, deepstack_visual_embeds = self.tt_model(
                 tt_input,
-                unpadded_seq_len=unpadded_seq_len,
+                unpadded_seq_len=seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
                 batch_size=batch_size,
+                padded_seq_len_list=padded_seq_len if batched_prefill else None,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -348,8 +403,8 @@ class DropInVisionTransformer(torch.nn.Module):
         final_output_ttnn = torch.cat(final_outputs, dim=0)
         if self.debug:
             logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-            reference_output, deepstack_ref = self.reference_model.forward(all_pixel_values, grid_thw_clone)
-            torch.save(reference_output, "models/demos/qwen3_vl/tt/ref_out_visual.pt")
+            # reference_output, deepstack_ref = self.reference_model.forward(all_pixel_values, grid_thw_clone)
+            # torch.save(reference_output, "models/demos/qwen3_vl/tt/ref_out_visual.pt")
             reference_output = torch.load("models/demos/qwen3_vl/tt/ref_out_visual.pt")
             _, pcc = comp_pcc(reference_output, final_output_ttnn)
             logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
