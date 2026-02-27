@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from typing import Dict
 
 import pytest
@@ -9,7 +10,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tests.test_moe_experts import generate_synthetic_moe_expert_weights
 
 # Import synthetic weight generators from component tests
@@ -91,13 +94,6 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
-@pytest.mark.parametrize(
-    "mode,num_tokens",
-    [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
-    ],
-)
 @pytest.mark.parametrize(
     "device_params",
     [

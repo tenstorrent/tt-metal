@@ -4,7 +4,7 @@
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 import pytest
 import torch
