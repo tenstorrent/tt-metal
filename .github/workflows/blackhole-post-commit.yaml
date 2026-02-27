@@ -205,7 +205,7 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
-      enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
+      enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100a_civ2' || 'bh_p150b_civ2' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
