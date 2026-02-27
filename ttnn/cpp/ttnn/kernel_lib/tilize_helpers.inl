@@ -56,10 +56,9 @@ constexpr bool has_supported_fast_tilize_format() {
     constexpr std::int32_t format = unpack_src_format[input_cb];
     return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
 #else
-    // On PACK TRISC, unpack_src_format[] is not in scope — the pack side of
-    // fast_tilize is format-agnostic, so assume supported and let UNPACK/MATH
-    // TRISCs make the authoritative format decision.
-    return true;
+    // If header not available, conservatively disallow fast_tilize
+    // Only enable fast_tilize when we can confirm the format is supported
+    return false;
 #endif
 }
 
