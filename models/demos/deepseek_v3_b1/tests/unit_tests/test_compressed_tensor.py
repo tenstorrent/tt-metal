@@ -156,14 +156,44 @@ def test_device_shared_memory_config(device):
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
 
 
-def _make_sharded_config(layout, buffer_type, num_cores):
-    """Helper to build a sharded MemoryConfig with a dummy shard shape.
+def _div_up(a, b):
+    return (a + b - 1) // b
 
-    CompressedTensor will recompute the shard shape based on packed tile sizes.
+
+def _make_sharded_mem_config(tensor_shape, layout, buffer_type, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """Build a sharded MemoryConfig with proper tile-aligned shard shape.
+
+    Computes shard shape using div_up on the tensor dimensions, aligned to tile size (32).
     """
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))])
-    # Dummy shard shape — CompressedTensor overrides this
-    shard_spec = ttnn.ShardSpec(grid, [1, 1], ttnn.ShardOrientation.ROW_MAJOR)
+    h, w = tensor_shape[-2], tensor_shape[-1]
+    tile = 32
+    num_cores = grid.num_cores()
+    grid_size = grid.bounding_box().grid_size()
+    grid_h, grid_w = grid_size.y, grid_size.x
+
+    if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # Each core gets some rows, all columns
+        shard_h = _div_up(h, num_cores)
+        shard_h = _div_up(shard_h, tile) * tile  # align to tile
+        shard_shape = [shard_h, w]
+    elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        # Each core gets all rows, some columns
+        shard_w = _div_up(w, num_cores)
+        shard_w = _div_up(shard_w, tile) * tile
+        shard_shape = [h, shard_w]
+    elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        is_row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
+        h_cores = grid_h if is_row_major else grid_w
+        w_cores = grid_w if is_row_major else grid_h
+        shard_h = _div_up(h, h_cores)
+        shard_h = _div_up(shard_h, tile) * tile
+        shard_w = _div_up(w, w_cores)
+        shard_w = _div_up(shard_w, tile) * tile
+        shard_shape = [shard_h, shard_w]
+    else:
+        raise ValueError(f"Unsupported layout: {layout}")
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, orientation)
     return ttnn.MemoryConfig(layout, buffer_type, shard_spec)
 
 
@@ -174,7 +204,8 @@ def test_device_height_sharded(device):
 
     assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
     # 4 tile rows → 4 cores, 1 tile row per core
-    data_mem = _make_sharded_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, num_cores=4)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, grid)
 
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
@@ -194,8 +225,8 @@ def test_device_width_sharded(device):
     x = torch.randn(128, 128)  # 4x4 tile grid
 
     assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    # 4 tile cols → 4 banks, 1 tile col per bank
-    data_mem = _make_sharded_config(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, num_cores=4)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, grid)
 
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
@@ -217,8 +248,7 @@ def test_device_block_sharded(device):
     assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
     # 2x2 grid: each core gets a 2x2 block of tiles
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
-    shard_spec = ttnn.ShardSpec(grid, [1, 1], ttnn.ShardOrientation.ROW_MAJOR)
-    data_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, grid)
 
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
@@ -230,3 +260,132 @@ def test_device_block_sharded(device):
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"Block-sharded PCC: {pcc:.6f}")
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low after block-sharded round-trip"
+
+
+# ---------------------------------------------------------------------------
+# Uneven shard tests (tile grid doesn't divide evenly across cores)
+# ---------------------------------------------------------------------------
+
+
+def _print_shard_distribution(ct, memory_config):
+    """Print how many tiles each core gets, with core coordinates."""
+    if not hasattr(ct, "_shard_tile_coords"):
+        return
+    # Enumerate cores from the shard spec grid in row-major order
+    grid = memory_config.shard_spec.grid
+    cores = []
+    for cr in grid.ranges():
+        for y in range(cr.start.y, cr.end.y + 1):
+            for x in range(cr.start.x, cr.end.x + 1):
+                cores.append((x, y))
+    for i, coords in enumerate(ct._shard_tile_coords):
+        core_xy = cores[i] if i < len(cores) else ("?", "?")
+        print(f"  core ({core_xy[0]},{core_xy[1]}): {len(coords)} tiles {coords}")
+    print(f"  max_shard_size: {ct.max_shard_size} bytes")
+
+
+def _validate_shard_distribution(ct, memory_config):
+    """Validate that our tile-to-core mapping matches the memory config's shard shape.
+
+    Converts the shard shape from elements to tiles and checks our max tiles per shard matches.
+    """
+    if not hasattr(ct, "_shard_tile_coords"):
+        return
+
+    tile_hw = ct.tile_hw
+    shard_shape = memory_config.shard_spec.shape
+    shard_h_tiles = shard_shape[0] // tile_hw
+    shard_w_tiles = shard_shape[1] // tile_hw
+    expected_max = shard_h_tiles * shard_w_tiles
+
+    our_max = max(len(coords) for coords in ct._shard_tile_coords)
+
+    print(f"  shard shape: {shard_shape} = {shard_h_tiles}x{shard_w_tiles} tiles = {expected_max} tiles/shard")
+    print(f"  our max tiles/shard: {our_max}")
+    print(f"  our tiles/core: {[len(c) for c in ct._shard_tile_coords]}")
+
+    assert our_max == expected_max, f"Max tiles per shard mismatch: expected={expected_max}, ours={our_max}"
+
+
+def test_device_uneven_height_shard(device):
+    """3 tile rows across 2 cores — first core gets 2 rows, second gets 1."""
+    torch.manual_seed(42)
+    x = torch.randn(96, 128)  # 3x4 tile grid
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, grid)
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+
+    # Verify assignment round-trips correctly despite uneven shards
+    result = assigner.assign(x, ttnn_quantize_fn)
+    recovered_assignment = ct.get_assignment_numpy()
+    assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven shard"
+
+    recovered = ct.to_torch()
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"Uneven height-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+def test_device_uneven_width_shard(device):
+    """4 tile columns across 3 banks — first bank gets 2 cols, others get 1."""
+    torch.manual_seed(42)
+    x = torch.randn(96, 128)  # 3x4 tile grid
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, grid)
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+
+    result = assigner.assign(x, ttnn_quantize_fn)
+    recovered_assignment = ct.get_assignment_numpy()
+    assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven shard"
+
+    recovered = ct.to_torch()
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"Uneven width-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+def test_device_uneven_block_shard(device):
+    """3x4 tile grid on a 2x3 core grid — uneven in both dims.
+
+    Height: 3 rows / 2 grid_h → row 0 gets 2 tile rows, row 1 gets 1.
+    Width: 4 cols / 3 grid_w → col 0 gets 2 tile cols, cols 1-2 get 1.
+    Core (0,0) gets 2x2=4 tiles, core (1,2) gets 1x1=1 tile.
+    """
+    torch.manual_seed(42)
+    x = torch.randn(96, 128)  # 3x4 tile grid
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, grid)
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    _print_shard_distribution(ct, data_mem)
+    _validate_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+
+    result = assigner.assign(x, ttnn_quantize_fn)
+    recovered_assignment = ct.get_assignment_numpy()
+    assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven block shard"
+
+    recovered = ct.to_torch()
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"Uneven block-shard PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
