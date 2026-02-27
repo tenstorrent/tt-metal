@@ -242,7 +242,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
 
     for (int i = 0; i < 10; i++) {
         profiler.start("inference_time");
-        
+
         // CQ1: Update Input (Async Copy)
         ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
         tt::tt_metal::copy_to_device(tt_input_host, tt_input, ttnn::QueueId(1));
@@ -252,7 +252,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
         ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
         op_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(0));
         ttnn::operations::trace::execute_trace(device.get(), tid, ttnn::QueueId(0), false);
-        
+
         profiler.stop("inference_time");
 
         profiler.start("sync_output");
@@ -269,10 +269,9 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     double fps = batch_size / inference_time_avg;
 
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "ttnn_deit_for_image_classification_with_teacher_batch_size_" << batch_size 
-              << ". One inference iteration time (sec): " << inference_time_avg 
-              << ", FPS: " << std::setprecision(2) << fps
-              << ", inference time (sec): " << std::setprecision(6) << (inference_time_total / 10.0)
+    std::cout << "ttnn_deit_for_image_classification_with_teacher_batch_size_" << batch_size
+              << ". One inference iteration time (sec): " << inference_time_avg << ", FPS: " << std::setprecision(2)
+              << fps << ", inference time (sec): " << std::setprecision(6) << (inference_time_total / 10.0)
               << ", sync output time(sec): " << (sync_time_total / 10.0) << std::endl;
 
     // Clean up device resources

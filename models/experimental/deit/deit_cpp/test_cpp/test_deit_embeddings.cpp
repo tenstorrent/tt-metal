@@ -114,7 +114,7 @@ void test_deit_embeddings_inference(const std::string& model_path) {
     auto permuted_input = input_tensor.permute({0, 2, 3, 1}); // NCHW -> NHWC
     auto ttnn_input = helper_funcs::from_torch(permuted_input, std::nullopt, ttnn::Layout::ROW_MAJOR);
     ttnn_input = ttnn::to_device(ttnn_input, device.get(), ttnn::DRAM_MEMORY_CONFIG);
-    
+
     // bool_masked_pos is std::nullopt (equivalent to None in Python)
     auto tt_output_tensor = tt_embeddings.forward(ttnn_input, std::nullopt);
 
@@ -142,15 +142,15 @@ void test_deit_embeddings_inference(const std::string& model_path) {
 
 void test_deit_embeddings_inference_mock(double pcc_threshold = 0.99) {
     std::cout << "Running mock test with random weights..." << std::endl;
-    
+
     // Config
     DeiTConfig config;
     std::string base_address = "model.embeddings";
     bool use_mask_token = false;
-    
+
     // Generate random weights
     std::unordered_map<std::string, torch::Tensor> state_dict;
-    
+
     auto projection_weight = torch::randn({config.hidden_size, config.num_channels, config.patch_size, config.patch_size});
     auto projection_bias = torch::randn({config.hidden_size});
     auto cls_token = torch::randn({1, 1, config.hidden_size});
@@ -158,60 +158,60 @@ void test_deit_embeddings_inference_mock(double pcc_threshold = 0.99) {
     // num_patches + 2 (cls, dist)
     int num_patches = (config.image_size / config.patch_size) * (config.image_size / config.patch_size);
     auto position_embeddings = torch::randn({1, num_patches + 2, config.hidden_size});
-    
+
     state_dict[base_address + ".patch_embeddings.projection.weight"] = projection_weight;
     state_dict[base_address + ".patch_embeddings.projection.bias"] = projection_bias;
     state_dict[base_address + ".cls_token"] = cls_token;
     state_dict[base_address + ".distillation_token"] = distillation_token;
     state_dict[base_address + ".position_embeddings"] = position_embeddings;
-    
+
     if (use_mask_token) {
         state_dict[base_address + ".mask_token"] = torch::randn({1, 1, config.hidden_size});
     }
-    
+
     // Input
     auto pixel_values = torch::randn({1, 3, config.image_size, config.image_size});
-    
+
     // Expected output (PyTorch implementation)
     // 1. Patch Embeddings
     auto torch_conv = torch::nn::Conv2d(torch::nn::Conv2dOptions(config.num_channels, config.hidden_size, config.patch_size)
                                         .stride(config.patch_size).padding(0));
     torch_conv->weight.data() = projection_weight;
     torch_conv->bias.data() = projection_bias;
-    
+
     auto embeddings = torch_conv->forward(pixel_values).flatten(2).transpose(1, 2); // [B, N, D]
-    
+
     // 2. Tokens
     auto batch_size = pixel_values.size(0);
     auto cls_token_expanded = cls_token.expand({batch_size, -1, -1});
     auto dist_token_expanded = distillation_token.expand({batch_size, -1, -1});
-    
+
     // 3. Concat
     embeddings = torch::cat({cls_token_expanded, dist_token_expanded, embeddings}, 1);
-    
+
     // 4. Pos Embs
     embeddings = embeddings + position_embeddings;
-    
+
     auto torch_output = embeddings;
-    
+
     // TTNN implementation
     int device_id = 0;
     auto device = ttnn::MeshDevice::create(ttnn::MeshDeviceConfig(ttnn::MeshShape(1, 1), std::nullopt, {device_id}));
-    
+
     TtDeiTEmbeddings tt_embeddings(config, state_dict, base_address, device, use_mask_token);
-    
+
     auto permuted_input = pixel_values.permute({0, 2, 3, 1}); // NCHW -> NHWC
     auto ttnn_input = helper_funcs::from_torch(permuted_input, std::nullopt, ttnn::Layout::ROW_MAJOR);
     ttnn_input = ttnn::to_device(ttnn_input, device.get(), ttnn::DRAM_MEMORY_CONFIG);
-    
+
     auto tt_output_tensor = tt_embeddings.forward(ttnn_input, std::nullopt);
     auto tt_output_host = ttnn::from_device(tt_output_tensor);
     auto tt_output_torch = helper_funcs::to_torch(tt_output_host);
-    
+
     // PCC
     double pcc = helper_funcs::compute_pcc(torch_output, tt_output_torch);
     std::cout << "Mock Test PCC: " << pcc << std::endl;
-    
+
     if (pcc >= pcc_threshold) {
         std::cout << "PASSED: Mock Test" << std::endl;
     } else {
