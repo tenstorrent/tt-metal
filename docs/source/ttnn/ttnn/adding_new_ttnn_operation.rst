@@ -128,6 +128,8 @@ then handles program construction, caching, and buffer address patching on cache
    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
    reader_desc.core_ranges = all_cores;
    reader_desc.compile_time_args = {cb_id};
+   // If the kernel uses get_named_compile_time_arg_val(), set named args:
+   reader_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
    reader_desc.config = ReaderConfigDescriptor{};
 
    KernelDescriptor compute_desc;
@@ -135,6 +137,12 @@ then handles program construction, caching, and buffer address patching on cache
    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
    compute_desc.core_ranges = all_cores;
    compute_desc.compile_time_args = {cb_id};
+   // Named compile-time args map string names to CB indices for the kernel
+   compute_desc.named_compile_time_args = {
+       {"cb_in0", tt::CBIndex::c_0},
+       {"cb_out", tt::CBIndex::c_4},
+       {"cb_intermed0", tt::CBIndex::c_5},
+   };
    compute_desc.config = ComputeConfigDescriptor{
        .math_fidelity = MathFidelity::HiFi4,
        .fp32_dest_acc_en = false,
@@ -151,6 +159,17 @@ then handles program construction, caching, and buffer address patching on cache
    desc.kernels.push_back(std::move(reader_desc));
    desc.kernels.push_back(std::move(compute_desc));
    return desc;
+
+.. warning::
+
+   If a kernel source uses ``get_named_compile_time_arg_val()`` to retrieve
+   compile-time arguments by name, you **must** set ``named_compile_time_args``
+   on the corresponding ``KernelDescriptor``. This field maps string names to
+   ``tt::CBIndex`` values and causes the ``KERNEL_COMPILE_TIME_ARG_MAP`` macro
+   to be defined during JIT compilation. Without it, the kernel will fail to
+   compile with a ``'get_named_compile_time_arg_val' was not declared in this
+   scope`` error. This applies to all kernel types (reader, writer, and
+   compute).
 
 **``compute_program_hash``:**
 

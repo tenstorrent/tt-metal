@@ -192,6 +192,7 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp";
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}};
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel
@@ -203,6 +204,7 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.named_compile_time_args = {{"cb_out", output_cb_index}};
     writer_desc.config = WriterConfigDescriptor{};
 
     // Compute kernel - group 1
@@ -219,6 +221,8 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     compute_desc_1.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
     compute_desc_1.core_ranges = core_group_1;
     compute_desc_1.compile_time_args = compute_args_group_1;
+    compute_desc_1.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}};
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .dst_full_sync_en = true,
@@ -238,6 +242,8 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
         compute_desc_2.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
         compute_desc_2.core_ranges = core_group_2;
         compute_desc_2.compile_time_args = compute_args_group_2;
+        compute_desc_2.named_compile_time_args = {
+            {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}};
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .dst_full_sync_en = true,

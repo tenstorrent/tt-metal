@@ -634,6 +634,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         in0_sender_desc.core_ranges = CoreRangeSet({all_cores_with_work});
         in0_sender_desc.compile_time_args = in0_sender_compile_time_args;
         in0_sender_desc.defines = in0_sender_sharded_defines;
+        in0_sender_desc.named_compile_time_args = {
+            {"cb_in0", tt::CBIndex::c_0}, {"cb_in0_sharded", tt::CBIndex::c_2}, {"cb_l1_array", tt::CBIndex::c_6}};
         in0_sender_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = in0_noc};
 
@@ -647,6 +649,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
                 CoreRangeSet({in0_mcast_cores_without_work_and_not_in_receiver_grid.value()});
             in0_sender_no_work_desc.compile_time_args = no_work_args;
             in0_sender_no_work_desc.defines = in0_sender_sharded_defines;
+            in0_sender_no_work_desc.named_compile_time_args = {
+                {"cb_in0", tt::CBIndex::c_0}, {"cb_in0_sharded", tt::CBIndex::c_2}, {"cb_l1_array", tt::CBIndex::c_6}};
             in0_sender_no_work_desc.config =
                 DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = in0_noc};
         }
@@ -656,6 +660,12 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         in0_sender_desc.core_ranges = CoreRangeSet({in0_sender_interleaved});
         in0_sender_desc.compile_time_args = in0_sender_compile_time_args;
         in0_sender_desc.defines = in0_sender_interleaved_defines;
+        in0_sender_desc.named_compile_time_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in0_sharded", tt::CBIndex::c_2},
+            {"cb_sparsity", tt::CBIndex::c_6},
+            {"cb_in0_intermediate", tt::CBIndex::c_8},
+        };
         in0_sender_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = in0_noc};
     }
@@ -667,6 +677,13 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     in1_sender_writer_desc.core_ranges = CoreRangeSet({in1_sender});
     in1_sender_writer_desc.compile_time_args = in1_sender_writer_compile_time_args;
     in1_sender_writer_desc.defines = in1_sender_writer_defines;
+    in1_sender_writer_desc.named_compile_time_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_sparsity", tt::CBIndex::c_7},
+        {"cb_in1_intermediate", tt::CBIndex::c_9},
+    };
     in1_sender_writer_desc.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = in1_noc};
 
@@ -680,6 +697,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         in1_receiver_writer_desc.core_ranges = in1_receiver;
         in1_receiver_writer_desc.compile_time_args = in1_receiver_writer_compile_time_args;
         in1_receiver_writer_desc.defines = in1_receiver_writer_defines;
+        in1_receiver_writer_desc.named_compile_time_args = {
+            {"cb_in1", tt::CBIndex::c_1}, {"cb_bias", tt::CBIndex::c_3}, {"cb_out", tt::CBIndex::c_4}};
         in1_receiver_writer_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = in1_noc};
     }
@@ -692,6 +711,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
         in0_receiver_desc.core_ranges = in0_receiver_interleaved;
         in0_receiver_desc.compile_time_args = in0_receiver_compile_time_args;
+        in0_receiver_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
         in0_receiver_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = in0_noc};
     }
@@ -708,6 +728,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
             CoreRangeSet({in0_receiver_in1_receiver_interleaved_other_cores.value()});
         in1_receiver_writer_other_noc_desc.compile_time_args = in1_receiver_writer_compile_time_args;
         in1_receiver_writer_other_noc_desc.defines = in1_receiver_writer_other_noc_defines;
+        in1_receiver_writer_other_noc_desc.named_compile_time_args = {
+            {"cb_in1", tt::CBIndex::c_1}, {"cb_bias", tt::CBIndex::c_3}, {"cb_out", tt::CBIndex::c_4}};
         in1_receiver_writer_other_noc_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = in1_split_noc};
 
@@ -716,6 +738,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         in0_receiver_other_noc_desc.core_ranges =
             CoreRangeSet({in0_receiver_in1_receiver_interleaved_other_cores.value()});
         in0_receiver_other_noc_desc.compile_time_args = in0_receiver_compile_time_args;
+        in0_receiver_other_noc_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
         in0_receiver_other_noc_desc.config =
             DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = in0_split_noc};
     }
@@ -754,6 +777,16 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     compute_desc.core_ranges = CoreRangeSet({all_cores_with_work});
     compute_desc.compile_time_args = compute_kernel_args;
     compute_desc.defines = mm_kernel_defines;
+    compute_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_in0_intermediate", tt::CBIndex::c_8},
+        {"cb_in1_intermediate", tt::CBIndex::c_9},
+        {"cb_in0_transposed", tt::CBIndex::c_10},
+    };
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

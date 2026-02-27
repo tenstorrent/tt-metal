@@ -561,6 +561,7 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     in0_reader_desc.core_ranges = all_cores_in_rect_grid;
     in0_reader_desc.compile_time_args = in0_reader_compile_args;
     in0_reader_desc.defines = reader_defines;
+    in0_reader_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
     in0_reader_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = in0_noc,
@@ -573,6 +574,8 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     in1_writer_desc.core_ranges = all_cores_in_rect_grid;
     in1_writer_desc.compile_time_args = in1_writer_compile_args;
     in1_writer_desc.defines = writer_defines;
+    in1_writer_desc.named_compile_time_args = {
+        {"cb_in1", tt::CBIndex::c_1}, {"cb_bias", tt::CBIndex::c_3}, {"cb_out", tt::CBIndex::c_4}};
     in1_writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = in1_noc,
@@ -585,6 +588,16 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     compute_desc.core_ranges = all_cores_in_rect_grid;
     compute_desc.compile_time_args = compute_kernel_args;
     compute_desc.defines = compute_defines;
+    compute_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_in0_intermediate", tt::CBIndex::c_8},
+        {"cb_in1_intermediate", tt::CBIndex::c_9},
+        {"cb_in0_transposed", tt::CBIndex::c_10},
+    };
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

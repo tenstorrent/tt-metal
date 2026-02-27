@@ -348,6 +348,10 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.defines = reader_defines;
+    reader_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
+    if (in0_needs_intermediate_cb_read) {
+        reader_desc.named_compile_time_args.emplace_back("cb_in0_intermediate", tt::CBIndex::c_8);
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel
@@ -392,6 +396,10 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.defines = writer_defines;
+    writer_desc.named_compile_time_args = {{"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_4}};
+    if (in1_needs_intermediate_cb_read) {
+        writer_desc.named_compile_time_args.emplace_back("cb_in1_intermediate", tt::CBIndex::c_9);
+    }
     writer_desc.config = WriterConfigDescriptor{};
 
     // Compute kernel defines
@@ -447,6 +455,15 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     compute_desc_1.core_ranges = core_group_1;
     compute_desc_1.compile_time_args = compute_args_1;
     compute_desc_1.defines = compute_defines;
+    compute_desc_1.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_intermed0", tt::CBIndex::c_5},
+    };
+    if (in0_transpose_tile) {
+        compute_desc_1.named_compile_time_args.emplace_back("cb_in0_transposed", tt::CBIndex::c_10);
+    }
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -481,6 +498,15 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
         compute_desc_2.core_ranges = core_group_2;
         compute_desc_2.compile_time_args = compute_args_2;
         compute_desc_2.defines = compute_defines;
+        compute_desc_2.named_compile_time_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in1", tt::CBIndex::c_1},
+            {"cb_out", tt::CBIndex::c_4},
+            {"cb_intermed0", tt::CBIndex::c_5},
+        };
+        if (in0_transpose_tile) {
+            compute_desc_2.named_compile_time_args.emplace_back("cb_in0_transposed", tt::CBIndex::c_10);
+        }
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
