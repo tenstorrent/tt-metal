@@ -119,7 +119,7 @@ struct LayerNormBackwardKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+    tt::tt_metal::KernelHandle compute_group_2{};
 };
 
 void assign_per_core_runtime_args(
