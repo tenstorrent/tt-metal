@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "blitz_decode_pipeline_nanobind.hpp"
+#include "pipeline_module_nanobind.hpp"
 
 #include <sstream>
 
@@ -11,7 +11,7 @@
 
 #include "tt-metalium/experimental/blitz_decode_pipeline.hpp"
 
-namespace ttnn::operations::experimental::distributed::detail {
+namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
     using tt::tt_metal::experimental::distributed::BlitzDecodePipelineStage;
@@ -45,4 +45,4 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
         )doc");
 }
 
-}  // namespace ttnn::operations::experimental::distributed::detail
+}  // namespace ttnn::pipeline_module
