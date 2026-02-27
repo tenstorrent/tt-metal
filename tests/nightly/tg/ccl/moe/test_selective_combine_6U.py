@@ -66,7 +66,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     dense_metadata_len = torch.zeros([devices], dtype=torch.uint32)
     active_token_counts = torch.zeros([experts], dtype=torch.int32)
     # 1 mapping value per token + 12 bytes padding
-    dense_token_maps = torch.ones([experts, batch * seq, 4], dtype=torch.int32) * 69
+    dense_token_maps = torch.zeros([experts, batch * seq + 1, 4], dtype=torch.int32)
 
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
@@ -437,6 +437,8 @@ def _get_tt_sharded_dense_input(
 
 
 def _get_tt_dense_metadata(dense_metadata_tensor, mesh_device):
+    shape = dense_metadata_tensor.shape
+    dense_metadata_tensor = dense_metadata_tensor.reshape([shape[0], shape[-2] * shape[-1]])
     return ttnn.from_torch(
         dense_metadata_tensor,
         device=mesh_device,
@@ -451,6 +453,7 @@ def _get_tt_dense_token_maps(dense_token_maps_tensor, mesh_device):
         dense_token_maps_tensor,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.uint32,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )

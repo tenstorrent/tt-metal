@@ -58,7 +58,7 @@ template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
     }
 }
 
-template <uint32_t NumLocalExperts, uint32_t AlignedActivationsPageSize, uint32_t MapStride, uint32_t GlobalNumTokens>
+template <uint32_t NumLocalExperts, uint32_t ActivationStride, uint32_t MapStride, uint32_t GlobalNumTokens>
 void get_token_activation_offsets(
     const uint32_t* token_split_offsets,
     volatile tt_l1_ptr uint32_t* dense_token_maps_ptr,
@@ -66,15 +66,15 @@ void get_token_activation_offsets(
     uint32_t* token_activation_offsets) {
     for (uint32_t e = 0; e < NumLocalExperts; ++e) {
         const auto token_split_offset = token_split_offsets[e];
-        auto* expert_token_activations_ptr = token_activations_ptr + token_split_offset * AlignedActivationsPageSize;
-        const auto st_start = dense_token_maps_ptr[(e * GlobalNumTokens + token_split_offset) * MapStride];
+        auto* expert_token_activations_ptr = token_activations_ptr + token_split_offset * ActivationStride;
+        const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
 
         for (uint32_t t = token_split_offset; t < GlobalNumTokens; ++t) {
             if (expert_token_activations_ptr[0] == st_start) {
                 token_activation_offsets[e] = t;
                 break;
             }
-            expert_token_activations_ptr += AlignedActivationsPageSize;
+            expert_token_activations_ptr += ActivationStride;
             ASSERT(t != GlobalNumTokens - 1);
         }
     }
@@ -92,6 +92,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("token_activations_page_size_bytes");
     constexpr uint32_t aligned_token_activations_page_size_bytes =
         get_named_compile_time_arg_val("aligned_token_activations_page_size_bytes");
+    constexpr uint32_t activations_stride_elm = get_named_compile_time_arg_val("activations_stride_elm");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
@@ -125,19 +126,10 @@ void kernel_main() {
     noc_async_read_barrier();
 
     // read activations
-    cb_reserve_back(token_activations_cb_id, global_num_tokens);
+    cb_reserve_back(token_activations_cb_id, 1);
     const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
-
-    // total active tokens is >= the number of required rows in the activations metadata, some tokens activate multiple
-    // experts
-    for (uint32_t t = 0, l1_offset = 0, activations_page = 0; t < global_num_tokens; ++t) {
-        const uint64_t token_activations_noc_addr = get_noc_addr(activations_page++, token_activations_addrgen);
-        noc_async_read(
-            token_activations_noc_addr,
-            token_activations_l1_addr + l1_offset,
-            aligned_token_activations_page_size_bytes);
-        l1_offset += aligned_token_activations_page_size_bytes;
-    }
+    const uint64_t token_activations_noc_addr = get_noc_addr(0, token_activations_addrgen);
+    noc_async_read(token_activations_noc_addr, token_activations_l1_addr, aligned_token_activations_page_size_bytes);
 
     // split work
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
@@ -164,7 +156,7 @@ void kernel_main() {
     uint32_t token_activation_offsets[num_local_experts];
     detail::get_token_activation_offsets<
         num_local_experts,
-        aligned_activations_page_size,
+        activations_stride_elm,
         dense_token_maps_stride_elm,
         global_num_tokens>(
         token_split_offsets, dense_token_maps_l1_ptr, token_activations_ptr, token_activation_offsets);
@@ -178,5 +170,5 @@ void kernel_main() {
 
     cb_push_back(token_counts_cb_id, 1);
     cb_push_back(dense_token_maps_cb_id, num_local_experts);
-    cb_push_back(token_activations_cb_id, global_num_tokens);
+    cb_push_back(token_activations_cb_id, 1);
 }
