@@ -523,8 +523,6 @@ class PreSDPA:
         cb_page_size = tile_size
 
         # CB indices (grouped by stage)
-        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 35  # Packet buffer for CCL broadcast
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
@@ -567,15 +565,17 @@ class PreSDPA:
 
         # MLA parameters
         mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
-        mla_compute_in_cb = 35  # Input CB for MLA all cores
-        mla_k_in_cb = 36  # Input CB for MLA
-        mla_interm_out_cb = 37  # Intermediate output CB for MLA
-        mla_interm_ms_cb = 38  # Intermediate MS CB for MLA
-        mla_out_in_cb = 39  # Output input CB for MLA
-        mla_ms_in_cb = 40  # Output MS CB for MLA
-        mla_out_o_cb = 41  # Output O CB for MLA
-        mla_out_ms_cb = 42  # Output MS CB for MLA
-        mla_out_final_cb = 43  # Output final CB for MLA
+        mla_k_in_cb = 35  # Input CB for MLA
+        mla_interm_out_cb = 36  # Intermediate output CB for MLA
+        mla_interm_ms_cb = 37  # Intermediate MS CB for MLA
+        mla_out_in_cb = 38  # Output input CB for MLA
+        mla_ms_in_cb = 39  # Output MS CB for MLA
+        mla_out_o_cb = 40  # Output O CB for MLA
+        mla_out_ms_cb = 41  # Output MS CB for MLA
+        mla_out_final_cb = 42  # Output final CB for MLA
+
+        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
+        bcast_pkt_cb = 43  # Packet buffer for CCL broadcast
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -1198,18 +1198,23 @@ class PreSDPA:
             ("num_cores_per_head", num_cores_per_head),
             ("mla_reducer_semaphore_addr", mla_reducer_semaphore_addr),
             ("k_chunk_size", k_chunk_size),
-            ("q_tile_height", Q_TILE_HEIGHT),
+            ("q_chunk_size_bytes", q_chunk_size_bytes),
             ("DHt", DHt),
             ("num_mcast_dests", num_mcast_dests),
-            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
+            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
+            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
+            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
+            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
+            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
             ("k_num_pages", k_num_pages),
             ("k_page_size", k_page_size),
-            ("k_num_pages", k_num_pages),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
             ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
             ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_q_in_cb", mla_q_in_cb),
             ("mla_out_in_cb", mla_out_in_cb),
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
@@ -1221,23 +1226,13 @@ class PreSDPA:
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
             ("k_chunk_size", k_chunk_size),
-            ("num_mcast_dests", num_mcast_dests),
             ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
-            ("q_chunk_size_bytes", q_chunk_size_bytes),
-            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
-            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
-            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
-            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
-            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
-            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
             ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
-            ("mla_q_in_cb", mla_q_in_cb),
-            ("mla_compute_in_cb", mla_compute_in_cb),
             ("mla_k_in_cb", mla_k_in_cb),
         ]
         mla_trisc_named_compile_time_args = [
@@ -1253,7 +1248,6 @@ class PreSDPA:
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
-            ("mla_compute_in_cb", mla_compute_in_cb),
             ("mla_k_in_cb", mla_k_in_cb),
             ("mla_interm_out_cb", mla_interm_out_cb),
             ("mla_interm_ms_cb", mla_interm_ms_cb),
@@ -1926,15 +1920,6 @@ class PreSDPA:
                 mla_intermed_output_tiles = out0_t * optimized_mla_grid.NUM_TREE_REDUCTION_STEPS
                 mla_intermed_ms_tiles = PNHt * optimized_mla_grid.NUM_TREE_REDUCTION_STEPS
 
-                mla_cb_descriptors.append(
-                    ttnn.CBDescriptor(
-                        total_size=q_tiles * q_tile_size,
-                        core_ranges=mla_core_grid,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(mla_compute_in_cb, q_df, q_tile_size, q_tile_descriptor)
-                        ],
-                    )
-                )
                 # cb_k_in: K input (full tile)
                 mla_cb_descriptors.append(
                     ttnn.CBDescriptor(
@@ -2071,13 +2056,8 @@ class PreSDPA:
                                 cur_batch,
                                 core_num_in_reduce,
                                 is_mcast_sender,
-                                is_output_core,
-                                output_core_noc_x,
-                                output_core_noc_y,
                                 mcast_start_x,
                                 mcast_start_y,
-                                mcast_end_x,
-                                mcast_end_y,
                                 vc,
                             ],
                         )
@@ -2092,7 +2072,10 @@ class PreSDPA:
                     mla_brisc_args = [
                         cur_batch,
                         core_num_in_reduce,
+                        is_output_core,
                         is_mcast_sender,
+                        output_core_noc_x,
+                        output_core_noc_y,
                         mcast_start_x,
                         mcast_start_y,
                         mcast_end_x,
@@ -2110,10 +2093,8 @@ class PreSDPA:
                     mla_trisc_args = [
                         do_reduce,
                         is_output_core,
-                        0,  # cur_head (always 0, num_heads_per_core=1)
                         cur_batch,
                         core_num_in_reduce,
-                        core_num_in_output,
                         is_sender_after_reduce,
                     ]
                     for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:

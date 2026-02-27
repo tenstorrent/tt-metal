@@ -110,20 +110,16 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         args.dilation[2]);
 
     if (args.config.C_out_block > 0) {
+        uint32_t padded_C_out = tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
         TT_FATAL(
-            args.output_channels % args.config.C_out_block == 0 &&
-                args.config.C_out_block % tt::constants::TILE_WIDTH == 0,
-            "C_out_block must be a multiple of {} and divide evenly into output channels. Got C_out_block={} and "
-            "output_channels={}.",
+            padded_C_out % args.config.C_out_block == 0 && args.config.C_out_block % tt::constants::TILE_WIDTH == 0,
+            "C_out_block must be a multiple of {} and divide evenly into padded output channels ({}). Got "
+            "C_out_block={} and output_channels={}.",
             tt::constants::TILE_WIDTH,
+            padded_C_out,
             args.config.C_out_block,
             args.output_channels);
     }
-
-    TT_FATAL(
-        args.output_channels % tt::constants::TILE_WIDTH == 0,
-        "Output channels must be a multiple of {}.",
-        tt::constants::TILE_WIDTH);
 
     // Validate weight shape and config arguments
     const auto patch_size =
@@ -193,16 +189,21 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     uint32_t H_in = input_tensor_a_shape[2];
     uint32_t W_in = input_tensor_a_shape[3];
     uint32_t C_out = args.output_channels;
+    uint32_t padded_C_out = tt::round_up(C_out, tt::constants::TILE_WIDTH);
 
     auto [T_out, H_out, W_out] =
         detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
+    ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
     const auto& memory_config = args.output_mem_config;
     auto dtype = args.dtype;
 
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+    return TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 
 Tensor Conv3dDeviceOperation::create_output_tensors(
