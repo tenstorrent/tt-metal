@@ -206,12 +206,13 @@ void kernel_main() {
         }
 
         // Capture start timestamp after receiving packet
-        uint64_t start_timestamp = get_timestamp();
 
         // Fully inline all send operations
         const uint8_t noc = get_fabric_worker_noc();
         uint64_t buffer_address = get_noc_addr(
             fabric_connection.edm_noc_x, fabric_connection.edm_noc_y, fabric_connection.edm_buffer_addr, noc);
+
+        uint64_t start_timestamp = get_timestamp();
 
         if constexpr (enable_fused_payload_with_sync) {
             // Inline wait_for_empty_write_slot
@@ -537,6 +538,12 @@ void kernel_main() {
                 auto iterations_total = iterations_payload + iterations_header + 1;
                 noc_nonposted_writes_num_issued[noc] += iterations_total;
                 noc_nonposted_writes_acked[noc] += iterations_total;
+                // Capture end timestamp after sending response
+                uint64_t end_timestamp = get_timestamp();
+
+                // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+                uint64_t elapsed_cycles = end_timestamp - start_timestamp;
+                result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
 
                 fabric_connection.buffer_slot_write_counter.counter++;
                 fabric_connection.buffer_slot_index = BufferIndex{wrap_increment(
@@ -546,13 +553,6 @@ void kernel_main() {
                     (fabric_connection.buffer_slot_index.get() * fabric_connection.buffer_size_bytes);
             }
         }
-
-        // Capture end timestamp after sending response
-        uint64_t end_timestamp = get_timestamp();
-
-        // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
-        uint64_t elapsed_cycles = end_timestamp - start_timestamp;
-        result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
     }
 
     fabric_connection.close();

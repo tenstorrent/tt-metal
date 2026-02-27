@@ -284,13 +284,13 @@ void kernel_main() {
     *receive_buffer_ptr = 0;
 
     for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
-        auto start_timestamp = get_timestamp();
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
             // Write incrementing value to send buffer BEFORE sending
             *send_buffer_ptr = sample_idx + 1;
             *receive_buffer_ptr = 0;
         }
 
+        auto start_timestamp = get_timestamp();
         // Send one message per sample
         if constexpr (enable_fused_payload_with_sync) {
             send_payload_packet();
