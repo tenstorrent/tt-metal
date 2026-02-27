@@ -12,8 +12,8 @@ import ttnn
 
 from .metrics import metric_value, pearson_corr
 
-MIXED_TILE_FORMATS = ["bf16", "bfp8", "bfp4", "bfp2"]
-MIXED_TILE_BYTES_PER_ELEM = {
+COMPRESSED_FORMATS = ["bf16", "bfp8", "bfp4", "bfp2"]
+COMPRESSED_BYTES_PER_ELEM = {
     "bf16": 2.0,
     "bfp8": 1.088,
     "bfp4": 0.50097,
@@ -207,12 +207,14 @@ def unpack_bfp_tile(packed: np.ndarray, mant_bits: int) -> np.ndarray:
     return unpacked.reshape(32, 32)
 
 
-def pack_mixed_tiles(data: torch.Tensor, assignment: np.ndarray, tile_hw: int = 32) -> tuple[torch.Tensor, list[int]]:
+def pack_compressed_tiles(
+    data: torch.Tensor, assignment: np.ndarray, tile_hw: int = 32
+) -> tuple[torch.Tensor, list[int]]:
     """Pack a 2D float32 tensor into a flat uint8 tensor with per-tile BFP formats.
 
     Args:
         data: Float32 torch tensor of shape (H, W), must be tile-aligned.
-        assignment: (tiles_h, tiles_w) int array of format indices into MIXED_TILE_FORMATS.
+        assignment: (tiles_h, tiles_w) int array of format indices into COMPRESSED_FORMATS.
         tile_hw: Tile dimension (default 32).
 
     Returns:
@@ -227,7 +229,7 @@ def pack_mixed_tiles(data: torch.Tensor, assignment: np.ndarray, tile_hw: int = 
     for tr in range(tiles_h):
         for tc in range(tiles_w):
             tile = data_np[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
-            fmt_name = MIXED_TILE_FORMATS[assignment[tr, tc]]
+            fmt_name = COMPRESSED_FORMATS[assignment[tr, tc]]
             mant_bits = BFP_MANT_BITS[fmt_name]
             tile_mant_bits.append(mant_bits)
             chunks.append(pack_bfp_tile(tile, mant_bits))
@@ -235,13 +237,13 @@ def pack_mixed_tiles(data: torch.Tensor, assignment: np.ndarray, tile_hw: int = 
     return torch.from_numpy(flat_np.copy()), tile_mant_bits
 
 
-def unpack_mixed_tiles(
+def unpack_compressed_tiles(
     flat_buffer: torch.Tensor, tile_mant_bits: list[int], tiles_h: int, tiles_w: int, tile_hw: int = 32
 ) -> torch.Tensor:
     """Unpack a flat uint8 tensor back into a 2D float32 tensor.
 
     Args:
-        flat_buffer: uint8 torch tensor from pack_mixed_tiles.
+        flat_buffer: uint8 torch tensor from pack_compressed_tiles.
         tile_mant_bits: list of mant_bits per tile in row-major order.
         tiles_h: Number of tile rows.
         tiles_w: Number of tile columns.
@@ -265,11 +267,11 @@ def unpack_mixed_tiles(
     return torch.from_numpy(out)
 
 
-def mixed_tile_total_bytes(counts: dict[str, int], tile_hw: int = 32) -> float:
+def compressed_total_bytes(counts: dict[str, int], tile_hw: int = 32) -> float:
     total = 0.0
     elems_per_tile = float(tile_hw * tile_hw)
     for fmt, count in counts.items():
-        total += float(count) * elems_per_tile * MIXED_TILE_BYTES_PER_ELEM.get(fmt, 0.0)
+        total += float(count) * elems_per_tile * COMPRESSED_BYTES_PER_ELEM.get(fmt, 0.0)
     return total
 
 

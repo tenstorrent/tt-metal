@@ -11,9 +11,9 @@ import torch
 
 from .metrics import metric_is_good
 from .tile_utils import (
-    MIXED_TILE_BYTES_PER_ELEM,
-    MIXED_TILE_FORMATS,
-    mixed_tile_total_bytes,
+    COMPRESSED_BYTES_PER_ELEM,
+    COMPRESSED_FORMATS,
+    compressed_total_bytes,
     reconstruct_from_tiles,
     reshape_to_2d_with_padding,
     tile_metrics,
@@ -21,13 +21,13 @@ from .tile_utils import (
 
 
 @dataclass
-class MixedTileResult:
-    """Result of mixed-tile format assignment.
+class CompressedTensorResult:
+    """Result of compressed tensor format assignment.
 
     Attributes:
-        assignment: (tiles_h, tiles_w) int8 array of format indices into MIXED_TILE_FORMATS.
+        assignment: (tiles_h, tiles_w) int8 array of format indices into COMPRESSED_FORMATS.
         tile_counts: Number of tiles assigned to each format, e.g. {"bfp8": 12, "bfp4": 988}.
-        total_bytes: Estimated total byte cost of the mixed-tile tensor.
+        total_bytes: Estimated total byte cost of the compressed tensor tensor.
         quantized: Reconstructed float32 tensor after per-tile quantization (same shape as input).
     """
 
@@ -37,7 +37,7 @@ class MixedTileResult:
     quantized: Union[np.ndarray, torch.Tensor, None] = None
 
 
-class MixedTileAssigner:
+class CompressedTensorAssigner:
     """Assigns per-tile quantization formats using a threshold-based algorithm.
 
     For each 32x32 tile, tries formats from cheapest to most expensive and picks
@@ -47,7 +47,7 @@ class MixedTileAssigner:
     Args:
         metric: Quality metric -- "pcc", "mae", or "atol".
         threshold: Quality threshold (for pcc: minimum correlation, for mae/atol: maximum error).
-        formats: List of candidate format strings from MIXED_TILE_FORMATS.
+        formats: List of candidate format strings from COMPRESSED_FORMATS.
                  Defaults to ["bfp8", "bfp4"].
     """
 
@@ -63,15 +63,15 @@ class MixedTileAssigner:
         self.threshold = threshold
         self.formats = formats or ["bfp8", "bfp4"]
         for fmt in self.formats:
-            if fmt not in MIXED_TILE_FORMATS:
+            if fmt not in COMPRESSED_FORMATS:
                 raise ValueError(f"Unsupported format: {fmt}")
 
     def assign(
         self,
         weight_fp32: Union[np.ndarray, torch.Tensor],
         quantize_fn: Callable,
-    ) -> MixedTileResult:
-        """Run threshold-based mixed-tile assignment.
+    ) -> CompressedTensorResult:
+        """Run threshold-based compressed tensor assignment.
 
         Args:
             weight_fp32: Float32 weight tensor of any shape (numpy or torch).
@@ -81,7 +81,7 @@ class MixedTileAssigner:
                          round-trip).
 
         Returns:
-            MixedTileResult with per-tile assignments, counts, byte cost, and reconstructed tensor.
+            CompressedTensorResult with per-tile assignments, counts, byte cost, and reconstructed tensor.
             If input was a torch tensor, quantized will be a torch tensor.
         """
         input_is_torch = isinstance(weight_fp32, torch.Tensor)
@@ -93,9 +93,9 @@ class MixedTileAssigner:
 
         if xf.size == 0:
             empty_q = torch.zeros_like(weight_fp32) if input_is_torch else xf.copy()
-            return MixedTileResult(
+            return CompressedTensorResult(
                 assignment=np.zeros((1, 1), dtype=np.int8),
-                tile_counts={fmt: 0 for fmt in MIXED_TILE_FORMATS},
+                tile_counts={fmt: 0 for fmt in COMPRESSED_FORMATS},
                 total_bytes=0.0,
                 quantized=empty_q,
             )
@@ -130,9 +130,9 @@ class MixedTileAssigner:
             scores_by_fmt[fmt] = tile_metrics(tiles_ref, tiles_q, self.metric)
 
         # Sort formats cheapest first; fallback is the most expensive
-        fmt_to_idx = {fmt: idx for idx, fmt in enumerate(MIXED_TILE_FORMATS)}
-        formats_by_cost = sorted(self.formats, key=lambda f: MIXED_TILE_BYTES_PER_ELEM.get(f, 0.0))
-        best_precision = max(self.formats, key=lambda f: MIXED_TILE_BYTES_PER_ELEM.get(f, 0.0))
+        fmt_to_idx = {fmt: idx for idx, fmt in enumerate(COMPRESSED_FORMATS)}
+        formats_by_cost = sorted(self.formats, key=lambda f: COMPRESSED_BYTES_PER_ELEM.get(f, 0.0))
+        best_precision = max(self.formats, key=lambda f: COMPRESSED_BYTES_PER_ELEM.get(f, 0.0))
 
         # Assign each tile: try cheapest first, fall back to most expensive
         num_tiles = tiles_ref.shape[0]
@@ -153,16 +153,16 @@ class MixedTileAssigner:
 
         quantized = reconstruct_from_tiles(tiles_out, shape_info, pad_info, tile_hw=tile_hw)
 
-        counts = {fmt: 0 for fmt in MIXED_TILE_FORMATS}
+        counts = {fmt: 0 for fmt in COMPRESSED_FORMATS}
         for fmt in self.formats:
             counts[fmt] = int(np.sum(assignments == fmt_to_idx[fmt]))
 
         if input_is_torch:
             quantized = torch.from_numpy(quantized).to(device=input_device)
 
-        return MixedTileResult(
+        return CompressedTensorResult(
             assignment=assignments.reshape(tiles_h, tiles_w),
             tile_counts=counts,
-            total_bytes=mixed_tile_total_bytes(counts),
+            total_bytes=compressed_total_bytes(counts),
             quantized=quantized,
         )

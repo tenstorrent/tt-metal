@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for storing mixed-precision tile tensors through ttnn.
+"""Tests for compressed tensor pack/store/unpack through ttnn.
 
 Flow:
   1. Start with a float32 torch tensor.
-  2. Run mixed-tile assignment (bfp8/bfp4) to quantize each tile.
+  2. Run compressed tensor assignment (bfp8/bfp4) to quantize each tile.
   3. Pack tiles into raw BFP bytes via C++ pack functions.
   4. Concatenate into a flat uint8 buffer, store as ttnn tensor.
   5. Read back, unpack each tile via C++ unpack functions.
@@ -18,23 +18,23 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.mixed_tile.assigner import MixedTileAssigner
-from models.demos.deepseek_v3_b1.mixed_tile.metrics import metric_value
-from models.demos.deepseek_v3_b1.mixed_tile.tile_utils import (
-    MIXED_TILE_FORMATS,
-    pack_mixed_tiles,
+from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor.metrics import metric_value
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import (
+    COMPRESSED_FORMATS,
+    pack_compressed_tiles,
     ttnn_quantize_fn,
-    unpack_mixed_tiles,
+    unpack_compressed_tiles,
 )
 
 
-def test_mixed_tile_pack_store_unpack():
+def test_compressed_tensor_pack_store_unpack():
     """Pack tiles with mixed bfp4/bfp8, store as flat uint8 in ttnn, unpack and validate."""
     torch.manual_seed(42)
     x = torch.randn(128, 128)
 
     # Threshold 0.995 is above bfp4 PCC (~0.993), so some tiles need bfp8
-    assigner = MixedTileAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
     result = assigner.assign(x, ttnn_quantize_fn)
     logger.info(f"Tile counts: {result.tile_counts}")
     logger.info(f"Assignment:\n{result.assignment}")
@@ -47,7 +47,7 @@ def test_mixed_tile_pack_store_unpack():
     tiles_w = x.shape[1] // tile_hw
 
     # Pack all tiles into flat uint8 torch tensor
-    flat_buffer, tile_mant_bits = pack_mixed_tiles(x, result.assignment)
+    flat_buffer, tile_mant_bits = pack_compressed_tiles(x, result.assignment)
     logger.info(f"Total packed size: {flat_buffer.numel()} bytes")
 
     # Store as ttnn uint8 tensor and read back
@@ -57,7 +57,7 @@ def test_mixed_tile_pack_store_unpack():
     logger.info("Flat uint8 buffer: ttnn round-trip is bit-exact")
 
     # Unpack back to float32 torch tensor
-    reconstructed = unpack_mixed_tiles(recovered_flat, tile_mant_bits, tiles_h, tiles_w)
+    reconstructed = unpack_compressed_tiles(recovered_flat, tile_mant_bits, tiles_h, tiles_w)
 
     # Validate overall PCC
     overall_pcc = metric_value(x.numpy(), reconstructed.numpy(), "pcc")
@@ -70,5 +70,5 @@ def test_mixed_tile_pack_store_unpack():
             ref_tile = x[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
             rec_tile = reconstructed[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
             tile_pcc = metric_value(ref_tile.numpy(), rec_tile.numpy(), "pcc")
-            fmt_name = MIXED_TILE_FORMATS[result.assignment[tr, tc]]
+            fmt_name = COMPRESSED_FORMATS[result.assignment[tr, tc]]
             logger.info(f"  tile ({tr},{tc}) [{fmt_name}]: PCC={tile_pcc:.6f}")
