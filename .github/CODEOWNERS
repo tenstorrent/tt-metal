@@ -35,7 +35,7 @@ tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu 
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
-tt_stl/**/CMakeLists.txt @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tenstorrent/codeowner-bypass
