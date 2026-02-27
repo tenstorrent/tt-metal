@@ -146,12 +146,13 @@ TEST_F(MockDeviceAPIFixture, SwitchFromRealToMockHardware) {
     // Phase 1: Create real hardware device
     {
         auto real_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        ASSERT_NE(real_device, nullptr);
         EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
         real_device->close();
         real_device.reset();
     }
 
-    // Phase 2: Switch to mock mode - should properly close UMD driver and reinitialize
+    // Phase 2: Switch to mock mode
     experimental::configure_mock_mode(detected_arch, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
     EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Mock);
@@ -159,6 +160,7 @@ TEST_F(MockDeviceAPIFixture, SwitchFromRealToMockHardware) {
     // Phase 3: Create mock device - verifies full reinitialization worked
     {
         auto mock_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        ASSERT_NE(mock_device, nullptr);
         EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Mock);
         mock_device->close();
         mock_device.reset();
@@ -173,6 +175,7 @@ TEST_F(MockDeviceAPIFixture, SwitchFromRealToMockHardware) {
     {
         auto real_device2 =
             distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        ASSERT_NE(real_device2, nullptr);
         EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
         real_device2->close();
         real_device2.reset();
