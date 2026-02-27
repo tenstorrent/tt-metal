@@ -24,7 +24,13 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
-from models.demos.deepseek_v3_b1.prepare_weights import prepare_routed_expert_weights, prepare_shared_expert_weights
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    create_gate_bias_tensor,
+    create_gate_indices_tensor,
+    prepare_attention_weights,
+    prepare_routed_expert_weights,
+    prepare_shared_expert_weights,
+)
 
 
 # ============================================================================
@@ -242,15 +248,14 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    # Create input, weights, and gate tensors
+    # Create input tensor (and when enable_routing: gate/bias for state_dict and golden)
     torch.manual_seed(RoutedExpert.SEED)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
-    torch_bias = torch.randn(
-        (1, 8, 32), dtype=torch.bfloat16
-    )  # Gate bias (batch=1, 8, 32) - matches golden expectation
-    # Expert indices 0-255, transposed as expected by gate
-    torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
+    torch_gate_mm_weights = None
+    torch_bias = None
+    if enable_routing:
+        torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
+        torch_bias = torch.randn((1, 8, 32), dtype=torch.bfloat16)
 
     # Define core grid for compute (first column, 8 cores)
     compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
@@ -305,91 +310,6 @@ def create_routed_expert_tensors(
     gate_output_scores_tensor = None
     gate_output_indices_tensor = None
 
-    if enable_routing:
-        # Gate matmul weights: width-sharded across 8 cores
-        gate_mm_weights_shard_spec = ttnn.ShardSpec(
-            compute_core_grid,
-            (K, N_per_core),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        gate_mm_weights_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_weights_shard_spec
-        )
-
-        ttnn_gate_mm_weights = ttnn.from_torch(
-            torch_gate_mm_weights,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_mm_weights_mem_config,
-            tile=Tiles.TILE_32x32,
-            **from_torch_kwargs,
-        )
-
-        # Gate bias and indices tensors: [16, 16] on sender core
-        gate_input_shard_spec = ttnn.ShardSpec(
-            input_core_grid,
-            (16, 16),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        gate_input_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_input_shard_spec
-        )
-
-        torch_bias_reshaped = torch_bias.reshape(16, 16)
-        torch_bias_transposed = torch.transpose(torch_bias_reshaped, 0, 1).contiguous()
-        ttnn_gate_bias = ttnn.from_torch(
-            torch_bias_transposed,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_input_mem_config,
-            tile=Tiles.TILE_16x16,
-            **from_torch_kwargs,
-        )
-
-        ttnn_gate_indices = ttnn.from_torch(
-            torch_indices,
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_input_mem_config,
-            tile=Tiles.TILE_16x16,
-            **from_torch_kwargs,
-        )
-
-        # Gate output scores tensor [1, 16] on sender core
-        tile_1x16 = ttnn.Tile((1, 16))
-        gate_output_shard_spec = ttnn.ShardSpec(
-            input_core_grid,
-            (1, 16),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        gate_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
-        )
-
-        gate_output_scores_tensor = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            **from_torch_kwargs,
-        )
-
-        # Gate output indices tensor [1, 16] on sender core
-        gate_output_indices_tensor = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.uint16),
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            **from_torch_kwargs,
-        )
-
     # ── Compute dimensions for expert DRAM matmul (down_proj padding for output extraction) ──
     num_banks = device.dram_grid_size().x
     tile_w = RoutedExpert.TILE_W
@@ -398,9 +318,23 @@ def create_routed_expert_tensors(
     down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_down_proj_N = down_proj_N_padded // num_banks
 
-    # ── Generate expert weights in HF format and build state dict for prepare_routed_expert_weights ──
+    # ── Build state dict: when enable_routing include attention + gate keys for prepare_attention_weights ──
     bdw = BlitzDecodeWeights(device)
     state_dict = {}
+    if enable_routing:
+        # Keys required by prepare_attention_weights / _get_layer_raw_tensors (dummy shapes; only gate_mm consumed)
+        layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
+        state_dict[f"{layer_key}.self_attn.q_a_proj.weight"] = torch.zeros(1536, K, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.q_b_proj.weight"] = torch.zeros(24576, 1536, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.kv_a_proj_with_mqa.weight"] = torch.zeros(576, K, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.kv_b_proj.weight"] = torch.zeros(32768, 512, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.o_proj.weight"] = torch.zeros(K, 16384, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.input_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.q_a_layernorm.weight"] = torch.zeros(1536, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.self_attn.kv_a_layernorm.weight"] = torch.zeros(512, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.post_attention_layernorm.weight"] = torch.zeros(K, dtype=torch.bfloat16)
+        state_dict[f"{layer_key}.mlp.gate.weight"] = torch_gate_mm_weights.T.clone()
+        state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"] = torch_bias.reshape(256).clone()
     expert_weights_dict = {}
     up_proj_weights_dict = {}
     down_proj_weights_dict = {}
@@ -434,6 +368,44 @@ def create_routed_expert_tensors(
     gate_proj_weights = gate_proj_expert_tensors[0]
     up_proj_weights = up_proj_expert_tensors[0]
     down_proj_weights = down_proj_expert_tensors[0]
+
+    if enable_routing:
+        # Gate matmul from prepare_attention_weights (OverlappedTensor); bias/indices from prepare_weights helpers
+        attn = prepare_attention_weights(
+            bdw, state_dict, layer_idx=ROUTED_EXPERT_LAYER_IDX, is_moe=True, move_to_device=True
+        )
+        ttnn_gate_mm_weights = attn.gate_mm
+        raw_bias = state_dict[f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.gate.e_score_correction_bias"]
+        ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
+        # Gate output buffers (scores and indices on sender core)
+        tile_1x16 = ttnn.Tile((1, 16))
+        gate_output_shard_spec = ttnn.ShardSpec(
+            input_core_grid,
+            (1, 16),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        gate_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
+        )
+        gate_output_scores_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            **from_torch_kwargs,
+        )
+        gate_output_indices_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.uint16),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            **from_torch_kwargs,
+        )
 
     # Final output tensor
     final_output_width_per_core = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE

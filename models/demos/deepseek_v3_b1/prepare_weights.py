@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -297,12 +298,90 @@ def _get_layer_raw_tensors(
     return q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm
 
 
+# Gate routing constants (bias/indices layout on sender core)
+_GATE_BIAS_INDICES_SHAPE = (16, 16)
+_GATE_NUM_INDICES = 256
+
+
+def create_gate_bias_tensor(
+    raw: torch.Tensor,
+    device: Any,
+    sender_core_grid: ttnn.CoreRangeSet,
+    *,
+    mesh_mapper: Any = None,
+) -> ttnn.Tensor:
+    """Build gate bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core.
+
+    Args:
+        raw: Shape (256,) from state dict mlp.gate.e_score_correction_bias.
+        device: ttnn device or mesh device.
+        sender_core_grid: Single-core range set for the sender core.
+        mesh_mapper: Optional mesh mapper for multi-device.
+
+    Returns:
+        ttnn.Tensor with shape (16, 16), HEIGHT_SHARDED on sender_core_grid, tile 16x16, bfloat16.
+    """
+    assert raw.shape == (_GATE_NUM_INDICES,), f"gate bias raw must be ({_GATE_NUM_INDICES},), got {raw.shape}"
+    # (256,) -> (1, 8, 32) -> (16, 16) then transpose to match op layout
+    reshaped = raw.reshape(1, 8, 32).reshape(_GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1])
+    transposed = torch.transpose(reshaped, 0, 1).contiguous().to(torch.bfloat16)
+    shard_spec = ttnn.ShardSpec(
+        sender_core_grid,
+        _GATE_BIAS_INDICES_SHAPE,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+    return ttnn.from_torch(
+        transposed,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+        tile=ttnn.Tile([16, 16]),
+        **kwargs,
+    )
+
+
+def create_gate_indices_tensor(
+    device: Any,
+    sender_core_grid: ttnn.CoreRangeSet,
+    *,
+    mesh_mapper: Any = None,
+) -> ttnn.Tensor:
+    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core.
+
+    Same layout as gate_bias: (16, 16), HEIGHT_SHARDED, tile 16x16, uint16.
+    """
+    indices = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32).reshape(
+        _GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1]
+    )
+    transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+    shard_spec = ttnn.ShardSpec(
+        sender_core_grid,
+        _GATE_BIAS_INDICES_SHAPE,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+    return ttnn.from_torch(
+        transposed,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+        tile=ttnn.Tile([16, 16]),
+        **kwargs,
+    )
+
+
 def prepare_attention_weights(
     bdw: BlitzDecodeWeights,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
     is_moe: bool,
+    move_to_device: bool = False,
 ) -> AttentionWeights:
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
@@ -313,14 +392,16 @@ def prepare_attention_weights(
     logger.debug("  load raw tensors: {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
-    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=False)
-    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=False)
+    q_a_proj, q_b_proj, kv_a_proj = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+        q_a, q_b, kv_a, move_to_device=move_to_device
+    )
+    kv_b1_proj, kv_b2_proj = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device)
     logger.debug("  convert q_ab_kv_a + kv_b12: {:.3f}s", time.perf_counter() - t0)
 
     if is_moe:
         gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=False
+            o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
         o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
         gate_bias_tt = create_gate_bias_tensor(
@@ -344,7 +425,7 @@ def prepare_attention_weights(
     else:
         gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=False
+            o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
         o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)

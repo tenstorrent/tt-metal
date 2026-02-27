@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
     MESH_LEAF,
@@ -38,7 +39,12 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import build_cb_reconfig_tensor, float_to_uint32, record_cb_metadata
+from models.demos.deepseek_v3_b1.utils import (
+    build_cb_reconfig_tensor,
+    cb_descriptor_from_overlapped_tensor,
+    float_to_uint32,
+    record_cb_metadata,
+)
 
 
 class MoeCB:
@@ -1030,15 +1036,25 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_data_size_bytes = 0
 
         if enable_routing:
-            # Gate MM (SRAM Matmul)
-            gate_mm_params = MoeOp.setup_sram_matmul(
-                in0_cb=gate_mm_input_cb,
-                in1_cb=gate_mm_weights_cb,
-                out_cb=gate_mm_output_cb,
-                weights_tensor=gate_mm_weights_tensor,
-                k_num_tiles=num_tiles_k,
-                fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
-            )
+            # Gate MM (SRAM Matmul): support both ttnn.Tensor and OverlappedTensor (from prepare_attention_weights)
+            if isinstance(gate_mm_weights_tensor, OverlappedTensor):
+                gate_mm_params = MoeOp._gate_mm_params_from_overlapped(
+                    in0_cb=gate_mm_input_cb,
+                    in1_cb=gate_mm_weights_cb,
+                    out_cb=gate_mm_output_cb,
+                    gate_mm_overlapped=gate_mm_weights_tensor,
+                    k_num_tiles=num_tiles_k,
+                    fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
+                )
+            else:
+                gate_mm_params = MoeOp.setup_sram_matmul(
+                    in0_cb=gate_mm_input_cb,
+                    in1_cb=gate_mm_weights_cb,
+                    out_cb=gate_mm_output_cb,
+                    weights_tensor=gate_mm_weights_tensor,
+                    k_num_tiles=num_tiles_k,
+                    fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
+                )
 
             # Gate MM Gather
             gate_mm_output_tile = ttnn.Tile([1, 32])
@@ -2929,6 +2945,36 @@ class MoeOp:
         }
 
     @staticmethod
+    def _gate_mm_params_from_overlapped(
+        in0_cb,
+        in1_cb,
+        out_cb,
+        gate_mm_overlapped: OverlappedTensor,
+        k_num_tiles=0,
+        fused_activation=0,
+    ):
+        """Build gate_mm params from an OverlappedTensor (e.g. from prepare_attention_weights)."""
+        shard_h, shard_w = gate_mm_overlapped.shard_shape
+        tile_h, tile_w = gate_mm_overlapped.tile_shape
+        out_w = shard_w // tile_w
+        core_grid = gate_mm_overlapped.core_range_set
+        weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+            in1_cb, gate_mm_overlapped, gate_mm_overlapped.fused_tensor
+        )
+        return {
+            "in0_cb": in0_cb,
+            "in1_cb": in1_cb,
+            "out_cb": out_cb,
+            "k_num_tiles": k_num_tiles,
+            "out_w": out_w,
+            "fused_activation": fused_activation,
+            "core_grid": core_grid,
+            "num_cores": core_grid.num_cores(),
+            "weights_cb_descriptor": weights_cb_descriptor,
+            "output_cb_descriptor": None,
+        }
+
+    @staticmethod
     def setup_sram_matmul(
         in0_cb,
         in1_cb,
@@ -4197,8 +4243,14 @@ class MoeOp:
         ctx = self.ctx
         io_tensors = []
         if ctx.enable_routing:
+            # generic_op expects Sequence[ttnn.Tensor]; use fused_tensor when gate_mm is OverlappedTensor
+            gate_mm_tensor = (
+                ctx.gate_mm_weights_tensor.fused_tensor
+                if isinstance(ctx.gate_mm_weights_tensor, OverlappedTensor)
+                else ctx.gate_mm_weights_tensor
+            )
             io_tensors += [
-                ctx.gate_mm_weights_tensor,
+                gate_mm_tensor,
                 ctx.gate_bias_tensor,
                 ctx.gate_indices_tensor,
                 ctx.gate_output_scores_tensor,
