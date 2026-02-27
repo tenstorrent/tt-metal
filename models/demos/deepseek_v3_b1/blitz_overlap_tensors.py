@@ -56,7 +56,7 @@ class OverlappedShardSpec:
     @property
     def tiles_per_shard(self) -> int:
         shard_w = self.raw_tensor_shape[1] // self.core_range_set.num_cores()
-        return (self.raw_tensor_shape[0] // self.tile_h) * (shard_w // self.tile_w)
+        return (self.per_device_height // self.tile_h) * (shard_w // self.tile_w)
 
     @property
     def shard_bytes(self) -> int:
@@ -65,6 +65,10 @@ class OverlappedShardSpec:
     @property
     def total_bytes(self) -> int:
         return self.shard_bytes * self.core_range_set.num_cores()
+
+    @property
+    def per_device_height(self) -> int:
+        return self.raw_tensor_shape[0] // self.tp
 
 
 def max_shard_bytes(shard_specs: list[list[OverlappedShardSpec]]) -> int:
@@ -83,6 +87,163 @@ def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedShardSpec) -> bytes:
             return tilize_and_pack_bfloat16(data_2d, spec.tile_h, spec.tile_w)
         case _:
             raise ValueError(f"Unsupported dtype: {spec.dtype}")
+
+
+@dataclass
+class OverlappedTensor:
+    """A logical view of a sub-tensor within a fused (overlapped) device buffer.
+
+    The fused tensor is a raw byte container whose own tensor properties
+    (dtype, layout, shard spec) are generally meaningless for the individual
+    sub-tensors.  This class carries the intended per-sub-tensor properties
+    alongside a shared reference to the underlying fused buffer.
+    """
+
+    fused_tensor: ttnn.Tensor
+    tensor_shape: tuple[int, int]
+    shard_shape: tuple[int, int]
+    core_range_set: ttnn.CoreRangeSet
+    dtype: ttnn.DataType
+    tile_shape: tuple[int, int]
+    byte_offset: int = 0
+    total_size: int = 0
+
+    def get_tile(self) -> ttnn.Tile:
+        return ttnn.Tile(self.tile_shape)
+
+
+def overlap_tensors(
+    tensors: list[list[tuple[torch.Tensor, OverlappedShardSpec]]],
+    device: ttnn.Device,
+    move_to_device: bool = True,
+) -> list[OverlappedTensor]:
+    """Overlap a list of tensors into a single fused WIDTH_SHARDED tensor.
+
+    Args:
+        tensors: A list of "lanes".  Each lane is a list of
+            ``(torch.Tensor, OverlappedShardSpec)`` tuples that share
+            the same core range set and are packed back-to-back within
+            each core's shard.  Lanes must occupy disjoint core ranges.
+        device: The mesh device to place the fused tensor on.
+        move_to_device: If True (default), place the result on device.
+
+    Returns:
+        A flat list of ``OverlappedTensor`` views, one per
+        ``(tensor, spec)`` pair across all lanes, in input order.
+    """
+
+    for lane in tensors:
+        assert len(lane) > 0, "Lane must contain at least one tensor"
+        for tensor, spec in lane:
+            assert (
+                tuple(tensor.shape) == spec.raw_tensor_shape
+            ), f"Tensor shape {tuple(tensor.shape)} does not match spec shape {spec.raw_tensor_shape}"
+            assert spec.core_range_set == lane[0][1].core_range_set, (
+                f"Core range set {spec.core_range_set} does not match {lane[0][1].core_range_set}, "
+                "all core range sets must be the same within a lane"
+            )
+            assert spec.tp > 0 and (spec.tp & (spec.tp - 1)) == 0, "TP must be a positive power of 2"
+
+    def _core_set(crs: ttnn.CoreRangeSet) -> set[tuple[int, int]]:
+        cores = set()
+        for cr in crs.ranges():
+            for x in range(cr.start.x, cr.end.x + 1):
+                for y in range(cr.start.y, cr.end.y + 1):
+                    cores.add((x, y))
+        return cores
+
+    for i, lane_a in enumerate(tensors):
+        cores_a = _core_set(lane_a[0][1].core_range_set)
+        for lane_b in tensors[i + 1 :]:
+            cores_b = _core_set(lane_b[0][1].core_range_set)
+            assert not cores_a & cores_b, "Lanes must have separate core range sets"
+
+    needed_shard_bytes = max_shard_bytes([[spec for _, spec in lane] for lane in tensors])
+    assert needed_shard_bytes % 4 == 0, "shard bytes must be UINT32-aligned"
+    uint32_per_shard = needed_shard_bytes // 4
+
+    max_tp = max(spec.tp for lane in tensors for _, spec in lane)
+    total_cores = sum(lane[0][1].core_range_set.num_cores() for lane in tensors)
+
+    byte_offsets: dict[int, int] = {}
+
+    per_tp_raw = []
+    for tp_idx in range(max_tp):
+        tp_packed = bytearray()
+        for lane in tensors:
+            num_cores = lane[0][1].core_range_set.num_cores()
+            for core_idx in range(num_cores):
+                shard_data = bytearray()
+                for tensor, spec in lane:
+                    slice_idx = tp_idx * spec.tp // max_tp
+                    per_dev_h = spec.per_device_height
+                    device_slice = tensor[slice_idx * per_dev_h : (slice_idx + 1) * per_dev_h, :]
+                    shard_w = spec.raw_tensor_shape[1] // num_cores
+                    shard_col = device_slice[:, core_idx * shard_w : (core_idx + 1) * shard_w].contiguous()
+                    shard_raw = tilize_and_pack(shard_col, spec)
+                    assert len(shard_raw) == spec.shard_bytes
+                    byte_offsets[id(spec)] = len(shard_data)
+                    shard_data.extend(shard_raw)
+
+                if len(shard_data) < needed_shard_bytes:
+                    shard_data.extend(b"\x00" * (needed_shard_bytes - len(shard_data)))
+                tp_packed.extend(shard_data)
+
+        per_tp_raw.append(torch.frombuffer(bytes(tp_packed), dtype=torch.int32).clone())
+
+    if max_tp == 1:
+        combined = per_tp_raw[0].reshape(1, uint32_per_shard * total_cores)
+    else:
+        combined = torch.cat([t.reshape(1, -1) for t in per_tp_raw], dim=1)
+
+    combined_crs_ranges = [cr for lane in tensors for cr in lane[0][1].core_range_set.ranges()]
+    combined_crs = ttnn.CoreRangeSet(combined_crs_ranges)
+    shard_spec = ttnn.ShardSpec(
+        combined_crs,
+        (1, uint32_per_shard),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+
+    if max_tp == 1:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    else:
+        mesh_shape = (device.shape[0], device.shape[1])
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=(None, 1))
+    device_for_torch = device if move_to_device else None
+
+    fused = ttnn.from_torch(
+        combined,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device_for_torch,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    result = []
+    for lane in tensors:
+        num_cores = lane[0][1].core_range_set.num_cores()
+        for tensor, spec in lane:
+            shard_w = spec.raw_tensor_shape[1] // num_cores
+            result.append(
+                OverlappedTensor(
+                    fused_tensor=fused,
+                    tensor_shape=(spec.per_device_height, spec.raw_tensor_shape[1]),
+                    shard_shape=(spec.per_device_height, shard_w),
+                    core_range_set=spec.core_range_set,
+                    dtype=spec.dtype,
+                    tile_shape=(spec.tile_h, spec.tile_w),
+                    byte_offset=byte_offsets[id(spec)],
+                    total_size=spec.shard_bytes,
+                )
+            )
+
+    return result
 
 
 def tilize_and_pack_bfp8(data_2d: torch.Tensor, tile_h: int = 32, tile_w: int = 32) -> bytes:

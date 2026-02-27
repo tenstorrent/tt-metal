@@ -444,7 +444,7 @@ def prepare_attention_weights(
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
             o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
-        o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
+        o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, ffn_norm_ot, kv_norm_ot = o_norms
         gate_bias_tt = create_gate_bias_tensor(
             state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
             bdw._device,
@@ -471,7 +471,7 @@ def prepare_attention_weights(
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
             o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
-        o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
+        o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, ffn_norm_ot, kv_norm_ot = o_norms
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
