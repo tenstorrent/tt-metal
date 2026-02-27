@@ -17,6 +17,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::device_operation::mesh_device_operation_utils {
 
@@ -66,86 +67,17 @@ TensorReturnValue filter_tensor_shards(
         tensor_return_value);
 }
 
-// Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
-inline bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
-    MeshCoordinateRangeSet a_set;
-    MeshCoordinateRangeSet b_set;
-
-    // Generate a MeshCoordinateRangeSet from the vectors of coordinates passed in
-    for (const auto& coord : a) {
-        a_set.merge(MeshCoordinateRange(coord));
-    }
-    for (const auto& coord : b) {
-        b_set.merge(MeshCoordinateRange(coord));
-    }
-    // Check if b_set is a subset of a_set
-    // This is true if every range in b_set is completely contained in some range
-    // in a_set
-    bool is_subset = false;
-    for (const auto& b_range : b_set.ranges()) {
-        is_subset = false;
-        for (const auto& a_range : a_set.ranges()) {
-            if (a_range.contains(b_range)) {
-                is_subset = true;
-                break;
-            }
-        }
-        if (not is_subset) {
-            return is_subset;
-        }
-    }
-    return is_subset;
-}
-
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
 // If no tensors are found, returns zero coordinate.
+// This template extracts tensors and delegates to the non-template implementation
+// in device_operation_detail.cpp to reduce per-operation template instantiation cost.
 template <typename TensorArgs>
 std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     const TensorArgs& tensor_args, ttnn::MeshDevice* mesh_device = nullptr) {
-    auto first_tensor_opt = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-
-    // If no tensor is found, return zero coordinate
-    if (!first_tensor_opt.has_value()) {
-        if (mesh_device == nullptr) {
-            TT_THROW("No tensors found in tensor_args and no mesh_device provided to extract_tensor_coordinates");
-        }
-        return {MeshCoordinate::zero_coordinate(mesh_device->shape().dims())};
-    }
-
-    const Tensor& first_tensor = first_tensor_opt.value();
-    std::vector<ttnn::MeshCoordinate> tensor_coordinates;
-    std::transform(
-        first_tensor.device_storage().coords.begin(),
-        first_tensor.device_storage().coords.end(),
-        std::back_inserter(tensor_coordinates),
-        [](const auto& coord) { return coord; });
-    // Verification Step: Assert if the tensors are placed on different coordinate ranges
-    // that do not overlap.
+    std::vector<std::reference_wrapper<const Tensor>> tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& tensor) {
-            if (tensor.device_storage().coords.size() != tensor_coordinates.size()) {
-                std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
-                std::transform(
-                    tensor.device_storage().coords.begin(),
-                    tensor.device_storage().coords.end(),
-                    std::back_inserter(tensor_mesh_coords),
-                    [](const auto& coord) { return coord; });
-                if (tensor_mesh_coords.size() < tensor_coordinates.size()) {
-                    // Case 1: Current tensor is placed on a smaller set of coordinates than tensor_coordinates.
-                    TT_ASSERT(
-                        is_subset_of(tensor_coordinates, tensor_mesh_coords),
-                        "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
-                    tensor_coordinates = std::move(tensor_mesh_coords);
-                } else {
-                    // Case 2: Current tensor is placed on a larger set of coordinates than tensor_coordinates.
-                    TT_ASSERT(
-                        is_subset_of(tensor_mesh_coords, tensor_coordinates),
-                        "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
-                }
-            }
-        },
-        tensor_args);
-    return tensor_coordinates;
+        [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
+    return ttnn::device_operation::detail::extract_tensor_coordinates_impl(tensors, mesh_device);
 }
 
 // Sets runtime ID for all programs in `workload`.

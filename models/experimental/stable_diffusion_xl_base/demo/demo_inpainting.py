@@ -387,9 +387,6 @@ def test_demo(
     input_images=None,
     input_masks=None,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("512x512 image resolution is not yet supported for inpainting pipeline.")
-
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
