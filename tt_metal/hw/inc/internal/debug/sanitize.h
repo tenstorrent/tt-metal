@@ -10,7 +10,7 @@
 // where the watcher thread can log the result.  The device then soft-hangs in
 // a spin loop.
 //
-// All functionaly gated behind defined WATCHER_ENABLED
+// All functionality gated behind defined WATCHER_ENABLED
 //
 #pragma once
 
