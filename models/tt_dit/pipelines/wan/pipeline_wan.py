@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -981,7 +981,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            tt_latents_BTHWC = bf16_tensor_2dshard(
+            tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
