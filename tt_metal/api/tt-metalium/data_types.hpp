@@ -50,10 +50,4 @@ enum NOC_MODE : uint8_t {
     DM_DYNAMIC_NOC = 1,
 };
 
-enum Eth : uint8_t {
-    SENDER = 0,
-    RECEIVER = 1,
-    IDLE = 2,
-};
-
 }  // namespace tt::tt_metal

@@ -14,7 +14,15 @@ set(UDM_SRCS
 
 add_library(tt_metal_udm STATIC ${UDM_SRCS})
 
-target_include_directories(tt_metal_udm PUBLIC ${PROJECT_SOURCE_DIR})
+target_include_directories(
+    tt_metal_udm
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/impl
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tt_metal/llrt
+)
 
 target_link_libraries(
     tt_metal_udm
