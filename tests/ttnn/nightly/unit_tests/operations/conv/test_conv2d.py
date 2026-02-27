@@ -7,10 +7,7 @@ from loguru import logger
 
 import torch
 import pytest
-from models.common.utility_functions import (
-    is_wormhole_b0,
-    is_blackhole,
-)
+from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_with_watcher, is_watcher_enabled
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.experimental.panoptic_deeplab.tests.pcc.common import skip_if_not_blackhole_110_cores
@@ -904,6 +901,7 @@ def test_conv_dram(
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #38727")
 def test_conv_ws(
     device,
     torch_tensor_map,
@@ -3772,6 +3770,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer):
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
