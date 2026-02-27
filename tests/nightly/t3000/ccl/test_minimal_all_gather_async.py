@@ -408,8 +408,60 @@ def run_all_gather_impl(
                 ),
             ),
         ),
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            # True,
+            # 30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            # True,
+            # 35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
     ],
-    ids=["row-major", "tiled"],
+    ids=["row-major sharded", "tiled sharded", "row-major L1 interleaved", "tiled L1 interleaved"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",

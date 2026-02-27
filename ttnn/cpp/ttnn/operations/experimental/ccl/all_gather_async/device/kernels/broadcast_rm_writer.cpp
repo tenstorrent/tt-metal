@@ -10,6 +10,8 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 #include <cstdint>
+#include <array>
+#include <type_traits>
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
@@ -38,10 +40,10 @@ constexpr bool unicast = packet_size <= out_page_size;
 constexpr bool scatter = !unicast;
 
 static_assert(
-    (unicast && out_page_size % packet_size == 0)  // will be able to cover otuput page with unicast writes
-    || (scatter && outputs_per_cb_page % num_out_pages_per_packet == 0)
-    // will be able to cover cb page with scattered writes with one type of header
-);
+    (unicast && out_page_size % packet_size == 0)  // will be able to cover output page with unicast writes
+    || (scatter && outputs_per_cb_page % num_out_pages_per_packet == 0 &&
+        // will be able to cover cb page with scattered writes with one type of header
+        num_out_pages_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS));
 
 class FabricUnicastWriter {
 public:
@@ -60,6 +62,7 @@ public:
         for (uint32_t packet = 0; packet < packets_per_outpage; packet++) {
             auto packet_read_addr = cb_out_page_start + packet * packet_size;
             auto write_offset = packet * packet_size;
+            noc_async_writes_flushed();
             fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 fabric_connection,
                 unicast_route_id,
@@ -74,9 +77,9 @@ private:
     uint8_t unicast_route_id;
 };
 
-class FabrictScatterWriter {
+class FabricScatterWriter {
 public:
-    FabrictScatterWriter(
+    FabricScatterWriter(
         tt::tt_fabric::RoutingPlaneConnectionManager& manager,
         std::array<uint8_t, 2> starts,
         std::array<uint8_t, 2> ranges,
@@ -191,7 +194,7 @@ void kernel_main() {
 
     // 1. mcast via fabric to remote tensor addresses
 
-    using FabricWriter = std::conditional_t<unicast, FabricUnicastWriter, FabrictScatterWriter>;
+    using FabricWriter = std::conditional_t<unicast, FabricUnicastWriter, FabricScatterWriter>;
     FabricWriter writer(fabric_connection, starts, ranges, num_connections);
 
     for (uint32_t page_id = output_page_id_start; page_id < output_page_id_end;) {
@@ -204,8 +207,8 @@ void kernel_main() {
             };
             auto out_page_start = l1_read_addr + output * out_page_size;
             auto tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
-            noc_async_write(out_page_start, tensor_page_addr, out_page_size);
             writer.send(out_page_start, tensor_page_addr);
+            noc_async_write(out_page_start, tensor_page_addr, out_page_size);
         }
         page_id += outputs_per_cb_page;
 
