@@ -54,7 +54,7 @@ void kernel_main() {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
             for (uint32_t k = 0; k < num_pages_in_row; k++) {
-                // For ND-sharded case, we need to read in all pages (pages) within the row.
+                // For ND-sharded case, we need to read in all pages within the row.
                 base_src_noc_addr[j * num_pages_in_row + k] = s.get_noc_addr(page_id);
                 page_id++;
             }

@@ -222,7 +222,6 @@ def test_tilize_nd_sharded_to_legacy_sharded(
     input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
 
     input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
-    #    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(
         input_torch_tensor,
         dtype=dtype,

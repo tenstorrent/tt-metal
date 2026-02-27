@@ -46,7 +46,9 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
-        if (input_is_nd_sharded) {
+        if (input_is_nd_sharded ||
+            input_tensor_a.memory_config().memory_layout() ==
+                TensorMemoryLayout::BLOCK_SHARDED) {  // All block sharded cases can take the default path
             uint32_t element_size_in_bytes = input_tensor_a.element_size();
             const uint32_t page_size_bytes =
                 input_tensor_a.nd_shard_spec().value().shard_shape[-1] * element_size_in_bytes;
@@ -138,7 +140,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        if (input_is_nd_sharded) {
+        if (input_is_nd_sharded ||
+            input_tensor_a.memory_config().memory_layout() ==
+                TensorMemoryLayout::BLOCK_SHARDED) {  // All block sharded cases can take the default path
             return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
         }
         TT_FATAL(

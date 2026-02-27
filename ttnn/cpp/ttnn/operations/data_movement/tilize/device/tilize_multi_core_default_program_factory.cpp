@@ -37,8 +37,8 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
     uint32_t ntiles_per_block = tt::div_up(logical_width, TILE_WIDTH);
-    int32_t ntiles = dst_buffer->num_pages();
-    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
+    uint32_t ntiles = dst_buffer->num_pages();
+    uint32_t nblocks = tt::div_up(ntiles, ntiles_per_block);
     auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -61,7 +61,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
-        page_size = shard_width * a.element_size();  // For ND sharding, a page is a row of the shard.
+        page_size = shard_width * a.element_size();  // For sharding, a page is a row of the shard.
         num_pages_in_row = tt::div_up(logical_width,
                                       shard_width);  // Compute number of pages in one tensor row.
         uint32_t padding_size =
@@ -147,7 +147,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
-        page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;  // adjust for ND sharded tensors
+        page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
