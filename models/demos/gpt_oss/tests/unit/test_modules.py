@@ -779,7 +779,7 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device)
+    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
@@ -864,14 +864,13 @@ def run_model_forward_test(
         )
 
     # Convert TT output to torch
-    mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
+    mesh_composer_dims = (-2, -1) if is_row_sharded else (0, -1)
     tt_logits_torch = ttnn.to_torch(
         tt_logits,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
         ),
     )
-
     # Slice to match reference shape
     tt_logits_torch = tt_logits_torch[0, 0]
 
