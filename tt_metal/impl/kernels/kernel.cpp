@@ -867,7 +867,6 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
 
     if (this->is_legacy_kernel_) {
-        std::cout << "KEV2 using legacy kernel" << std::endl;
         std::vector<const JitBuildState*> targets;
         targets.reserve(this->dm_cores_.size());
         for (const auto& proc : this->dm_processors_) {
@@ -877,7 +876,6 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         }
         jit_build_for_processors(targets, this);
     } else {
-        std::cout << "KEV2 using non-legacy kernel" << std::endl;
         const int canonical_id =
             static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -893,7 +891,6 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     if (this->is_legacy_kernel_) {
-        std::cout << "KEV3 reading legacy kernel" << std::endl;
         for (const DataMovementProcessor& processor : this->dm_processors_) {
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
             const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -906,7 +903,6 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
             binaries.push_back(&binary_mem);
         }
     } else {
-        std::cout << "KEV3 reading non-legacy kernel" << std::endl;
         const int canonical_id =
             static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -941,7 +937,6 @@ bool QuasarDataMovementKernel::configure(
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     if (this->is_legacy_kernel_) {
-        std::cout << "KEV4 configuring legacy kernel" << std::endl;
         for (int i = 0; i < this->expected_num_binaries(); i++) {
             llrt::write_binary_to_address(
                 *binaries[i],
@@ -950,7 +945,6 @@ bool QuasarDataMovementKernel::configure(
                 base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i])]);
         }
     } else {
-        std::cout << "KEV4 configuring non-legacy kernel" << std::endl;
         const uint32_t canonical_offset =
             offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0])];
         llrt::write_binary_to_address(*binaries[0], device_id, worker_core, base_address + canonical_offset);
