@@ -41,8 +41,15 @@ private:
 // implicit conversions (e.g., T -> std::optional<T>).
 template <typename Op, typename Tuple, std::size_t... Is>
 auto invoke_op_impl(Op&& op, Tuple& args, std::index_sequence<Is...>) {
-    return std::forward<Op>(op)(std::get<Is>(args)...);
+    return std::invoke(std::forward<Op>(op), std::get<Is>(args)...);
 }
+
+// Produces a generic functor that defers overload resolution to the call site.
+#define AS_OVERLOADED_FUNCTOR(F)                 \
+    [](auto&&... xs) -> decltype(auto) {         \
+        /* intentionally not forwarding xs... */ \
+        return F(xs...);                         \
+    }
 
 template <typename Op, typename Tuple>
 auto invoke_op(Op&& op, Tuple& args) {

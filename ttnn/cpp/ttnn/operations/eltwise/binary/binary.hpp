@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::binary {
