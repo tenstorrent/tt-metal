@@ -5,6 +5,7 @@
 """Test for GLM 4.7 Flash model with TTNN backend."""
 
 import os
+import time
 
 import pytest
 import torch
@@ -22,11 +23,44 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
 from models.experimental.tt_symbiote.modules.moe import TTNNMoE
-from models.experimental.tt_symbiote.modules.attention import TTNNGlm4MoeLiteAttention
+from models.experimental.tt_symbiote.modules.attention import (
+    TTNNGlm4MoeLiteAttention,
+    PagedAttentionConfig,
+    TTNNPagedAttentionKVCache,
+)
 
 assert transformers.__version__.startswith(
     "5."
 ), "This test requires transformers version 5.0.0.dev0. Try: `pip install git+https://github.com/huggingface/transformers.git`"
+
+
+def create_paged_kv_cache(model_config, device, batch_size=1):
+    config = PagedAttentionConfig(
+        block_size=64,
+        max_num_blocks=32,
+        batch_size=batch_size,
+    )
+    return TTNNPagedAttentionKVCache(
+        num_layers=model_config.num_hidden_layers,
+        num_kv_heads=model_config.num_key_value_heads,
+        head_dim=model_config.qk_head_dim,
+        config=config,
+        device=None,
+    ).to_device(device)
+
+
+MESH_DEVICE_MAP = {
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
 
 
 @pytest.mark.parametrize(
@@ -36,33 +70,22 @@ assert transformers.__version__.startswith(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [MESH_DEVICE_MAP.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
-def test_glm(mesh_device):
+@pytest.mark.parametrize("use_paged_attention", [True], ids=["paged"])
+@pytest.mark.parametrize("max_new_tokens", [128], ids=["128tok"])
+def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     """Test GLM model with TTNN acceleration."""
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
     nn_to_ttnn = {
-        model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,  # Add TTNNGlm4MoeLiteAttention module
-        model.model.layers[1].mlp.__class__: TTNNMoE,  # Add TTNNMoE module
+        model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,
+        model.model.layers[1].mlp.__class__: TTNNMoE,
     }
     nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,  # TTNNLinearLLamaIColShardedWRowSharded
+        nn.Linear: TTNNLinearIColShardedWRowSharded,
     }
 
     messages = [
@@ -87,11 +110,42 @@ def test_glm(mesh_device):
         v.preprocess_weights()
         v.move_weights_to_device()
     print("Running inference...")
-    model.eval()  # Disables dropout, batch norm updates
-    torch.set_grad_enabled(False)  # Disables autograd overhead
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True)
+    model.eval()
+    torch.set_grad_enabled(False)
+
+    cache_kwargs = {}
+    if use_paged_attention:
+        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+
+    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
-    print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
+
+    cache_kwargs = {}
+    if use_paged_attention:
+        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+
+    prompt_tokens = inputs["input_ids"].shape[-1]
+
+    start_time = time.perf_counter()
+    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True, **cache_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    end_time = time.perf_counter()
+
+    total_time = end_time - start_time
+    generated_tokens = outputs.shape[-1] - prompt_tokens
+    tokens_per_second = generated_tokens / total_time
+
+    decoded_output = tokenizer.decode(outputs[0][prompt_tokens:])
+    print(f"\n{'='*80}")
+    print(f"GLM OUTPUT: {decoded_output}")
+    print(f"{'='*80}")
+    print(f"\nPERFORMANCE METRICS:")
+    print(f"  Prompt tokens:        {prompt_tokens}")
+    print(f"  Generated tokens:     {generated_tokens}")
+    print(f"  Total time:           {total_time:.3f}s")
+    print(f"  Throughput:           {tokens_per_second:.2f} tokens/s")
+    print(f"  Time per token:       {(total_time / generated_tokens * 1000):.2f}ms")
+    print(f"{'='*80}\n")
+
     DispatchManager.save_stats_to_file("glm_timing_stats.csv")
     TracedRun.release_all()
