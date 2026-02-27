@@ -12,6 +12,8 @@ import ttnn
 
 from .metrics import metric_value, pearson_corr
 
+DEFAULT_TILE_HW = 32
+
 COMPRESSED_FORMATS = ["bfp8", "bfp4", "bfp2", "bfp0"]
 COMPRESSED_BYTES_PER_ELEM = {
     "bfp8": 1.088,
@@ -63,8 +65,8 @@ def quantize_dequantize_bfp(x: np.ndarray, mant_bits: int) -> np.ndarray:
         batch = int(np.prod(x.shape[:-2])) if x.ndim > 2 else 1
         x = x.reshape(batch, height, width)
 
-    tile_h = 32
-    tile_w = 32
+    tile_h = DEFAULT_TILE_HW
+    tile_w = DEFAULT_TILE_HW
     pad_h = _ceil_div(height, tile_h) * tile_h
     pad_w = _ceil_div(width, tile_w) * tile_w
 
@@ -143,19 +145,32 @@ BFP_MANT_BITS = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
 
 
 def ttnn_quantize_fn(x: torch.Tensor, fmt: str) -> torch.Tensor:
-    """Quantize-dequantize round trip. Uses ttnn for bfp8/bfp4, numpy emulation for bfp2, zeros for fp0."""
+    """Quantize-dequantize round trip. Uses C++ pack/unpack for all BFP formats."""
     if fmt == "bfp0":
         return torch.zeros_like(x)
-    if fmt in BFP_MANT_BITS and fmt not in TTNN_DTYPE_MAP:
-        xn = x.detach().float().cpu().numpy()
-        q = quantize_dequantize_bfp(xn, mant_bits=BFP_MANT_BITS[fmt])
-        return torch.from_numpy(q).to(device=x.device)
-    tt_dtype = TTNN_DTYPE_MAP[fmt]
-    tt_tensor = ttnn.from_torch(x, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT)
-    return ttnn.to_torch(tt_tensor).to(dtype=torch.float32)
+    if fmt in TTNN_DTYPE_MAP:
+        # bfp8/bfp4: use ttnn from_torch/to_torch (handles padding/tiling)
+        tt_dtype = TTNN_DTYPE_MAP[fmt]
+        tt_tensor = ttnn.from_torch(x, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT)
+        return ttnn.to_torch(tt_tensor).to(dtype=torch.float32)
+    # bfp2: C++ pack → unpack (handles all tiles in one call)
+    mant_bits = BFP_MANT_BITS[fmt]
+    xn = x.detach().float().cpu().numpy()
+    orig_shape = xn.shape
+    flat = xn.reshape(-1, xn.shape[-1])
+    h, w = flat.shape
+    pad_h = _ceil_div(h, DEFAULT_TILE_HW) * DEFAULT_TILE_HW
+    pad_w = _ceil_div(w, DEFAULT_TILE_HW) * DEFAULT_TILE_HW
+    padded = np.zeros((pad_h, pad_w), dtype=np.float32)
+    padded[:h, :w] = flat
+    pack_fn = _PACK_FN[mant_bits]
+    unpack_fn = _UNPACK_FN[mant_bits]
+    packed_u32 = np.asarray(pack_fn(padded.ravel()))
+    unpacked = np.asarray(unpack_fn(packed_u32)).reshape(pad_h, pad_w)
+    return torch.from_numpy(unpacked[:h, :w].reshape(orig_shape)).to(device=x.device)
 
 
-def bfp_tile_packed_size(mant_bits: int, tile_hw: int = 32) -> int:
+def bfp_tile_packed_size(mant_bits: int, tile_hw: int = DEFAULT_TILE_HW) -> int:
     """Return the packed byte size of a single BFP tile.
 
     Layout: [exponent bytes] [packed mantissa+sign data bytes]
@@ -194,25 +209,28 @@ _UNPACK_FN = {
 
 
 def pack_bfp_tile(tile: np.ndarray, mant_bits: int) -> np.ndarray:
-    """Pack a single 32×32 float32 tile into raw BFP bytes via C++ SIMD pack.
+    """Pack a single tile into raw BFP bytes via C++ SIMD pack.
 
     Returns uint8 view of the packed uint32 data.
     """
-    assert tile.shape == (32, 32), f"Expected (32, 32), got {tile.shape}"
+    assert tile.shape == (
+        DEFAULT_TILE_HW,
+        DEFAULT_TILE_HW,
+    ), f"Expected ({DEFAULT_TILE_HW}, {DEFAULT_TILE_HW}), got {tile.shape}"
     pack_fn = _PACK_FN[mant_bits]
     packed_u32 = np.asarray(pack_fn(tile.astype(np.float32).ravel()))
     return packed_u32.view(np.uint8)
 
 
 def unpack_bfp_tile(packed: np.ndarray, mant_bits: int) -> np.ndarray:
-    """Unpack raw BFP bytes back to a 32×32 float32 tile via C++ SIMD unpack."""
+    """Unpack raw BFP bytes back to a tile via C++ SIMD unpack."""
     unpack_fn = _UNPACK_FN[mant_bits]
     packed_u32 = packed.view(np.uint32)
     unpacked = np.asarray(unpack_fn(packed_u32))
-    return unpacked.reshape(32, 32)
+    return unpacked.reshape(DEFAULT_TILE_HW, DEFAULT_TILE_HW)
 
 
-def compressed_total_bytes(counts: dict[str, int], tile_hw: int = 32) -> float:
+def compressed_total_bytes(counts: dict[str, int], tile_hw: int = DEFAULT_TILE_HW) -> float:
     total = 0.0
     elems_per_tile = float(tile_hw * tile_hw)
     for fmt, count in counts.items():
@@ -234,15 +252,15 @@ def tile_metrics(ref_tiles: np.ndarray, q_tiles: np.ndarray, metric: str) -> np.
     raise ValueError(f"Unsupported metric: {metric}")
 
 
-def reshape_to_2d_with_padding(xf: np.ndarray) -> tuple[np.ndarray, tuple, tuple]:
+def reshape_to_2d_with_padding(xf: np.ndarray, tile_hw: int = DEFAULT_TILE_HW) -> tuple[np.ndarray, tuple, tuple]:
     xf = np.asarray(xf, dtype=np.float32)
     if xf.ndim == 0:
         data2d = xf.reshape(1, 1)
         shape_info = ("scalar", xf.shape)
     elif xf.ndim == 1:
         n = xf.shape[0]
-        h = int(np.ceil(n / 32.0))
-        w = 32
+        h = _ceil_div(n, tile_hw)
+        w = tile_hw
         data2d = np.zeros((h, w), dtype=np.float32)
         data2d.reshape(-1)[:n] = xf.reshape(-1)
         shape_info = ("vector", n)
@@ -253,15 +271,17 @@ def reshape_to_2d_with_padding(xf: np.ndarray) -> tuple[np.ndarray, tuple, tuple
         shape_info = ("nd", xf.shape)
 
     h, w = data2d.shape
-    h_pad = int(np.ceil(h / 32.0)) * 32
-    w_pad = int(np.ceil(w / 32.0)) * 32
+    h_pad = _ceil_div(h, tile_hw) * tile_hw
+    w_pad = _ceil_div(w, tile_hw) * tile_hw
     padded = np.zeros((h_pad, w_pad), dtype=np.float32)
     padded[:h, :w] = data2d
     pad_info = (h, w, h_pad, w_pad)
     return padded, shape_info, pad_info
 
 
-def reconstruct_from_tiles(tiles: np.ndarray, shape_info: tuple, pad_info: tuple, tile_hw: int = 32) -> np.ndarray:
+def reconstruct_from_tiles(
+    tiles: np.ndarray, shape_info: tuple, pad_info: tuple, tile_hw: int = DEFAULT_TILE_HW
+) -> np.ndarray:
     h, w, h_pad, w_pad = pad_info
     tiles_h = h_pad // tile_hw
     tiles_w = w_pad // tile_hw
