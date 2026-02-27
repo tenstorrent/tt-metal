@@ -21,6 +21,9 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 384, 64, 64), (1, 1536), (1, 77, 1280), 768, 12, 768, 1, 0.996),
         ((1024, 1024), (1, 768, 32, 32), (1, 1536), (1, 77, 1280), 1536, 24, 1536, 2, 0.990),
+        # 512x512 image resolution
+        ((512, 512), (1, 384, 32, 32), (1, 1536), (1, 77, 1280), 768, 12, 768, 1, 0.996),
+        ((512, 512), (1, 768, 16, 16), (1, 1536), (1, 77, 1280), 1536, 24, 1536, 2, 0.990),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -39,10 +42,6 @@ def test_crossattndown(
     is_ci_env,
     reset_seeds,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
