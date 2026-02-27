@@ -20,13 +20,13 @@ namespace detail {
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
-    const MemoryConfig& output_mem_config,
+    const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
     // Get the device
     uint32_t rank = a.logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
+        return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
     };
 
     if (rank > 4) {
@@ -47,17 +47,13 @@ ttnn::Tensor permute_impl(
         typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
     auto output = formatted_input_tensor;
-    auto transpose_wh = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, -2, -1, output_mem_config, 0.0f);
+    auto transpose_wh = [&](const ttnn::Tensor& input,
+                            const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
+        return ttnn::transpose(input, -2, -1, mem_config, 0.0f);
     };
 
-    auto transpose_hc = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        // some permute tests assume transpose hc uses the input shard spec
-        // avoid the intermediate memory configuration mismatch
-        auto mem_config = output_mem_config;
-        if (input.memory_config().is_sharded() && output_mem_config.is_sharded()) {
-            mem_config = input.memory_config();
-        }
+    auto transpose_hc = [&](const ttnn::Tensor& input,
+                            const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
         return ttnn::transpose(input, 1, -2, mem_config, pad_value);
     };
 
@@ -70,15 +66,15 @@ ttnn::Tensor permute_impl(
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-            output = transpose_wh(formatted_input_tensor);
+            output = transpose_wh(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-            output = transpose_hc(formatted_input_tensor);
+            output = transpose_hc(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 3 && W == 1) {
-            output = transpose_wh(transpose_hc(formatted_input_tensor));
+            output = transpose_wh(transpose_hc(formatted_input_tensor), output_mem_config);
         } else if (N == 0 && C == 3 && H == 1 && W == 2) {
-            output = transpose_hc(transpose_wh(formatted_input_tensor));
+            output = transpose_hc(transpose_wh(formatted_input_tensor), output_mem_config);
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
-            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)), output_mem_config);
         } else {
             output = prim_permute(formatted_input_tensor);
         }
@@ -86,9 +82,9 @@ ttnn::Tensor permute_impl(
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-            output = transpose_wh(formatted_input_tensor);
+            output = transpose_wh(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-            output = transpose_hc(formatted_input_tensor);
+            output = transpose_hc(formatted_input_tensor, output_mem_config);
         } else if (N == 1 && C == 0 && H == 2 && W == 3) {
             output = transpose_cn(formatted_input_tensor);
         } else {
@@ -103,7 +99,7 @@ ttnn::Tensor permute_impl(
 ttnn::Tensor permute_launch(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
-    const MemoryConfig& output_mem_config,
+    const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
     return permute_impl(a, dims, output_mem_config, pad_value);
 }
@@ -195,17 +191,16 @@ ttnn::Tensor ExecutePermute::invoke(
     auto iorder = normalized_dims.size() < 4 ? adjust_order(normalized_dims) : normalized_dims;
 
     const auto input_layout = input_tensor.layout();
-    const auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    if (input_layout == Layout::ROW_MAJOR) {
+    if (input_layout == Layout::ROW_MAJOR && memory_config.has_value()) {
         uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
         TT_FATAL(
-            !output_memory_config.is_sharded() ||
-                (*output_memory_config.shard_spec()).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
+            !memory_config.value().is_sharded() ||
+                (*memory_config.value().shard_spec()).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = detail::permute_launch(itensor, iorder, output_memory_config, pad_value);
+    auto output_tensor = detail::permute_launch(itensor, iorder, memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
