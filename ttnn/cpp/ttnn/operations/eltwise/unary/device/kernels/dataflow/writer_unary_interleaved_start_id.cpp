@@ -27,23 +27,16 @@ void kernel_main() {
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
     for (uint32_t i = start_id; i != end_id; --i) {
+#else
+    uint32_t end_id = start_id + num_pages;
+    for (uint32_t i = start_id; i < end_id; ++i) {
+#endif
         cb_wait_front(cb_id_out, onepage);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         noc_async_write_page(i, s, l1_read_addr);
         noc_async_writes_flushed();
         cb_pop_front(cb_id_out, onepage);
     }
-#else
-    uint32_t end_id = start_id + num_pages;
-    auto output_pages = s.pages(start_id, end_id);
-    for (auto it = output_pages.begin(); it != output_pages.end(); ++it) {
-        cb_wait_front(cb_id_out, onepage);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write(l1_read_addr, it->noc_addr(), page_bytes);
-        noc_async_writes_flushed();
-        cb_pop_front(cb_id_out, onepage);
-    }
-#endif
     noc_async_write_barrier();
 #endif
 }

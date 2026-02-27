@@ -20,6 +20,10 @@ void kernel_main() {
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;
     for (uint32_t i = start_id; i != end_id; --i) {
+#else
+    uint32_t end_id = start_id + num_sticks;
+    for (uint32_t i = start_id; i < end_id; ++i) {
+#endif
         cb_wait_front(cb_id_out0, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         uint64_t dst_noc_addr = s0.get_noc_addr(i);
@@ -27,15 +31,4 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, 1);
     }
-#else
-    uint32_t end_id = start_id + num_sticks;
-    auto output_pages = s0.pages(start_id, end_id);
-    for (auto it = output_pages.begin(); it != output_pages.end(); ++it) {
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-        noc_async_write(l1_read_addr, it->noc_addr(), stick_size);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, 1);
-    }
-#endif
 }

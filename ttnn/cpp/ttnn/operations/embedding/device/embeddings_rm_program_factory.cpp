@@ -52,7 +52,6 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     // weights shape is [1, 1, num_embeddings, num_dim]
     // num_output_rows = total embedding lookups (product of all input dims); supports any input rank (1D, 2D, 3D, ...)
-    // uint32_t batch_size = a.padded_shape()[0];
     uint32_t num_output_rows = static_cast<uint32_t>(a.padded_shape().volume());
     // When sharded, one buffer page = shard row (shard_shape[-1] elements); use buffer's logical page size for advance
     uint32_t logical_input_row_size = is_sharded(a.buffer()->buffer_layout())
@@ -63,10 +62,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     uint32_t block_height = (alignment / input_element_size_bytes);
     uint32_t num_blocks = num_output_rows;
 
-    // setup problem and grid size
-
-    uint32_t problem_size = num_blocks;
-
+    // setup grid size
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2;
@@ -87,7 +83,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
             core_group_2,
             num_blocks_per_core_group_1,
             num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 

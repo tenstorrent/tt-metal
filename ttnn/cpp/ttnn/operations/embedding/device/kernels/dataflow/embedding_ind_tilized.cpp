@@ -87,8 +87,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            auto input_pages = s.pages(curr_tile, curr_tile + 1);
-            noc_async_read(input_pages.begin()->noc_addr(), input_l1_addr, tile_size_bytes);
+            noc_async_read_tile(curr_tile, s, input_l1_addr);
             noc_async_read_barrier();
             read_indices = false;
         }

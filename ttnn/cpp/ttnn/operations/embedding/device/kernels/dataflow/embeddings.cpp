@@ -44,8 +44,7 @@ void kernel_main() {
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            auto input_pages = input.pages(curr_row, curr_row + 1);
-            uint64_t noc_input_src_addr = input_pages.begin()->noc_addr() + offset;
+            uint64_t noc_input_src_addr = input.get_noc_addr(curr_row) + offset;
             noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
             noc_async_read_barrier();
             read_indices = false;
