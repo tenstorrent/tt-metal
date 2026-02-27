@@ -49,9 +49,8 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, partial_prod_cb);
-
         partial_prod_cb_obj.reserve_back(one_tile);
+        pack_tile(0, partial_prod_cb);
         partial_prod_cb_obj.push_back(one_tile);
         tile_regs_release();
 
