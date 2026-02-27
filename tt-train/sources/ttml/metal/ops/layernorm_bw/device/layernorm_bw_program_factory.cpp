@@ -116,9 +116,9 @@ bool fits_in_l1_check(
 namespace ttml::metal::ops::layernorm_bw::device {
 
 struct LayerNormBackwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
+    tt::tt_metal::KernelHandle reader{};
+    tt::tt_metal::KernelHandle writer{};
+    tt::tt_metal::KernelHandle compute_group_1{};
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
