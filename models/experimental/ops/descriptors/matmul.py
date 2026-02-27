@@ -78,6 +78,19 @@ def matmul(
     # Create output tensors
     output_tensors = ttnn.MatmulDeviceOperation.create_output_tensors(operation_params, tensor_args)
 
+    # Fix: compute_output_specs() always generates (0,0)-based output shard cores
+    # via num_cores_to_corerangeset(), overwriting the user's shard spec.
+    # When the output is sharded on a non-(0,0) core range, the output buffer ends up
+    # allocated on the wrong cores. Recreate with the correct shard spec.
+    if output_mem_config is not None and output_mem_config.is_sharded():
+        wrong_output = output_tensors[0]
+        output_tensors = [
+            ttnn.allocate_tensor_on_device(
+                wrong_output.shape, wrong_output.dtype, ttnn.TILE_LAYOUT, device, output_mem_config
+            )
+        ]
+        ttnn.deallocate(wrong_output)
+
     # Create descriptor via the factory.
     # Only MatmulMultiCoreReuseOptimizedProgramFactory is supported for now.
     program_descriptor = ttnn.MatmulMultiCoreReuseOptimizedProgramFactory.create_descriptor(
