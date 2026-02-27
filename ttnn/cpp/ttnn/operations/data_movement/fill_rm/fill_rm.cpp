@@ -5,7 +5,8 @@
 #include "fill_rm.hpp"
 #include "device/fill_rm_device_operation.hpp"
 #include "ttnn/operation.hpp"
-namespace ttnn::operations::data_movement {
+
+namespace ttnn {
 
 ttnn::Tensor FillRMOperation::invoke(
     uint32_t N,
@@ -35,4 +36,4 @@ ttnn::Tensor FillOnesRMOperation::invoke(
     return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, 1.0f, 0.0f, output_memory_config);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

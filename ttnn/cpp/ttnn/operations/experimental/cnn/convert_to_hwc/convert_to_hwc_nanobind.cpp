@@ -10,13 +10,11 @@
 #include <nanobind/stl/optional.h>
 
 #include "convert_to_hwc.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 
 void bind_convert_to_hwc(nb::module_& mod) {
-    using OperationType = decltype(ttnn::experimental::convert_to_hwc);
-
     const auto* const doc = R"doc(
     Convert a tensor from CHW channel ordering to HWC channel ordering.
 
@@ -41,19 +39,14 @@ void bind_convert_to_hwc(nb::module_& mod) {
 
     )doc";
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"convert_to_hwc">(
         mod,
-        ttnn::experimental::convert_to_hwc,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype) { return self(input, memory_config, dtype); },
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none()});
+        &ttnn::experimental::convert_to_hwc,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

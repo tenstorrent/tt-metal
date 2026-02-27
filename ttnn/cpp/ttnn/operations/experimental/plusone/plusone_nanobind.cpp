@@ -4,12 +4,10 @@
 
 #include "plusone_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/plusone/plusone.hpp"
 
 namespace ttnn::operations::experimental::plusone::detail {
@@ -36,19 +34,13 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::plus_one);
-    bind_registered_operation(
+    ttnn::bind_function<"plus_one", "ttnn.experimental.">(
         mod,
-        ttnn::plus_one,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               bool skip_negative_entries) { return self(input_tensor, sub_core_grids, skip_negative_entries); },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("skip_negative_entries") = false});
+        &ttnn::operations::experimental::plus_one,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("skip_negative_entries") = false);
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

@@ -11,7 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -19,76 +19,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_llama_all_gather_matmul_async_op(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor0,
-               const ttnn::Tensor& input_tensor1,
-               const ttnn::Tensor& intermediate_tensor,
-               const int32_t dim,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const ttnn::ccl::Topology topology,
-               const GlobalSemaphore& multi_device_global_semaphore,
-               const std::optional<size_t> num_preferred_links,
-               const std::optional<MemoryConfig>& ag_memory_config,
-               const std::optional<MemoryConfig>& mm_memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
-               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const DataType> dtype,
-               const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
-                return self(
-                    input_tensor0,        // in0 for matmul, need AG first
-                    input_tensor1,        // in1 for matmul
-                    intermediate_tensor,  // intermediate tensor for AG operation
-                    dim,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    multi_device_global_semaphore,
-                    ag_memory_config,     // = std::nullopt,
-                    mm_memory_config,     // = std::nullopt,
-                    num_preferred_links,  // = std::nullopt,
-                    subdevice_id,         // = std::nullopt
-                    // MM optional params
-                    program_config,         // = std::nullopt
-                    compute_kernel_config,  // = std::nullopt
-                    dtype,                  // = std::nullopt
-                    global_cb);             // = std::nullopt
-            },
-            nb::arg("input_tensor0"),
-            nb::arg("input_tensor1"),
-            nb::arg("intermediate_tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("topology"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("ag_memory_config") = nb::none(),
-            nb::arg("mm_memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("global_cb") = nb::none()});
-}
-
-}  // namespace
-
 void bind_llama_all_gather_matmul_async(nb::module_& mod) {
-    bind_llama_all_gather_matmul_async_op(
+    ttnn::bind_function<"llama_all_gather_matmul_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::llama_all_gather_matmul_async,
         R"doc(
         Performs an all-gather-matml operation on multi-device :attr:`input_tensor0` and :attr:`input_tensor1` across all devices.
 
@@ -131,7 +64,25 @@ void bind_llama_all_gather_matmul_async(nb::module_& mod) {
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.llama_all_gather_matmul_async(ttnn_tensor_a, ttnn_tensor_b, dim=0, topology=ttnn.Topology.Ring)
 
-        )doc");
+        )doc",
+        &ttnn::experimental::llama_all_gather_matmul_async,
+        nb::arg("input_tensor0"),
+        nb::arg("input_tensor1"),
+        nb::arg("intermediate_tensor"),
+        nb::arg("dim"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("ag_memory_config") = nb::none(),
+        nb::arg("mm_memory_config") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("global_cb") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

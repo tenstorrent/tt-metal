@@ -4,19 +4,15 @@
 
 #include "convert_to_chw_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "convert_to_chw.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 
 void bind_convert_to_chw(nb::module_& mod) {
-    using OperationType = decltype(ttnn::experimental::convert_to_chw);
-
     const auto* const doc = R"doc(
     Convert a tensor from HWC channel ordering to CHW channel ordering.
 
@@ -26,17 +22,8 @@ void bind_convert_to_chw(nb::module_& mod) {
     with appropriate shard dimensions based on the input tensor's sharding configuration.
     )doc";
 
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::experimental::convert_to_chw,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self, const ttnn::Tensor& input, const std::optional<DataType> dtype) {
-                return self(input, dtype);
-            },
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none()});
+    ttnn::bind_function<"convert_to_chw">(
+        mod, doc, &ttnn::experimental::convert_to_chw, nb::arg("input"), nb::kw_only(), nb::arg("dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

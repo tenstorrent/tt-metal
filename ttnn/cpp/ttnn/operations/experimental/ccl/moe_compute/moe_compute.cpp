@@ -9,9 +9,9 @@
 #include "device/moe_compute_device_operation.hpp"
 
 namespace ttnn {
-namespace operations::experimental::ccl {
+namespace experimental {
 
-std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
+std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,
     const ttnn::Tensor& tilize_expert_indices_tensor,
     const ttnn::Tensor& tilize_expert_scores_tensor,
@@ -34,10 +34,6 @@ std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
         output_width_shard_dim,
         cluster_axis);
 }
-
-}  // namespace operations::experimental::ccl
-
-namespace experimental {
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
     return ttnn::prim::get_moe_combine_cores(mesh_device);

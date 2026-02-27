@@ -16,7 +16,7 @@
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
@@ -26,10 +26,10 @@ namespace ttnn::operations::binary_backward {
 
 namespace {
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name, typename Func>
 void bind_binary_backward_ops(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
+    Func func,
     const std::string_view description,
     const std::string_view supported_dtype = "BFLOAT16",
     const std::string_view note = "") {
@@ -64,36 +64,27 @@ void bind_binary_backward_ops(
             {4}
         )doc",
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-                return self(grad_tensor, input_tensor_a, input_tensor_b, output_memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            func,
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_backward_concat(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     int parameter_value,
@@ -135,38 +126,19 @@ void bind_binary_backward_concat(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         parameter_name,
         parameter_doc,
         parameter_value,
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               int parameter,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    grad_tensor,
-                    input_tensor_a,
-                    input_tensor_b,
-                    parameter,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::concat_bw,
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -175,13 +147,12 @@ void bind_binary_backward_concat(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()});
+            nb::arg("input_b_grad") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_backward_addalpha(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     float parameter_value,
@@ -225,38 +196,19 @@ void bind_binary_backward_addalpha(
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         parameter_name,
         parameter_doc,
         parameter_value,
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               float parameter,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    grad_tensor,
-                    input_tensor_a,
-                    input_tensor_b,
-                    parameter,
-                    are_required_outputs,
-                    memory_config,
-                    input_a_grad,
-                    input_b_grad);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::addalpha_bw,
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -265,13 +217,12 @@ void bind_binary_backward_addalpha(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()});
+            nb::arg("input_b_grad") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_backward_bias_gelu(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
@@ -312,8 +263,8 @@ void bind_binary_backward_bias_gelu(
             {9}
 
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         parameter_name_a,
         parameter_a_doc,
         parameter_name_b,
@@ -323,47 +274,42 @@ void bind_binary_backward_bias_gelu(
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::string& parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, parameter_b, memory_config);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor_a,
+                const ttnn::Tensor& input_tensor_b,
+                const std::string& parameter_b,
+                const std::optional<MemoryConfig>& memory_config) {
+                return ttnn::bias_gelu_bw(grad_tensor, input_tensor_a, input_tensor_b, parameter_b, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::string& parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                float parameter_a,
+                const std::string& parameter_b,
+                const std::optional<MemoryConfig>& memory_config) {
+                return ttnn::bias_gelu_bw(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_backward_sub_alpha(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
     float parameter_value,
@@ -399,38 +345,19 @@ void bind_binary_backward_sub_alpha(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         parameter_name,
         parameter_doc,
         parameter_value,
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& other_tensor,
-               float alpha,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    alpha,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::subalpha_bw,
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -439,15 +366,12 @@ void bind_binary_backward_sub_alpha(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()});
+            nb::arg("other_grad") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_backward_rsub(
-    nb::module_& mod,
-    const binary_backward_operation_t& operation,
-    const std::string_view description,
-    const std::string_view supported_dtype = "BFLOAT16") {
+    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -477,33 +401,16 @@ void bind_binary_backward_rsub(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& other_tensor,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::rsub_bw,
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -511,15 +418,12 @@ void bind_binary_backward_rsub(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()});
+            nb::arg("other_grad") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
+template <ttnn::unique_string Name>
 void bind_binary_bw_mul(
-    nb::module_& mod,
-    const binary_backward_operation_t& operation,
-    const std::string_view description,
-    const std::string_view supported_dtype = "BFLOAT16") {
+    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -552,43 +456,37 @@ void bind_binary_bw_mul(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const Tensor& grad_tensor,
-               const Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::mul_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& other_tensor,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
+            nb::arg("input_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& other_tensor,
+                const std::vector<bool>& are_required_outputs,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad,
+                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::mul_bw(
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -604,28 +502,24 @@ void bind_binary_bw_mul(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()},
-
-        // complex tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor_a,
-               const ComplexTensor& input_tensor_b,
-               const MemoryConfig& memory_config) {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            nb::arg("other_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ComplexTensor& grad_tensor,
+                const ComplexTensor& input_tensor_a,
+                const ComplexTensor& input_tensor_b,
+                const MemoryConfig& memory_config) {
+                return ttnn::mul_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
-void bind_binary_bw(
+template <ttnn::unique_string Name>
+void bind_binary_bw_add(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string_view description,
     const std::string_view supported_dtype = "BFLOAT16",
     const std::string_view note = "") {
@@ -661,44 +555,38 @@ void bind_binary_bw(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const Tensor& grad_tensor,
-               const Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::add_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& other_tensor,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
+            nb::arg("input_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& other_tensor,
+                const std::vector<bool>& are_required_outputs,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad,
+                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::add_bw(
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -714,32 +602,128 @@ void bind_binary_bw(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()},
-
-        // complex tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor_a,
-               const ComplexTensor& input_tensor_b,
-               float alpha,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+            nb::arg("other_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ComplexTensor& grad_tensor,
+                const ComplexTensor& input_tensor_a,
+                const ComplexTensor& input_tensor_b,
+                float alpha,
+                const std::optional<MemoryConfig>& memory_config) {
+                return ttnn::add_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::arg("alpha"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
-void bind_binary_bw_div(
+template <ttnn::unique_string Name>
+void bind_binary_bw_sub(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string_view description,
-    const std::string_view supported_dtype = "BFLOAT16") {
+    const std::string_view supported_dtype = "BFLOAT16",
+    const std::string_view note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+        Supports broadcasting.
+
+        Args:
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
+            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
+
+        Keyword args:
+            are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
+            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
+
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {3}
+                 - TILE, ROW_MAJOR
+
+            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+
+            {4}
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        supported_dtype,
+        note);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::sub_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
+            },
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("scalar"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& other_tensor,
+                const std::vector<bool>& are_required_outputs,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad,
+                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::sub_bw(
+                    grad_tensor,
+                    input_tensor,
+                    other_tensor,
+                    are_required_outputs,
+                    memory_config,
+                    input_grad,
+                    other_grad);
+            },
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor"),
+            nb::arg("other_tensor"),
+            nb::kw_only(),
+            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ComplexTensor& grad_tensor,
+                const ComplexTensor& input_tensor_a,
+                const ComplexTensor& input_tensor_b,
+                float alpha,
+                const std::optional<MemoryConfig>& memory_config) {
+                return ttnn::sub_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+            },
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::arg("alpha"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
+}
+
+template <ttnn::unique_string Name>
+void bind_binary_bw_div(
+    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -778,25 +762,22 @@ void bind_binary_bw_div(
             Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
 
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const Tensor& grad_tensor,
-               const Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<std::string>& rounding_mode,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, scalar, rounding_mode, memory_config, input_grad);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<std::string>& rounding_mode,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::div_bw(grad_tensor, input_tensor_a, scalar, rounding_mode, memory_config, input_grad);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
@@ -804,20 +785,17 @@ void bind_binary_bw_div(
             nb::kw_only(),
             nb::arg("rounding_mode") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& other_tensor,
-               const std::optional<std::string>& rounding_mode,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
+            nb::arg("input_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                const ttnn::Tensor& other_tensor,
+                const std::optional<std::string>& rounding_mode,
+                const std::vector<bool>& are_required_outputs,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad,
+                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::div_bw(
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -835,28 +813,24 @@ void bind_binary_bw_div(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()},
-
-        // complex tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor_a,
-               const ComplexTensor& input_tensor_b,
-               const MemoryConfig& memory_config) {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            nb::arg("other_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ComplexTensor& grad_tensor,
+                const ComplexTensor& input_tensor_a,
+                const ComplexTensor& input_tensor_b,
+                const MemoryConfig& memory_config) {
+                return ttnn::div_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
-void bind_binary_backward_overload(
+template <ttnn::unique_string Name>
+void bind_binary_backward_remainder(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -888,53 +862,113 @@ void bind_binary_backward_overload(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const Tensor& grad_tensor,
-               const Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(grad_tensor, input_tensor_a, scalar, memory_config);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return ttnn::remainder_bw(grad_tensor, input_tensor_a, scalar, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor_a,
+                const ttnn::Tensor& input_tensor_b,
+                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return ttnn::remainder_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_backward_operation_t>
-void bind_binary_backward_assign(
+template <ttnn::unique_string Name>
+void bind_binary_backward_fmod(
     nb::module_& mod,
-    const binary_backward_operation_t& operation,
-    const std::string_view description,
-    const std::string_view supported_dtype = "BFLOAT16") {
+    const std::string& description,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        Args:
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {3}
+                 - TILE, ROW_MAJOR
+
+            {4}
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        supported_dtype,
+        note);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const Tensor& grad_tensor,
+                const Tensor& input_tensor_a,
+                const float scalar,
+                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return ttnn::fmod_bw(grad_tensor, input_tensor_a, scalar, memory_config);
+            },
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("scalar"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor_a,
+                const ttnn::Tensor& input_tensor_b,
+                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return ttnn::fmod_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
+}
+
+template <ttnn::unique_string Name>
+void bind_binary_backward_assign(
+    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -964,41 +998,35 @@ void bind_binary_backward_assign(
                  - TILE, ROW_MAJOR
 
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, memory_config, input_grad);
+        doc.c_str(),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::assign_bw(grad_tensor, input_tensor, memory_config, input_grad);
             },
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
+            nb::arg("input_a_grad") = nb::none()),
+        ttnn::overload_t(
+            +[](const ttnn::Tensor& grad_tensor,
+                const ttnn::Tensor& input_tensor_a,
+                const ttnn::Tensor& input_tensor_b,
+                const std::vector<bool>& are_required_outputs,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<ttnn::Tensor>& input_a_grad,
+                const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return ttnn::assign_bw(
                     grad_tensor,
                     input_tensor_a,
                     input_tensor_b,
@@ -1014,150 +1042,138 @@ void bind_binary_backward_assign(
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()});
+            nb::arg("input_b_grad") = nb::none()));
 }
 
 }  // namespace
 
 void py_module(nb::module_& mod) {
-    bind_binary_bw_mul(
+    bind_binary_bw_mul<"mul_bw">(
         mod,
-        ttnn::mul_bw,
         R"doc(Performs backward operations for multiply on :attr:`input_tensor_a`, :attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_bw(
+    bind_binary_bw_add<"add_bw">(
         mod,
-        ttnn::add_bw,
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Sharding is not supported if both inputs are tensors.)doc");
 
-    bind_binary_bw(
+    bind_binary_bw_sub<"sub_bw">(
         mod,
-        ttnn::sub_bw,
         R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_bw_div(
+    bind_binary_bw_div<"div_bw">(
         mod,
-        ttnn::div_bw,
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_overload(
+    bind_binary_backward_remainder<"remainder_bw">(
         mod,
-        ttnn::remainder_bw,
         R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_overload(
+    bind_binary_backward_fmod<"fmod_bw">(
         mod,
-        ttnn::fmod_bw,
         R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_assign(
+    bind_binary_backward_assign<"assign_bw">(
         mod,
-        ttnn::assign_bw,
         R"doc(Performs backward operations for assign of :attr:`input_tensor_a`, :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"atan2_bw">(
         mod,
-        ttnn::atan2_bw,
+        &ttnn::atan2_bw,
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc");
 
-    bind_binary_backward_sub_alpha(
+    bind_binary_backward_sub_alpha<"subalpha_bw">(
         mod,
-        ttnn::subalpha_bw,
         "alpha",
         "Alpha value",
         1.0f,
         R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_addalpha(
+    bind_binary_backward_addalpha<"addalpha_bw">(
         mod,
-        ttnn::addalpha_bw,
         "alpha",
         "Alpha value",
         1.0f,
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"xlogy_bw">(
         mod,
-        ttnn::xlogy_bw,
+        &ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"hypot_bw">(
         mod,
-        ttnn::hypot_bw,
+        &ttnn::hypot_bw,
         R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"ldexp_bw">(
         mod,
-        ttnn::ldexp_bw,
+        &ttnn::ldexp_bw,
         R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(Recommended input range : [-80, 80]. Performance of the PCC may degrade if the input falls outside this range.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"logaddexp_bw">(
         mod,
-        ttnn::logaddexp_bw,
+        &ttnn::logaddexp_bw,
         R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"logaddexp2_bw">(
         mod,
-        ttnn::logaddexp2_bw,
+        &ttnn::logaddexp2_bw,
         R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"squared_difference_bw">(
         mod,
-        ttnn::squared_difference_bw,
+        &ttnn::squared_difference_bw,
         R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_concat(
+    bind_binary_backward_concat<"concat_bw">(
         mod,
-        ttnn::concat_bw,
         "dim",
         "Dimension to concatenate",
         0,
         R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc");
 
-    bind_binary_backward_rsub(
+    bind_binary_backward_rsub<"rsub_bw">(
         mod,
-        ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"min_bw">(
         mod,
-        ttnn::min_bw,
+        &ttnn::min_bw,
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    bind_binary_backward_ops(
+    bind_binary_backward_ops<"max_bw">(
         mod,
-        ttnn::max_bw,
+        &ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
-    bind_binary_backward_bias_gelu(
+    bind_binary_backward_bias_gelu<"bias_gelu_bw">(
         mod,
-        ttnn::bias_gelu_bw,
         "bias",
         "Bias value",
         "approximate",

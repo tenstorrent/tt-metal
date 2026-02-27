@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn::operations::ccl {

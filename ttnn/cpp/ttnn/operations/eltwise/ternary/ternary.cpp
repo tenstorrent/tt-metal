@@ -199,7 +199,7 @@ Tensor invoke_impl(
 
 }  // namespace
 
-Tensor WhereOperation::invoke(
+Tensor where(
     const Tensor& predicate,
     const TensorScalarVariant& value_true,
     const TensorScalarVariant& value_false,
@@ -216,7 +216,7 @@ Tensor WhereOperation::invoke(
 
 template <typename T>
     requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
-Tensor WhereOperation::invoke(
+Tensor where(
     const Tensor& predicate,
     const T& value_true,
     const T& value_false,
@@ -229,14 +229,14 @@ Tensor WhereOperation::invoke(
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
 }
 
-template Tensor WhereOperation::invoke<int32_t>(
+template Tensor where<int32_t>(
     const Tensor&,
     const int32_t&,
     const int32_t&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
-template Tensor WhereOperation::invoke<uint32_t>(
+template Tensor where<uint32_t>(
     const Tensor&,
     const uint32_t&,
     const uint32_t&,
@@ -244,7 +244,7 @@ template Tensor WhereOperation::invoke<uint32_t>(
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
 
-Tensor AddcmulOperation::invoke(
+Tensor addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -285,7 +285,7 @@ Tensor AddcmulOperation::invoke(
         std::nullopt);
 }
 
-Tensor AddcdivOperation::invoke(
+Tensor addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -325,7 +325,7 @@ Tensor AddcdivOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     float weight,
@@ -356,7 +356,7 @@ Tensor LerpOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     const Tensor& weight,

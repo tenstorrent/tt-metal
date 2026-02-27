@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -17,37 +17,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_neighbor_pad_async_op(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("dim"),
-            nb::arg("padding_left"),
-            nb::arg("padding_right"),
-            nb::arg("padding_mode"),
-            nb::arg("cluster_axis"),
-            nb::arg("final_semaphore"),
-            nb::arg("barrier_semaphore"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Linear,  // TODO_NANOBIND: cast?
-            nb::arg("secondary_cluster_axis") = nb::none(),
-            nb::arg("secondary_mesh_shape") = nb::none()});
-}
-
-}  // namespace
-
 void bind_neighbor_pad_async(nb::module_& mod) {
-    bind_neighbor_pad_async_op(
+    ttnn::bind_function<"neighbor_pad_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::neighbor_pad_async,
         R"doc(
 
         Performs a halo-padding operation on multi-device input tensor, where the padding values come from the neighbor device's tensor when available, or as specified by padding mode when no neighbor device is present.
@@ -67,7 +39,22 @@ void bind_neighbor_pad_async(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the padded output tensor.
-        )doc");
+        )doc",
+        &ttnn::experimental::neighbor_pad_async,
+        nb::arg("input_tensor"),
+        nb::arg("dim"),
+        nb::arg("padding_left"),
+        nb::arg("padding_right"),
+        nb::arg("padding_mode"),
+        nb::arg("cluster_axis"),
+        nb::arg("final_semaphore"),
+        nb::arg("barrier_semaphore"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
+        nb::arg("secondary_cluster_axis") = nb::none(),
+        nb::arg("secondary_mesh_shape") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
