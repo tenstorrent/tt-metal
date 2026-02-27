@@ -75,6 +75,7 @@ def test_adaptive_pool2d(
     )
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, output_size, num_slices",

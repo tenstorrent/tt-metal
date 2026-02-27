@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from functools import partial
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -103,6 +104,10 @@ class TestTypecast:
     ):
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
+        if (tt_input_dtype == ttnn.uint32 and is_llk_assert_enabled()) or (
+            tt_output_dtype == ttnn.uint32 and is_llk_assert_enabled()
+        ):
+            pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=100), pt_input_dtype)
         ]

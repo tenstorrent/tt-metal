@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_with_llk_assert
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
@@ -819,6 +819,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
 @pytest.mark.parametrize(
     "memory_config",

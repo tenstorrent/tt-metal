@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -127,6 +128,8 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     ],
 )
 def test_unary_min_int32_test(scalar, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
     torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 1, 32, 32]))
@@ -175,6 +178,8 @@ def test_unary_min_int32_test(scalar, ttnn_dtype, device):
     ],
 )
 def test_unary_min_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -226,6 +231,8 @@ def test_unary_min_fill_val_int32(input_shapes, input_val, scalar, ttnn_dtype, d
     torch_input = torch.ones(input_shapes, dtype=torch.int32) * input_val
 
     if ttnn_dtype == ttnn.uint32:
+        if is_llk_assert_enabled():
+            pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
         # convert uint32 to int64 to make PyTorch happy
         # everything is converted to int32 for the final equality check
         torch_input = torch_input.to(torch.uint32).to(torch.int64)
