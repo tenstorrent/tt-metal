@@ -166,6 +166,25 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
     const auto& hal = tt_metal::MetalContext::instance().hal();
     core_type_index_ = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
 
+    // Calculate architecture-specific overlay register address for stream 0
+    // Formula: NOC_OVERLAY_START_ADDR + (stream_id * 0x1000) + (STREAM_REMOTE_SRC_REG_INDEX << 2)
+    // For stream_id=0: NOC_OVERLAY_START_ADDR + (STREAM_REMOTE_SRC_REG_INDEX << 2)
+    constexpr size_t NOC_OVERLAY_START_ADDR = 0xFFB40000;
+    const auto arch = hal.get_arch();
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0:
+            // STREAM_REMOTE_SRC_REG_INDEX = 0 for Wormhole
+            stream_scratch_register_0_ = NOC_OVERLAY_START_ADDR + (0 << 2);  // 0xFFB40000
+            break;
+        case tt::ARCH::BLACKHOLE:
+        case tt::ARCH::QUASAR:
+            // STREAM_REMOTE_SRC_REG_INDEX = 4 for Blackhole and Quasar
+            stream_scratch_register_0_ = NOC_OVERLAY_START_ADDR + (4 << 2);  // 0xFFB40010
+            break;
+        default:
+            TT_FATAL(false, "Unsupported architecture for fabric tensix datamover: {}", static_cast<int>(arch));
+    }
+
     TT_FATAL(
         memory_map_end_address_ <= l1_end_address,
         "Memory map end address: {} is greater than allocated L1 end address: {}",
@@ -219,6 +238,7 @@ size_t FabricTensixDatamoverBaseConfig::get_termination_signal_address() const {
 size_t FabricTensixDatamoverBaseConfig::get_channel_credits_stream_id(
     ChannelTypes channel_type, uint32_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
+    // All channels use unique stream IDs based on their global offset
     return get_channel_global_offset(channel_type, channel_id);
 }
 
@@ -234,8 +254,19 @@ size_t FabricTensixDatamoverBaseConfig::get_connection_info_address(
 }
 
 size_t FabricTensixDatamoverBaseConfig::get_connection_handshake_address(
-    ChannelTypes channel_type, uint32_t channel_id) const {
+    ChannelTypes channel_type, uint32_t channel_id, bool const use_overlay) const {
     validate_channel_id(channel_type, channel_id);
+    
+    if(use_overlay) {
+        // Use architecture-specific overlay register for channel 0 handshake if requested
+        // (This is only used for the MUX config when accessed through the FabricTensixDatamoverConfig interface, and is ignored for the Relay config)
+        TT_FATAL(
+            channel_id == 0,
+            "Overlay register can only be used for channel 0, but channel_id {} was requested",
+            channel_id);
+        return stream_scratch_register_0_;
+    }
+    // All channels use L1 addresses for handshakes (no overlay registers)
     return connection_handshake_regions_.at(channel_type).get_address(channel_id);
 }
 
@@ -405,7 +436,7 @@ MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
         .noc_x = noc_coords ? noc_coords->first : 0u,
         .noc_y = noc_coords ? noc_coords->second : 0u,
         .buffer_base_addr = get_channel_base_address(channel_type, downstream_mux_channel_id),
-        .connection_handshake_addr = get_connection_handshake_address(channel_type, downstream_mux_channel_id),
+        .connection_handshake_addr = get_connection_handshake_address(channel_type, downstream_mux_channel_id, false),
         .worker_location_info_addr = get_connection_info_address(channel_type, downstream_mux_channel_id),
         .buffer_index_addr = get_buffer_index_address(channel_type, downstream_mux_channel_id),
         .flow_control_semaphore_addr =
@@ -513,12 +544,11 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     for (const auto& [type, region] : connection_info_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
-    // Connection handshake base addresses (one per channel type)
-    // Use get_connection_handshake_address() to respect stream register override for channel 0
+    // Connection handshake base addresses (one per channel type) - all channels use L1
     for (const auto& [type, region] : connection_handshake_regions_) {
-        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id, false));
     }
-    // Connection handshake L1 region base addresses (for channels 1+ when channel 0 uses stream register)
+    // Connection handshake L1 region base addresses (same as above, provided for kernel compatibility)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
@@ -657,7 +687,7 @@ MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
         .noc_x = noc_coords ? noc_coords->first : 0u,
         .noc_y = noc_coords ? noc_coords->second : 0u,
         .buffer_base_addr = mux_config->get_channel_base_address(channel_type, mux_channel_id),
-        .connection_handshake_addr = mux_config->get_connection_handshake_address(channel_type, mux_channel_id),
+        .connection_handshake_addr = mux_config->get_connection_handshake_address(channel_type, mux_channel_id, false),
         .worker_location_info_addr = mux_config->get_connection_info_address(channel_type, mux_channel_id),
         .buffer_index_addr = mux_config->get_buffer_index_address(channel_type, mux_channel_id),
         .flow_control_semaphore_addr = mux_flow_control_semaphore_regions_[connection_region_idx].get_address(),
@@ -779,12 +809,11 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     for (const auto& [type, region] : connection_info_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
-    // Connection handshake base addresses (one per channel type)
-    // Use get_connection_handshake_address() to respect stream register override for channel 0
+    // Connection handshake base addresses (one per channel type) - all channels use L1
     for (const auto& [type, region] : connection_handshake_regions_) {
-        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id, false));
     }
-    // Connection handshake L1 region base addresses (for channels 1+ when channel 0 uses stream register)
+    // Connection handshake L1 region base addresses (same as above, provided for kernel compatibility)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
@@ -908,13 +937,16 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverMuxBuilder::build_co
     // skip the channel liveness check if it is used for upstream connection (persistent)
     channel_connection_liveness_check_disable_array_[channel_id] = true;
 
+    // Use overlay register for channel 0 handshake (ROUTER → MUX channel 0)
+    bool use_overlay = (channel_id == 0);
+
     return tt::tt_fabric::SenderWorkerAdapterSpec{
         noc_x_,                                                               // edm_noc_x
         noc_y_,                                                               // edm_noc_y
         config_->get_channel_base_address(channel_type, channel_id),          // edm_buffer_base_addr
         config_->get_num_buffers(channel_type),                               // num_buffers_per_channel
         config_->get_flow_control_address(channel_type, channel_id),          // edm_l1_sem_addr
-        config_->get_connection_handshake_address(channel_type, channel_id),  // edm_connection_handshake_addr
+        config_->get_connection_handshake_address(channel_type, channel_id, use_overlay),  // edm_connection_handshake_addr
         config_->get_connection_info_address(channel_type, channel_id),       // edm_worker_location_info_addr
         config_->get_buffer_size_bytes(channel_type),                         // buffer_size_bytes
         config_->get_buffer_index_address(channel_type, channel_id),          // buffer_index_semaphore_id
@@ -1180,13 +1212,15 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverRelayBuilder::build_
     // skip the channel liveness check if it is used for upstream connection (persistent)
     channel_connection_liveness_check_disable_array_[channel_id] = true;
 
+    bool use_overlay = (channel_id == 0);
+
     return tt::tt_fabric::SenderWorkerAdapterSpec{
         noc_x_,                                                               // edm_noc_x
         noc_y_,                                                               // edm_noc_y
         config_->get_channel_base_address(channel_type, channel_id),          // edm_buffer_base_addr
         config_->get_num_buffers(channel_type),                               // num_buffers_per_channel
         config_->get_flow_control_address(channel_type, channel_id),          // edm_l1_sem_addr
-        config_->get_connection_handshake_address(channel_type, channel_id),  // edm_connection_handshake_addr
+        config_->get_connection_handshake_address(channel_type, channel_id, use_overlay),  // edm_connection_handshake_addr (L1 for relay)
         config_->get_connection_info_address(channel_type, channel_id),       // edm_worker_location_info_addr
         config_->get_buffer_size_bytes(channel_type),                         // buffer_size_bytes
         config_->get_buffer_index_address(channel_type, channel_id),          // buffer_index_semaphore_id
