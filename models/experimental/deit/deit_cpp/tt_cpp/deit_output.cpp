@@ -40,7 +40,7 @@ ttnn::Tensor TtDeiTOutput::forward(const ttnn::Tensor& hidden_states, const ttnn
     );
 
     // Add residual connection: output + input_tensor
-    output = ttnn::add(output, input_tensor);
+    output = ttnn::add(output, input_tensor, std::nullopt, ttnn::L1_MEMORY_CONFIG);
 
     return output;
 }

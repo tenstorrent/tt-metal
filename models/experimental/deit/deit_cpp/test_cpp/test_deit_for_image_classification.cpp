@@ -123,9 +123,25 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     // Convert input to TT tensor
     // Permute to NHWC for Conv2d input (required by TtDeiTPatchEmbeddings)
     auto pixel_values_nhwc = pixel_values.permute({0, 2, 3, 1}).contiguous();
-    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR).to_device(device.get());
 
-    // Run TT model inference
+    // Pad to 16 channels for L1 alignment
+    if (pixel_values_nhwc.size(3) < 16) {
+        auto options = pixel_values_nhwc.options();
+        auto padded = torch::zeros({pixel_values_nhwc.size(0), pixel_values_nhwc.size(1), pixel_values_nhwc.size(2), 16}, options);
+        using namespace torch::indexing;
+        padded.index_put_({Slice(), Slice(), Slice(), Slice(0, pixel_values_nhwc.size(3))}, pixel_values_nhwc);
+        pixel_values_nhwc = padded;
+    }
+
+    // Create L1 interleaved input
+    auto tt_input = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR)
+                        .to_device(device.get(), ttnn::L1_MEMORY_CONFIG);
+
+    // DEBUG: Print memory config
+    // std::cout << "DEBUG: tt_input memory layout: " << (int)tt_input.memory_config().memory_layout << std::endl;
+    // std::cout << "DEBUG: tt_input buffer type: " << (int)tt_input.memory_config().buffer_type << std::endl;
+
+    // // Run TT model inference
     std::optional<ttnn::Tensor> head_mask = std::nullopt;
     bool output_attentions = false;
     bool output_hidden_states = false;
@@ -177,11 +193,12 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
 
     // Prepare inputs for Trace/2CQ
     auto tt_input_host = helper_funcs::from_torch(pixel_values_nhwc, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-
+    auto tt_input_l1 = tt_input_host.to_device(device.get(), ttnn::L1_MEMORY_CONFIG);
+    
     // Warmup run
     {
          tt_model.forward(
-            tt_input,
+            tt_input_l1,
             head_mask.has_value() ? &head_mask.value() : nullptr,
             output_attentions,
             output_hidden_states,
@@ -192,7 +209,7 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     // Trace Capture
     auto tid = ttnn::operations::trace::begin_trace_capture(device.get(), ttnn::QueueId(0));
     auto [tt_logits_trace, attention_weights_trace, hidden_states_trace] = tt_model.forward(
-        tt_input,
+        tt_input_l1,
         head_mask.has_value() ? &head_mask.value() : nullptr,
         output_attentions,
         output_hidden_states,
@@ -209,7 +226,6 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
         
         // CQ1: Update Input (Async Copy)
         ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
-        tt::tt_metal::copy_to_device(tt_input_host, tt_input, ttnn::QueueId(1));
         write_event = ttnn::events::record_mesh_event(device.get(), ttnn::QueueId(1));
 
         // CQ0: Execute Trace

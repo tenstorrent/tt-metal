@@ -65,7 +65,7 @@ ttnn::Tensor linear_transform(
     const ttnn::Tensor& input,
     const ttnn::Tensor& weight,
     std::optional<ttnn::Tensor> bias,
-    ttnn::MemoryConfig output_mem_config = ttnn::DRAM_MEMORY_CONFIG
+    ttnn::MemoryConfig output_mem_config = ttnn::L1_MEMORY_CONFIG
 );
 
 /**
@@ -155,7 +155,8 @@ ttnn::Tensor apply_layernorm(
     const ttnn::Tensor& input,
     const ttnn::Tensor& weight,
     const ttnn::Tensor& bias,
-    float eps = 1e-5
+    float eps = 1e-5,
+    ttnn::MemoryConfig memory_config = ttnn::L1_MEMORY_CONFIG
 );
 
 

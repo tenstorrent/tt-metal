@@ -22,10 +22,7 @@ ttnn::Tensor linear_transform(
     std::optional<ttnn::Tensor> bias,
     ttnn::MemoryConfig output_mem_config
 ) {
-    // Transpose weight for matrix multiplication
-    auto weight_transposed = ttnn::transpose(weight, -2, -1);
-
-    // // Perform matrix multiplication
+    // Perform matrix multiplication
     // auto output = ttnn::matmul(input, weight_transposed);
 
     // Add bias if provided
@@ -34,7 +31,9 @@ ttnn::Tensor linear_transform(
     }
 
     // Perform linear transformation
-    auto output = ttnn::linear(input, weight_transposed, bias, false, false, output_mem_config);
+    // weight is (out_features, in_features), so we need to transpose it to (in_features, out_features)
+    // We can do this by setting transpose_b = true in ttnn::linear
+    auto output = ttnn::linear(input, weight, bias, false, true, output_mem_config);
 
     return output;
 }
@@ -316,10 +315,11 @@ ttnn::Tensor apply_layernorm(
     const ttnn::Tensor& input,
     const ttnn::Tensor& weight,
     const ttnn::Tensor& bias,
-    float eps
+    float eps,
+    ttnn::MemoryConfig memory_config
 ) {
     // Apply layer normalization using ttnn operations
-    return ttnn::layer_norm(input, eps, weight, bias);
+    return ttnn::layer_norm(input, eps, weight, bias, std::nullopt, memory_config);
 }
 
 

@@ -60,4 +60,5 @@ private:
     ttnn::Tensor bias_;
     ttnn::Conv2dConfig conv_config_;
     ttnn::DeviceComputeKernelConfig compute_config_;
+    int padded_num_channels_;
 };
