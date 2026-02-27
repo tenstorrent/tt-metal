@@ -379,7 +379,6 @@ void mul_bcast_cols_l1_acc(
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
-    PACK((llk_pack_reconfig_l1_acc(1)));
     tile_regs_acquire();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
         uint32_t src_tile_index = read_row_base + i;
@@ -392,7 +391,6 @@ void mul_bcast_cols_l1_acc(
         pack_tile<true>(i, out_cb, write_row_base + i);  // L1 accumulate into reserved out_cb
     }
     tile_regs_release();
-    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 template <uint32_t SBH, uint32_t SBW>
@@ -411,7 +409,6 @@ void mul_block_bcast_cols_acc(
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
-    PACK((llk_pack_reconfig_l1_acc(1 /*pack accumulate*/)));
     tile_regs_acquire();
     uint32_t dst_index = 0;
     for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -423,14 +420,16 @@ void mul_block_bcast_cols_acc(
     tile_regs_commit();
     tile_regs_wait();
     dst_index = 0;
+    PACK((llk_pack_mop_config<false, false, false>(out_cb, tiles_per_column)));
     for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + j;
-            pack_tile<true>(dst_index++, out_cb, out_tile_index);
-        }
+        // for (uint32_t j = 0; j < tiles_per_column; j++) {
+        uint32_t out_tile_index = (write_row_base + i) * tiles_per_column;
+        pack_tile<true>(dst_index, out_cb, out_tile_index);
+        dst_index += tiles_per_column;
+        // }
     }
+    PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
     tile_regs_release();
-    PACK((llk_pack_reconfig_l1_acc(false)));
 }
 
 /**
@@ -823,8 +822,12 @@ void normalize_row_streaming(
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
             // Recip directly in DST[0] — serial dependency, no overlap, but avoids DST round-trip
-            recip_tile_init();
-            MATH((recip_tile_first_column(0)));
+            // legacy_compat=false uses hardware SFPARECIP + loadmacro pipeline instead of
+            // the slow SFPI Newton-Raphson loop. Full-tile RC mode is safe: only column 0
+            // has meaningful data (from the matmul), and mul_tiles_bcast_cols downstream
+            // only reads column 0.
+            recip_tile_init<false>();
+            MATH((recip_tile<false>(0)));
             tile_regs_commit();
 
             tile_regs_wait();
@@ -1167,6 +1170,7 @@ void sdpa_inner_loop_step(
         // SALAD correction for one completed row: sum/out L1-accumulate, then
         // optionally push + normalize on the last K iteration.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
+            PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MATH(DPRINT << "SALAD sum correction for Q[" << salad_row << "]" << ENDL());
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
@@ -1177,6 +1181,7 @@ void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, head_dim_t>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
+            PACK((llk_pack_reconfig_l1_acc(0)));
             if (last_iter) {
                 normalize_row(w_salad, pushed);
             }
@@ -1194,7 +1199,6 @@ void sdpa_inner_loop_step(
 
             MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ", SALAD for row " << salad_row << ENDL());
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
-            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
             // 1. Compute exp_max_diff for PREVIOUS row (only when correcting prev iteration)
             if (!is_first_iter) {
@@ -1205,6 +1209,7 @@ void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, sbh);
             }
 
+            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
             // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
             // Uses w_q for the output row offset (adjusted for pushed rows)
             {
