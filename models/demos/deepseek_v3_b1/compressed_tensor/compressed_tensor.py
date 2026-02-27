@@ -25,6 +25,7 @@ from .assigner import CompressedTensorAssigner
 from .tile_utils import (
     BFP_MANT_BITS,
     COMPRESSED_FORMATS,
+    DEFAULT_TILE_HW,
     bfp_tile_packed_size,
     pack_bfp_tile,
     ttnn_quantize_fn,
@@ -92,7 +93,7 @@ class CompressedTensor:
         device=None,
         memory_config=None,
         assignment_memory_config=None,
-        tile_hw: int = 32,
+        tile_hw: int = DEFAULT_TILE_HW,
     ) -> None:
         """Pack a float32 tensor into compressed format.
 
