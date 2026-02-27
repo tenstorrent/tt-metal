@@ -13,7 +13,7 @@
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
-// long time, it is expected for the implementation to graudate out of experimental really quickly.
+// long time, it is expected for the implementation to graduate out of experimental really quickly.
 //
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
@@ -131,7 +131,7 @@ public:
 
     /**
      * Return the underlying device storage MeshBuffer.
-     * empty optional when the device tensor is in deacllocated state via deallocate().
+     * empty optional when the device tensor is in deallocated state via deallocate().
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
