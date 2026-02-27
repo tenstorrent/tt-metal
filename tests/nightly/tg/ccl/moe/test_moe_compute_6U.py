@@ -1360,7 +1360,7 @@ def test_moe_compute(
         }
     )
 
-    output_shard_cores = ttnn.get_moe_combine_cores(mesh_device)
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
