@@ -385,15 +385,13 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     if grid_shape != (1, 1, 1408, 2) and mode == "nearest":
         pytest.skip("Tensors too large for sharded output which nearest mode supports")
 
-    batch_size, grid_h, grid_w, _ = grid_shape
-
     batch_size, channels, height, width = input_shape
+    _, grid_h, grid_w, _ = grid_shape
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    # PyTorch CPU grid_sample has bad behaviour for bfloat16 inputs
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     # Generates a uniform grid using torch affine grid
     theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
@@ -404,13 +402,13 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05
 
-    # Convert inputs to proper format for golden function
-    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
     torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
 
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    golden_grid_dtype = torch.float32 if use_precomputed_grid else torch.bfloat16
     torch_output_formatted = golden_grid_sample(
-        input_tensor=torch_input_formatted.to(torch.bfloat16),
-        grid=torch_grid_formatted.to(torch.bfloat16),
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(golden_grid_dtype),
         batch_size=batch_size,
         input_h=height,
         input_w=width,
@@ -421,11 +419,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
         padding_mode="zeros",
         align_corners=align_corners,
     )
-    torch_output_nchw = (
-        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
-    )
-
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(
         torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -571,20 +565,19 @@ def test_grid_sample_sharded(
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    # Create input tensor with 0s across channels and different values for height/width positions
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
-    # Convert inputs to proper format for golden function
-    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
     torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
 
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    # or when grid_dtype is float32 (to match precision of ttnn)
+    golden_grid_dtype = torch.float32 if (grid_dtype == ttnn.float32 or use_precomputed_grid) else torch.bfloat16
     torch_output_formatted = golden_grid_sample(
-        input_tensor=torch_input_formatted.to(torch.bfloat16),
-        grid=torch_grid_formatted.to(torch.bfloat16),
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(golden_grid_dtype),
         batch_size=batch_size,
         input_h=height,
         input_w=width,
@@ -595,10 +588,7 @@ def test_grid_sample_sharded(
         padding_mode="zeros",
         align_corners=align_corners,
     )
-    torch_output_nchw = (
-        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
-    )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(
         torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -678,21 +668,19 @@ def test_grid_sample_sharded_batched(
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_input = torch.randn((1, 1, batch_size * height * width, channels), dtype=torch.bfloat16)
+    torch_input_nhwc = torch_input.reshape(batch_size, height, width, channels)
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
-    # Use golden function
-    from ttnn.operations.pool import golden_grid_sample
-
-    # Convert inputs to proper format for golden function
-    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
     torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
 
+    # Use float32 grid for golden when precomputed grid is used (precomputed grid computation uses float32 internally)
+    # or when grid_dtype is float32 (to match precision of ttnn)
+    golden_grid_dtype = torch.float32 if (grid_dtype == ttnn.float32 or use_precomputed_grid) else torch.bfloat16
     torch_output_formatted = golden_grid_sample(
-        input_tensor=torch_input_formatted.to(torch.bfloat16),
-        grid=torch_grid_formatted.to(torch.bfloat16),
+        input_tensor=torch_input,
+        grid=torch_grid_formatted.to(golden_grid_dtype),
         batch_size=batch_size,
         input_h=height,
         input_w=width,
@@ -703,10 +691,7 @@ def test_grid_sample_sharded_batched(
         padding_mode="zeros",
         align_corners=align_corners,
     )
-    torch_output_nchw = (
-        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
-    )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_output_nhwc = torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels)
 
     ttnn_input = ttnn.from_torch(
         torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
