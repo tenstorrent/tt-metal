@@ -10,6 +10,7 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_stl/span.hpp>
 
 namespace ttnn::bfp_utils {
@@ -89,6 +90,10 @@ void py_module(nb::module_& mod) {
         nb::arg("row_major_output") = false,
         nb::arg("is_exp_a") = false,
         R"doc(Unpack raw BFP4 tile data back to float32.)doc");
+
+    mod.def("get_l1_alignment", &tt::tt_metal::hal::get_l1_alignment, R"doc(Get L1 memory alignment in bytes.)doc");
+    mod.def(
+        "get_dram_alignment", &tt::tt_metal::hal::get_dram_alignment, R"doc(Get DRAM memory alignment in bytes.)doc");
 }
 
 }  // namespace ttnn::bfp_utils
