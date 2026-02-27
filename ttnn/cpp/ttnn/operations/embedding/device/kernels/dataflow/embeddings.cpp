@@ -18,16 +18,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
 
     constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_input_row_size = get_compile_time_arg_val(7);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
 
     constexpr auto input_args = TensorAccessorArgs<8>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr, aligned_input_page_size);
     const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
@@ -62,9 +62,8 @@ void kernel_main() {
         bool end_of_block = index == rows_per_block;
         // Advance at buffer page boundary; if buffer has alignment padding (logical_row < page_size), advance at
         // logical row
-        bool end_of_page =
-            (total_bytes_into_page == input_page_size) ||
-            (logical_input_row_size < input_page_size && total_bytes_into_page == logical_input_row_size);
+        bool end_of_page = (total_bytes_into_page == aligned_input_page_size) ||
+                           (input_page_size < aligned_input_page_size && total_bytes_into_page == input_page_size);
         if (end_of_block || end_of_page) {
             offset += input_block_size_bytes;
             if (end_of_page) {

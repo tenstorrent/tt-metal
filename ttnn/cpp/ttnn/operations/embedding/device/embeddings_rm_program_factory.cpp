@@ -37,30 +37,18 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         is_sharded(output.buffer()->buffer_layout()) and !output.nd_shard_spec().has_value();
 
     uint32_t input_element_size_bytes = a.element_size();
-    uint32_t weights_element_size_bytes = weights.element_size();
-    uint32_t output_element_size_bytes = output.element_size();
 
-    // row major, page size is last dim; use buffer's aligned page size when sharded so TensorAccessor matches buffer
-    // layout
+    uint32_t aligned_input_page_size = static_cast<uint32_t>(a.buffer()->aligned_page_size());
+    uint32_t weight_page_size = static_cast<uint32_t>(weights.buffer()->page_size());
+    uint32_t output_page_size = static_cast<uint32_t>(out_buffer->page_size());
+
+    uint32_t num_input_elems = static_cast<uint32_t>(a.padded_shape().volume());
     uint32_t input_page_size = is_sharded(a.buffer()->buffer_layout())
-                                   ? static_cast<uint32_t>(a.buffer()->aligned_page_size())
+                                   ? static_cast<uint32_t>(a.buffer()->page_size())  // shard_shape[-1]
                                    : (a.padded_shape()[-1] * input_element_size_bytes);
-    uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = is_sharded(out_buffer->buffer_layout())
-                                    ? static_cast<uint32_t>(out_buffer->aligned_page_size())
-                                    : (output.padded_shape()[-1] * output_element_size_bytes);
-
-    // weights shape is [1, 1, num_embeddings, num_dim]
-    // num_output_rows = total embedding lookups (product of all input dims); supports any input rank (1D, 2D, 3D, ...)
-    uint32_t num_output_rows = static_cast<uint32_t>(a.padded_shape().volume());
-    // When sharded, one buffer page = shard row (shard_shape[-1] elements); use buffer's logical page size for advance
-    uint32_t logical_input_row_size = is_sharded(a.buffer()->buffer_layout())
-                                          ? static_cast<uint32_t>(a.buffer()->page_size())
-                                          : (a.padded_shape()[-1] * input_element_size_bytes);
-    uint32_t indices_per_input_page = logical_input_row_size / input_element_size_bytes;
+    uint32_t num_input_elems_per_page = input_page_size / input_element_size_bytes;
     auto alignment = a.buffer()->alignment();
     uint32_t block_height = (alignment / input_element_size_bytes);
-    uint32_t num_blocks = num_output_rows;
 
     // setup grid size
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -83,7 +71,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
             core_group_2,
             num_blocks_per_core_group_1,
             num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_input_elems);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
@@ -139,11 +127,11 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         (std::uint32_t)out_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
+        (std::uint32_t)aligned_input_page_size,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes,
-        (std::uint32_t)logical_input_row_size};
+        (std::uint32_t)input_page_size};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -204,11 +192,11 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         // Reader: batch_offset = starting input page, weights_offset = byte offset within page, index_idx = index
         // within first block
         {
-            reader_runtime_args[2] = input_offset / indices_per_input_page;
+            reader_runtime_args[2] = input_offset / num_input_elems_per_page;
             reader_runtime_args[3] =
-                tt::round_down(input_offset % indices_per_input_page, block_height) * input_element_size_bytes;
+                tt::round_down(input_offset % num_input_elems_per_page, block_height) * input_element_size_bytes;
             reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = (input_offset % indices_per_input_page) % block_height;
+            reader_runtime_args[5] = (input_offset % num_input_elems_per_page) % block_height;
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
