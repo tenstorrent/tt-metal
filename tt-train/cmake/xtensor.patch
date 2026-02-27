@@ -14,7 +14,7 @@ index c7ec920..5228c30 100644
 
  set(XTENSOR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
- # Versioning
+ # Versionning
 diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
 index cc2f928..8e84e39 100644
 --- a/test/CMakeLists.txt
