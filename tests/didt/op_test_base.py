@@ -142,25 +142,30 @@ class OpTestBase:
 
         logger.info("Activations and inputs pushed to devices!")
 
+        converted_activations = None
         if self.determinism_check_enabled:
-            # Run op once to populate reference output to use for determinism checks
+            # Run op once to populate reference output to use for determinism checks.
+            # Keep all converted activation tensors alive (do not deallocate): when
+            # activation mem_config equals DRAM, to_memory_config can return the same
+            # tensor, so deallocating would invalidate a_t[act] and cause "buffer not
+            # allocated" when we reuse it later. We swap among the converted list instead.
             num_nd_outputs = [0] * num_devices
             reference_out = [None for _ in range(num_activation_tensors)]
+            converted_activations = []
 
             for act in range(num_activation_tensors):
-                # First, load activations from DRAM to required memory config
                 self.activations = self.convert_activations_to_memory_config(a_t[act])
+                converted_activations.append(self.activations)
                 output = self.run_device_operation()
                 reference_out[act] = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output.cpu())]
-
                 output.deallocate(True)
-                self.deallocate_activations()
 
         current_act_tensor = 0
-        self.activations = [None] * num_devices
         out = [None] * num_devices
-
-        self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+        if converted_activations is not None:
+            self.activations = converted_activations[0]
+        else:
+            self.activations = self.convert_activations_to_memory_config(a_t[0])
 
         logger.info("Starting iterations")
         for i in range(self.loop_count):
@@ -192,10 +197,7 @@ class OpTestBase:
 
                 current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
                 logger.info("Switching activation tensor for new determinism iterations...")
-                self.deallocate_activations()
-
-                # Load next round of activations from DRAM to required memory config
-                self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+                self.activations = converted_activations[current_act_tensor]
 
             out.deallocate(True)
 
