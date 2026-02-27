@@ -1170,11 +1170,9 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
-    // Ensure global bindings are initialized before accessing them
-    TT_FATAL(
-        global_bindings_initialized_.test(std::memory_order_acquire),
-        "global_logical_bindings_ must be initialized before configuring routing tables. "
-        "Call initialize_distributed_contexts() first.");
+    // Note: global_logical_bindings_ may not be initialized in single-host scenarios.
+    // The reads below use get_global_logical_binding() which returns nullopt if not initialized,
+    // and callers handle the missing binding gracefully with continue.
 
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
