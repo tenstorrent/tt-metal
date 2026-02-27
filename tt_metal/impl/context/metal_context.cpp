@@ -306,11 +306,6 @@ void MetalContext::teardown() {
 
     auto all_devices = cluster_->all_chip_ids();
 
-    // Set internal routing to false to exit active ethernet FW & go back to base FW
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), false);
-    }
-
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
@@ -905,19 +900,6 @@ void MetalContext::initialize_control_plane_impl() {
             mesh_graph_desc_path.string());
         this->construct_control_plane(mesh_graph_desc_path);
     }
-}
-
-CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord) {
-    const auto& grid_size = cluster_->get_soc_desc(device_id).grid_size;
-    if (coord.x >= grid_size.x || coord.y >= grid_size.y || cluster_->arch() == ARCH::BLACKHOLE) {
-        // Coordinate already in virtual space: NOC0 and NOC1 are the same
-        return coord;
-    }  // Coordinate in Physical NOC0 Space. Convert to Virtual.
-    coord = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, coord);
-    // Derive virtual coord in noc_index space.
-    CoreCoord virtual_coord = {
-        hal_->noc_coordinate(noc_index, grid_size.x, coord.x), hal_->noc_coordinate(noc_index, grid_size.y, coord.y)};
-    return virtual_coord;
 }
 
 // Command queue id stack for thread

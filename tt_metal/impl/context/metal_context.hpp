@@ -177,16 +177,6 @@ private:
     void teardown_dispatch_state();
     void initialize_base_objects();
 
-    // Returns the ERISC Launch Flag address
-    uint32_t get_active_erisc_launch_flag_addr();
-    // Returns true if metal firmware or a kernel is running on the virtual ethernet core
-    bool erisc_app_still_running(ChipId device_id, CoreCoord virtual_core);
-    // Send a message to exit the erisc app
-    void erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
-
-    // Functions used to init/run firmware on devices
-    CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
-
     void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
 

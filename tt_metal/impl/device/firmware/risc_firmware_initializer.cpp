@@ -201,7 +201,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             assert_cores(device_id, ignore_cores);
             cluster_.l1_barrier(device_id);
         }
+        // Set internal routing to false to exit active ethernet FW & go back to base FW
+        // Must be last
+        if (get_control_plane_) {
+            cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+        }
     }
+
     initialized_ = false;
 }
 
