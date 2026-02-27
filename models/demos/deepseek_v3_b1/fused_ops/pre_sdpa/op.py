@@ -156,7 +156,7 @@ class PreSDPA:
         return semaphores
 
     @staticmethod
-    def op(
+    def get_program_context(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         gamma_tensor,
@@ -215,7 +215,16 @@ class PreSDPA:
             noc_mode: NOC mode for the kernel (dedicated or dynamic)
 
         Returns:
-            output_tensor with pre-SDPA operations applied
+            Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
+            - full_device_grid: CoreRangeSet covering the full device compute grid
+            - per_device_contexts: List of dicts, one per device, each containing:
+                ncrisc_compile_time_args, brisc_compile_time_args,
+                brisc_named_compile_time_args, ncrisc_named_compile_time_args,
+                trisc_named_compile_time_args, brisc_common_runtime_args,
+                ncrisc_common_runtime_args, trisc_common_runtime_args,
+                unified_compile_time_core_descriptors, per_core_compile_time_descriptors,
+                per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
+                cbs_list, worker_core, fabric_node_id, dst_nodes
         """
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
@@ -397,7 +406,6 @@ class PreSDPA:
         )
 
         kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
-
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
 
@@ -893,7 +901,6 @@ class PreSDPA:
         # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
         gather_reduce_noc0_num_senders = gather_reduce_num_senders
         gather_reduce_noc1_num_senders = 0
-
         # Gather sender compile-time args (named args for NCRISC on matmul cores)
         # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
         # Grid-based destination and sender index are computed in kernel from my_logical_x_/y_.
@@ -1266,8 +1273,7 @@ class PreSDPA:
         rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
         rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
 
-        # Create mesh program descriptor
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        per_device_contexts = []
 
         # ========================================================================
         # Kernel descriptors
@@ -1982,7 +1988,7 @@ class PreSDPA:
                 )
 
                 # mla_out_final_cb: final sharded output
-                mla_cb_descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(mla_out_final_cb, output_tensor))
+                final_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_final_cb, output_tensor)
 
                 kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(kv_cache_tensor_device)
                 brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
@@ -2190,12 +2196,8 @@ class PreSDPA:
                 krope_cores = ttnn.corerange_to_cores(krope_grid)
                 krope_start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(krope_cores)]
 
-                unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
-                    core_ranges=full_device_grid,
-                    ncrisc_compile_time_args=ncrisc_compile_time_args,
-                    brisc_compile_time_args=brisc_compile_time_args,
-                    ncrisc_named_compile_time_args=bcast_ncrisc_named_compile_time_args
+                ncrisc_named_compile_time_args = (
+                    bcast_ncrisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
                     + mcast_receiver_named_compile_time_args
                     + matmul_ncrisc_named_compile_time_args
@@ -2212,15 +2214,15 @@ class PreSDPA:
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
                     + krope_ncrisc_addr_args
-                    + mla_ncrisc_named_compile_time_args,
-                    # NCRISC common runtime args:
-                    ncrisc_common_runtime_args=ncrisc_bcast_common_args
-                    + [
-                        k_addr,
-                        position_ids_tensor_addr,
-                    ],
-                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
-                    brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
+                    + mla_ncrisc_named_compile_time_args
+                )
+                ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
+                    k_addr,
+                    position_ids_tensor_addr,
+                ]
+
+                brisc_named_compile_time_args = (
+                    bcast_brisc_named_compile_time_args
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
                     + gather_reduce_receiver_named_compile_time_args
@@ -2232,11 +2234,12 @@ class PreSDPA:
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args
-                    + mla_brisc_named_compile_time_args,
-                    # BRISC common runtime args: bcast args
-                    brisc_common_runtime_args=[k_addr, position_ids_tensor_addr],
-                    # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
-                    trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
+                    + mla_brisc_named_compile_time_args
+                )
+                brisc_common_runtime_args = [k_addr, position_ids_tensor_addr]
+
+                trisc_named_compile_time_args = (
+                    bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
                     + gather_reduce_trisc_named_compile_time_args
@@ -2249,201 +2252,300 @@ class PreSDPA:
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
                     + kv_cache_trisc_named_compile_time_args
-                    + mla_trisc_named_compile_time_args,
-                    # TRISC common runtime args (shared by all cores)
-                    trisc_common_runtime_args=trisc_common_runtime_args,
-                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.LoFi,
-                        math_approx_mode=False,
-                        fp32_dest_acc_en=fp32_dest_acc_en,
-                        dst_full_sync_en=fp32_dest_acc_en,
-                    ),
-                    # Per-core compile-time role differentiation
-                    unified_compile_time_core_descriptors=[
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_input_core",
-                            core_range=rmsnorm_core,  # First core is the input core
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_matmul_core",
-                            core_range=matmul_weights_core_grid,  # 96 matmul cores (12x8)
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_matmul2_core",
-                            core_range=matmul2_weights_core_grid,  # matmul2 cores
-                            value=1,
-                            other_value=0,
-                        ),
-                        # Qnope/Qrope core differentiation for interleaved Q head layout
-                        # Qnope cores: 64 cores (8x8 grid), each handles 1 head of 128 elements
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_qnope_core",
-                            core_range=qnope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_qrope_core",
-                            core_range=qrope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # SDPA Input cores: 8 cores (4×2 grid), receive interleaved QNOPE/QROPE data
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_sdpa_input_core",
-                            core_range=sdpa_input_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # DKV Matmul core: 9x2 grid, each core handles 1 head of 32 dim
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_dkv_matmul_core",
-                            core_range=dkv_matmul_weights_core_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_kv_rmsnorm_core",
-                            core_range=dkv_rmsnorm_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_knope_core",
-                            core_range=dkv_gather_sender_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_krope_core",
-                            core_range=krope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_mla_core",
-                            core_range=mla_core_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                    ],
-                    per_core_compile_time_descriptors=[
-                        PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="qrope_start_tile_offset",
-                            core_values=qrope_start_tile_offset_core_values,
-                            other_value=0,
-                        ),
-                        PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="krope_start_tile_offset",
-                            core_values=krope_start_tile_offset_core_values,
-                            other_value=0,
-                        ),
-                    ],
-                    # Per-core runtime args for fabric (BRISC only, on worker_core)
-                    # Initialize empty args that will be populated by setup_routing_plane_connection
-                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        ncrisc_args=mla_ncrisc_per_core_args,
-                        brisc_args=mla_brisc_per_core_args,  # Fabric args appended after program creation
-                        trisc_args=mla_trisc_per_core_args,
-                    ),
-                    noc_mode=noc_mode,
+                    + mla_trisc_named_compile_time_args
                 )
 
-                # ================================================================
-                # Create program descriptor
-                # ================================================================
+                unified_compile_time_core_descriptors = [
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_input_core",
+                        core_range=rmsnorm_core,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_matmul_core",
+                        core_range=matmul_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_matmul2_core",
+                        core_range=matmul2_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_qnope_core",
+                        core_range=qnope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_qrope_core",
+                        core_range=qrope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_sdpa_input_core",
+                        core_range=sdpa_input_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_dkv_matmul_core",
+                        core_range=dkv_matmul_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_kv_rmsnorm_core",
+                        core_range=dkv_rmsnorm_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_knope_core",
+                        core_range=dkv_gather_sender_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_krope_core",
+                        core_range=krope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_mla_core",
+                        core_range=mla_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                ]
+
+                per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="qrope_start_tile_offset",
+                        core_values=qrope_start_tile_offset_core_values,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="krope_start_tile_offset",
+                        core_values=krope_start_tile_offset_core_values,
+                        other_value=0,
+                    ),
+                ]
+
+                per_core_ncrisc_args = mla_ncrisc_per_core_args
+                per_core_brisc_args = mla_brisc_per_core_args
+                per_core_trisc_args = mla_trisc_per_core_args
+
                 cbs_list = [
-                    in_cb_descriptor,
                     gamma_cb_descriptor,
                     rmsnorm_output_cb_descriptor,
                     matmul_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
-                    rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
-                    rmsnorm2_input_cb_descriptor,  # CB 7: RMSNorm2 input
-                    gather_reduce_half1_scratch_cb_descriptor,  # CB 8: gather_reduce half1 scratch
-                    rmsnorm2_output_cb_descriptor,  # CB 9: RMSNorm2 output
-                    matmul2_input_cb_descriptor,  # CB 10: Matmul2 input
-                    matmul2_weights_cb_descriptor,  # CB 11: Matmul2 weights
-                    matmul2_output_cb_descriptor,  # CB 12: Matmul2 output (intermediate)
-                    matmul3_weights_cb_descriptor,  # CB 13: Matmul3 weights
-                    matmul3_output_cb_descriptor,  # CB 14: Matmul3 output (Qnope final)
-                    qrope_output_cb_descriptor,  # CB 15: Qrope output (RoPE output)
-                    create_q_heads_out_cb_descriptor,  # CB 16: CreateQHeads output (tilized, linked to tensor)
-                    qrope_cos_cb_descriptor,  # CB 17: Cos (DRAM, read by NCRISC)
-                    qrope_sin_cb_descriptor,  # CB 18: Sin (DRAM, read by NCRISC)
-                    qrope_trans_mat_cb_descriptor,  # CB 19: Trans_mat (sharded tensor)
-                    qrope_rotated_input_interm_cb_descriptor,  # CB 20: Rotated input intermediate
-                    qrope_cos_interm_cb_descriptor,  # CB 21: Cos intermediate
-                    qrope_sin_interm_cb_descriptor,  # CB 22: Sin intermediate
-                    dkv_matmul_weights_cb_descriptor,  # CB 23: DKV Matmul weights
-                    dkv_matmul_output_cb_descriptor,  # CB 24: DKV Matmul output
-                    kv_rmsnorm_input_cb_descriptor,  # CB 25: KV RMSNorm input
-                    kv_rmsnorm_gamma_cb_descriptor,  # CB 26: KV RMSNorm gamma
-                    kv_rmsnorm_output_cb_descriptor,  # CB 27: KV RMSNorm output
-                    krope_output_cb_descriptor,  # CB 28: KV Cache Branch RoPE output
-                    krope_cos_cb_descriptor,  # CB 29: Cos (DRAM, read by NCRISC)
-                    krope_sin_cb_descriptor,  # CB 30: Sin (DRAM, read by NCRISC)
-                    create_q_heads_interm_cb_descriptor,  # CB 31: CreateQHeads intermediate (row-major)
-                    kv_cache_output_cb_descriptor,  # CB 32: KV Cache output
-                    kv_cache_intermed_cb_descriptor,  # CB 33: KV Cache intermed
-                    kv_cache_input_cb_descriptor,  # CB 34: KV Cache input
+                    rmsnorm2_gamma_cb_descriptor,
+                    rmsnorm2_input_cb_descriptor,
+                    gather_reduce_half1_scratch_cb_descriptor,
+                    rmsnorm2_output_cb_descriptor,
+                    matmul2_input_cb_descriptor,
+                    matmul2_weights_cb_descriptor,
+                    matmul2_output_cb_descriptor,
+                    matmul3_weights_cb_descriptor,
+                    matmul3_output_cb_descriptor,
+                    qrope_output_cb_descriptor,
+                    create_q_heads_out_cb_descriptor,
+                    qrope_cos_cb_descriptor,
+                    qrope_sin_cb_descriptor,
+                    qrope_trans_mat_cb_descriptor,
+                    qrope_rotated_input_interm_cb_descriptor,
+                    qrope_cos_interm_cb_descriptor,
+                    qrope_sin_interm_cb_descriptor,
+                    dkv_matmul_weights_cb_descriptor,
+                    dkv_matmul_output_cb_descriptor,
+                    kv_rmsnorm_input_cb_descriptor,
+                    kv_rmsnorm_gamma_cb_descriptor,
+                    kv_rmsnorm_output_cb_descriptor,
+                    krope_output_cb_descriptor,
+                    krope_cos_cb_descriptor,
+                    krope_sin_cb_descriptor,
+                    create_q_heads_interm_cb_descriptor,
+                    kv_cache_output_cb_descriptor,
+                    kv_cache_intermed_cb_descriptor,
+                    kv_cache_input_cb_descriptor,
                     *mla_cb_descriptors,
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
-                program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors().kernels,
-                    cbs=cbs_list,
-                    semaphores=[],
+                per_device_contexts.append(
+                    {
+                        "coord": coord,
+                        "ncrisc_compile_time_args": ncrisc_compile_time_args,
+                        "brisc_compile_time_args": brisc_compile_time_args,
+                        "brisc_named_compile_time_args": brisc_named_compile_time_args,
+                        "ncrisc_named_compile_time_args": ncrisc_named_compile_time_args,
+                        "trisc_named_compile_time_args": trisc_named_compile_time_args,
+                        "brisc_common_runtime_args": brisc_common_runtime_args,
+                        "ncrisc_common_runtime_args": ncrisc_common_runtime_args,
+                        "trisc_common_runtime_args": trisc_common_runtime_args,
+                        "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "per_core_ncrisc_args": per_core_ncrisc_args,
+                        "per_core_brisc_args": per_core_brisc_args,
+                        "per_core_trisc_args": per_core_trisc_args,
+                        "input_cb_descriptor": in_cb_descriptor,
+                        "output_cb_descriptor": final_output_cb_descriptor,
+                        "cbs_list": cbs_list,
+                        "worker_core": worker_core,
+                        "fabric_node_id": fabric_node_id,
+                        "dst_nodes": dst_nodes,
+                    }
                 )
 
-                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
-                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
-                if not skip_ccl and num_connections > 0:
-                    # Find the BRISC (writer) kernel whose core_ranges includes worker_core
-                    for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and (
-                            isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
-                            or (
-                                isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
-                            )
-                        ):
-                            writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
-                            fabric_args = ttnn.setup_routing_plane_connection(
-                                fabric_node_id, dst_nodes, [0], program, idx, worker_core
-                            )
-                            writer_rt_args_ref.extend(fabric_args)
-                            break
+        return full_device_grid, per_device_contexts
 
-                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
-        result = ttnn.generic_op(
-            [
-                input_tensor_mesh,
-                intermediate_tensor_mesh,
-                gamma_tensor.fused_tensor,
-                matmul_weights_tensor.fused_tensor,
-                matmul3_weights_tensor.fused_tensor,
-                trans_mat_tensor,
-                qrope_cos_tensor,
-                qrope_sin_tensor,
-                krope_cos_tensor,
-                krope_sin_tensor,
-                position_ids_tensor,
-                kv_cache_tensor,
-                sdpa_kv_cache_buffer,
-                sdpa_out_interm_buffer,
-                output_tensor,
-            ],
-            mesh_program_descriptor,
+    @staticmethod
+    def op(
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
+        gamma_tensor,
+        matmul_weights_tensor,
+        rmsnorm2_gamma_tensor,
+        matmul2_weights_tensor,
+        matmul3_weights_tensor,
+        qrope_sin_tensor,
+        qrope_cos_tensor,
+        trans_mat_tensor,
+        krope_cos_tensor,
+        krope_sin_tensor,
+        dkv_matmul_weights_tensor,
+        dkv_rmsnorm_gamma_tensor,
+        kv_cache_tensor,
+        position_id,
+        position_ids_tensor,
+        scale,
+        output_tensor,
+        sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer,
+        sender_coord,
+        semaphores=None,
+        cluster_axis=0,
+        secondary_cluster_axis=1,
+        num_links=1,
+        epsilon=1e-6,
+        fp32_dest_acc_en=False,
+        skip_ccl=False,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+    ):
+        io_tensors = [
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            gamma_tensor.fused_tensor,
+            matmul_weights_tensor.fused_tensor,
+            matmul3_weights_tensor.fused_tensor,
+            trans_mat_tensor,
+            qrope_cos_tensor,
+            qrope_sin_tensor,
+            krope_cos_tensor,
+            krope_sin_tensor,
+            position_ids_tensor,
+            kv_cache_tensor,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
+            output_tensor,
+        ]
+        full_device_grid, per_device_contexts = PreSDPA.get_program_context(
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            gamma_tensor,
+            matmul_weights_tensor,
+            rmsnorm2_gamma_tensor,
+            matmul2_weights_tensor,
+            matmul3_weights_tensor,
+            qrope_sin_tensor,
+            qrope_cos_tensor,
+            trans_mat_tensor,
+            krope_cos_tensor,
+            krope_sin_tensor,
+            dkv_matmul_weights_tensor,
+            dkv_rmsnorm_gamma_tensor,
+            kv_cache_tensor,
+            position_id,
+            position_ids_tensor,
+            scale,
+            output_tensor,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
+            sender_coord,
+            semaphores,
+            cluster_axis,
+            secondary_cluster_axis,
+            num_links,
+            epsilon,
+            fp32_dest_acc_en,
+            skip_ccl,
+            noc_mode,
         )
 
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for ctx in per_device_contexts:
+            unified_kernel = UnifiedKernelDescriptor(
+                kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
+                core_ranges=full_device_grid,
+                ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
+                brisc_compile_time_args=ctx["brisc_compile_time_args"],
+                ncrisc_named_compile_time_args=ctx["ncrisc_named_compile_time_args"],
+                ncrisc_common_runtime_args=ctx["ncrisc_common_runtime_args"],
+                brisc_named_compile_time_args=ctx["brisc_named_compile_time_args"],
+                brisc_common_runtime_args=ctx["brisc_common_runtime_args"],
+                trisc_named_compile_time_args=ctx["trisc_named_compile_time_args"],
+                trisc_common_runtime_args=ctx["trisc_common_runtime_args"],
+                trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=fp32_dest_acc_en,
+                    dst_full_sync_en=fp32_dest_acc_en,
+                ),
+                unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
+                per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
+                per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                    ncrisc_args=ctx["per_core_ncrisc_args"],
+                    brisc_args=ctx["per_core_brisc_args"],
+                    trisc_args=ctx["per_core_trisc_args"],
+                ),
+                noc_mode=noc_mode,
+            )
+
+            program = ttnn.ProgramDescriptor(
+                kernels=unified_kernel.get_kernel_descriptors().kernels,
+                cbs=[ctx["input_cb_descriptor"], *ctx["cbs_list"], ctx["output_cb_descriptor"]],
+                semaphores=[],
+            )
+
+            coord = ctx["coord"]
+            worker_core = ctx["worker_core"]
+            dst_nodes = ctx["dst_nodes"]
+            if not skip_ccl and len(dst_nodes) > 0:
+                for idx, kernel in enumerate(program.kernels):
+                    if kernel.core_ranges.contains(worker_core) and (
+                        isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
+                        or (
+                            isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
+                            and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
+                        )
+                    ):
+                        writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
+                        fabric_args = ttnn.setup_routing_plane_connection(
+                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, worker_core
+                        )
+                        writer_rt_args_ref.extend(fabric_args)
+                        break
+
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+        result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result
