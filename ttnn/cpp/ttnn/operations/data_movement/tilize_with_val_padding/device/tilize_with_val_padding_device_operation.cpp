@@ -140,10 +140,12 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value() &&
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        // if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value() &&
         operation_attributes.output_mem_config.shard_spec().has_value()) {
-        // This case only applies when we expect that the input and output are both legacy 2D sharded.
-        // This bit forces the output tensor to be width-sharded.
+        // This case only applies when we expect that the input is width sharded and output is legacy 2D sharded (i.e.,
+        // we expect to use the optimized sharded program factory). This bit forces the output tensor to be
+        // width-sharded.
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];

@@ -368,8 +368,11 @@ def test_tilize_with_val_padding_legacy_sharded_to_nd_sharded(
     assert_equal(expected_torch_tensor, output_torch_tensor)
 
 
-# nd_sharded -> legacy: use tile-aligned output (H,W multiple of 32) and grid matching layout
-# (height sharding needs grid with 2 rows; width needs 2 cols; block needs 2 cores)
+# nd_sharded -> legacy: use tile-aligned output (H,W multiple of 32) and grid matching layout.
+# Physical output 2D = (3*64, 64) = (192, 64).
+# height: 2 cores in column, shard (96, 64) -> 2 height shards
+# width:  2 cores in row,    shard (192, 32) -> 2 width shards, full height per shard
+# block:  2 rows x 1 col,    shard (96, 64)  -> 2 height shards, 1 width shard
 _ND_TO_LEGACY_PARAMS = [
     (
         [3, 50, 64],
@@ -377,7 +380,7 @@ _ND_TO_LEGACY_PARAMS = [
         [3, 64, 64],
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        (32, 64),
+        (96, 64),
     ),
     (
         [3, 50, 64],
@@ -385,15 +388,15 @@ _ND_TO_LEGACY_PARAMS = [
         [3, 64, 64],
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        (64, 32),
+        (192, 32),
     ),
     (
         [3, 50, 64],
         [2, 50, 64],
         [3, 64, 64],
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        (32, 64),
+        (96, 64),
     ),
 ]
 
