@@ -8,6 +8,7 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/hal.hpp>
@@ -72,6 +73,16 @@ void py_module(nb::module_& mod) {
         R"doc(Pack float32 data into BFP4 tile format. Returns raw uint32 packed data.)doc");
 
     mod.def(
+        "pack_bfp2",
+        [](nb::ndarray<nb::numpy, const float, nb::ndim<1>> input, bool row_major_input, bool is_exp_a) {
+            return pack_impl(pack_as_bfp2_tiles<float>, input, row_major_input, is_exp_a);
+        },
+        nb::arg("input"),
+        nb::arg("row_major_input") = false,
+        nb::arg("is_exp_a") = false,
+        R"doc(Pack float32 data into BFP2 tile format. Returns raw uint32 packed data.)doc");
+
+    mod.def(
         "unpack_bfp8",
         [](nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input, bool row_major_output, bool is_exp_a) {
             return unpack_impl(unpack_bfp8_tiles_into_float_vec, input, row_major_output, is_exp_a);
@@ -90,6 +101,16 @@ void py_module(nb::module_& mod) {
         nb::arg("row_major_output") = false,
         nb::arg("is_exp_a") = false,
         R"doc(Unpack raw BFP4 tile data back to float32.)doc");
+
+    mod.def(
+        "unpack_bfp2",
+        [](nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input, bool row_major_output, bool is_exp_a) {
+            return unpack_impl(unpack_bfp2_tiles_into_float_vec, input, row_major_output, is_exp_a);
+        },
+        nb::arg("input"),
+        nb::arg("row_major_output") = false,
+        nb::arg("is_exp_a") = false,
+        R"doc(Unpack raw BFP2 tile data back to float32.)doc");
 
     mod.def("get_l1_alignment", &tt::tt_metal::hal::get_l1_alignment, R"doc(Get L1 memory alignment in bytes.)doc");
     mod.def(

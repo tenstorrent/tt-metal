@@ -270,11 +270,14 @@ class CompressedTensor:
 
     def _pack_tile(self, data_2d: np.ndarray, tr: int, tc: int, assignment: np.ndarray) -> tuple[np.ndarray, int]:
         """Pack a single tile from 2D data, return (packed_bytes, mant_bits)."""
+        mant_bits = _FMT_IDX_TO_MANT_BITS[int(assignment[tr, tc])]
+        if mant_bits == 0:
+            # fp0: no data stored
+            return np.array([], dtype=np.uint8), mant_bits
         tile = data_2d[
             tr * self.tile_hw : (tr + 1) * self.tile_hw,
             tc * self.tile_hw : (tc + 1) * self.tile_hw,
         ]
-        mant_bits = _FMT_IDX_TO_MANT_BITS[int(assignment[tr, tc])]
         return pack_bfp_tile(tile, mant_bits), mant_bits
 
     def _pack(self, tensor: torch.Tensor, assignment: np.ndarray) -> tuple[torch.Tensor, list[int]]:
@@ -505,8 +508,10 @@ class CompressedTensor:
             for tc in range(self.tiles_w):
                 mant_bits = self._tile_mant_bits[idx]
                 size = bfp_tile_packed_size(mant_bits)
-                tile = unpack_bfp_tile(flat_np[offset : offset + size], mant_bits)
-                out[tr * self.tile_hw : (tr + 1) * self.tile_hw, tc * self.tile_hw : (tc + 1) * self.tile_hw] = tile
+                if mant_bits > 0:
+                    tile = unpack_bfp_tile(flat_np[offset : offset + size], mant_bits)
+                    out[tr * self.tile_hw : (tr + 1) * self.tile_hw, tc * self.tile_hw : (tc + 1) * self.tile_hw] = tile
+                # fp0: out is already zeros
                 offset += size
                 idx += 1
         return torch.from_numpy(out).reshape(self.shape)
@@ -523,8 +528,10 @@ class CompressedTensor:
             for tr, tc in shard_tiles:
                 mant_bits = self._tile_mant_bits[mant_idx]
                 size = bfp_tile_packed_size(mant_bits)
-                tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], mant_bits)
-                out[tr * self.tile_hw : (tr + 1) * self.tile_hw, tc * self.tile_hw : (tc + 1) * self.tile_hw] = tile
+                if mant_bits > 0:
+                    tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], mant_bits)
+                    out[tr * self.tile_hw : (tr + 1) * self.tile_hw, tc * self.tile_hw : (tc + 1) * self.tile_hw] = tile
+                # fp0: out is already zeros
                 tile_offset += size
                 mant_idx += 1
             # Skip to next shard (past padding)
