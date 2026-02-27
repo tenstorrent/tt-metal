@@ -459,33 +459,24 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // -------------------------------------------------------------------------
     // SINGLE-SENDER MULTICAST: Core (0,0) reads from DRAM and multicasts to ALL others.
     // This is much more efficient than per-row multicast for weight sharing.
+    //
+    // Sender (0,0) uses loopback: mcast_sender_read_batched_rows_and_send_loopback()
+    // multicasts to a bounding box that INCLUDES (0,0), and the NOC loopback API
+    // copies data to the sender's own L1. So (0,0) gets the weights from the sender
+    // kernel, not by running the receiver kernel. Therefore receiver_core_set must
+    // exclude (0,0) — we use CoreRangeSet::subtract. (Same semantics as before;
+    // we only simplified building the set.) Matmul 1D does the same conceptually
+    // (receiver set = all cores except sender) but builds it via start core + count.
+    //
+    // CoreRangeSet::subtract gives receivers = all_cores \ {(0,0)}; result may be
+    // multiple rectangular CoreRanges (each CoreRange is rectangular).
 
-    std::vector<tt::tt_metal::CoreRange> sender_ranges;
-    std::vector<tt::tt_metal::CoreRange> receiver_ranges;
-
-    for (const auto& core_range : all_cores.ranges()) {
-        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                tt::tt_metal::CoreCoord core = {x, y};
-                // Single-sender: only core (0,0) is the sender
-                if (use_multicast) {
-                    if (core.x == 0U && core.y == 0U) {
-                        sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
-                    } else {
-                        receiver_ranges.push_back(tt::tt_metal::CoreRange(core, core));
-                    }
-                } else {
-                    // No multicast (single core): use sender kernel
-                    sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
-                }
-            }
-        }
-    }
-
-    tt::tt_metal::CoreRangeSet sender_core_set(sender_ranges);
+    const tt::tt_metal::CoreRange sender_core_range(tt::tt_metal::CoreCoord(0U, 0U), tt::tt_metal::CoreCoord(0U, 0U));
+    tt::tt_metal::CoreRangeSet sender_core_set =
+        use_multicast ? tt::tt_metal::CoreRangeSet(sender_core_range) : all_cores;
     tt::tt_metal::CoreRangeSet receiver_core_set;
-    if (!receiver_ranges.empty()) {
-        receiver_core_set = tt::tt_metal::CoreRangeSet(receiver_ranges);
+    if (use_multicast) {
+        receiver_core_set = all_cores.subtract(tt::tt_metal::CoreRangeSet(sender_core_range));
     }
 
     // -------------------------------------------------------------------------
@@ -537,7 +528,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
             .defines = defines});
 
     // --- RISCV_0: Weight receiver (receiver cores, only if multicast) ---
-    if (use_multicast && !receiver_ranges.empty()) {
+    if (use_multicast && !receiver_core_set.empty()) {
         std::vector<uint32_t> weight_receiver_compile_time_args{block_size, Wt, hidden_Wt};
         kernels.weight_receiver = tt::tt_metal::CreateKernel(
             program,

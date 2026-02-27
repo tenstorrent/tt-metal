@@ -73,6 +73,8 @@ constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Y[r, c_block] - L1 acc target
 // Phase A: Accumulate X @ W into final CB using packer L1 accumulation.
 // Packs results at offset k_block_start in the final CB.
 // first_p_block: l1_acc=0 (seed), subsequent: l1_acc=1 (accumulate).
+// do_mm_init: true on first k_block only; mm_block_init_short is hoisted per
+//             (p_block, weight) so we skip it on subsequent k_blocks.
 // ============================================================================
 inline void mul_XW_accumulate_l1(
     const tt::CBIndex cb_x_idx,
@@ -80,19 +82,22 @@ inline void mul_XW_accumulate_l1(
     const tt::CBIndex cb_out_idx,  // Final CB (cb_xw1 or cb_xw3), already reserved
     const uint32_t k_block_start,  // Offset in final CB for this k_block
     const uint32_t p_block_size,
-    const bool first_p_block) {
+    const bool first_p_block,
+    const bool do_mm_init) {
     tile_regs_acquire();
 
     // Wait for W tiles (batched: block_size rows × block_size tiles)
     cb_wait_front(cb_w_idx, tiles_per_batch);
 
-    mm_block_init_short(
-        cb_x_idx,
-        cb_w_idx,
-        /*transpose=*/false,
-        /*ct_dim=*/block_size,
-        /*rt_dim=*/1U,
-        /*kt_dim=*/p_block_size);
+    if (do_mm_init) {
+        mm_block_init_short(
+            cb_x_idx,
+            cb_w_idx,
+            /*transpose=*/false,
+            /*ct_dim=*/block_size,
+            /*rt_dim=*/1U,
+            /*kt_dim=*/p_block_size);
+    }
 
     uint32_t in0_index = 0U;
     uint32_t in1_index = 0U;
@@ -133,9 +138,11 @@ inline void compute_XW1_XW3_for_r() {
         cb_wait_front(cb_input_idx, block_size);
 
         for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
-            mul_XW_accumulate_l1(cb_input_idx, cb_w1_idx, cb_xw1_idx, k_block_start, p_block_size, first_p_block);
-
-            mul_XW_accumulate_l1(cb_input_idx, cb_w3_idx, cb_xw3_idx, k_block_start, p_block_size, first_p_block);
+            const bool do_init = (k_block_start == 0U);
+            mul_XW_accumulate_l1(
+                cb_input_idx, cb_w1_idx, cb_xw1_idx, k_block_start, p_block_size, first_p_block, do_init);
+            mul_XW_accumulate_l1(
+                cb_input_idx, cb_w3_idx, cb_xw3_idx, k_block_start, p_block_size, first_p_block, do_init);
         }
 
         cb_pop_front(cb_input_idx, block_size);
