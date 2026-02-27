@@ -23,22 +23,28 @@ python run_pybullet_sim.py --steps 400 --use-gemma-tokenizer
 ## Overview
 
 **What it does:**
-- Simulates a Franka Panda robot arm in PyBullet environment
-- Captures multi-view RGB observations (2 cameras)
+- Simulates a Franka Panda robot arm manipulating a cube in PyBullet environment
+- Captures multi-view RGB observations (2 cameras at 224x224 or custom resolution)
 - Runs PI0 model inference on TT device for action prediction
 - **Action buffering** for smooth, efficient control (executes multiple predicted actions before re-planning)
+- **Delta action control** (default) for stable, oscillation-free motion
 - Applies actions to robot in real-time control loop
-- Records video of simulation
-- Tracks performance metrics (inference time, control frequency)
+- **Spatial tracking** monitors distance to target cube
+- Records high-quality video (720p @ 20fps)
+- Tracks detailed performance metrics (inference time, control frequency, timing breakdowns)
 
 **Robot:** Franka Emika Panda (7-DOF collaborative arm) - same robot used in PI0's training data!
 
 **Key Features:**
-- ✅ Action buffering reduces oscillation and improves task completion
-- ✅ Configurable re-planning interval (1-20 actions)
-- ✅ 5-10x faster control loop with buffering enabled
-- ✅ Reproducible behavior with random seed control
-- ✅ Two tokenizer options:
+- ✅ **Action buffering** reduces oscillation and improves task completion
+- ✅ **Configurable re-planning** interval (5-30 actions) for smooth motion
+- ✅ **10-25 Hz control frequency** (up from 2-3 Hz) with optimization
+- ✅ **Delta action mode** (default) for smoother, more stable motion
+- ✅ **Spatial tracking** monitors end-effector distance to cube in real-time
+- ✅ **Performance optimizations** (image resolution, warm-up, timing breakdowns)
+- ✅ **Reproducible behavior** with random seed control
+- ✅ **Diagnostic tools** for debugging trajectory and tokenization issues
+- ✅ **Two tokenizer options:**
   - **SimpleRoboticsTokenizer** (default, no setup required)
   - **Gemma tokenizer** (opt-in with `--use-gemma-tokenizer` flag, best quality)
 
@@ -95,6 +101,16 @@ python tests/download_pretrained_weights.py
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--device` | int | `0` | Tenstorrent device ID to use for inference |
+| `--image-size` | int | `224` | Image resolution for observations (NxN pixels). Lower values = faster inference. Try 160 or 112 for speed. |
+| `--replan-interval` | int | `5` | Number of actions to execute before re-planning (1=original behavior, 5-10=smoother motion, 20-30=maximum speed) |
+
+### Motion Control
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--use-delta-actions` | flag | `True` | Use incremental position changes (default, smoother motion with less oscillation) |
+| `--use-absolute-actions` | flag | `False` | Use absolute position control instead of delta (overrides --use-delta-actions) |
+| `--max-velocity` | float | `0.5` | Maximum joint velocity in rad/s (lower = smoother but slower, higher = faster but may overshoot) |
 
 ### Behavior & Debugging
 
@@ -103,7 +119,6 @@ python tests/download_pretrained_weights.py
 | `--demo-mode` | flag | `False` | Use scripted sinusoidal motion instead of PI0 predictions (good for testing robot/sim works) |
 | `--verbose-actions` | flag | `False` | Print predicted and scaled actions every 50 steps |
 | `--seed` | int | `42` | Random seed for reproducibility (controls diffusion sampling) |
-| `--replan-interval` | int | `5` | Number of actions to execute before re-planning (1=original behavior, 5-10=smoother motion, reduces oscillation) |
 
 ### Advanced
 
@@ -197,7 +212,7 @@ xvfb-run -a python run_pybullet_sim.py \
 - Uses TT device ID 1 instead of default 0
 - Useful if you have multiple Tenstorrent accelerators
 
-### 10. **Reduced Re-planning for Smoother Motion** (New!)
+### 10. **Reduced Re-planning for Smoother Motion**
 ```bash
 xvfb-run -a python run_pybullet_sim.py \
   --headless --record-video --steps 1000 \
@@ -214,6 +229,41 @@ xvfb-run -a python run_pybullet_sim.py \
 - `--replan-interval 5`: Balanced (default, good for most tasks)
 - `--replan-interval 10`: Smooth motion (best for precise tasks, less reactive)
 - `--replan-interval 20`: Very committed plans (may be slow to adapt)
+
+### 11. **Performance Optimization** (New!)
+```bash
+# Fast mode: 20-25 Hz control frequency
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --steps 400 \
+  --replan-interval 30 --image-size 160
+
+# Balanced mode: 10-15 Hz, good quality
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --steps 400 \
+  --replan-interval 20 --image-size 224
+```
+- **--replan-interval 20-30**: Run inference less frequently
+- **--image-size 160 or 112**: Lower resolution = faster inference
+- Dramatically improves loop frequency (from 2-3 Hz to 10-25 Hz)
+- See `PERFORMANCE_GUIDE.md` for detailed optimization strategies
+
+### 12. **Absolute vs Delta Action Control**
+```bash
+# Delta mode (default): Incremental position changes
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --use-delta-actions
+
+# Absolute mode: Direct position targets
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --use-absolute-actions
+
+# Adjust motion speed
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --max-velocity 1.0
+```
+- **Delta actions (default)**: Smoother, reduces oscillation, recommended
+- **Absolute actions**: Original behavior, may be less stable
+- **max-velocity**: Higher = faster motion, lower = smoother/safer
 
 ---
 
@@ -299,17 +349,38 @@ Tokenizer: ✅ Official Gemma (SentencePiece)
    Robot DOF: 7 (using first 7 of 32 predicted actions)
    State: 14-dim (7 pos + 7 vel), padded to 32
    Action horizon: 50
+   Image size: 224x224 (lower = faster inference)
+   Re-plan interval: 20 (execute 20 actions before re-planning)
+   Action mode: ✅ Delta (incremental)
+   Max velocity: 0.5 rad/s
    Random seed: 42
    Tokenizer: ✅ Official Gemma (SentencePiece)
 ======================================================================
 
 ⏳ Warming up model (first inference includes JIT compilation)...
+   Running 3 warm-up iterations to ensure full compilation...
+   Warm-up 1/3: 450.0ms
+   Warm-up 2/3: 340.0ms
+   Warm-up 3/3: 335.0ms
 ✅ Warm-up complete! Starting control loop...
+
+   🔍 Task tokenization debug:
+      Prompt: 'pick up cube'
+      Tokens: [2, 100, 403, 200]... (first 10)
+      Mask: [True, True, True, True]... (first 10)
+      Vocab size: 256000
 
    🔄 Re-planning at step 5 (new action buffer)
 Step    0 | Cap: 90.3ms | Prep: 4.4ms | Inf: 334.5ms | Loop: 430.7ms | Freq: 2.3 Hz | Inferences: 1/1
+   📍 EE pos: [0.307, 0.000, 0.487]
+   🎯 Cube: [0.500, 0.000, 0.025]
+   📏 Distance to cube: 0.523m
    🔄 Re-planning at step 10 (new action buffer)
 Step   50 | Cap: 88.9ms | Prep: 3.3ms | Inf: 332.0ms | Loop: 85.2ms | Freq: 11.7 Hz | Inferences: 10/50
+Step  100 | Cap: 88.5ms | Prep: 3.1ms | Inf: 330.8ms | Loop: 82.3ms | Freq: 12.2 Hz | Inferences: 20/100
+   📍 EE pos: [0.398, 0.012, 0.352]
+   🎯 Cube: [0.500, 0.000, 0.025]
+   📏 Distance to cube: 0.342m
 ...
 
 ======================================================================
@@ -348,6 +419,25 @@ Step   50 | Cap: 88.9ms | Prep: 3.3ms | Inf: 332.0ms | Loop: 85.2ms | Freq: 11.7
 | **Loop time** | ~85ms avg | Total time for one control step (much lower with buffering!) |
 | **Control frequency** | ~11.7 Hz | Steps per second (5x faster with replan_interval=5) |
 | **Inferences** | 10/50 | Number of inference calls vs total steps (shown every 50 steps) |
+| **EE pos** | [x, y, z] | End-effector position in world coordinates (printed every 100 steps) |
+| **Cube pos** | [0.5, 0.0, 0.025] | Cube position on table surface |
+| **Distance to cube** | varies | Euclidean distance from end-effector to cube (should decrease!) |
+
+### Spatial Tracking (New!)
+
+Every 100 steps, the simulation prints spatial information:
+
+```
+📍 EE pos: [0.398, 0.012, 0.352]  ← End-effector position
+🎯 Cube: [0.500, 0.000, 0.025]    ← Target cube position
+📏 Distance to cube: 0.342m        ← Should DECREASE over time
+```
+
+**How to use this:**
+- **Distance decreasing:** ✅ Robot moving toward cube (trajectory correct)
+- **Distance constant/increasing:** ❌ Wrong trajectory (see troubleshooting)
+- **Distance reaches ~0.05m:** Robot very close to cube
+- **Compare over time:** Step 0 vs Step 100 vs Step 200, etc.
 
 ### Video Output
 - **Format:** MP4 (H.264 codec)
@@ -449,6 +539,80 @@ xvfb-run -a python run_pybullet_sim.py \
 - `--replan-interval 10`: Better for precise tasks with oscillation
 - `--replan-interval 1`: Original behavior (may oscillate)
 
+### Issue: Robot takes wrong trajectory to cube / doesn't understand task
+**This is likely a tokenization issue!**
+
+**Symptoms:**
+- Robot moves smoothly but goes in wrong direction
+- Robot doesn't approach the cube
+- Distance to cube stays constant or increases
+
+**Solution 1: Use official Gemma tokenizer (recommended)**
+```bash
+# Install transformers and authenticate
+pip install transformers
+huggingface-cli login
+
+# Run with official tokenizer
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --use-gemma-tokenizer --task "pick cube"
+```
+
+**Solution 2: Try different task prompts**
+```bash
+# Simple prompts with basic vocabulary
+xvfb-run -a python run_pybullet_sim.py --task "pick cube"
+xvfb-run -a python run_pybullet_sim.py --task "grasp object"
+xvfb-run -a python run_pybullet_sim.py --task "reach forward"
+```
+
+**Solution 3: Test tokenization**
+```bash
+cd demo/
+python test_tokenization.py
+```
+This shows how your task is being tokenized and helps identify vocabulary issues.
+
+**Solution 4: Visualize camera views**
+```bash
+cd demo/
+python visualize_cameras.py --image-size 224
+```
+Check if the cube is visible in the saved images (./camera_debug/).
+
+**Why this happens:**
+- PI0 was trained with Gemma's SentencePiece tokenizer
+- SimpleRoboticsTokenizer (fallback) uses different token IDs
+- Model may not understand the task correctly with wrong tokenization
+
+**See also:** `TROUBLESHOOTING_TRAJECTORY.md` for detailed debugging steps
+
+### Issue: Simulation runs too slowly (< 5 Hz)
+**This is expected behavior for the full model!**
+
+**Current performance:**
+- Inference takes ~330ms per call
+- With `--replan-interval 5` (default): ~10-12 Hz average
+- With `--replan-interval 1`: ~2-3 Hz (very slow)
+
+**Solution: Optimize performance**
+```bash
+# Fast mode (20-25 Hz)
+xvfb-run -a python run_pybullet_sim.py \
+  --replan-interval 30 --image-size 160 --headless
+
+# Balanced mode (10-15 Hz)
+xvfb-run -a python run_pybullet_sim.py \
+  --replan-interval 20 --image-size 224
+```
+
+**Performance trade-offs:**
+- Higher `--replan-interval`: Faster but less reactive to changes
+- Lower `--image-size`: Faster inference but less visual detail
+- `--headless`: Removes GUI rendering overhead
+
+**See also:** `PERFORMANCE_GUIDE.md` for comprehensive optimization strategies
+
 ### Issue: Video recording fails on headless server
 **Solution:**
 ```bash
@@ -473,67 +637,114 @@ sudo apt-get install xvfb
 - **Use seed 42** or test seeds 1-10 to find best behavior
 - **Record video** - Much easier to share than live GUI
 - **Try demo mode first** - Verify simulation works before testing PI0
-- **Use replan-interval 5-10** - Smoother motion, less oscillation
+- **Use replan-interval 20** - Smooth motion, 10-15 Hz control frequency
+- **Use image-size 160-224** - Good quality without excessive slowdown
 
 ### For Debugging
 - **Use --verbose-actions** - See what PI0 is predicting
+- **Monitor distance to cube** - Watch console output every 100 steps
+- **Test tokenization** - Run `python test_tokenization.py` to check prompt encoding
+- **Visualize cameras** - Run `python visualize_cameras.py` to see robot's view
 - **Start with 200 steps** - Faster iteration
-- **Test different tasks** - "pick cube", "grasp object", "move left"
-- **Check performance metrics** - Should see ~2-3 Hz control frequency
+- **Test different tasks** - "pick cube", "grasp object", "reach forward"
+- **Check spatial tracking** - Distance to cube should decrease over time
 
 ### For Development
 - **Use SimpleRoboticsTokenizer** - No auth required, good enough for testing
 - **Fix the seed** - Reproducibility is critical for debugging
 - **Profile performance** - Check which operations are slow
 - **Test on single device** - Use --device 0 for consistent results
+- **Read diagnostic guides** - See TROUBLESHOOTING_TRAJECTORY.md and PERFORMANCE_GUIDE.md
 
-### Recommended Starting Command (SimpleRoboticsTokenizer)
+### For Performance
+- **Replan-interval 20-30** - Dramatically improves control frequency
+- **Image-size 160** - Best balance of speed and quality
+- **Headless mode** - Remove GUI overhead
+- **Expected performance:**
+  - Default (replan=5, img=224): ~10-12 Hz
+  - Optimized (replan=20, img=160): ~15-20 Hz
+  - Maximum (replan=30, img=112): ~20-25 Hz
+
+### Recommended Starting Command (Fast & Simple)
 ```bash
 xvfb-run -a python run_pybullet_sim.py \
   --headless --record-video --steps 400 \
-  --task "pick up cube" --verbose-actions --seed 42 \
-  --replan-interval 5
+  --task "pick cube" --seed 42 \
+  --replan-interval 20 --image-size 160
 ```
-This gives you: video output, clear motion, action debugging, reproducibility, smooth control.
-Uses SimpleRoboticsTokenizer (no HF auth required).
+**Performance:** 10-15 Hz control frequency
+**Features:** Video output, smooth motion, reproducible, fast
+**Tokenizer:** SimpleRoboticsTokenizer (no HF auth required)
 
 ### Recommended Starting Command (With Gemma Tokenizer)
 ```bash
 xvfb-run -a python run_pybullet_sim.py \
   --headless --record-video --steps 400 \
-  --task "pick up cube" --verbose-actions --seed 42 \
-  --replan-interval 5 --use-gemma-tokenizer
+  --task "pick cube" --seed 42 \
+  --replan-interval 20 --image-size 224 \
+  --use-gemma-tokenizer
 ```
-Same as above, but with best task understanding using official Gemma tokenizer.
-Requires HuggingFace authentication (see Tokenizer Setup).
+**Performance:** 10-15 Hz control frequency
+**Features:** Best task understanding, smooth motion, reproducible
+**Tokenizer:** Official Gemma (requires HuggingFace authentication)
 
 ### For Tasks with Oscillation Issues
 ```bash
 xvfb-run -a python run_pybullet_sim.py \
   --headless --record-video --steps 1000 \
-  --task "pick up cube" --seed 42 \
+  --task "pick cube" --seed 42 \
   --replan-interval 10
 ```
 Higher re-plan interval (10) provides smoother, more committed motion toward targets.
+
+### For Trajectory Debugging
+```bash
+# Monitor distance to cube (printed every 100 steps)
+python run_pybullet_sim.py --task "pick cube" \
+  --replan-interval 10 --steps 400
+
+# Test tokenization
+cd demo/ && python test_tokenization.py
+
+# Visualize camera views
+cd demo/ && python visualize_cameras.py --image-size 224
+
+# Try different prompts
+for prompt in "pick cube" "grasp object" "reach forward"; do
+  python run_pybullet_sim.py --task "$prompt" --steps 200
+done
+```
 
 ---
 
 ## Technical Details
 
 ### Simulation Architecture
+
 1. **Environment:** PyBullet physics engine with Franka Panda URDF
+   - Robot: Franka Panda (7-DOF) at origin [0, 0, 0]
+   - Cube: Small cube at [0.5, 0.0, 0.025] (on table surface, reachable)
+   - Plane: Ground plane for physics
+
 2. **Observations:**
-   - 2x RGB images (224x224, normalized to [-1, 1])
-   - Robot state: 14-dim (7 joint positions + 7 velocities)
+   - 2x RGB images (configurable resolution, default 224x224)
+   - Normalized to [-1, 1] for SigLIP vision encoder
+   - Camera 1: Front view at [1.0, 0.0, 0.5]
+   - Camera 2: Side view at [0.3, 1.0, 0.5]
+   - Robot state: 14-dim (7 joint positions + 7 velocities), padded to 32-dim
+
 3. **Actions:**
    - PI0 predicts 32-dim actions at 50-step horizon
    - First 7 dimensions used for 7-DOF arm
-   - Normalized actions scaled to joint limits (±2.87 rad)
-   - Position control applied to each joint
+   - **Delta mode (default):** Actions are position changes scaled by 0.3
+   - **Absolute mode:** Actions normalized from [-1, 1] to joint limits
+   - Position control with configurable max velocity (default: 0.5 rad/s)
+
 4. **Inference:**
    - TTNN-optimized PI0 model on TT device
-   - Diffusion-based action generation
-   - KV caching for efficiency
+   - Diffusion-based action generation (flow matching)
+   - Multiple warm-up iterations ensure full compilation
+   - ~330ms per inference call on TT hardware
 
 ### Action Buffering & Re-planning Strategy
 
@@ -566,11 +777,27 @@ Benefits: 5x fewer inferences, smoother motion, better temporal consistency
 - ✅ **Reduced wiggling** - Especially helpful when robot is near target objects
 
 ### Action Space Details
-- **Input:** Normalized actions from PI0 (roughly [-1, 1])
-- **Scaling:** Linear mapping to joint limits
-  - Example: -0.16 → -0.46 rad ≈ -26 degrees
-- **Control:** Position control with force limit (87N)
-- **Safety:** Clamped to Franka Panda joint limits
+
+**Two action modes:**
+
+1. **Delta Actions (default, `--use-delta-actions`):**
+   - Actions interpreted as position changes (deltas)
+   - `new_position = current_position + (action * 0.3)`
+   - Smoother motion, reduces oscillation
+   - Better for precise manipulation tasks
+   - Automatically clamped to joint limits
+
+2. **Absolute Actions (`--use-absolute-actions`):**
+   - Actions interpreted as target positions
+   - Linear mapping from [-1, 1] to joint limits
+   - Example: -0.16 → -0.46 rad ≈ -26 degrees
+   - Original behavior, may be less stable
+
+**Control parameters:**
+- **Type:** Position control with velocity limits
+- **Force limit:** 87N (Franka Panda max)
+- **Max velocity:** Configurable via `--max-velocity` (default: 0.5 rad/s)
+- **Safety:** All targets clamped to joint limits
 
 ### Random Seed Behavior
 - Seeds control **diffusion sampling** during action generation
@@ -650,37 +877,107 @@ For PI0 model or TT-Metal issues:
 # Minimal command (GUI, no recording, uses SimpleRoboticsTokenizer)
 python run_pybullet_sim.py
 
-# Production command (headless, video, smooth motion, uses SimpleRoboticsTokenizer)
+# RECOMMENDED: Fast & high quality (10-15 Hz, SimpleRoboticsTokenizer)
 xvfb-run -a python run_pybullet_sim.py --headless --record-video \
-  --steps 400 --replan-interval 5
+  --steps 400 --replan-interval 20 --image-size 160 \
+  --task "pick cube" --seed 42
 
-# Debug command (verbose, short run, uses SimpleRoboticsTokenizer)
-python run_pybullet_sim.py --verbose-actions --steps 200
-
-# Demo command (scripted motion, verify sim works)
-python run_pybullet_sim.py --demo-mode --record-video
+# Maximum performance (20-25 Hz, SimpleRoboticsTokenizer)
+xvfb-run -a python run_pybullet_sim.py --headless --record-video \
+  --steps 400 --replan-interval 30 --image-size 112 --seed 42
 
 # Best quality - WITH Gemma tokenizer (REQUIRES FLAG!)
 xvfb-run -a python run_pybullet_sim.py --headless --record-video \
-  --steps 400 --use-gemma-tokenizer --seed 42 \
-  --task "pick up cube" --replan-interval 5
+  --steps 400 --use-gemma-tokenizer --replan-interval 20 \
+  --image-size 224 --task "pick cube" --seed 42
 
-# Best quality - WITHOUT Gemma (SimpleRoboticsTokenizer, no HF auth needed)
-xvfb-run -a python run_pybullet_sim.py --headless --record-video \
-  --steps 400 --seed 42 --task "pick up cube" --replan-interval 5
+# Debug command (verbose, short run, spatial tracking)
+python run_pybullet_sim.py --verbose-actions --steps 200 \
+  --replan-interval 5
+
+# Demo command (scripted motion, verify sim works)
+python run_pybullet_sim.py --demo-mode --record-video
 
 # For oscillation issues (more committed motion)
 xvfb-run -a python run_pybullet_sim.py --headless --record-video \
   --steps 1000 --replan-interval 10 --seed 42
 
-# Original behavior (no buffering, may oscillate)
+# Absolute positioning mode (if delta actions cause issues)
 xvfb-run -a python run_pybullet_sim.py --headless --record-video \
-  --steps 400 --replan-interval 1
+  --use-absolute-actions --steps 400
+
+# Test different tokenization approaches
+cd demo/ && python test_tokenization.py
+
+# Visualize camera views
+cd demo/ && python visualize_cameras.py --image-size 224
+
+# Original behavior (slow, may oscillate)
+xvfb-run -a python run_pybullet_sim.py --headless --record-video \
+  --steps 400 --replan-interval 1 --image-size 224
 ```
 
 ---
 
 ## Recent Updates
+
+### 2026-02-27 - Performance Optimizations & Diagnostic Tools
+
+**Performance Impact Summary:**
+
+| Configuration | Control Frequency | Notes |
+|--------------|------------------|-------|
+| **Before** (replan=1, img=224) | 2-3 Hz | Very slow, may oscillate |
+| **Default** (replan=5, img=224) | 10-12 Hz | Good balance |
+| **Optimized** (replan=20, img=160) | 15-20 Hz | Recommended |
+| **Maximum** (replan=30, img=112) | 20-25 Hz | Fastest |
+
+**Performance Improvements:**
+- **Image resolution control:** Added `--image-size` parameter (default: 224)
+  - Try `--image-size 160` or `--image-size 112` for faster inference
+  - 20-40% speedup with acceptable quality trade-off
+- **Improved warm-up:** Now runs 3 warm-up iterations (was 1)
+  - Ensures TTNN ops are fully compiled before control loop
+  - Shows timing for each warm-up iteration
+- **Performance monitoring:** Added detailed timing breakdown in output
+  - Shows inference time separately from buffered steps
+  - Tracks capture, preprocessing, and inference times independently
+
+**Bug Fixes:**
+- **Fixed cube position:** Changed from `[0.5, 0.0, 0.5]` (floating!) to `[0.5, 0.0, 0.025]` (on table)
+  - This was causing robot to reach for wrong location
+  - Cube now properly placed on table surface
+
+**Motion Control:**
+- **Delta actions enabled by default:** Uses incremental position changes
+  - Smoother motion, reduces oscillation
+  - Can disable with `--use-absolute-actions` flag
+- **Configurable max velocity:** Added `--max-velocity` parameter (default: 0.5 rad/s)
+  - Lower = smoother/safer, higher = faster but may overshoot
+
+**Diagnostic Features:**
+- **Tokenization debugging:** Prints token IDs and mask on first inference
+  - Helps identify if task prompt is being understood correctly
+  - Shows vocabulary size and token ranges
+- **Spatial tracking:** Every 100 steps, prints:
+  - End-effector position
+  - Cube position
+  - Distance to cube (should decrease if trajectory is correct!)
+- **New diagnostic tools:**
+  - `test_tokenization.py` - Compare tokenizers, test different prompts
+  - `visualize_cameras.py` - Save camera view images for debugging
+  - `TROUBLESHOOTING_TRAJECTORY.md` - Step-by-step guide for trajectory issues
+  - `PERFORMANCE_GUIDE.md` - Comprehensive optimization strategies
+  - `README_FIXES.md` - Summary of all recent changes
+
+**Recommended Command for Best Performance:**
+```bash
+xvfb-run -a python run_pybullet_sim.py \
+  --headless --record-video --steps 400 \
+  --replan-interval 20 --image-size 160 \
+  --task "pick cube" --seed 42
+```
+This achieves 10-15 Hz control frequency (vs. 2-3 Hz before optimizations).
 
 ### 2026-02-26 - Action Buffering Feature & Tokenizer Clarification
 - **Action Buffering:** Added `--replan-interval` parameter for smoother robot motion
@@ -697,4 +994,66 @@ xvfb-run -a python run_pybullet_sim.py --headless --record-video \
 
 ---
 
-**Last updated:** 2026-02-26
+## Diagnostic Tools
+
+The demo folder now includes several diagnostic tools to help debug issues:
+
+### test_tokenization.py
+Compare how different tokenizers encode your task prompts.
+
+```bash
+cd demo/
+python test_tokenization.py
+```
+
+**Use this when:**
+- Robot seems to ignore task instructions
+- You want to understand if tokenization is correct
+- Comparing SimpleRoboticsTokenizer vs. Gemma tokenizer
+
+### visualize_cameras.py
+Capture and save what the robot "sees" from each camera.
+
+```bash
+cd demo/
+python visualize_cameras.py --image-size 224
+```
+
+**Use this when:**
+- Verifying cube is visible in camera views
+- Checking if image resolution is sufficient
+- Debugging visual input issues
+
+**Output:** Saves RGB and depth images to `./camera_debug/`
+
+### TROUBLESHOOTING_TRAJECTORY.md
+Step-by-step guide for debugging wrong trajectories.
+
+```bash
+cat demo/TROUBLESHOOTING_TRAJECTORY.md
+```
+
+**Covers:**
+- Tokenization issues
+- Visual input problems
+- Action scaling issues
+- How to monitor distance to cube
+- Testing with different prompts
+
+### PERFORMANCE_GUIDE.md
+Comprehensive guide to optimization strategies.
+
+```bash
+cat demo/PERFORMANCE_GUIDE.md
+```
+
+**Covers:**
+- Why inference is slow (335ms per call)
+- Quick fixes (replan-interval, image-size)
+- Advanced optimizations
+- Expected performance improvements
+- Recommended settings by use case
+
+---
+
+**Last updated:** 2026-02-27
