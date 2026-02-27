@@ -19,9 +19,27 @@ Phase 0: Discovery ─► Phase 1: Analysis ─► Phase 2: Design
 
 ---
 
+## Spec Detection
+
+Before parsing input, check if a spec already exists:
+
+1. Extract the operation name from the user's message (snake_case identifier)
+2. Look for `ttnn/ttnn/operations/{op_name}/op_spec.md`
+3. **If found**:
+   - Read it and use its contents as the operation requirements
+   - Extract all fields (math, tensors, parameters, test criteria, hardware preferences)
+   - Skip interactive questions for information already in the spec
+   - Phase 0 still runs for reference discovery (unless references are specified in the spec)
+   - Pass spec contents to the architect in Phase 2 as structured requirements
+   - Log: "Using existing op_spec.md from ttnn/ttnn/operations/{op_name}/op_spec.md"
+4. **If not found**:
+   - Proceed with normal input parsing below
+
+---
+
 ## Input Parsing
 
-Extract from the user's message:
+Extract from the user's message (or from op_spec.md if detected above):
 1. **Operation name**: snake_case identifier (e.g., `row_centralize`)
 2. **Math definition**: The formula or algorithm to implement
 3. **Input tensor**: Layout (RM/tile), memory layout (interleaved/sharded), dtype, rank
