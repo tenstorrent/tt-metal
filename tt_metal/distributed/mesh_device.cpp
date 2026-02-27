@@ -1544,6 +1544,7 @@ bool MeshDevice::is_local(const MeshCoordinate& coord) const { return pimpl_->is
 const MeshShape& MeshDevice::shape() const { return pimpl_->shape(); }
 void MeshDevice::reshape(const MeshShape& new_shape) { pimpl_->reshape(new_shape); }
 const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); }
+uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
 bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
