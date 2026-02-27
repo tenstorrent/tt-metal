@@ -552,7 +552,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
     const uint32_t reuse_k = (tensor_args.v.has_value() ? 0 : 1) | (q_heads_parallel_factor > 1 ? 1 : 0);
-
     // ========== Compile Time Arguments ==========
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
@@ -589,7 +588,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         original_block_size,
         k_mcast_semaphore_id,
         (uint32_t)q_locally_available,
-        (uint32_t)(q_heads_parallel_factor > 1),  // use_k_mcast
+        (uint32_t)use_col_major_group_indexing,  // use_k_mcast
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -1034,8 +1033,8 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         bool do_output = (worker_id_for_output == UINT32_MAX);
         bool do_k_mcast = false;
         uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
-        if (q_heads_parallel_factor > 1) {
-            do_k_mcast = (core.y == 0 || core.y == 4);
+        if (use_col_major_group_indexing) {
+            do_k_mcast = (core.y % q_heads_parallel_factor == 0);
             num_dests = q_heads_parallel_factor - 1;
             if (do_k_mcast && num_dests > 0) {
                 auto phys_start = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
