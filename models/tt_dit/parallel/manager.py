@@ -377,16 +377,17 @@ class CCLManager:
         }
 
     def device_to_host(
-        self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = False
+        self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = True
     ) -> torch.Tensor:
         """Move a ttnn device tensor to a torch host tensor.
         Args:
             tensor: The ttnn tensor to move to host
             mesh_dims: The dimensions to mesh. Provided dimensions will be concatenated along the corresponding mesh axis.
+            use_persistent_buffer: Whether to use a persistent buffer for the all gather operation.
         Returns:
             The torch host tensor
         """
-        device_tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+        device_tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)  # Workaround for bug in Row Major layout
         for mesh_axis, mesh_dim in enumerate(mesh_dims):
             if mesh_dim is not None:
                 device_tensor = self.all_gather(
