@@ -1,0 +1,62 @@
+kernel_name: lm_head_sampling
+
+core_roles:
+  input_core:
+    infer_from_zone: RMSNORM
+  matmul_core:
+    infer_from_zone: MATMUL
+
+micro_ops:
+  - zone: CCL_BROADCAST
+    type: broadcast
+    participants:
+      - role: input_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+
+  - zone: RMSNORM
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: matmul_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MATMUL
+    type: compute
+    participants:
+      - role: matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: ARGMAX
+    type: span
+    participants:
+      - role: matmul_core
+        risc: NCRISC
+        function: reader
+
+dependencies:
+  - [RMSNORM, CCL_BROADCAST]
+  - [MCAST, RMSNORM]
+  - [MATMUL, MCAST]
+  - [ARGMAX, MATMUL]
+
+display_order:
+  - CCL_BROADCAST
+  - RMSNORM
+  - MCAST
+  - MATMUL
+  - ARGMAX

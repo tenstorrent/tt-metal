@@ -920,8 +920,8 @@ uint32_t per_core_rta_arg_idx = 0;
     }
 
     {
-        DeviceZoneScopedN("Q_HEADS") static_assert(
-            !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
+        DeviceZoneScopedN("Q_HEADS");
+        static_assert(!(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
 
         // ========================================================================
         // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]

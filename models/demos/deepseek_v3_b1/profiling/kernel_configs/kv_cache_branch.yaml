@@ -1,0 +1,60 @@
+kernel_name: kv_cache_branch
+
+core_roles:
+  dkv_matmul_core:
+    infer_from_zone: DKV_MATMUL
+  kv_rmsnorm_core:
+    infer_from_zone: KV_RMSNORM
+
+micro_ops:
+  - zone: DKV_MATMUL
+    type: compute
+    participants:
+      - role: dkv_matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: DKV_GATHER
+    type: gather
+    participants:
+      - role: dkv_matmul_core
+        risc: NCRISC
+        function: sender
+      - role: kv_rmsnorm_core
+        risc: BRISC
+        function: receiver
+
+  - zone: KV_RMSNORM
+    type: compute
+    participants:
+      - role: kv_rmsnorm_core
+        risc: TRISC
+        function: compute
+
+  - zone: K_ROPE
+    type: compute
+    participants:
+      - role: kv_rmsnorm_core
+        risc: TRISC
+        function: compute
+
+  - zone: KV_CACHE_UPDATE
+    type: dram_write
+    participants:
+      - role: kv_rmsnorm_core
+        risc: BRISC
+        function: writer
+
+dependencies:
+  - [DKV_GATHER, DKV_MATMUL]
+  - [KV_RMSNORM, DKV_GATHER]
+  - [K_ROPE, KV_RMSNORM]
+  - [KV_CACHE_UPDATE, KV_RMSNORM]
+  - [KV_CACHE_UPDATE, K_ROPE]
+
+display_order:
+  - DKV_MATMUL
+  - DKV_GATHER
+  - KV_RMSNORM
+  - K_ROPE
+  - KV_CACHE_UPDATE

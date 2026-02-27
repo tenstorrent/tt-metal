@@ -1,0 +1,123 @@
+kernel_name: shared_expert
+
+core_roles:
+  input_core:
+    infer_from_zone: GATED_REDUCE
+  matmul_core:
+    infer_from_zone: GATE_UP_MATMUL
+  down_matmul_core:
+    infer_from_zone: DOWN_MATMUL
+
+micro_ops:
+  - zone: ACT_MCAST
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: matmul_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: GATE_UP_MATMUL
+    type: compute
+    participants:
+      - role: matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: GATE_GATHER
+    type: gather
+    participants:
+      - role: matmul_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+
+  - zone: UP_GATHER
+    type: gather
+    participants:
+      - role: matmul_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+
+  - zone: GATED_REDUCE
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST1
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: down_matmul_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MCAST2
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: down_matmul_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: DOWN_MATMUL
+    type: compute
+    participants:
+      - role: down_matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: ADD
+    type: compute
+    participants:
+      - role: down_matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: OUTPUT_GATHER
+    type: gather
+    participants:
+      - role: down_matmul_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+
+dependencies:
+  - [GATE_UP_MATMUL, ACT_MCAST]
+  - [GATE_GATHER, GATE_UP_MATMUL]
+  - [UP_GATHER, GATE_UP_MATMUL]
+  - [GATED_REDUCE, GATE_GATHER]
+  - [GATED_REDUCE, UP_GATHER]
+  - [MCAST1, GATED_REDUCE]
+  - [MCAST2, GATED_REDUCE]
+  - [DOWN_MATMUL, MCAST1]
+  - [DOWN_MATMUL, MCAST2]
+  - [ADD, DOWN_MATMUL]
+  - [OUTPUT_GATHER, ADD]
+
+display_order:
+  - ACT_MCAST
+  - GATE_UP_MATMUL
+  - GATE_GATHER
+  - UP_GATHER
+  - GATED_REDUCE
+  - MCAST1
+  - MCAST2
+  - DOWN_MATMUL
+  - ADD
+  - OUTPUT_GATHER

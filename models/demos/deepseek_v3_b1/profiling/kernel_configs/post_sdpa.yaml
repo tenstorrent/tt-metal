@@ -1,0 +1,118 @@
+kernel_name: post_sdpa
+
+core_roles:
+  sdpa_core:
+    infer_from_zone: SDPA_REDUCE_TO_ALL
+  matmul1_core:
+    infer_from_zone: MATMUL1
+  matmul2_core:
+    infer_from_zone: MATMUL2
+
+micro_ops:
+  - zone: SDPA_REDUCE_TO_ALL
+    type: span
+    participants:
+      - role: sdpa_core
+        risc: TRISC
+        function: compute
+
+  - zone: MATMUL1
+    type: compute
+    participants:
+      - role: matmul1_core
+        risc: TRISC
+        function: compute
+
+  - zone: GATHER1
+    type: gather_reduce
+    participants:
+      - role: matmul1_core
+        risc: NCRISC
+        function: sender
+      - role: sdpa_core
+        risc: BRISC
+        function: receiver
+      - role: sdpa_core
+        risc: TRISC
+        function: reducer
+
+  - zone: MCAST
+    type: mcast
+    participants:
+      - role: sdpa_core
+        risc: BRISC
+        function: sender
+      - role: matmul2_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MATMUL2
+    type: compute
+    participants:
+      - role: matmul2_core
+        risc: TRISC
+        function: compute
+
+  - zone: GATHER2
+    type: gather_reduce
+    participants:
+      - role: matmul2_core
+        risc: NCRISC
+        function: sender
+      - role: sdpa_core
+        risc: BRISC
+        function: receiver
+      - role: sdpa_core
+        risc: TRISC
+        function: reducer
+
+  - zone: CCL_SENDER_READ
+    type: span
+    participants:
+      - role: sdpa_core
+        risc: NCRISC
+        function: reader
+
+  - zone: CCL_SENDER_SEND
+    type: span
+    participants:
+      - role: sdpa_core
+        risc: BRISC
+        function: sender
+
+  - zone: CCL_RECEIVER_WAIT
+    type: span
+    participants:
+      - role: sdpa_core
+        risc: NCRISC
+        function: reader
+
+  - zone: CCL_RECEIVER_COMPUTE
+    type: compute
+    participants:
+      - role: sdpa_core
+        risc: TRISC
+        function: compute
+
+dependencies:
+  - [MATMUL1, SDPA_REDUCE_TO_ALL]
+  - [GATHER1, MATMUL1]
+  - [MCAST, GATHER1]
+  - [MATMUL2, MCAST]
+  - [GATHER2, MATMUL2]
+  - [CCL_SENDER_READ, GATHER2]
+  - [CCL_SENDER_SEND, CCL_SENDER_READ]
+  - [CCL_RECEIVER_WAIT, GATHER2]
+  - [CCL_RECEIVER_COMPUTE, CCL_RECEIVER_WAIT]
+
+display_order:
+  - SDPA_REDUCE_TO_ALL
+  - MATMUL1
+  - GATHER1
+  - MCAST
+  - MATMUL2
+  - GATHER2
+  - CCL_SENDER_READ
+  - CCL_SENDER_SEND
+  - CCL_RECEIVER_WAIT
+  - CCL_RECEIVER_COMPUTE
