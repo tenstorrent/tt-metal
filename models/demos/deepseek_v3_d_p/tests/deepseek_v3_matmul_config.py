@@ -3,12 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Shared matmul configurations for Deepseek V3 128k DIDT tests, PCC unit tests,
-and the sweep tuner. Imported by tests/didt/test_deepseek_v3_128k_matmul.py,
-tests/didt/sweep_deepseek_v3_matmul_tune.py, and tests/pcc/test_deepseek_v3_matmul_pcc.py.
+Shared matmul configurations for Deepseek V3 128k prefill: DIDT, PCC, and sweep.
+
+Consumers:
+  - tests/didt/test_deepseek_v3_128k_matmul.py
+  - tests/didt/sweep_deepseek_v3_matmul_tune.py
+  - tests/pcc/test_deepseek_v3_matmul_pcc.py
 """
 
 import math
+from typing import Optional
 
 import ttnn
 
@@ -35,8 +39,8 @@ OPTIMAL_PROGRAM_CONFIG = {
 }
 
 
-def _find_largest_divisor(n, max_divisor=8):
-    """Find the largest divisor of n that is <= max_divisor."""
+def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:
+    """Return the largest divisor of n that is <= max_divisor."""
     best = 1
     for d in range(1, int(math.isqrt(n)) + 1):
         if n % d == 0:
@@ -48,11 +52,17 @@ def _find_largest_divisor(n, max_divisor=8):
     return best
 
 
-def get_prefill_matmul_program_config(M, K, N, grid_size=GRID_SIZE, optimal_config=None):
-    """Compute MatmulMultiCoreReuseMultiCastProgramConfig for a prefill matmul.
+def get_prefill_matmul_program_config(
+    M: int,
+    K: int,
+    N: int,
+    grid_size: tuple[int, int] = GRID_SIZE,
+    optimal_config: Optional[tuple[int, int, int]] = None,
+):
+    """Build MatmulMultiCoreReuseMultiCastProgramConfig for a prefill matmul.
 
-    If optimal_config is (in0_block_w, out_subblock_h, out_subblock_w), use those
-    values; otherwise use heuristics (largest divisor of K_tiles for in0_block_w, etc.).
+    If optimal_config is (in0_block_w, out_subblock_h, out_subblock_w), use it;
+    otherwise use heuristics (e.g. largest divisor of K_tiles for in0_block_w).
     """
     grid_x, grid_y = grid_size
     M_tiles = math.ceil(M / TILE_SIZE)
@@ -82,10 +92,16 @@ def get_prefill_matmul_program_config(M, K, N, grid_size=GRID_SIZE, optimal_conf
 
 
 # ---------------------------------------------------------------------------
+# Harmonized dtype and math_fidelity (all tests and sweep)
+# ---------------------------------------------------------------------------
+# MLA:  bfloat16 activations (in0), bfloat8_b weights (in1), HiFi2.
+# MoE:  bfloat4_b weights, LoFi (dense MLP, shared expert, routed expert).
+# Gate: bfloat16 activations and weights, HiFi2.
+# ---------------------------------------------------------------------------
 # Workload param lists: (M, K, N, ...) and workload_id for parametrization.
 # MLA: (M, K, N, batch, in1_dtype, workload_id)
 # Gate: single config (M, K, N, in1_dtype, workload_id)
-# Dense / shared / routed: (M, K, N, workload_id)
+# Dense / shared / routed: (M, K, N, workload_id)  -> in1_dtype BFLOAT4_B in callers
 # ---------------------------------------------------------------------------
 
 # MLA matmuls (6 ops). batch=1 or 32 for batched heads.
@@ -115,7 +131,7 @@ SHARED_EXPERT_MATMUL_PARAMS = [
     (4096, 512, 7168, "shared_expert_w2"),
 ]
 
-# Routed expert: (M, K, N, workload_id)
+# Routed expert: (M, K, N, workload_id). All use bfloat4_b + LoFi (MoE harmonized).
 ROUTED_EXPERT_MATMUL_PARAMS = [
     (1024, 7168, 2048, "routed_expert_w1"),
     (1024, 7168, 2048, "routed_expert_w3"),

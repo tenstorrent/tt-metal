@@ -3,27 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Scaffolding to sweep matmul program-config parameters for Deepseek V3 DIDT
-matmuls and print timing results for tuning maximum compute utilization.
+Sweep matmul program-config parameters for Deepseek V3 prefill and print timing.
 
-Run with pytest, e.g.:
+Usage:
   pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 50
+  pytest ... -k "dense_mlp_w1" --didt-workload-iterations 20
+  pytest ... --timeout=7200
 
-Use -s to see printed results. Optionally restrict to one workload with -k, e.g.:
-  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s -k "dense_mlp_w1" --didt-workload-iterations 20
-
-Input, output, and weights all in DRAM; 11×10 core grid; HiFi2 math fidelity.
-
-After each run the device profiler is read (ttnn.ReadDeviceProfiler). When Tracy program
-perf data is available (TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1,
-TT_METAL_PROFILER_CPP_POST_PROCESS=1), timing is taken from Tracy and core count is
-the actual cores the matmul executed on; otherwise wall-clock timing and config grid
-core count are used. CSV and summary include core_count.
-
-If the test times out (full sweep can take a long time), increase the timeout via
-pytest-timeout's command-line option, e.g.:
-  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --timeout=7200 --didt-workload-iterations 50
-(7200 = 2 hours). The test has a default timeout of 3600s (1 hour).
+DRAM tensors, 11×10 grid. MLA/Gate: HiFi2; MoE: LoFi. With Tracy env vars set
+(TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1,
+TT_METAL_PROFILER_CPP_POST_PROCESS=1), timing and core count come from Tracy;
+otherwise wall-clock and config grid. Default timeout 3600s.
 """
 
 import math
@@ -38,6 +28,7 @@ from models.common.utility_functions import is_blackhole, skip_for_wormhole_b0
 from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     DENSE_MLP_MATMUL_PARAMS,
     GATE_MATMUL_CONFIG,
+    GRID_SIZE,
     MLA_MATMUL_PARAMS,
     ROUTED_EXPERT_MATMUL_PARAMS,
     SHARED_EXPERT_MATMUL_PARAMS,
@@ -45,11 +36,6 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
 )
 from tests.didt.op_test_base import OpParameter, OpTestBase
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
-
-# 11×10 core grid (110 cores). All tensors in DRAM, HiFi2.
-# Use 11×10 to avoid dispatch cores on Blackhole (last column is reserved).
-GRID_SIZE = (11, 10)
-
 
 # ---------------------------------------------------------------------------
 # Compute utilization: ideal cycles vs actual cycles (same as test_benchmark.py)
@@ -174,27 +160,39 @@ def _make_program_config(
 
 
 # ---------------------------------------------------------------------------
-# Workload definitions (same as DIDT tests; batch and dtypes included)
+# Workload definitions (aligned with DIDT: MLA/Gate HiFi2, MoE LoFi)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class MatmulWorkload:
-    """Single matmul workload: shapes and dtypes."""
+    """Single matmul workload: shapes, weight dtype, and math fidelity."""
 
     workload_id: str
     M: int
     K: int
     N: int
     batch: int
-    in1_dtype: Any  # ttnn.DataType
-    math_fidelity: Any  # ttnn.MathFidelity
+    in1_dtype: Any
+    math_fidelity: Any
+
+
+def _moe_workload(M: int, K: int, N: int, workload_id: str) -> MatmulWorkload:
+    """MoE matmul: bfloat4_b, LoFi."""
+    return MatmulWorkload(
+        workload_id=workload_id,
+        M=M,
+        K=K,
+        N=N,
+        batch=1,
+        in1_dtype=ttnn.DataType.BFLOAT4_B,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+    )
 
 
 def _deepseek_v3_workloads() -> list[MatmulWorkload]:
-    """All Deepseek V3 DIDT matmul workloads (MLA, gate, dense MLP, shared expert, routed expert)."""
+    """All Deepseek V3 matmul workloads (MLA, gate, dense MLP, shared expert, routed expert)."""
     workloads: list[MatmulWorkload] = []
-
     for row in MLA_MATMUL_PARAMS:
         M, K, N, batch, in1_dtype, workload_id = row
         workloads.append(
@@ -208,7 +206,6 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
                 math_fidelity=ttnn.MathFidelity.HiFi2,
             )
         )
-
     M, K, N, in1_dtype, workload_id = GATE_MATMUL_CONFIG
     workloads.append(
         MatmulWorkload(
@@ -221,49 +218,15 @@ def _deepseek_v3_workloads() -> list[MatmulWorkload]:
             math_fidelity=ttnn.MathFidelity.HiFi2,
         )
     )
-
     for row in DENSE_MLP_MATMUL_PARAMS:
         M, K, N, workload_id = row
-        workloads.append(
-            MatmulWorkload(
-                workload_id=workload_id,
-                M=M,
-                K=K,
-                N=N,
-                batch=1,
-                in1_dtype=ttnn.DataType.BFLOAT4_B,
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-            )
-        )
-
+        workloads.append(_moe_workload(M, K, N, workload_id))
     for row in SHARED_EXPERT_MATMUL_PARAMS:
         M, K, N, workload_id = row
-        workloads.append(
-            MatmulWorkload(
-                workload_id=workload_id,
-                M=M,
-                K=K,
-                N=N,
-                batch=1,
-                in1_dtype=ttnn.DataType.BFLOAT4_B,
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-            )
-        )
-
+        workloads.append(_moe_workload(M, K, N, workload_id))
     for row in ROUTED_EXPERT_MATMUL_PARAMS:
         M, K, N, workload_id = row
-        workloads.append(
-            MatmulWorkload(
-                workload_id=workload_id,
-                M=M,
-                K=K,
-                N=N,
-                batch=1,
-                in1_dtype=ttnn.DataType.BFLOAT4_B,
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-            )
-        )
-
+        workloads.append(_moe_workload(M, K, N, workload_id))
     return workloads
 
 
@@ -339,7 +302,7 @@ class SweepResult:
 
 
 def _run_single_config(
-    mesh_device,
+    mesh_device: Any,
     wl: MatmulWorkload,
     program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig,
     iterations: int,
@@ -449,10 +412,9 @@ def _run_single_config(
 
 
 # ---------------------------------------------------------------------------
-# Sweep entrypoint: one test that runs all (workload × params) and prints
+# Sweep entrypoint
 # ---------------------------------------------------------------------------
 
-# CSV header for printed results
 SWEEP_CSV_HEADER = (
     "workload_id,M,K,N,batch,in0_block_w,out_subblock_h,out_subblock_w,"
     "duration_ns,duration_per_iter_ns,duration_per_iter_us,utilization_pct,core_count,memory_configs"
@@ -463,18 +425,12 @@ SWEEP_CSV_HEADER = (
 @pytest.mark.timeout(3600)  # 1 hour default; override with pytest --timeout=SECONDS
 @pytest.mark.parametrize("mesh_device", [pytest.param(1, id="1chips")], indirect=["mesh_device"])
 def test_sweep_deepseek_v3_matmul_tune(
-    mesh_device,
-    didt_workload_iterations,
-):
-    """
-    Sweep in0_block_w, out_subblock_h, out_subblock_w for each Deepseek V3
-    DIDT matmul workload and print timing + compute utilization % (vs theoretical
-    peak FLOPS). The config with the highest utilization per workload is reported.
-    Use -s to see output. Tune --didt-workload-iterations for sweep speed (e.g. 20–100).
-    """
+    mesh_device: Any,
+    didt_workload_iterations: int,
+) -> None:
+    """Sweep program configs per workload; print timing and utilization. Use -s for output."""
     iterations = max(1, min(didt_workload_iterations, 500))
-    workloads = _deepseek_v3_workloads()
-    workloads = [w for w in workloads if w.batch == 1]
+    workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1]
 
     print(SWEEP_CSV_HEADER, flush=True)
     all_results: list[SweepResult] = []

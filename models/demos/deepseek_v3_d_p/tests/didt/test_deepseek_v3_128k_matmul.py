@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-DIDT tests for Deepseek V3 matmuls at 128k sequence length (prefill only).
+DIDT tests for Deepseek V3 prefill matmuls (128k sequence length).
 
-Tests cover per-chip matmul shapes for MLA (TP=4, SP=32), MoE gate,
-dense MLP, shared expert, and routed expert operations on single-chip
-and 8×4 Galaxy (32 chips) configurations.
-
-Per-chip grid: 11×10 (110 worker cores) only.
+Covers MLA, MoE gate, dense MLP, shared expert, and routed expert on
+single-chip and 8×4 Galaxy. Per-chip grid: 11×10 (Blackhole only).
 """
 
 import pytest
@@ -31,12 +28,18 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import get_pre
 from tests.didt.op_test_base import OpParameter, OpTestBase
 
 # ---------------------------------------------------------------------------
-# Test class
+# Test harness
 # ---------------------------------------------------------------------------
+
+# Single-chip and 8×4 Galaxy (32 chips).
+MESH_DEVICE_PARAMS = [
+    pytest.param(1, id="1chips"),
+    pytest.param((8, 4), id="galaxy"),
+]
 
 
 class DeepseekV3MatmulTest(OpTestBase):
-    """DIDT test wrapper for Deepseek V3 prefill matmuls."""
+    """OpTestBase wrapper for Deepseek V3 prefill matmuls (DRAM, 11×10 grid)."""
 
     def __init__(
         self,
@@ -74,47 +77,29 @@ class DeepseekV3MatmulTest(OpTestBase):
 
 
 # ---------------------------------------------------------------------------
-# Shared parametrization
-# ---------------------------------------------------------------------------
-
-# Mesh device parametrization: single-chip and 8×4 Galaxy (32 chips), aligned with other DIDT tests
-MESH_DEVICE_PARAMS = [
-    pytest.param(1, id="1chips"),
-    pytest.param((8, 4), id="galaxy"),
-]
-
-
-# ---------------------------------------------------------------------------
-# Common test runner
+# Shared test runner
 # ---------------------------------------------------------------------------
 
 
 def _run_matmul_test(
     mesh_device,
-    M,
-    K,
-    N,
+    M: int,
+    K: int,
+    N: int,
     in1_dtype,
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    batch=1,
-    grid_size=GRID_SIZE,
-    workload_id=None,
-):
-    """Set up and run a single Deepseek V3 matmul DIDT test."""
-
-    # Memory configs: DRAM interleaved for prefill
+    batch: int = 1,
+    grid_size: tuple[int, int] = GRID_SIZE,
+    workload_id: str | None = None,
+) -> None:
+    """Run one Deepseek V3 matmul DIDT test (DRAM, optional optimal program config)."""
     dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
-    # Program config – use optimal from sweep when available, else auto-generated
     optimal_config = OPTIMAL_PROGRAM_CONFIG.get(workload_id) if workload_id else None
-    if batch == 1:
-        program_config = get_prefill_matmul_program_config(M, K, N, grid_size, optimal_config=optimal_config)
-    else:
-        program_config = None
-
-    # Compute kernel config
+    program_config = (
+        get_prefill_matmul_program_config(M, K, N, grid_size, optimal_config=optimal_config) if batch == 1 else None
+    )
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
         math_fidelity=math_fidelity,
@@ -154,10 +139,9 @@ def _run_matmul_test(
 
 
 # =============================================================================
-# MLA matmul tests (6 ops)
+# MLA (6 matmuls): bfloat16 activations, bfloat8_b weights, HiFi2
 # =============================================================================
 
-# Build pytest params from config: (M, K, N, batch, in1_dtype, workload_id)
 MLA_MATMUL_PARAMS = [pytest.param(*row, id=row[5]) for row in MLA_PARAMS]
 
 
@@ -175,14 +159,14 @@ def test_deepseek_v3_mla_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    """DIDT test for Deepseek V3 MLA matmuls (prefill, 128k seq len)."""
+    """MLA matmuls: bfloat16 in0, bfloat8_b in1, HiFi2."""
     _run_matmul_test(
         mesh_device=mesh_device,
         M=M,
         K=K,
         N=N,
         in1_dtype=in1_dtype,
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         didt_workload_iterations=didt_workload_iterations,
         determinism_check_interval=determinism_check_interval,
         batch=batch,
@@ -191,7 +175,7 @@ def test_deepseek_v3_mla_matmul(
 
 
 # =============================================================================
-# Gate matmul test
+# Gate: bfloat16, HiFi2
 # =============================================================================
 
 
@@ -202,10 +186,7 @@ def test_deepseek_v3_gate_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    """DIDT test for Deepseek V3 MoE gate matmul (prefill, 128k seq len).
-
-    Per-chip shape: 4096×1792×256 (K=7168/4 after TP=4 sharding).
-    """
+    """MoE gate matmul: 4096×1792×256, bfloat16, HiFi2."""
     M, K, N, in1_dtype, workload_id = GATE_MATMUL_CONFIG
     _run_matmul_test(
         mesh_device=mesh_device,
@@ -221,7 +202,7 @@ def test_deepseek_v3_gate_matmul(
 
 
 # =============================================================================
-# Dense MLP matmul tests
+# Dense MLP: bfloat4_b, LoFi (MoE)
 # =============================================================================
 
 DENSE_MLP_MATMUL_PARAMS = [pytest.param(*row, id=row[3]) for row in DENSE_MLP_PARAMS]
@@ -239,7 +220,7 @@ def test_deepseek_v3_dense_mlp_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    """DIDT test for Deepseek V3 dense MLP matmuls (prefill, 128k seq len)."""
+    """Dense MLP matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
         mesh_device=mesh_device,
         M=M,
@@ -254,7 +235,7 @@ def test_deepseek_v3_dense_mlp_matmul(
 
 
 # =============================================================================
-# Shared expert matmul tests
+# Shared expert: bfloat4_b, LoFi (MoE)
 # =============================================================================
 
 SHARED_EXPERT_MATMUL_PARAMS = [pytest.param(*row, id=row[3]) for row in SHARED_EXPERT_PARAMS]
@@ -272,7 +253,7 @@ def test_deepseek_v3_shared_expert_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    """DIDT test for Deepseek V3 shared expert matmuls (prefill, 128k seq len)."""
+    """Shared expert matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
         mesh_device=mesh_device,
         M=M,
@@ -287,7 +268,7 @@ def test_deepseek_v3_shared_expert_matmul(
 
 
 # =============================================================================
-# Routed expert matmul tests
+# Routed expert: bfloat4_b, LoFi (MoE)
 # =============================================================================
 
 ROUTED_EXPERT_MATMUL_PARAMS = [pytest.param(*row, id=row[3]) for row in ROUTED_EXPERT_PARAMS]
@@ -305,10 +286,7 @@ def test_deepseek_v3_routed_expert_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    """DIDT test for Deepseek V3 routed expert matmuls (prefill, 128k seq len).
-
-    M=1024 = 4096/4 (chunked for routed experts).
-    """
+    """Routed expert matmuls: bfloat4_b, LoFi."""
     _run_matmul_test(
         mesh_device=mesh_device,
         M=M,

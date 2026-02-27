@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests that check PCC (correctness) of Deepseek V3 matmuls with the shared
-optimal program configurations. Single-chip only; one matmul per workload,
-compare TT output to torch reference.
+PCC (correctness) tests for Deepseek V3 prefill matmuls.
+
+Single-chip only; one matmul per workload; TT output compared to torch reference.
+Uses shared optimal program configs. MLA/Gate: HiFi2; MoE: LoFi.
 """
+
+from typing import Any
 
 import pytest
 import torch
@@ -25,29 +28,23 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
 )
 from tests.didt.op_test_base import OpParameter, OpTestBase
 
-# Minimum PCC to pass (same as comp_pcc default)
 PCC_THRESHOLD = 0.99
 
 
-def _pcc_workloads():
-    """All batch=1 workloads that have optimal configs, as (M, K, N, in1_dtype, math_fidelity, workload_id)."""
-    out = []
-    # MLA: only batch=1
+def _pcc_workloads() -> list[tuple[int, int, int, Any, Any, str]]:
+    """Batch=1 workloads with optimal config: (M, K, N, in1_dtype, math_fidelity, workload_id)."""
+    out: list[tuple[int, int, int, Any, Any, str]] = []
     for row in MLA_MATMUL_PARAMS:
         M, K, N, batch, in1_dtype, workload_id = row
         if batch != 1:
             continue
-        out.append((M, K, N, in1_dtype, ttnn.MathFidelity.LoFi, workload_id))
-    # Gate
+        out.append((M, K, N, in1_dtype, ttnn.MathFidelity.HiFi2, workload_id))
     M, K, N, in1_dtype, workload_id = GATE_MATMUL_CONFIG
     out.append((M, K, N, in1_dtype, ttnn.MathFidelity.HiFi2, workload_id))
-    # Dense MLP
     for M, K, N, workload_id in DENSE_MLP_MATMUL_PARAMS:
         out.append((M, K, N, ttnn.DataType.BFLOAT4_B, ttnn.MathFidelity.LoFi, workload_id))
-    # Shared expert
     for M, K, N, workload_id in SHARED_EXPERT_MATMUL_PARAMS:
         out.append((M, K, N, ttnn.DataType.BFLOAT4_B, ttnn.MathFidelity.LoFi, workload_id))
-    # Routed expert
     for M, K, N, workload_id in ROUTED_EXPERT_MATMUL_PARAMS:
         out.append((M, K, N, ttnn.DataType.BFLOAT4_B, ttnn.MathFidelity.LoFi, workload_id))
     return out
@@ -70,11 +67,12 @@ def test_deepseek_v3_matmul_pcc(
     in1_dtype,
     math_fidelity,
     workload_id,
-):
-    """Compare TT matmul output to torch reference; assert PCC >= threshold."""
+) -> None:
+    """Compare TT matmul to torch reference; assert PCC >= PCC_THRESHOLD."""
     dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    optimal_config = OPTIMAL_PROGRAM_CONFIG.get(workload_id)
-    program_config = get_prefill_matmul_program_config(M, K, N, GRID_SIZE, optimal_config=optimal_config)
+    program_config = get_prefill_matmul_program_config(
+        M, K, N, GRID_SIZE, optimal_config=OPTIMAL_PROGRAM_CONFIG.get(workload_id)
+    )
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
         math_fidelity=math_fidelity,
@@ -82,7 +80,6 @@ def test_deepseek_v3_matmul_pcc(
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-
     batch = 1
     in0_shape = [1, batch, M, K]
     in1_shape = [1, batch, K, N]
@@ -127,7 +124,6 @@ def test_deepseek_v3_matmul_pcc(
     test.activations = test.convert_activations_to_memory_config(a_t)
 
     out = test.run_device_operation()
-    # Single device: one tensor
     device_tensors = ttnn.get_device_tensors(out.cpu())
     calculated = ttnn.to_torch(device_tensors[0])
     out.deallocate(True)
@@ -135,4 +131,4 @@ def test_deepseek_v3_matmul_pcc(
     test.inputs[0].deallocate(True)
 
     passed, pcc_value = comp_pcc(golden, calculated, pcc=PCC_THRESHOLD)
-    assert passed, f"{workload_id} ({M}x{K}x{N}): PCC {pcc_value:.4f} < {PCC_THRESHOLD}"
+    assert passed, f"{workload_id} {M}x{K}x{N}: PCC {pcc_value:.4f} < {PCC_THRESHOLD}"
