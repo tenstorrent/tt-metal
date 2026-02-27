@@ -14,7 +14,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>

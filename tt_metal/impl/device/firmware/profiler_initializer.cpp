@@ -9,7 +9,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
 #include "device/device_impl.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 #include <tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"

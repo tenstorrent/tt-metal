@@ -6,7 +6,7 @@
 #include <optional>
 
 #include "fd_kernel.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {

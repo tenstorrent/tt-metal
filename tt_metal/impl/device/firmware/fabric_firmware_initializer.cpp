@@ -13,7 +13,7 @@
 #include <tt_metal.hpp>
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
