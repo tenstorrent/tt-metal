@@ -275,7 +275,7 @@ def compare_featured_vs_all_models(featured_models, all_models):
             continue
 
         errors.append(
-            f"ERROR: Missmatch for Featured model '{fmodel['name']}' (attributes: {fmodel['attributes']})"
+            f"ERROR: Mismatch for Featured model '{fmodel['name']}' (attributes: {fmodel['attributes']})"
             f"\nFound {len(matches)} candidates with same name but different attributes. Compare:"
             f"\n" + "\n".join(candidates_lines)
         )

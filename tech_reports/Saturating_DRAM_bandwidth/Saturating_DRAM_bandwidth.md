@@ -46,7 +46,7 @@ As shown in the diagram, some DRAM readers cannot be placed next to the DRAM ban
 <img src="images/image4.png" style="width:500px;"/>
 
 
-## Sharded Tensors in DRAM exmaple
+## Sharded Tensors in DRAM example
 Most of the OPs use interleaved tensor layout when storing tensors in DRAM, meaning each DRAM reader will access the DRAM banks in a round-robin style. This is fine if the OP is not DRAM-bound, however, for DRAM-bound applications, the interleaved strategy will cause NoC congestions.
 
 To mitigate the NoC congestion, we need to shard the tensor into DRAM banks, so that each DRAM reader reads only its own tensor partition from its assigned bank. One use case is matmul with 1d sharded input tensors. When in0 has small height and large width (ex, 32x1024) and in1 has large width (ex, 1024x8192), it becomes DRAM bound and we can use the same DRAM reader placement and optimization strategy mentioned earlier. 
