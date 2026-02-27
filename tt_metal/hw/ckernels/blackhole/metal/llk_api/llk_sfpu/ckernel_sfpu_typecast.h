@@ -29,7 +29,6 @@ inline void calculate_typecast_fp32_to_uint8() {
         mantissa = sfpi::shft(mantissa, -(23 - exponent));
         v_if(in < sfpi::vConst0) {
             mantissa = ~mantissa + 1;
-            mantissa &= 0x8000FFFF;  // To prevent overflow
             mantissa += 256;
         };
         v_endif;
@@ -45,8 +44,7 @@ inline void calculate_typecast_uint_to_uint8() {
     for (int d = 0; d < ITERATIONS; ++d) {
         sfpi::vUInt in;
         if constexpr (u16) {
-            TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
-            in = sfpi::l_reg[sfpi::LRegs::LReg0];
+            in = __builtin_rvtt_sfpload(InstrModLoadStore::LO16, ADDR_MOD_7, 0);
         } else {
             in = sfpi::dst_reg[0];
         }
