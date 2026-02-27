@@ -222,7 +222,6 @@ def run_flash_mla_decode_impl(
     if q_mem_config is not None:
         num_cores_per_head = 4
         q_heads_parallel_factor = math.ceil(nh / ttnn.TILE_SIZE)
-        num_virtual_batches = batch * q_heads_parallel_factor
         heads_per_vbatch = nh // q_heads_parallel_factor
         q_permuted = q.permute(2, 0, 1, 3)
         q_reshaped = q_permuted.reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)
@@ -270,7 +269,7 @@ def run_flash_mla_decode_impl(
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
-        k_chunk_size=0,
+        k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
         max_cores_per_head_batch=max_cores_per_head_batch,
         q_locally_available=q_locally_available,

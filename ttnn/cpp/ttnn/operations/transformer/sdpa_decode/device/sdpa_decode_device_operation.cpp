@@ -352,16 +352,19 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const auto& input = tensor_args.q;
     const auto q_shape = input.padded_shape();
     const auto q_shape_unpadded = input.logical_shape();
-
     const bool q_locally_available =
         operation_attributes.program_config.has_value() && operation_attributes.program_config->q_locally_available;
-
     uint32_t B;
     if (operation_attributes.paged_attention && tensor_args.page_table_tensor.has_value()) {
         const auto& page_table = tensor_args.page_table_tensor.value();
         if (page_table.is_sharded()) {
             uint32_t num_cores = page_table.memory_config().shard_spec()->grid.num_cores();
-            B = page_table.padded_shape()[0] / num_cores;
+            const uint32_t total_batch = page_table.padded_shape()[0];
+            TT_FATAL(
+                total_batch % num_cores == 0,
+                "Paged attention with sharded page table expects batch dimension batch size to be divisible by number "
+                "of cores");
+            B = total_batch / num_cores;
         } else {
             B = page_table.padded_shape()[0];
         }
@@ -370,6 +373,10 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
         B = tensor_args.k.padded_shape()[0];
     }
     uint32_t num_q_heads;
+    // Q heads parallelization
+    TT_FATAL(
+        q_locally_available && input.is_sharded(),
+        "In order for Q tensor to be locally available to all worker cores, it must be sharded");
     if (q_locally_available && input.is_sharded()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
