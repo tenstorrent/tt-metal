@@ -161,4 +161,4 @@ class TtLoRAWeightsManager:
             device_tensor = self.base_weights_device[key]
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
-        # unload lora weights from the memory: self.torch_pipleline.unload_lora_weights() or something like that
+        self.torch_pipeline.unload_lora_weights()

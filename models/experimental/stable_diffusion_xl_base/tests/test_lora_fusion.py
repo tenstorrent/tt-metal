@@ -22,7 +22,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # LORA_PATH = "lora_weights/crayons_v1_sdxl.safetensors"
 # LORA_PATH = "lora_weights/PS1Redmond-PS1Game-Playstation1Graphics.safetensors"
-LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
+# LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
+LORA_PATH = "lora_weights/pytorch_lora_weights.safetensors"
 
 
 def _get_lora_impacted_weights(sd):
@@ -59,9 +60,9 @@ def _build_reference_weights(peft_sd):
             )
 
             if is_self_attention:
-                q_w = q_weights.float().unsqueeze(0).unsqueeze(0).transpose(-2, -1)
-                k_w = k_weights.float().unsqueeze(0).unsqueeze(0).transpose(-2, -1)
-                v_w = v_weights.float().unsqueeze(0).unsqueeze(0).transpose(-2, -1)
+                q_w = q_weights.unsqueeze(0).unsqueeze(0).transpose(-2, -1)
+                k_w = k_weights.unsqueeze(0).unsqueeze(0).transpose(-2, -1)
+                v_w = v_weights.unsqueeze(0).unsqueeze(0).transpose(-2, -1)
 
                 qkv = torch.cat([q_w, k_w, v_w], dim=-1)
                 ref[f"{attn_path}.to_qkv.weight"] = qkv
@@ -77,7 +78,7 @@ def _build_reference_weights(peft_sd):
 
         # Split single proj weight into linear_1 + linear_2
         if key.endswith(".net.0.proj.weight"):
-            w = torch_tensor.float().unsqueeze(0).unsqueeze(0)
+            w = torch_tensor.unsqueeze(0).unsqueeze(0)
             w1, w2 = w.chunk(2, dim=-2)
             prefix = key.replace(".proj.weight", ".proj")
             ref[f"{prefix}.linear_1.weight"] = w1.movedim(-1, -2)
@@ -87,7 +88,7 @@ def _build_reference_weights(peft_sd):
             key.endswith(f"{suffix}.weight")
             for suffix in ("to_q", "to_k", "to_v", "to_out.0", "proj_in", "proj_out", "ff.net.2")
         ):
-            ref[key] = torch_tensor.float().unsqueeze(0).unsqueeze(0).movedim(-1, -2)
+            ref[key] = torch_tensor.unsqueeze(0).unsqueeze(0).movedim(-1, -2)
 
     return ref
 
@@ -148,7 +149,7 @@ def test_lora_fusion_pcc(mesh_device):
             continue
 
         tt_tensor = lora_manager.base_weights_device[weights_name]
-        tt_torch_tensor = ttnn.to_torch(tt_tensor).float()
+        tt_torch_tensor = ttnn.to_torch(tt_tensor)
 
         if tt_torch_tensor.shape != ref_tensor.shape:
             logger.warning(
@@ -159,10 +160,10 @@ def test_lora_fusion_pcc(mesh_device):
         assert_with_pcc(ref_tensor, tt_torch_tensor, pcc=0.999)
 
         try:
-            torch.testing.assert_close(ref_tensor, tt_torch_tensor, atol=1e-5, rtol=1e-3)
+            torch.testing.assert_close(ref_tensor, tt_torch_tensor, atol=1e-3, rtol=1e-3)
         except AssertionError as _:
             diff = torch.abs(ref_tensor - tt_torch_tensor).mean()
-            logger.warning(f"{weights_name}: Mean Diff = {diff:.8f}")
+            logger.warning(f"{weights_name}: Mean Diff = {diff:.6f}")
 
         # ref_tensor_flattened = ref_tensor.flatten()
         # tt_torch_flattened = tt_torch.flatten()
@@ -173,3 +174,8 @@ def test_lora_fusion_pcc(mesh_device):
     if skipped_keys:
         logger.warning(f"{len(skipped_keys)} LoRA impacted weights were not fused into base weights")
         logger.warning(f"Following weights were not fused: {skipped_keys}")
+        # Fail if any ref key was skipped: TT pipeline must have all base weight keys for valid comparison
+        assert not skipped_keys, (
+            f"{len(skipped_keys)} weights in PEFT reference are missing on TT (naming mismatch or missing layers). "
+            "First few: " + str(skipped_keys[:10])
+        )
