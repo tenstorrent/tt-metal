@@ -7,6 +7,7 @@
 #include <benchmark/benchmark.h>
 
 #include <algorithm>
+#include <chrono>
 #include <enchantum/enchantum.hpp>
 #include <fstream>
 #include <numeric>
@@ -21,8 +22,13 @@ struct TargetChip {
     uint32_t asic_location;
 };
 
-constexpr TargetChip kHighBwChip = {1, 6};  // Gen 4 ×8 PCIe link (16 GB/s peak)
-constexpr TargetChip kLowBwChip = {1, 1};   // Gen 4 x1 PCIe link (2 GB/s peak)
+// Gen 4 ×8 PCIe link (16 GB/s peak)
+// Chips with asic location 6 are high-bandwidth.
+constexpr TargetChip kHighBwChip = {1, 6};
+
+// Gen 4 x1 PCIe link (2 GB/s peak)
+// Chips that are not ASIC 6 are low-bandwidth.
+constexpr TargetChip kLowBwChip = {1, 1};
 
 constexpr uint32_t kWarmupIters = 5;
 constexpr uint32_t kLatencyIters = 100;
@@ -182,6 +188,29 @@ LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycles, dou
     };
 }
 
+LatencySummary summarize_latency_us(const std::vector<double>& us_values, double cycles_per_us) {
+    TT_FATAL(!us_values.empty(), "Expected non-empty latency measurements");
+
+    auto sorted = us_values;
+    std::sort(sorted.begin(), sorted.end());
+    double avg_us = 0.0;
+    for (auto v : us_values) {
+        avg_us += v;
+    }
+    avg_us /= static_cast<double>(us_values.size());
+
+    return {
+        .avg_us = avg_us,
+        .min_us = sorted.front(),
+        .max_us = sorted.back(),
+        .p50_us = sorted[sorted.size() / 2],
+        .p99_us = sorted[(sorted.size() * 99) / 100],
+        .avg_cycles = avg_us * cycles_per_us,
+        .min_cycles = static_cast<uint64_t>(sorted.front() * cycles_per_us),
+        .max_cycles = static_cast<uint64_t>(sorted.back() * cycles_per_us),
+    };
+}
+
 // Returns {per_page_us, per_page_cycles}.
 std::pair<double, double> run_d2h_throughput(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -326,7 +355,7 @@ std::vector<uint64_t> run_d2h_ping_cycles(
     return cycles;
 }
 
-// Returns {per_page_us, per_page_cycles} via device-side cycle counter.
+// Returns {per_page_us, per_page_cycles} via host-side wall-clock.
 std::pair<double, double> run_h2d_throughput(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -366,20 +395,21 @@ std::pair<double, double> run_h2d_throughput(
 
     execute_program_on_device(*mesh_device, recv_core.device_coord, std::move(recv_program));
 
+    auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_iterations; i++) {
         input_socket.write(src_vec.data(), 1);
     }
     input_socket.barrier();
-    Finish(mesh_device->mesh_command_queue());
+    auto t1 = std::chrono::high_resolution_clock::now();
 
-    uint64_t elapsed_cycles = read_l1_uint64(*mesh_device, recv_core, measurement_buffer->address());
-    double per_page_cycles = static_cast<double>(elapsed_cycles) / static_cast<double>(num_iterations);
-    double per_page_us = per_page_cycles / get_cycles_per_us(*mesh_device);
+    double elapsed_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+    double per_page_us = elapsed_us / num_iterations;
+    double per_page_cycles = per_page_us * get_cycles_per_us(*mesh_device);
     return {per_page_us, per_page_cycles};
 }
 
-// Per-iteration device-side latencies in cycles.
-std::vector<uint64_t> run_h2d_latency_cycles(
+// Per-iteration host-side latencies in microseconds.
+std::vector<double> run_h2d_latency_us(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -423,19 +453,19 @@ std::vector<uint64_t> run_h2d_latency_cycles(
         input_socket.barrier();
     }
 
+    std::vector<double> latencies_us(num_iterations);
     for (uint32_t i = 0; i < num_iterations; i++) {
+        auto t0 = std::chrono::high_resolution_clock::now();
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        latencies_us[i] = std::chrono::duration<double, std::micro>(t1 - t0).count();
     }
-    Finish(mesh_device->mesh_command_queue());
-
-    std::vector<uint64_t> cycles(num_iterations);
-    read_l1_uint64s(*mesh_device, recv_core, measurement_buffer->address(), cycles);
-    return cycles;
+    return latencies_us;
 }
 
-// H2D pure ping (no data DMA). Returns per-iteration device-side cycles.
-std::vector<uint64_t> run_h2d_ping_cycles(
+// H2D pure ping (no data DMA). Returns per-iteration host-side latencies in microseconds.
+std::vector<double> run_h2d_ping_us(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -471,15 +501,15 @@ std::vector<uint64_t> run_h2d_ping_cycles(
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
     }
+    std::vector<double> latencies_us(num_iterations);
     for (uint32_t i = 0; i < num_iterations; i++) {
+        auto t0 = std::chrono::high_resolution_clock::now();
         input_socket.write(src_vec.data(), 1);
         input_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        latencies_us[i] = std::chrono::duration<double, std::micro>(t1 - t0).count();
     }
-    Finish(mesh_device->mesh_command_queue());
-
-    std::vector<uint64_t> cycles(num_iterations);
-    read_l1_uint64s(*mesh_device, recv_core, measurement_buffer->address(), cycles);
-    return cycles;
+    return latencies_us;
 }
 
 void set_latency_counters(benchmark::State& state, const LatencySummary& s, uint32_t num_iterations) {
@@ -763,9 +793,9 @@ static void BM_H2DSocketLatency(benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        auto cycles =
-            run_h2d_latency_cycles(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
-        auto stats = summarize_latency_cycles(cycles, get_cycles_per_us(*fx.mesh_device));
+        auto latencies_us =
+            run_h2d_latency_us(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
+        auto stats = summarize_latency_us(latencies_us, get_cycles_per_us(*fx.mesh_device));
 
         state.counters["h2d_mode"] = mode_index;
         set_latency_counters(state, stats, kLatencyIters);
@@ -799,10 +829,10 @@ static void BM_H2DSocketPing(benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        auto cycles = run_h2d_ping_cycles(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
-
+        auto latencies_us =
+            run_h2d_ping_us(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
         double cycles_per_us = get_cycles_per_us(*fx.mesh_device);
-        auto stats = summarize_latency_cycles(cycles, cycles_per_us);
+        auto stats = summarize_latency_us(latencies_us, cycles_per_us);
         state.counters["h2d_mode"] = mode_index;
         set_latency_counters(state, stats, kLatencyIters);
 
@@ -816,7 +846,7 @@ static void BM_H2DSocketPing(benchmark::State& state) {
         if (f.is_open()) {
             f << "iteration,latency_us,cycles\n";
             for (uint32_t i = 0; i < kLatencyIters; i++) {
-                f << i << "," << (static_cast<double>(cycles[i]) / cycles_per_us) << "," << cycles[i] << "\n";
+                f << i << "," << latencies_us[i] << "," << (latencies_us[i] * cycles_per_us) << "\n";
             }
         }
     }
