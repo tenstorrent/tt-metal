@@ -26,7 +26,12 @@ static std::optional<MockDeviceConfig> g_registered_mock_config = std::nullopt;
 void configure_mock_mode(tt::ARCH arch, uint32_t num_chips) {
     g_registered_mock_config = MockDeviceConfig{arch, num_chips};
     log_info(tt::LogMetal, "Mock mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
-    tt::tt_metal::detail::ReleaseOwnership();
+
+    // Only destroy MetalContext if it's already initialized to avoid issues in CI/installed environments
+    // where YAML files might not be in the expected location
+    if (tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
+    }
 }
 
 void configure_mock_mode_from_hw() {
@@ -42,7 +47,11 @@ void disable_mock_mode() {
 
     g_registered_mock_config = std::nullopt;
     log_info(tt::LogMetal, "Mock mode disabled");
-    tt::tt_metal::detail::ReleaseOwnership();
+
+    // Only destroy MetalContext if it's already initialized
+    if (tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
+    }
 }
 
 bool is_mock_mode_registered() {

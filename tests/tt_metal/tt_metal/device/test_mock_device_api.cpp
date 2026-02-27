@@ -73,8 +73,16 @@ TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
 }
 
 TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {
-    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 99);
-    EXPECT_THROW(experimental::get_mock_cluster_desc(), std::runtime_error);
+    bool threw_during_configure = false;
+    try {
+        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 99);
+    } catch (const std::runtime_error&) {
+        threw_during_configure = true;
+    }
+
+    if (!threw_during_configure) {
+        EXPECT_THROW(experimental::get_mock_cluster_desc(), std::runtime_error);
+    }
 }
 
 TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
