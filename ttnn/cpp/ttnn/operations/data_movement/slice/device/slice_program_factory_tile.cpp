@@ -198,25 +198,29 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
 
-    // Reader compile-time args
-    // Data is 32 byte aligned
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_dims};
+    // Reader compile-time args (CB index via named arg, positional starts at num_dims)
+    std::vector<uint32_t> reader_compile_time_args = {num_dims};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
+    std::unordered_map<std::string, uint32_t> reader_named_args = {{"cb_in", src0_cb_index}};
+
+    // Writer compile-time args (CB index via named arg, positional starts at TensorAccessorArgs)
+    std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    std::unordered_map<std::string, uint32_t> writer_named_args = {{"cb_out", src0_cb_index}};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "reader_unary_unpad_dims_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_args));
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
     ttnn::operations::data_movement::set_slice_runtime_args_tile<true>(
@@ -315,7 +319,8 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     program_descriptor.cbs.push_back(std::move(cb_desc));
 
     // --- Reader Kernel Descriptor ---
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_dims};
+    // CB index via named compile-time arg (essential for fusion CB remapping).
+    std::vector<uint32_t> reader_compile_time_args = {num_dims};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Reader common runtime args: [src_addr, num_unpadded_per_dim..., num_padded_per_dim...]
@@ -396,7 +401,8 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // --- Writer Kernel Descriptor ---
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
+    // CB index via named compile-time arg (essential for fusion CB remapping).
+    std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
@@ -421,7 +427,8 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp";
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
