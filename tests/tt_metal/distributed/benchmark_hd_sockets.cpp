@@ -97,7 +97,7 @@ struct DeviceFixture {
             MeshDeviceConfig(std::nullopt),
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
-            /*num_cqs=*/1,
+            /*num_command_queues=*/1,
             DispatchCoreType::WORKER)) {}
 };
 
@@ -571,7 +571,7 @@ bool check_preconditions(
     return true;
 }
 
-static void BM_D2HSocketThroughput(benchmark::State& state) {
+void BM_D2HSocketThroughput(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_throughput_counters(state);
     auto& fx = get_device_fixture();
@@ -610,7 +610,7 @@ static void BM_D2HSocketThroughput(benchmark::State& state) {
     }
 }
 
-static void BM_D2HSocketLatency(benchmark::State& state) {
+void BM_D2HSocketLatency(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_latency_counters(state);
     auto& fx = get_device_fixture();
@@ -641,7 +641,7 @@ static void BM_D2HSocketLatency(benchmark::State& state) {
     }
 }
 
-static void BM_D2HSocketPing(benchmark::State& state) {
+void BM_D2HSocketPing(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_latency_counters(state);
     auto& fx = get_device_fixture();
@@ -683,7 +683,7 @@ static void BM_D2HSocketPing(benchmark::State& state) {
     }
 }
 
-static void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
+void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_multichip_counters(state);
     auto& fx = get_device_fixture();
@@ -727,7 +727,7 @@ static void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
     }
 }
 
-static void BM_H2DSocketThroughput(benchmark::State& state) {
+void BM_H2DSocketThroughput(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_throughput_counters(state);
     state.counters["h2d_mode"] = 0;
@@ -770,7 +770,7 @@ static void BM_H2DSocketThroughput(benchmark::State& state) {
     }
 }
 
-static void BM_H2DSocketLatency(benchmark::State& state) {
+void BM_H2DSocketLatency(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_latency_counters(state);
     state.counters["h2d_mode"] = 0;
@@ -806,7 +806,7 @@ static void BM_H2DSocketLatency(benchmark::State& state) {
     }
 }
 
-static void BM_H2DSocketPing(benchmark::State& state) {
+void BM_H2DSocketPing(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_latency_counters(state);
     state.counters["h2d_mode"] = 0;
@@ -852,7 +852,7 @@ static void BM_H2DSocketPing(benchmark::State& state) {
     }
 }
 
-static void BM_H2DSocketMultiChipThroughput(benchmark::State& state) {
+void BM_H2DSocketMultiChipThroughput(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_multichip_counters(state);
     auto& fx = get_device_fixture();

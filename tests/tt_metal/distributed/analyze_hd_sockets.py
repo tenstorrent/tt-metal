@@ -100,7 +100,8 @@ def _gbench_extract_args(df: pd.DataFrame, arg_names: list) -> pd.DataFrame:
                         try:
                             result[key] = int(val)
                         except ValueError:
-                            pass
+                            # Ignore malformed integer values in benchmark name fields.
+                            continue
             return result
         else:
             # Positional format (legacy): 32768/134217728/536870912
