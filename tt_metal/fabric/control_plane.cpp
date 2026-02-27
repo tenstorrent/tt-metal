@@ -2625,7 +2625,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     // Synchronize the decision across all ranks using all_reduce with LAND
     // If ANY rank needs multi-host processing (generate_mapping_locally=false), ALL ranks must participate
     bool global_generate_mapping_locally = false;
-    distributed_context->all_reduce(
+    distributed_context.all_reduce(
         tt::stl::Span<std::byte>(
             reinterpret_cast<std::byte*>(&generate_mapping_locally), sizeof(generate_mapping_locally)),
         tt::stl::Span<std::byte>(
