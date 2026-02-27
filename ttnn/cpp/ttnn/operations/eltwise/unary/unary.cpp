@@ -338,6 +338,10 @@ Tensor Softplus::invoke(
         input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
 }
 
+// xIELU (Expanded Integral of the Exponential Linear Unit)
+// With beta = 0.5 and eps = -1e-6:
+//     x > 0 :  alpha_p * x^2 + beta * x
+//     x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
 Tensor Xielu::invoke(
     const Tensor& input,
     const float alpha_p,

@@ -268,6 +268,12 @@ ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
 
 
 def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):
+    # xIELU (Expanded Integral of the Exponential Linear Unit)
+    # A Custom piecewise trainable activation function from "Deriving Activation Functions Using Integration" paper (https://arxiv.org/abs/2411.13010)
+
+    # With beta = 0.5 and eps = -1e-6:
+    #      x > 0 :  alpha_p * x^2 + beta * x
+    #      x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
     import torch
 
     dtype = x.dtype
