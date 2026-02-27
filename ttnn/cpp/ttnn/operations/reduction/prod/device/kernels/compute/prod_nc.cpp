@@ -6,6 +6,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
@@ -20,8 +21,13 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_3);
-    cb_wait_front(cb_in1, onetile);
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
+
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    cb_in1_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
@@ -29,9 +35,9 @@ void kernel_main() {
             bool last_out = (j == num_input_tiles - 1);
             uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
 
-            cb_wait_front(cb_in0, onetile);
+            cb_in0_obj.wait_front(onetile);
             if (enable_reload) {
-                cb_wait_front(cb_intermed0, onetile);
+                cb_intermed0_obj.wait_front(onetile);
             }
 
             tile_regs_acquire();
@@ -39,17 +45,17 @@ void kernel_main() {
             mul_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
             tile_regs_commit();
 
-            cb_pop_front(cb_in0, onetile);
+            cb_in0_obj.pop_front(onetile);
             if (enable_reload) {
-                cb_pop_front(cb_intermed0, onetile);
+                cb_intermed0_obj.pop_front(onetile);
             }
 
-            uint32_t cb_out = (last_out) ? (cb_out0) : (cb_intermed0);
-            cb_reserve_back(cb_out, onetile);
+            auto& cb_out_obj = last_out ? cb_out0_obj : cb_intermed0_obj;
+            cb_out_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile(dst0, cb_out);
+            pack_tile(dst0, cb_out_obj.get_cb_id());
             tile_regs_release();
-            cb_push_back(cb_out, onetile);
+            cb_out_obj.push_back(onetile);
             enable_reload = true;
         }
     }
