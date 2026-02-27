@@ -205,7 +205,18 @@ def test_attention_inference(
 
         # Get cos/sin matrices for the current position of each user
         # When using hf style rope, this
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        current_pos_tensor_rope = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
+
+        rot_mats = rope_setup.get_rot_mats(current_pos_tensor_rope)
 
         tt_out = tt_model(
             attention_input,
