@@ -11,9 +11,8 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from analysis_common import (
+from tools.scaleout.exabox.analysis_common import (
     DOMAIN_FABRIC,
     Colors,
     analysis_timestamp,

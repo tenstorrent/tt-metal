@@ -12,10 +12,9 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from analysis_common import (
+from tools.scaleout.exabox.analysis_common import (
     DOMAIN_VALIDATION,
     Colors,
     analysis_timestamp,
