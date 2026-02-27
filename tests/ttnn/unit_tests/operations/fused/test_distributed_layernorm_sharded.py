@@ -12,7 +12,7 @@ from models.common.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
-    is_llk_assert_enabled,
+    skip_with_llk_assert,
 )
 
 from models.common.utility_functions import tt2torch_tensor
@@ -366,6 +366,7 @@ def test_pre_allgather_layernorm_1d_reduce(
     )
 
 
+@skip_with_llk_assert("Hits LLK assert check for for are_packers_configured_correctly.")
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])
@@ -393,8 +394,6 @@ def test_post_allgather_layernorm(
     max_atol,
     core_grid,
 ):
-    if is_rmsnorm and seed == 0 and num_devices == 4 and input_df == ttnn.bfloat8_b and output_df == ttnn.bfloat8_b and weights_df == ttnn.bfloat8_b and is_llk_assert_enabled():
-        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
     )
@@ -450,6 +449,7 @@ def test_post_allgather_layernorm(
     logger.info("Post-allgather layernorm test passed for all devices")
 
 
+@skip_with_llk_assert("Hits LLK assert check for for are_packers_configured_correctly.")
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])

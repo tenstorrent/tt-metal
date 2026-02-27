@@ -12,6 +12,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from models.common.utility_functions import is_llk_assert_enabled
 
 
 def random_torch_tensor(dtype, shape):
@@ -35,6 +36,9 @@ dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16]
 def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
     if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
         pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
+    if in_dtype in [ttnn.uint32, ttnn.int32] and is_llk_assert_enabled():
+        pytest.skip(f"Skipping: dtype {in_dtype} with LLK_ASSERTS enabled.")
+
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -54,6 +58,9 @@ def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
 @pytest.mark.parametrize("H", [128, 2048])
 @pytest.mark.parametrize("W", [32, 1056])
 def test_tilize_2D(device, in_dtype, use_multicore, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and is_llk_assert_enabled():
+        pytest.skip(f"Skipping: dtype {in_dtype} with LLK_ASSERTS enabled.")
+
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -77,6 +84,9 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
 def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
     if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
         pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
+    if in_dtype in [ttnn.uint32, ttnn.int32] and is_llk_assert_enabled():
+        pytest.skip(f"Skipping: dtype {in_dtype} with LLK_ASSERTS enabled.")
+
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -99,6 +109,9 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
 @pytest.mark.parametrize("H", [32, 43])
 @pytest.mark.parametrize("W", [64, 76])
 def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_value):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and is_llk_assert_enabled():
+        pytest.skip(f"Skipping: dtype {in_dtype} with LLK_ASSERTS enabled.")
+
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -118,6 +131,9 @@ def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_v
 @pytest.mark.parametrize("H", [128, 98])
 @pytest.mark.parametrize("W", [78, 1024])
 def test_tilize_with_zero_padding_2D(device, in_dtype, use_multicore, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and is_llk_assert_enabled():
+        pytest.skip(f"Skipping: dtype {in_dtype} with LLK_ASSERTS enabled.")
+
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
