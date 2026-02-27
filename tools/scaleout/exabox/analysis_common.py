@@ -116,6 +116,16 @@ def build_base_argparser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     parser.add_argument("--no-color", action="store_true", help="Disable colored output")
     parser.add_argument("--csv", type=str, metavar="PATH", help="Save analysis results as CSV file(s) at PATH")
+    parser.add_argument(
+        "--csv-prefix",
+        type=str,
+        metavar="PREFIX",
+        help=(
+            "Optional prefix for CSV filenames. When set, --csv is treated as the "
+            "output directory and files are named {domain}_test_{PREFIX}_*.csv "
+            '(e.g. --csv-prefix "run42_3" produces dispatch_test_run42_3_summary.csv).'
+        ),
+    )
     return parser
 
 
@@ -141,6 +151,25 @@ def validate_dir_exists(path: str) -> Path:
         print(f"Error: Directory not found: {path}", file=sys.stderr)
         sys.exit(1)
     return p
+
+
+def csv_stem_and_suffix(csv_path: str, csv_prefix: str | None, domain: str) -> tuple[str, str]:
+    """Compute CSV file stem and suffix from CLI arguments.
+
+    When *csv_prefix* is provided, *csv_path* is treated as a directory and
+    filenames follow the documented convention ``{domain}_test_{prefix}``.
+    Otherwise *csv_path* is split into stem + suffix directly (original
+    behaviour).
+    """
+    csv_p = Path(csv_path)
+    if csv_prefix:
+        directory = csv_p if csv_p.suffix == "" else csv_p.parent
+        stem = str(Path(directory) / f"{domain}_test_{csv_prefix}")
+        suffix = ".csv"
+    else:
+        suffix = csv_p.suffix or ".csv"
+        stem = str(csv_p.with_suffix(""))
+    return stem, suffix
 
 
 def write_csv(rows: list[dict], filepath: str, fieldnames: list[str]) -> None:

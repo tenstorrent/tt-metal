@@ -20,6 +20,7 @@ from analysis_common import (
     analysis_timestamp_display,
     apply_common_args,
     build_base_argparser,
+    csv_stem_and_suffix,
     deduplicate_and_count_messages,
     print_message_section,
     print_section_header,
@@ -294,8 +295,7 @@ def print_recommendations(analysis: LogAnalysis) -> None:
 
     if analysis.has_critical:
         recs.append(
-            "• Critical errors detected (segmentation faults, core dumps). "
-            "Investigate hardware or driver issues."
+            "• Critical errors detected (segmentation faults, core dumps). " "Investigate hardware or driver issues."
         )
         recs.append("• Escalate to SYSENG team for hardware diagnostics.")
 
@@ -367,7 +367,7 @@ def output_text(analysis: LogAnalysis):
         print("All tests passed successfully.")
 
 
-def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
+def output_csv(analysis: LogAnalysis, csv_path: str, csv_prefix: str | None = None) -> None:
     """Write analysis results to CSV files."""
     ts = analysis_timestamp()
     log_basename = os.path.basename(analysis.filepath)
@@ -386,9 +386,7 @@ def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
         "status": analysis.status,
     }
 
-    csv_p = Path(csv_path)
-    suffix = csv_p.suffix
-    stem = str(csv_p.with_suffix(""))
+    stem, suffix = csv_stem_and_suffix(csv_path, csv_prefix, DOMAIN_DISPATCH)
 
     write_csv([summary_row], f"{stem}_summary{suffix}", SUMMARY_CSV_FIELDS)
 
@@ -396,56 +394,64 @@ def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
     detail_rows: list[dict] = []
 
     for test in sorted(analysis.tests_passed):
-        detail_rows.append({
-            "timestamp": ts,
-            "log_file": log_basename,
-            "domain": DOMAIN_DISPATCH,
-            "record_type": "test_result",
-            "test_name": test,
-            "test_status": "PASSED",
-            "error_category": "",
-            "error_severity": "",
-            "error_message": "",
-        })
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "PASSED",
+                "error_category": "",
+                "error_severity": "",
+                "error_message": "",
+            }
+        )
 
     for test in sorted(analysis.tests_failed):
-        detail_rows.append({
-            "timestamp": ts,
-            "log_file": log_basename,
-            "domain": DOMAIN_DISPATCH,
-            "record_type": "test_result",
-            "test_name": test,
-            "test_status": "FAILED",
-            "error_category": "test_failed",
-            "error_severity": "error",
-            "error_message": "",
-        })
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "FAILED",
+                "error_category": "test_failed",
+                "error_severity": "error",
+                "error_message": "",
+            }
+        )
 
     for test in sorted(analysis.tests_skipped):
-        detail_rows.append({
-            "timestamp": ts,
-            "log_file": log_basename,
-            "domain": DOMAIN_DISPATCH,
-            "record_type": "test_result",
-            "test_name": test,
-            "test_status": "SKIPPED",
-            "error_category": "test_skipped",
-            "error_severity": "info",
-            "error_message": "",
-        })
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "test_result",
+                "test_name": test,
+                "test_status": "SKIPPED",
+                "error_category": "test_skipped",
+                "error_severity": "info",
+                "error_message": "",
+            }
+        )
 
     for cat_key, severity, msg in analysis.categorized_errors:
-        detail_rows.append({
-            "timestamp": ts,
-            "log_file": log_basename,
-            "domain": DOMAIN_DISPATCH,
-            "record_type": "error",
-            "test_name": "",
-            "test_status": "",
-            "error_category": cat_key,
-            "error_severity": severity,
-            "error_message": msg[:500],
-        })
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_DISPATCH,
+                "record_type": "error",
+                "test_name": "",
+                "test_status": "",
+                "error_category": cat_key,
+                "error_severity": severity,
+                "error_message": msg[:500],
+            }
+        )
 
     if detail_rows:
         write_csv(detail_rows, f"{stem}_details{suffix}", DETAIL_CSV_FIELDS)
@@ -461,7 +467,7 @@ def main():
     analysis = analyze_log_file(str(log_file))
 
     if args.csv:
-        output_csv(analysis, args.csv)
+        output_csv(analysis, args.csv, csv_prefix=args.csv_prefix)
 
     if args.json:
         output_json(analysis)

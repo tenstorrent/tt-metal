@@ -2,6 +2,8 @@
 
 This document describes the CSV output schemas produced by the three log analysis scripts. All scripts support a `--csv PATH` flag that writes structured CSV files alongside the normal console/JSON output. These CSVs are designed for ingestion into Superset (or any BI tool) for visualization and dashboarding.
 
+All scripts also accept an optional `--csv-prefix PREFIX` flag. When provided, `--csv` is treated as the output **directory** and filenames are generated automatically following the naming convention shown below (e.g. `{domain}_test_{PREFIX}_summary.csv`). When omitted, the original behaviour is preserved — `--csv` is treated as a base filepath and `_summary`, `_details`, etc. are appended to its stem.
+
 ## Common Columns
 
 The following columns appear across all CSV outputs:
@@ -54,7 +56,7 @@ One row per test result, plus one row per categorized runtime error.
 
 Analyzes a single fabric test log file. Produces two CSV files.
 
-### `fabrich_test_{run_id}_{run}_summary.csv`
+### `fabric_test_{run_id}_{run}_summary.csv`
 
 One row per analyzed log file.
 
@@ -69,7 +71,7 @@ One row per analyzed log file.
 | `critical_errors_count` | int | Critical errors detected |
 | `status` | string | `PASSED` or `FAILED` |
 
-### `fabrich_test_{run_id}_{run}_details.csv`
+### `fabric_test_{run_id}_{run}_details.csv`
 
 One row per error category found, with occurrence count.
 
@@ -202,14 +204,29 @@ Error categories are extensible -- adding a new type requires only adding an ent
 ## Usage Examples
 
 ```bash
-# Dispatch: analyze single log, produce CSV
+# Dispatch: analyze single log, produce CSV (original naming)
 python3 analyze_dispatch_results.py test.log --csv results/dispatch.csv
+# → results/dispatch_summary.csv, results/dispatch_details.csv
+
+# Dispatch: with --csv-prefix for documented naming convention
+python3 analyze_dispatch_results.py test.log --csv results/ --csv-prefix "run42_3"
+# → results/dispatch_test_run42_3_summary.csv, results/dispatch_test_run42_3_details.csv
 
 # Fabric: analyze single log, produce CSV
 python3 analyze_fabric_results.py test.log --csv results/fabric.csv
+# → results/fabric_summary.csv, results/fabric_details.csv
+
+# Fabric: with --csv-prefix
+python3 analyze_fabric_results.py test.log --csv results/ --csv-prefix "run42_3"
+# → results/fabric_test_run42_3_summary.csv, results/fabric_test_run42_3_details.csv
 
 # Validation: analyze directory of logs, produce CSV
 python3 analyze_validation_results.py validation_output/ --csv results/validation.csv
+# → results/validation_summary.csv, ..._aggregate.csv, ..._faulty_links.csv, ..._errors.csv
+
+# Validation: with --csv-prefix
+python3 analyze_validation_results.py validation_output/ --csv results/ --csv-prefix "run42_3"
+# → results/validation_test_run42_3_summary.csv, etc.
 ```
 
-The `--csv` flag can be combined with `--json` (both outputs are produced) or used standalone alongside the default text output.
+The `--csv` flag can be combined with `--json` (both outputs are produced) or used standalone alongside the default text output. The `--csv-prefix` flag is optional and only affects filename generation when `--csv` is also provided.
