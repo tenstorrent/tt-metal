@@ -102,14 +102,20 @@ struct KernelMode {
     uint32_t tiles_per_block;
 };
 
+static constexpr uint32_t memory_estimator(uint32_t width_tiles, uint32_t tile_size) {
+    return (width_tiles * tile_size) * 4U + (1U * tile_size) * 2U;  // src0, src1, out, ygrad; sum_reduce, ones
+}
+
 static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t memory_needed =
-        (width_tiles * tile_size) * 4U + (1U * tile_size) * 2U;  // src0, src1, out, ygrad; sum_reduce, ones
-    const uint32_t tiles_per_block = (memory_needed < available_L1_in_bytes) ? width_tiles : 1U;
-    const uint32_t buffering_multiplier = (memory_needed * 2U > available_L1_in_bytes) ? 1U : 2U;
-    return {buffering_multiplier, memory_needed, tiles_per_block};
+    const uint32_t full_row_memory_needed = memory_estimator(width_tiles, tile_size);
+    const uint32_t tiles_per_block = (full_row_memory_needed < available_L1_in_bytes) ? width_tiles : 4U;
+    const uint32_t new_estimation_memory_needed = memory_estimator(tiles_per_block, tile_size);
+    // Double buffering when total L1 with 2x fits: for streaming (small blocks) and for short rows (e.g. 6000x5).
+    // Long full rows (e.g. 127 tiles) get 1x so we stay under L1.
+    const uint32_t buffering_multiplier = (new_estimation_memory_needed * 2U <= available_L1_in_bytes) ? 2U : 1U;
+    return {buffering_multiplier, new_estimation_memory_needed, tiles_per_block};
 }
 
 static void get_tensor_properties(
@@ -190,10 +196,11 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
 
     log_debug(
         tt::LogOp,
-        "SoftmaxBackward: Using {} kernel | Shape: {}x{} tiles | Estimated L1: {} KB",
+        "SoftmaxBackward: Using {} kernel | Shape: {}x{} tiles | {}x buffering | Estimated L1: {} KB",
         tiles_per_block == width_tiles ? "NON-STREAMING" : "STREAMING",
         num_rows,
         width_tiles,
+        buffering_multiplier,
         required_memory_bytes / 1024);
 
     // Collect worker cores in deterministic order and assign rows to each.

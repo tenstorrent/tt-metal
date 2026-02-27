@@ -35,16 +35,15 @@ void kernel_main() {
 
         // Process tiles in blocks within each row
         for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
-            // Calculate block size (handle remainder)
             const uint32_t current_block_size = std::min(tiles_per_block, num_tiles_per_row - block_start);
 
             write_tiles_by_row(
                 out_cb_id,
                 output_accessor,
                 row_start_tile + block_start,
-                current_block_size,
+                current_block_size,  // num_tiles_to_write to DRAM
                 out_tile_size,
-                current_block_size);
+                tiles_per_block);  // num_tiles_to_pop (fixed for CB API)
         }
     }
 }

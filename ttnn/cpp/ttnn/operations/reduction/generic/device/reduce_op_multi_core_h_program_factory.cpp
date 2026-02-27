@@ -44,6 +44,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
+    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
+
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
     uint32_t num_cores;
@@ -88,7 +90,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
                 .set_globally_allocated_address(*a.buffer());
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     } else {
-        uint32_t num_input_tiles = 2;
+        uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
@@ -113,7 +115,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
                 .set_globally_allocated_address(*output.buffer());
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     } else {
-        uint32_t num_output_tiles = 2;
+        uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -125,7 +127,19 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
+    if (operation_attributes.negate) {
+        uint32_t acc_cb_index = CBIndex::c_4;
+        tt_metal::CircularBufferConfig cb_acc_config =
+            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+                .set_page_size(acc_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
+
+        uint32_t ineg_cb_index = CBIndex::c_5;
+        tt_metal::CircularBufferConfig cb_ineg_config =
+            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
+                .set_page_size(ineg_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_ineg_config);
+    }
 
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
@@ -180,9 +194,13 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         chunk_size,                 // Column Chunk Size
     };
 
+    const std::string compute_kernel =
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h") +
+        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+        compute_kernel,
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -200,7 +218,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+            compute_kernel,
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

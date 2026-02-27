@@ -206,7 +206,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::optional<float> pad_value) {
+    std::optional<float> pad_value,
+    bool col_tilize) {
     ZoneScoped;
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
@@ -226,12 +227,53 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
     auto host_buffer = get_host_tensor(host_dtype);
+
+    ttnn::Shape effective_shape = tensor_shape;
+    if (col_tilize) {
+        // Transpose the last two dims of the float32 host buffer by creating a new
+        // buffer and replacing host_buffer, so that BFP exponent grouping happens
+        // along columns instead of rows.
+        auto rank = tensor_shape.rank();
+        TT_FATAL(rank >= 2, "col_tilize requires tensor rank >= 2, got {}", rank);
+        TT_FATAL(
+            dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B,
+            "col_tilize requires BFP dtype (BFLOAT8_B or BFLOAT4_B)");
+
+        const auto K = tensor_shape[-2];
+        const auto N = tensor_shape[-1];
+        size_t batch_size = 1;
+        for (size_t i = 0; i < rank - 2; ++i) {
+            batch_size *= tensor_shape[i];
+        }
+
+        const float* src = host_buffer.view_as<float>().data();
+        std::vector<float> transposed(batch_size * K * N);
+        for (size_t b = 0; b < batch_size; ++b) {
+            for (size_t i = 0; i < static_cast<size_t>(N); ++i) {
+                for (size_t j = 0; j < static_cast<size_t>(K); ++j) {
+                    transposed[(b * N * K) + (i * K) + j] = src[(b * K * N) + (j * N) + i];
+                }
+            }
+        }
+        host_buffer = HostBuffer(std::move(transposed));
+
+        // Build transposed shape: swap last two dims
+        std::vector<uint32_t> new_dims;
+        new_dims.reserve(rank);
+        for (size_t i = 0; i < rank - 2; ++i) {
+            new_dims.push_back(tensor_shape[i]);
+        }
+        new_dims.push_back(N);
+        new_dims.push_back(K);
+        effective_shape = ttnn::Shape(tt::stl::Span<const uint32_t>(new_dims.data(), new_dims.size()));
+    }
+
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,
         host_dtype,
         dst_dtype,
         layout,
-        tensor_shape,
+        effective_shape,
         memory_config,
         optional_tile,
         pad_value.value_or(0.0f),
