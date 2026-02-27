@@ -6,10 +6,14 @@ on:
       version:
         required: false
         type: string
-      os:
+      platform:
         required: false
         type: string
         default: ubuntu-22.04
+      image:
+        required: true
+        type: string
+        description: "Image type: release or release-models"
       tag-latest:
         required: false
         type: boolean
@@ -27,20 +31,22 @@ on:
         default: false
 jobs:
   create-docker-release-image:
+    name: Build ${{ inputs.image }} image
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        os:
-          - ${{ inputs.os }}
-        image: [release, release-models]
     runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
+      image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Extract Ubuntu version
+        id: extract-version
+        run: |
+          PLATFORM="${{ inputs.platform }}"
+          UBUNTU_VERSION="${PLATFORM#ubuntu-}"
+          echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
@@ -57,39 +63,52 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          OS_VERSION="${{ matrix.os }}"
-          UBUNTU_VERSION="${OS_VERSION#ubuntu-}"
+          UBUNTU_VERSION="${{ steps.extract-version.outputs.version }}"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
+          # Determine Python version based on Ubuntu version
+          if [ "$UBUNTU_VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_ENV
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_OUTPUT
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
+        id: build-push
         uses: docker/build-push-action@v6
         with:
           push: true
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
             UBUNTU_VERSION=${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
+            PYTHON_VERSION=${{ steps.generate-tag-name.outputs.PYTHON_VERSION }}
             GIT_REF=${{ github.ref_name || 'main' }}
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
-          target: ${{ matrix.image }}
+          target: ${{ inputs.image }}
           outputs: |
             type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Get image digest
+        if: ${{ !inputs.dry-run }}
+        id: get-digest
+        run: |
+          # Output format: repo@sha256:digest
+          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
+          echo "Built image: $IMAGE_ID"
+          echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 
   smoke-test-docker-image:
     if: ${{ !inputs.dry-run }}
     needs: create-docker-release-image
     strategy:
       matrix:
-        os:
-          - ${{ inputs.os }}
-        image: [release, release-models]
         test_group:
           [
               {
@@ -105,12 +124,11 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64:${{ inputs.version }}
+      image: ${{ needs.create-docker-release-image.outputs.image_digest }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test_group.arch }}
         GITHUB_ACTIONS: true
-        PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -143,13 +161,7 @@ jobs:
   tag-docker-image-as-latest:
     if: ${{ !inputs.dry-run }}
     needs: [smoke-test-docker-image, create-docker-release-image]
-    strategy:
-      matrix:
-        os:
-          - ${{ inputs.os }}
-        image: [release, release-models]
-    runs-on:
-      - ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Docker login
         uses: docker/login-action@v3
@@ -167,10 +179,11 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
-          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
-          docker pull $TAG_NAME
-          echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
-          docker tag $TAG_NAME $REPO_IMAGE_NAME:$LATEST_TAG
-          echo "Pushing image with tag " $REPO_IMAGE_NAME:$LATEST_TAG
-          docker push $REPO_IMAGE_NAME:$LATEST_TAG
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
+          # Pull by digest to ensure we tag the exact image we built and tested
+          IMAGE_DIGEST="${{ needs.create-docker-release-image.outputs.image_digest }}"
+          docker pull "$IMAGE_DIGEST"
+          echo "Tagging image $IMAGE_DIGEST as $REPO_IMAGE_NAME:$LATEST_TAG"
+          docker tag "$IMAGE_DIGEST" "$REPO_IMAGE_NAME:$LATEST_TAG"
+          echo "Pushing image with tag $REPO_IMAGE_NAME:$LATEST_TAG"
+          docker push "$REPO_IMAGE_NAME:$LATEST_TAG"
