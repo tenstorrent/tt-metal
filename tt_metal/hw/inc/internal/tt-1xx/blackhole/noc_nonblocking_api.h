@@ -1629,7 +1629,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 /**
  * The stateful NOC commands provide granular control over NOC register programming by writing
  * only a subset of registers for each transaction. This approach leverages the fact that many
- * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ * transactions reuse certain values (e.g. length, coordinates) while varying others.
  *
  * This design provides significant advantages over previous stateful APIs:
  * - Fine-grained control: Users can specify exactly which registers to update per transaction
