@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
