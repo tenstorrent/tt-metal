@@ -665,6 +665,17 @@
   team: models
   model-name: llama3.1-8b
 
+# P100 Single-card tests
+- name: llama3.1-8b P100 performance batch-32
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
+  skus:
+    bh_p100:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
 # LLMBox Multi-card tests
 - name: llama3.1-8b LLMBox performance batch-32
   cmd: |
