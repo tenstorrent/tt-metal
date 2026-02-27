@@ -1222,9 +1222,9 @@ void kernel_main() {
         uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
         uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
         uint32_t alias_prev_out = cb_out_A, alias_cur_out = cb_out_B;
-
+        DeviceZoneScopedN("Q chunk");
         for (uint32_t k_chunk = 0; k_chunk < num_k_chunks; k_chunk++) {
-            DeviceZoneScopedN("sdpa_inner_loop_step");
+            DeviceZoneScopedN("K chunk");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == num_k_chunks - 1);
 

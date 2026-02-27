@@ -158,6 +158,7 @@ def save_test_inputs(
     subblock_h,
     mm_throttle_level,
     exp_approx_mode,
+    padded_k_tiles=0,
 ):
     """Save input files and C++ command to a permanent directory."""
     out_dir = os.path.join(TEST_INPUTS_DIR, test_id)
@@ -193,6 +194,8 @@ def save_test_inputs(
         str(mm_throttle_level),
         "--exp_approx_mode",
         str(int(exp_approx_mode)),
+        "--padded_k_tiles",
+        str(padded_k_tiles),
     ]
 
     import json
@@ -281,6 +284,7 @@ def run_sdpa_single_core_test(
             subblock_h,
             mm_throttle_level,
             exp_approx_mode,
+            padded_k_tiles,
         )
         pytest.skip("--save-inputs: files generated, skipping C++ execution")
 
@@ -371,6 +375,8 @@ TEST_CASES = [
     (1, 5, "random", 4, 0, 4, 2),
     (1, 5, "random", 8, 0, 4, 2),
     (3, 5, "random", 4, 1, 4, 2),
+    # WAN-like: sq9, sk16, 19 K chunks with 8 padded tiles (3 Q chunks for fast iteration)
+    (3, 19, "random", 16, 8, 9, 1),
 ]
 
 TEST_IDS = [
@@ -389,6 +395,7 @@ TEST_IDS = [
     "1q_5k-random-sk4-sbh2",
     "1q_5k-random-sk8-sbh2",
     "3q_5k-random-sk4-sbh2-pad1",
+    "3q_19k-random-sk16-pad8-sq9",
 ]
 
 
