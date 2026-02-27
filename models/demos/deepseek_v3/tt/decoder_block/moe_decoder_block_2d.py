@@ -22,6 +22,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 
+fabric_config = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
@@ -93,14 +97,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         }
 
     @classmethod
-    def _forward_mlp_common(
-        cls,
-        x: ttnn.Tensor,
-        cfg: RunPrefillConfig | RunDecodeConfig,
-        moe_forward_fn,
-        shared_expert_forward_fn,
-    ) -> ttnn.Tensor:
-        """Common implementation for forward_mlp_prefill and forward_mlp_decode."""
+    @abstractmethod
+    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         # Handle all_gather if input is TP-sharded
         hidden_size = cfg["moe"]["hidden_size"]
         tp_size = cfg["moe"]["mesh_device"].shape[1]
@@ -118,14 +116,17 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
         # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = moe_forward_fn(x_gathered, cfg["moe"])
+        mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
-        shared_expert_out = shared_expert_forward_fn(x_gathered, cfg["shared_expert"])
+        shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
-        # Add outputs first, then reduce_scatter the combined result
-        combined_out = ttnn.add(mlp_out, shared_expert_out)
+        # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
+        # of a reduce on the MoE experts followed by an add with the SharedExpert. This enables us to use
+        # the optimized reduce_scatter.
+        combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
+        combined_out = ttnn.sum(combined_out, dim=0, keepdim=True)
 
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
@@ -147,10 +148,70 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     @abstractmethod
-    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls._forward_mlp_common(x, cfg, MoE.forward_prefill, SharedExpert.forward_prefill)
-
-    @classmethod
-    @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls._forward_mlp_common(x, cfg, MoE.forward_decode, SharedExpert.forward_decode)
+        # Handle all_gather if input is TP-sharded
+        hidden_size = cfg["moe"]["hidden_size"]
+        tp_size = cfg["moe"]["mesh_device"].shape[1]
+        x_dim = x.shape[-1]
+
+        if x_dim == hidden_size // tp_size:
+            # Input is TP-sharded, need to gather
+            # Use MoE's all_gather config which outputs the correct memory layout for MoEGate
+            ccl_moe = cfg["moe"]["ccl"]
+            x_gathered = ttnn.experimental.all_gather_async(
+                x, **ccl_moe.populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+            )
+        else:
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
+
+        # Run both MoE and SharedExpert with the same gathered input
+        mlp_out = MoE.forward_decode(x_gathered, cfg["moe"])
+        # SharedExpert now always expects collective ops to be handled by caller
+        shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
+
+        # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
+        # of a reduce on the MoE experts followed by an add with the SharedExpert. This enables us to use
+        # the optimized reduce_scatter.
+        combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(shared_expert_out)
+
+        # Handle reduce_scatter if input was TP-sharded
+        if x_dim == hidden_size // tp_size:
+            # Single reduce_scatter on combined output using MoE's config for consistency
+            ccl_moe = cfg["moe"]["ccl"]
+
+            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+                summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    combined_out,
+                    dim=0,
+                    split_size=combined_out[-1] // tp_size,
+                    output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
+                )
+                ttnn.deallocate(combined_out)
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                    summed_experts, cfg["moe"]["ring_final_output_reduce_scatter"]
+                )
+            else:
+                summed_experts = ttnn.sum(
+                    combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
+                )
+                ttnn.deallocate(combined_out)
+                output = ttnn.experimental.reduce_scatter_minimal_async(
+                    summed_experts,
+                    **ccl.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
+                )
+
+            # Cleanup gathered tensor
+            if x_gathered is not x:
+                ttnn.deallocate(x_gathered)
+        else:
+            output = ttnn.sum(
+                combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
+            )
+
+            # Should always be TP-sharded at this point
+            assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
+
+        return output
