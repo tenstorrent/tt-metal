@@ -69,7 +69,7 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     // weight shape: (out_channels, in_channels, kernel_h, kernel_w)
     // ttnn::conv2d requires weights on host in ROW_MAJOR layout
     weight_ = helper_funcs::from_torch(weight_torch, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-    
+
     // Bias must be 4D [1, 1, 1, out_channels]
     auto bias_torch_reshaped = bias_torch.reshape({1, 1, 1, -1});
     bias_ = helper_funcs::from_torch(bias_torch_reshaped, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
@@ -153,12 +153,13 @@ ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
 
     // Reshape to (batch_size, 1, num_patches, hidden_size) to match ttnn 4D requirement
     // num_patches = output_height * output_width
-    auto output_reshaped = ttnn::reshape(output_tensor, ttnn::Shape{
-        static_cast<uint32_t>(batch_size), 
-        1, 
-        static_cast<uint32_t>(output_height * output_width), 
-        static_cast<uint32_t>(hidden_size_)
-    });
+    auto output_reshaped = ttnn::reshape(
+        output_tensor,
+        ttnn::Shape{
+            static_cast<uint32_t>(batch_size),
+            1,
+            static_cast<uint32_t>(output_height * output_width),
+            static_cast<uint32_t>(hidden_size_)});
 
     return output_reshaped;
 }
