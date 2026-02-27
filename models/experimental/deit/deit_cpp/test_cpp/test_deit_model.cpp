@@ -144,7 +144,7 @@ void test_deit_model_inference(const std::string& model_path) {
     auto tt_image = helper_funcs::torch_to_tt_tensor_tile(input_image, device);
 
     // Run TT model inference
-    std::optional<torch::Tensor> bool_masked_pos_opt = std::nullopt;
+    std::optional<ttnn::Tensor> bool_masked_pos_opt = std::nullopt;
     const ttnn::Tensor* tt_head_mask = nullptr;
     auto [tt_out, pooler_output, hidden_states, attentions] = tt_model->forward(
         tt_image,

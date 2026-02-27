@@ -12,7 +12,9 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/host_api.hpp>
 
 TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     const DeiTConfig& config,
@@ -33,6 +35,12 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     // Calculate number of patches
     num_patches_ = (image_size_.first / patch_size_.first) * (image_size_.second / patch_size_.second);
 
+    // Initialize padded_num_channels_
+    padded_num_channels_ = num_channels_;
+    if (padded_num_channels_ < 16) {
+        padded_num_channels_ = 16;
+    }
+
     // Load projection weights and bias from state_dict
     std::string weight_key = base_address + "projection.weight";
     std::string bias_key = base_address + "projection.bias";
@@ -47,6 +55,15 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     // Load weights and bias
     auto weight_torch = state_dict[weight_key];
     auto bias_torch = state_dict[bias_key];
+
+    // Pad weights if needed
+    if (padded_num_channels_ > num_channels_) {
+        auto options = weight_torch.options();
+        auto padded_weight_torch = torch::zeros({weight_torch.size(0), padded_num_channels_, weight_torch.size(2), weight_torch.size(3)}, options);
+        using namespace torch::indexing;
+        padded_weight_torch.index_put_({Slice(), Slice(0, num_channels_), Slice(), Slice()}, weight_torch);
+        weight_torch = padded_weight_torch;
+    }
 
     // Convert to TTNN tensors
     // weight shape: (out_channels, in_channels, kernel_h, kernel_w)
@@ -76,7 +93,7 @@ ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
     int num_channels = input_shape[3];
 
     // Check channel dimension
-    if (num_channels != num_channels_) {
+    if (num_channels != num_channels_ && num_channels != padded_num_channels_) {
         throw std::invalid_argument(
             "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
         );
@@ -97,7 +114,7 @@ ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
         pixel_values,
         weight_,
         device_.get(),
-        num_channels_,
+        padded_num_channels_,
         hidden_size_,
         batch_size,
         height,
@@ -111,8 +128,8 @@ ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
         bias_,
         conv_config_,
         compute_config_,
-        std::nullopt, // memory_config
-        std::nullopt, // dram_slice_config
+        std::nullopt,
+        std::nullopt,
         true,         // return_output_dim
         true          // return_weights_and_bias
     );

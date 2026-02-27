@@ -94,7 +94,7 @@ ttnn::Tensor TtDeiTPooler::forward(const ttnn::Tensor& hidden_states) {
     );
 
     // Apply tanh activation
-    pooled_output = ttnn::tanh(pooled_output);
+    pooled_output = ttnn::tanh(pooled_output, ttnn::L1_MEMORY_CONFIG);
 
     return pooled_output;
 }
