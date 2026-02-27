@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
     constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
     constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -117,7 +118,7 @@ void kernel_main() {
                     sdpa_standard_v2<
                         Sq_chunk_t,
                         Sk_chunk_t,
-                        Skt,
+                        valid_Skt,
                         DHt,
                         vDHt,
                         scale_fp32,

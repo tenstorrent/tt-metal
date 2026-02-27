@@ -328,11 +328,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // DST values from the preceding matmul corrupt the GMPOOL MAX accumulation when SBH>1.
     // Additionally, the sub_exp pack_tile<true> write-back through cb_push_back_hold_wr_ptr
     // may have L1 coherency issues with subsequent UNPACK reads from the same addresses.
-    const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_padded_mask && !use_attention_sink &&
-                                       sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
-                                       qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h == 1 &&
-                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8;
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+    // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
+    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
+    const bool use_streaming_compute =
+        !is_causal && !use_provided_mask && !use_attention_sink && sliding_window_size.value_or(0) == 0 &&
+        !is_chunked && !fp32_dest_acc_en && qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h == 1 &&
+        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8 && !streaming_mask_unsupported;
+    log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -509,6 +512,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         sliding_window_size.value_or(0),
         (std::uint32_t)use_attention_sink,
         (std::uint32_t)use_streaming_compute,  // arg 30
+        valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -539,7 +543,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat mask_df =
         attn_mask.has_value()
             ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-            : tt::DataFormat::Bfp4_b;  // Bfp4_b is fine for standard path; streaming path only reads -inf tiles
+            : tt::DataFormat::Bfp4_b;  // Bfp4_b is fine; streaming path only L1-accumulates -inf tiles
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
