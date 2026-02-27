@@ -313,6 +313,65 @@ def _tiles_for_core(ring_pos: int) -> int:
     return 7 if ring_pos in _FUSED_PAD_CORES else 8
 
 
+def _prepare_b0_b1_tensor(
+    torch_b0: torch.Tensor,
+    torch_b1: torch.Tensor,
+    L: int,
+    E: int,
+    K: int,
+    N: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Interleave, shard, and pad b0/b1 biases for the fused MoE kernel.
+
+    Broadcasts the bias from height 1 to height K (matching w0_w1 layout),
+    then applies the same N-dimension swizzle as :func:`_prepare_w0_w1_tensor`.
+
+    Args:
+        torch_b0: Gate bias tensor ``(L, E, 1, N)``.
+        torch_b1: Up bias tensor ``(L, E, 1, N)``.
+        L: Number of layers.
+        E: Number of experts.
+        K: Input / hidden dimension (2880) — bias is broadcast to this height.
+        N: Intermediate dimension (2880).
+        ring2cores: Ring-position -> ``(core_coord, dram_bank_id, pad_flag)`` mapping.
+
+    Returns:
+        Tensor of shape ``(num_cores, L, E, groups_per_core, K, 4*TILE_SIZE)``.
+    """
+    torch_b0_expanded = torch_b0.expand(L, E, K, N)
+    torch_b1_expanded = torch_b1.expand(L, E, K, N)
+    return _prepare_w0_w1_tensor(torch_b0_expanded, torch_b1_expanded, L, E, K, N, ring2cores)
+
+
+def _prepare_b2_tensor(
+    torch_b2: torch.Tensor,
+    L: int,
+    E: int,
+    N: int,
+    K: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Shard, pad, and reorder b2 bias for the fused MoE kernel.
+
+    Broadcasts the bias from height 1 to height N (matching w2 layout),
+    then applies the same K-dimension swizzle as :func:`_prepare_w2_tensor`.
+
+    Args:
+        torch_b2: Down bias tensor ``(L, E, 1, K)``.
+        L: Number of layers.
+        E: Number of experts.
+        N: Intermediate dimension (2880) — bias is broadcast to this height.
+        K: Output / hidden dimension (2880).
+        ring2cores: Ring-position -> ``(core_coord, dram_bank_id, pad_flag)`` mapping.
+
+    Returns:
+        Tensor of shape ``(num_cores, L, E, 2, N, 4*TILE_SIZE)``.
+    """
+    torch_b2_expanded = torch_b2.expand(L, E, N, K)
+    return _prepare_w2_tensor(torch_b2_expanded, L, E, N, K, ring2cores)
+
+
 def _prepare_w0_w1_tensor(
     torch_w0: torch.Tensor,
     torch_w1: torch.Tensor,

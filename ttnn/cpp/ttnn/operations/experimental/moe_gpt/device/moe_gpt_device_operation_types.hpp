@@ -20,6 +20,8 @@ struct tensor_args_t {
     const Tensor& input_tensor;
     const Tensor& w0_w1_tensor;
     const Tensor& w2_tensor;
+    const Tensor& b0_b1_tensor;
+    const Tensor& b2_tensor;
     const Tensor& output_tensor;
     std::optional<Tensor> dram_output_tensor;
 };

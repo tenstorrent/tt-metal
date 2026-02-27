@@ -16,13 +16,14 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& w0_w1_tensor,
     const ttnn::Tensor& w2_tensor,
+    const ttnn::Tensor& b0_b1_tensor,
+    const ttnn::Tensor& b2_tensor,
     const ttnn::Tensor& output_tensor,
     const uint32_t num_experts,
     const uint32_t layer_id,
     bool enable_dram_output) {
     std::optional<Tensor> dram_output_tensor;
     if (enable_dram_output) {
-        // Allocate interleaved DRAM output tensor with shape (E, 1, M, K) in TILE_LAYOUT
         auto shape = input_tensor.logical_shape();
         uint32_t M = shape[-2];
         uint32_t K = shape[-1];
@@ -39,6 +40,8 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
         input_tensor,
         w0_w1_tensor,
         w2_tensor,
+        b0_b1_tensor,
+        b2_tensor,
         output_tensor,
         num_experts,
         layer_id,

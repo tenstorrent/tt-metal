@@ -87,7 +87,12 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
     // Create compile args for the program
     const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_args.output_tensor};
+        &tensor_args.input_tensor,
+        &tensor_args.w0_w1_tensor,
+        &tensor_args.w2_tensor,
+        &tensor_args.b0_b1_tensor,
+        &tensor_args.b2_tensor,
+        &tensor_args.output_tensor};
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -175,25 +180,23 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
     }
 
     // Set the runtime arguments for the kernels
-    // Layout: [0] dram_bank_id, [1] vchannel, [2-5] tensor addrs, [6] semaphore_id,
-    //         [7] ring_core_id, [8] neighbor_x, [9] neighbor_y
-    // When enable_dram_output: [10] dram_output_addr, [11] k_start_tile
+    // Layout: [0] dram_bank_id, [1] vchannel, [2-7] tensor addrs (input, w0_w1, w2, b0_b1, b2, output),
+    //         [8] semaphore_id, [9] ring_core_id, [10] neighbor_x, [11] neighbor_y
+    // When enable_dram_output: [12] dram_output_addr, [13] k_start_tile
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
-    // Push addresses for the first 4 tensors (input, w0_w1, w2, output)
-    for (uint32_t i = 0; i < 4; ++i) {
+    for (uint32_t i = 0; i < 6; ++i) {
         runtime_args.push_back(tensors[i]->buffer()->address());
     }
-    // Add placeholders for neighbor physical coords and semaphore
     runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
     runtime_args.push_back(0);                  // Ring core ID placeholder
     runtime_args.push_back(0);                  // Neighbor physical x
     runtime_args.push_back(0);                  // Neighbor physical y
 
     if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
-        runtime_args.push_back(tensor_args.dram_output_tensor->buffer()->address());  // [10] dram_output_addr
-        runtime_args.push_back(0);                                                    // [11] k_start_tile placeholder
+        runtime_args.push_back(tensor_args.dram_output_tensor->buffer()->address());  // [12] dram_output_addr
+        runtime_args.push_back(0);                                                    // [13] k_start_tile placeholder
     }
 
     std::vector<uint32_t> vchannels;
@@ -222,15 +225,15 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
         runtime_args[0] = dram_bank++;
         runtime_args[1] = vchannel;
-        // runtime_args[2-5] are already set to tensor addresses
-        // runtime_args[6] is already set to ring_semaphore_id
-        runtime_args[7] = ring_pos;
-        runtime_args[8] = static_cast<uint32_t>(next_physical.x);
-        runtime_args[9] = static_cast<uint32_t>(next_physical.y);
+        // runtime_args[2-7] are already set to tensor addresses
+        // runtime_args[8] is already set to ring_semaphore_id
+        runtime_args[9] = ring_pos;
+        runtime_args[10] = static_cast<uint32_t>(next_physical.x);
+        runtime_args[11] = static_cast<uint32_t>(next_physical.y);
 
         if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
-            // runtime_args[10] already set to dram_output_addr
-            runtime_args[11] = k_start_tiles[ring_pos];
+            // runtime_args[12] already set to dram_output_addr
+            runtime_args[13] = k_start_tiles[ring_pos];
         }
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
@@ -261,14 +264,17 @@ void MoEGPTProgramFactory::override_runtime_arguments(
         program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [3] = w0_w1_tensor address, [4] = w2_tensor address
+    // Runtime args layout: [3] = w0_w1, [4] = w2, [5] = b0_b1, [6] = b2, [7] = output
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
             runtime_args[3] = tensor_args.w0_w1_tensor.buffer()->address();
             runtime_args[4] = tensor_args.w2_tensor.buffer()->address();
+            runtime_args[5] = tensor_args.b0_b1_tensor.buffer()->address();
+            runtime_args[6] = tensor_args.b2_tensor.buffer()->address();
+            runtime_args[7] = tensor_args.output_tensor.buffer()->address();
             if (operation_attributes.enable_dram_output && tensor_args.dram_output_tensor.has_value()) {
-                runtime_args[10] = tensor_args.dram_output_tensor->buffer()->address();
+                runtime_args[12] = tensor_args.dram_output_tensor->buffer()->address();
             }
         }
     }

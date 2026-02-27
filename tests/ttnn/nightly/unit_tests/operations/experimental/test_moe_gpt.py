@@ -36,6 +36,8 @@ from models.demos.gpt_oss.tt.experts_throughput.weights import (
     _FUSED_PAD_CORES as PAD_CORES,
     _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
     _prepare_w2_tensor as prepare_w2_tensor,
+    _prepare_b0_b1_tensor as prepare_b0_b1_tensor,
+    _prepare_b2_tensor as prepare_b2_tensor,
 )
 
 from tracy.process_model_log import (
@@ -71,6 +73,21 @@ def create_torch_w1(L, E, K, N):
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
     return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+
+
+def create_torch_b0(L, E, N):
+    """Create torch b0 (gate) bias tensor of shape (L, E, 1, N)."""
+    return torch.rand((L, E, 1, N), dtype=torch.bfloat16) - 0.5
+
+
+def create_torch_b1(L, E, N):
+    """Create torch b1 (up) bias tensor of shape (L, E, 1, N)."""
+    return torch.rand((L, E, 1, N), dtype=torch.bfloat16) - 0.5
+
+
+def create_torch_b2(L, E, K):
+    """Create torch b2 (down) bias tensor of shape (L, E, 1, K)."""
+    return torch.rand((L, E, 1, K), dtype=torch.bfloat16) - 0.5
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
@@ -162,6 +179,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     input_shape = (in0_num_cores, E, M, K)
+    bias_k = 32
 
     in0_shard_spec = ttnn.ShardSpec(
         grid=in0_core_range_set,
@@ -203,6 +221,30 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
     w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for b0_b1 (same layout as w0_w1 but with bias_k height)
+    # ------------------------------------------------------------------------
+    b0_b1_shard_height = L * E * groups_per_core * bias_k
+    b0_b1_shard_width = 4 * ttnn.TILE_SIZE
+
+    b0_b1_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (b0_b1_shard_height, b0_b1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+
+    b0_b1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, b0_b1_shard_spec)
+
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for b2 (same layout as w2 but with bias_k height)
+    # ------------------------------------------------------------------------
+    b2_shard_height = L * E * 2 * bias_k
+    b2_shard_width = 4 * ttnn.TILE_SIZE
+
+    b2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (b2_shard_height, b2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+
+    b2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, b2_shard_spec)
+
     # --------------------------------------------------------------------------
     # Prepare the tensors
     # --------------------------------------------------------------------------
@@ -211,6 +253,9 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
+        torch_b0 = create_torch_b0(L, E, N)
+        torch_b1 = create_torch_b1(L, E, N)
+        torch_b2 = create_torch_b2(L, E, K)
 
         # Prepare w0_w1 tensor (interleaved, and reordered)
         torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
@@ -228,6 +273,28 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
         tt_w2 = ttnn.from_torch(
             torch_w2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
+        )
+
+        # Prepare b0_b1 bias tensor (same swizzle as w0_w1, broadcast to bias_k height)
+        torch_b0_b1_reordered = prepare_b0_b1_tensor(torch_b0, torch_b1, L, E, bias_k, N, ring2cores)
+
+        tt_b0_b1 = ttnn.from_torch(
+            torch_b0_b1_reordered,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b0_b1_mem_config,
+        )
+
+        # Prepare b2 bias tensor (same swizzle as w2, broadcast to bias_k height)
+        torch_b2_reordered = prepare_b2_tensor(torch_b2, L, E, bias_k, K, ring2cores)
+
+        tt_b2 = ttnn.from_torch(
+            torch_b2_reordered,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b2_mem_config,
         )
     else:
         tt_input = ttnn.empty(
@@ -251,6 +318,20 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config,
         )
+        tt_b0_b1 = ttnn.empty(
+            [num_dram_banks] + b0_b1_shard_spec.shape,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b0_b1_mem_config,
+        )
+        tt_b2 = ttnn.empty(
+            [num_dram_banks] + b2_shard_spec.shape,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b2_mem_config,
+        )
 
     # --------------------------------------------------------------------------
     # Run the operation
@@ -272,6 +353,8 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             tt_input,
             w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
+            b0_b1_tensor=tt_b0_b1,
+            b2_tensor=tt_b2,
             output_tensor=tt_input,
             num_experts=E,
             layer_id=layer_id,
@@ -289,17 +372,17 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # Reference calculation using SwiGLU
             torch_input_ref = torch_input[:, 0, ...]  # (L, E, M, K)
 
-            # W0 and W1 projections
-            # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_w1_output_ref = torch_input_ref @ torch_w1
+            # W0 and W1 projections + bias
+            # (L, E, M, K) @ (L, E, K, N) + (L, E, 1, N) -> (L, E, M, N)
+            torch_w0_output_ref = torch_input_ref @ torch_w0 + torch_b0
+            torch_w1_output_ref = torch_input_ref @ torch_w1 + torch_b1
 
             # SwiGLU activation: gate=W0 output, up=W1 output
             torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
 
-            # W2 projection
-            # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
-            torch_output_ref = torch_intermediate_ref @ torch_w2
+            # W2 projection + bias
+            # (L, E, M, N) @ (L, E, N, K) + (L, E, 1, K) -> (L, E, M, K)
+            torch_output_ref = torch_intermediate_ref @ torch_w2 + torch_b2
 
         # Calculate accuracy metrics for each layer and expert
         for layer_id, expert_id in itertools.product(range(L), range(E)):
@@ -446,6 +529,7 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     input_shape = (in0_num_cores, E, M, K)
+    bias_k = 32
 
     in0_shard_spec = ttnn.ShardSpec(
         grid=in0_core_range_set,
@@ -474,6 +558,24 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
     )
     w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
+    # b0_b1 shard spec (same layout as w0_w1 but with bias_k height)
+    b0_b1_shard_height = L * E * groups_per_core * bias_k
+    b0_b1_shard_width = 4 * ttnn.TILE_SIZE
+
+    b0_b1_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (b0_b1_shard_height, b0_b1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    b0_b1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, b0_b1_shard_spec)
+
+    # b2 shard spec (same layout as w2 but with bias_k height)
+    b2_shard_height = L * E * 2 * bias_k
+    b2_shard_width = 4 * ttnn.TILE_SIZE
+
+    b2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (b2_shard_height, b2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    b2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, b2_shard_spec)
+
     # --------------------------------------------------------------------------
     # Prepare the tensors
     # --------------------------------------------------------------------------
@@ -481,6 +583,9 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
     torch_w0 = create_torch_w0(L, E, K, N)
     torch_w1 = create_torch_w1(L, E, K, N)
     torch_w2 = create_torch_w2(L, E, N, K)
+    torch_b0 = create_torch_b0(L, E, N)
+    torch_b1 = create_torch_b1(L, E, N)
+    torch_b2 = create_torch_b2(L, E, K)
 
     torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
     tt_w0_w1 = ttnn.from_torch(
@@ -494,6 +599,28 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
     torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
+    )
+
+    # Prepare b0_b1 bias tensor (same swizzle as w0_w1, broadcast to bias_k height)
+    torch_b0_b1_reordered = prepare_b0_b1_tensor(torch_b0, torch_b1, L, E, bias_k, N, ring2cores)
+
+    tt_b0_b1 = ttnn.from_torch(
+        torch_b0_b1_reordered,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=b0_b1_mem_config,
+    )
+
+    # Prepare b2 bias tensor (same swizzle as w2, broadcast to bias_k height)
+    torch_b2_reordered = prepare_b2_tensor(torch_b2, L, E, bias_k, K, ring2cores)
+
+    tt_b2 = ttnn.from_torch(
+        torch_b2_reordered,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=b2_mem_config,
     )
 
     # --------------------------------------------------------------------------
@@ -514,6 +641,8 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
             tt_input,
             w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
+            b0_b1_tensor=tt_b0_b1,
+            b2_tensor=tt_b2,
             output_tensor=tt_input,
             num_experts=E,
             layer_id=layer_id,
@@ -532,10 +661,10 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
         # Reference calculation
         with torch.no_grad():
             torch_input_ref = torch_input[layer_id, 0, ...]  # (E, M, K)
-            torch_w0_output_ref = torch_input_ref @ torch_w0[layer_id]
-            torch_w1_output_ref = torch_input_ref @ torch_w1[layer_id]
+            torch_w0_output_ref = torch_input_ref @ torch_w0[layer_id] + torch_b0[layer_id]
+            torch_w1_output_ref = torch_input_ref @ torch_w1[layer_id] + torch_b1[layer_id]
             torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
-            torch_output_ref = torch_intermediate_ref @ torch_w2[layer_id]
+            torch_output_ref = torch_intermediate_ref @ torch_w2[layer_id] + torch_b2[layer_id]
 
         for expert_id in range(E):
             torch_layer_output = torch_output_ref[expert_id, :, :]

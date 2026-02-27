@@ -46,6 +46,8 @@ MoEGPTDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& w0_w1_tensor,
     const Tensor& w2_tensor,
+    const Tensor& b0_b1_tensor,
+    const Tensor& b2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
     const uint32_t layer_id,
@@ -58,6 +60,8 @@ MoEGPTDeviceOperation::invoke(
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,
             .w2_tensor = w2_tensor,
+            .b0_b1_tensor = b0_b1_tensor,
+            .b2_tensor = b2_tensor,
             .output_tensor = output_tensor,
             .dram_output_tensor = std::move(dram_output_tensor)}};
 }
