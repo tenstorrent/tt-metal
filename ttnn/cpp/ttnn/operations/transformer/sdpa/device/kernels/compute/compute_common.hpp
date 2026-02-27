@@ -1668,44 +1668,39 @@ void mul_block_bcast_cols_acc(
 }
 
 /**
- * L1-accumulate only the padded K-position tiles from mask_cb onto cb_qkt_im.
- * Only copies -inf tiles (padded columns), skipping zero tiles entirely to avoid
- * Bfp4_b→Float16_b round-trip artifacts in L1 accumulate.
+ * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
+ * tile positions in cb_qkt_im. No full mask matrix needed — just 1 tile in neginf_cb.
  *
- * @tparam padded_k_tiles  Number of padded K tiles per row (must be > 0)
- * @tparam Sk_chunk_t      Total K tiles per row
- * @tparam SBH             Sub-rows per row group (subblock_h)
+ * Ported from sdpa_benchmark branch's apply_padded_mask.
  *
- * Caller must cb_wait_front(mask_cb, Sq_chunk_t * Sk_chunk_t) before calling.
- * Caller must cb_pop_front(mask_cb, Sq_chunk_t * Sk_chunk_t) after all row groups.
+ * @tparam num_padded  Number of padded K tiles per row (must be > 0)
+ * @tparam num_cols    Total K tiles per row (Sk_chunk_t)
+ * @tparam SBH         Sub-rows per row group (subblock_h)
+ * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
  */
-template <bool PROFILING_ENABLED, uint32_t padded_k_tiles, uint32_t Sk_chunk_t, uint32_t SBH, uint32_t Sq_chunk_t>
-void apply_mask_padded_k(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subblock) {
+template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
+void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
-    static_assert(padded_k_tiles > 0, "padded_k_tiles must be > 0");
-    static_assert(padded_k_tiles < Sk_chunk_t, "padded_k_tiles must be less than Sk_chunk_t");
-    constexpr uint32_t start = Sk_chunk_t - padded_k_tiles;  // First padded column
-    constexpr uint32_t row_tiles = SBH * Sk_chunk_t;
-    const uint32_t mask_offset = q_subblock * row_tiles;
+    static_assert(num_padded > 0, "num_padded must be > 0");
+    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
+    constexpr uint32_t start = num_cols - num_padded;
 
-    // Read -inf tiles from mask_cb and L1-accumulate onto padded positions in out_cb
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_tile_to_dst_init_short(neginf_cb);
+    cb_wait_front(neginf_cb, 1);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
-    constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t out_row_offset = (q_subblock * SBH + row) * Sk_chunk_t;
-        uint32_t mask_row_offset = mask_offset + row * Sk_chunk_t;
-        for (uint32_t base = start; base < Sk_chunk_t; base += DST_BATCH) {
-            uint32_t batch = (Sk_chunk_t - base < DST_BATCH) ? (Sk_chunk_t - base) : DST_BATCH;
+        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
+        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
+            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
             tile_regs_acquire();
             for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(mask_cb, mask_row_offset + base + i, i);
+                copy_tile(neginf_cb, 0, i);  // Always tile 0 — single -inf tile
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, out_row_offset + base + i);
+                pack_tile<true>(i, out_cb, row_offset + base + i);
             }
             tile_regs_release();
         }
@@ -1843,13 +1838,6 @@ void sdpa_inner_loop_step(
     cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
-    // Wait for mask tiles if writer generates them (Q or K padding)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
-    }
-
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
@@ -1880,11 +1868,10 @@ void sdpa_inner_loop_step(
             kt_index_offset += qkt_subblock_w;
         }
 
-        // Apply mask on last K chunk: only accumulate -inf onto padded K positions.
-        // Skips zero-valued tiles to avoid Bfp4_b→Float16_b L1 acc round-trip artifacts.
+        // Apply mask on last K chunk: L1-accumulate single -inf tile onto padded K positions.
         if constexpr (padded_k_tiles > 0) {
             if (is_last_iter) {
-                apply_mask_padded_k<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh, Sq_chunk_t>(
+                apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock);
             }
         }
@@ -1916,13 +1903,6 @@ void sdpa_inner_loop_step(
     // reader can start fetching the next Q chunk during Phase 2.
     if (is_last_iter) {
         cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
-    }
-
-    // Pop mask after all rows processed (must match writer's generate_mask push)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
     }
 
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
@@ -2149,6 +2129,7 @@ void sdpa_standard_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B) {
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
+        // DeviceZoneScopedN("Q chunk");
         uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
         uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
         uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
@@ -2204,6 +2185,7 @@ void sdpa_standard_v2(
         };
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
+            // DeviceZoneScopedN("K chunk");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == k_num_chunks - 1);
 
