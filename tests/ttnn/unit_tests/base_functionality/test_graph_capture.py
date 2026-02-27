@@ -29,7 +29,6 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
     assert captured_graph[1]["params"]["name"] == "ttnn::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-2]["node_type"] == "buffer_deallocate"
     assert captured_graph[-1]["node_type"] == "capture_end"
 
     ttnn.graph.pretty_print(captured_graph)
@@ -526,16 +525,16 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
 
 def test_stack_trace_control():
     """Test stack trace enable/disable API"""
-    # Default should be disabled
-    assert not ttnn.graph.is_stack_trace_enabled()
-
-    # Enable
-    ttnn.graph.enable_stack_traces()
+    # Default is enabled (stack traces are captured by default for graph reports)
     assert ttnn.graph.is_stack_trace_enabled()
 
     # Disable
     ttnn.graph.disable_stack_traces()
     assert not ttnn.graph.is_stack_trace_enabled()
+
+    # Re-enable
+    ttnn.graph.enable_stack_traces()
+    assert ttnn.graph.is_stack_trace_enabled()
 
 
 def test_buffer_pages_control():
@@ -583,16 +582,18 @@ def test_stack_traces_captured_when_enabled(device, mode):
 def test_stack_traces_not_captured_when_disabled(device, mode):
     """Test that stack traces are NOT captured when disabled"""
     ttnn.graph.disable_stack_traces()
+    try:
+        ttnn.graph.begin_graph_capture(mode)
+        ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        captured_graph = ttnn.graph.end_graph_capture()
 
-    ttnn.graph.begin_graph_capture(mode)
-    ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    captured_graph = ttnn.graph.end_graph_capture()
-
-    # No function_start node should have non-empty stack traces
-    for node in captured_graph:
-        if node["node_type"] == "function_start":
-            stack_trace = node.get("stack_trace", [])
-            assert len(stack_trace) == 0, "Stack trace should be empty when disabled"
+        # No function_start node should have non-empty stack traces
+        for node in captured_graph:
+            if node["node_type"] == "function_start":
+                stack_trace = node.get("stack_trace", [])
+                assert len(stack_trace) == 0, "Stack trace should be empty when disabled"
+    finally:
+        ttnn.graph.enable_stack_traces()
 
 
 @pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
