@@ -70,59 +70,25 @@ def initialize_device(yaml_config: dict):
 def create_optimizer(model, yaml_config: dict):
     """Create an optimizer from the optimizer config YAML.
 
-    Reads the optimizer_config YAML file referenced in training_config
-    and creates the appropriate optimizer based on the 'type' field.
+    Accepts either a top-level YAML config dict (with training_config.optimizer)
+    or the optimizer dict directly (detected by the presence of a "type" key).
+    Passes the dict straight to the C++ optimizer factory.
 
     Args:
         model: Model to optimize
-        yaml_config: Top-level YAML config dict
+        yaml_config: Top-level YAML config dict or optimizer dict
 
     Returns:
         Optimizer instance
     """
-    from ttml.common.config import OptimizerConfig
-
-    cfg = OptimizerConfig(yaml_config)
-
-    params = model.parameters()
-
-    if cfg.type == "NoOp":
-        return ttml.optimizers.NoOp(params)
-
-    if cfg.type == "AdamW":
-        adamw_cfg = ttml.optimizers.AdamWConfig.make(
-            cfg.lr,
-            cfg.beta1,
-            cfg.beta2,
-            cfg.epsilon,
-            cfg.weight_decay,
-            cfg.amsgrad,
-            cfg.stochastic_rounding,
-        )
-        return ttml.optimizers.AdamW(params, adamw_cfg)
-
-    if cfg.type == "AdamWFullPrecision":
-        adamw_cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
-            cfg.lr,
-            cfg.beta1,
-            cfg.beta2,
-            cfg.epsilon,
-            cfg.weight_decay,
-            cfg.amsgrad,
-        )
-        return ttml.optimizers.AdamWFullPrecision(params, adamw_cfg)
-
-    if cfg.type == "SGD":
-        sgd_cfg = ttml.optimizers.SGDConfig.make(
-            cfg.lr,
-            cfg.momentum,
-            cfg.dampening,
-            cfg.weight_decay,
-            cfg.nesterov,
-        )
-        return ttml.optimizers.SGD(params, sgd_cfg)
-
-    raise ValueError(f"Unsupported optimizer type: {cfg.type}")
+    if "type" in yaml_config:
+        optimizer_cfg = yaml_config
+    else:
+        tc = yaml_config.get("training_config", {})
+        optimizer_cfg = tc.get("optimizer")
+        if optimizer_cfg is None:
+            raise ValueError("training_config must contain an 'optimizer' section")
+    return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 
 def get_loss_over_devices(loss):

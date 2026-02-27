@@ -87,50 +87,6 @@ class TrainingConfig:
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
 
-class OptimizerConfig:
-    """Optimizer configuration parsed from the ``optimizer`` section of a training config.
-
-    The training config YAML contains an inline ``optimizer`` block::
-
-        training_config:
-          optimizer:
-            type: AdamW
-            lr: 0.0003
-            ...
-    """
-
-    def __init__(self, yaml_config: dict):
-        """Initialize optimizer configuration.
-
-        Args:
-            yaml_config: Top-level YAML config dict (must contain
-                ``training_config.optimizer``), **or** the optimizer
-                dict itself (detected by the presence of a ``type`` key).
-        """
-        if "type" in yaml_config:
-            cfg = yaml_config
-        else:
-            tc = yaml_config.get("training_config", {})
-            cfg = tc.get("optimizer")
-            if cfg is None:
-                raise ValueError(
-                    "training_config must contain an 'optimizer' section"
-                )
-
-        self.type = cfg.get("type", "AdamW")
-        self.lr = float(cfg.get("lr", 3e-4))
-        self.beta1 = float(cfg.get("beta1", 0.9))
-        self.beta2 = float(cfg.get("beta2", 0.999))
-        self.epsilon = float(cfg.get("epsilon", 1e-8))
-        self.weight_decay = float(cfg.get("weight_decay", 0.01))
-        self.amsgrad = bool(cfg.get("amsgrad", False))
-        self.use_kahan_summation = bool(cfg.get("use_kahan_summation", False))
-        self.stochastic_rounding = bool(cfg.get("stochastic_rounding", False))
-        self.momentum = float(cfg.get("momentum", 0.0))
-        self.dampening = float(cfg.get("dampening", 0.0))
-        self.nesterov = bool(cfg.get("nesterov", False))
-
-
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
 

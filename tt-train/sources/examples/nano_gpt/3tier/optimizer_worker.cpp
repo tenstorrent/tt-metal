@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
-    OptimizerConfig optimizer_config = parse_optimizer_config(yaml_config["training_config"]["optimizer"]);
+    auto optimizer_node = yaml_config["training_config"]["optimizer"];
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
-    auto optimizer = create_optimizer(optimizer_config, model_parameters);
+    auto optimizer = ttml::optimizers::create_optimizer(optimizer_node, model_parameters);
 
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);

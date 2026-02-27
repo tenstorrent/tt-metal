@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
         (training_config_path.parent_path().parent_path() / training_config.model_config).string();
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
 
-    OptimizerConfig optimizer_config = parse_optimizer_config(yaml_config["training_config"]["optimizer"]);
+    auto optimizer_node = yaml_config["training_config"]["optimizer"];
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
@@ -677,12 +677,13 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    if (optimizer_config.type == "NoOp") {
+    auto optimizer_type = optimizer_node["type"].as<std::string>("AdamW");
+    if (optimizer_type == "NoOp") {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
     } else if (!is_three_tier_training(multihost_config)) {
-        fmt::print("Optimizer: {}\n", optimizer_config.type);
-        fmt::print("    Learning rate: {}\n", optimizer_config.lr);
-        fmt::print("    Weight decay: {}\n", optimizer_config.weight_decay);
+        fmt::print("Optimizer: {}\n", optimizer_type);
+        fmt::print("    Learning rate: {}\n", optimizer_node["lr"].as<float>(1e-3F));
+        fmt::print("    Weight decay: {}\n", optimizer_node["weight_decay"].as<float>(1e-2F));
     } else {
         fmt::println("Remote optimizer configured!");
     }
@@ -690,12 +691,12 @@ int main(int argc, char **argv) {
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
-        [&model, &optimizer_config, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+        [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(multihost_config)) {
             return std::make_unique<ttml::optimizers::RemoteOptimizer>(
                 get_model_parameters(model), multihost_config.num_mh_workers);
         }
-        return create_optimizer(optimizer_config, get_model_parameters(model));
+        return ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
     };
 
     auto optimizer = select_optimizer();

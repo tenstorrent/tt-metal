@@ -12,38 +12,13 @@
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
-#include "optimizers/adamw.hpp"
-#include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
-#include "optimizers/no_op.hpp"
-#include "optimizers/sgd.hpp"
-#include "optimizers/sgd_composite.hpp"
+#include "optimizers/optimizer_factory.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
 #include "schedulers/sequential_scheduler.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
-
-struct OptimizerConfig {
-    std::string type = "AdamW";
-    float lr = 3e-4F;
-    float beta1 = 0.9F;
-    float beta2 = 0.999F;
-    float epsilon = 1e-8F;
-    float weight_decay = 1e-2F;
-    bool amsgrad = false;
-    bool use_kahan_summation = false;
-    bool stochastic_rounding = false;
-    float momentum = 0.0F;
-    float dampening = 0.0F;
-    bool nesterov = false;
-};
-
-OptimizerConfig parse_optimizer_config(const YAML::Node &yaml_config);
-
-std::unique_ptr<ttml::optimizers::OptimizerBase> create_optimizer(
-    const OptimizerConfig &cfg, ttml::serialization::NamedParameters params);
 
 class LossAverageMeter {
     float m_sum = 0.0F;

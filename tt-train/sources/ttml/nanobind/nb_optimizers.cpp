@@ -13,7 +13,9 @@
 // Make NamedParameters opaque - must be before unordered_map include
 NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/unordered_map.h>
+#include <yaml-cpp/yaml.h>
 
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
@@ -21,6 +23,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "optimizers/optimizer_factory.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
@@ -40,6 +43,28 @@ void py_module_types(nb::module_& m) {
 }
 
 void py_module(nb::module_& m) {
+    m.def(
+        "create_optimizer",
+        [](nb::dict config, serialization::NamedParameters params) {
+            YAML::Node node;
+            for (auto [key, val] : config) {
+                std::string k = nb::cast<std::string>(key);
+                if (nb::isinstance<nb::bool_>(val)) {
+                    node[k] = nb::cast<bool>(val);
+                } else if (nb::isinstance<nb::int_>(val)) {
+                    node[k] = nb::cast<int64_t>(val);
+                } else if (nb::isinstance<nb::float_>(val)) {
+                    node[k] = nb::cast<double>(val);
+                } else if (nb::isinstance<nb::str>(val)) {
+                    node[k] = nb::cast<std::string>(val);
+                }
+            }
+            return create_optimizer(node, std::move(params));
+        },
+        nb::arg("config"),
+        nb::arg("params"),
+        "Create an optimizer from a config dict and named parameters");
+
     {
         auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
         py_optimizer_base.def("get_name", &OptimizerBase::get_name, "Get optimizer name");
