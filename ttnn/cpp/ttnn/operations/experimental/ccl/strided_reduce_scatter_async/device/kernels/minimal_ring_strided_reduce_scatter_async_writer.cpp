@@ -46,13 +46,14 @@ constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(19);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
 constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(21);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(28);
 
-constexpr uint32_t num_ct_args = 28;
+constexpr uint32_t num_ct_args = 29;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -283,8 +284,10 @@ void kernel_main() {
                                             ? std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet)
                                             : 1;
                                     tiles_remaining_in_step -= tiles_to_put_in_current_packet;
+                                    const bool can_use_two_tiles_in_packet = tiles_to_put_in_current_packet == 2;
 
-                                    const auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
+                                    // Tile 1
+                                    const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
                                         tile_row_in_mm_M_unit_block,
                                         chunk_col_in_tiles,
                                         mm_core_idx,
@@ -294,11 +297,12 @@ void kernel_main() {
                                         N_full_block_wt,
                                         tiles_ht_per_core,
                                         mm_block_ht,  // full stride between blocks for absolute row calculation
-                                        chunk_width_in_tiles,
-                                        actual_slice_idx,
-                                        slice_Wt,
-                                        input_tensor_Wt);
-
+                                        chunk_width_in_tiles);
+                                    const bool tile1_in_bounds = slice_row < slice_Ht;
+                                    const uint32_t slice_tile_idx =
+                                        slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
+                                    const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     get_next_tile_coordinates(
                                         tile_row_in_mm_M_unit_block,
                                         chunk_col_in_tiles,
@@ -308,68 +312,73 @@ void kernel_main() {
                                         effective_chunk_width_in_tiles,
                                         current_mm_block_ht);
 
+                                    // Tile 2 (only when the packet can hold 2 tiles)
+                                    bool tile2_in_bounds = false;
+                                    uint32_t global_tile_idx_two = 0;
+                                    if (can_use_two_tiles_in_packet) {
+                                        const auto [slice_row_two, slice_col_two] = coordinates_to_slice_coordinates(
+                                            tile_row_in_mm_M_unit_block,
+                                            chunk_col_in_tiles,
+                                            mm_core_idx,
+                                            chunk_piece_idx,
+                                            m_block_iter,
+                                            chunk_idx,
+                                            N_full_block_wt,
+                                            tiles_ht_per_core,
+                                            mm_block_ht,  // full stride between blocks for absolute row calculation
+                                            chunk_width_in_tiles);
+                                        tile2_in_bounds = slice_row_two < slice_Ht;
+                                        global_tile_idx_two = slice_coordinates_to_global_tile_index(
+                                            slice_row_two, slice_col_two, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                        get_next_tile_coordinates(
+                                            tile_row_in_mm_M_unit_block,
+                                            chunk_col_in_tiles,
+                                            mm_core_idx,
+                                            effective_advance_by_tiles,
+                                            effective_subchunk_size,
+                                            effective_chunk_width_in_tiles,
+                                            current_mm_block_ht);
+                                    }
+
                                     if (i < (ring_size - 1)) {
-                                        // Write the tile(s) to the intermediate buffer on the neighboring device.
-                                        const auto noc_address0 =
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                intermediate_addrgen, global_tile_idx, 0);
-
-                                        switch (tiles_to_put_in_current_packet) {
-                                            case 2: {
-                                                auto [_, global_tile_idx_two] = coordinates_to_tile_indices(
-                                                    tile_row_in_mm_M_unit_block,
-                                                    chunk_col_in_tiles,
-                                                    mm_core_idx,
-                                                    chunk_piece_idx,
-                                                    m_block_iter,
-                                                    chunk_idx,
-                                                    N_full_block_wt,
-                                                    tiles_ht_per_core,
-                                                    mm_block_ht,  // full stride between blocks for absolute row
-                                                                  // calculation
-                                                    chunk_width_in_tiles,
-                                                    actual_slice_idx,
-                                                    slice_Wt,
-                                                    input_tensor_Wt);
-                                                get_next_tile_coordinates(
-                                                    tile_row_in_mm_M_unit_block,
-                                                    chunk_col_in_tiles,
-                                                    mm_core_idx,
-                                                    effective_advance_by_tiles,
-                                                    effective_subchunk_size,
-                                                    effective_chunk_width_in_tiles,
-                                                    current_mm_block_ht);
-
-                                                const auto noc_address1 =
-                                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                        intermediate_addrgen, global_tile_idx_two, 0);
-                                                fabric_unicast_noc_scatter_write_with_state<
-                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                    &mux_connection_handle,
-                                                    pkt_scatter_hdr,
-                                                    l1_read_addr,
-                                                    NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-                                                l1_read_addr += page_size * 2;
-                                                break;
-                                            }
-                                            case 1:
-                                            default: {
-                                                fabric_unicast_noc_unicast_write_with_state<
-                                                    UnicastWriteUpdateMask::DstAddr>(
-                                                    &mux_connection_handle,
-                                                    pkt_unicast_hdr,
-                                                    l1_read_addr,
-                                                    NocUnicastCommandHeader{noc_address0});
-                                                l1_read_addr += page_size;
-                                                break;
-                                            }
+                                        // Write tile(s) to the intermediate buffer on the neighboring device.
+                                        if (tile1_in_bounds && can_use_two_tiles_in_packet && tile2_in_bounds) {
+                                            const auto noc_address0 =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    intermediate_addrgen, global_tile_idx, 0);
+                                            const auto noc_address1 =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    intermediate_addrgen, global_tile_idx_two, 0);
+                                            fabric_unicast_noc_scatter_write_with_state<
+                                                UnicastScatterWriteUpdateMask::DstAddrs>(
+                                                &mux_connection_handle,
+                                                pkt_scatter_hdr,
+                                                l1_read_addr,
+                                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                                            l1_read_addr += page_size * 2;
+                                        } else if (tile1_in_bounds) {
+                                            const auto noc_address0 =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    intermediate_addrgen, global_tile_idx, 0);
+                                            fabric_unicast_noc_unicast_write_with_state<
+                                                UnicastWriteUpdateMask::DstAddr>(
+                                                &mux_connection_handle,
+                                                pkt_unicast_hdr,
+                                                l1_read_addr,
+                                                NocUnicastCommandHeader{noc_address0});
+                                            l1_read_addr += page_size * tiles_to_put_in_current_packet;
+                                        } else {
+                                            l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                         }
                                         noc_async_writes_flushed();
                                     } else {
                                         // Write the tile to the output buffer on this device.
-                                        const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
-                                        const uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                                        noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                        if (tile1_in_bounds) {
+                                            const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
+                                            const uint64_t local_noc_addr =
+                                                get_noc_addr(output_tile_id, output_addrgen);
+                                            noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                        }
                                         l1_read_addr += page_size;
                                     }
                                 }
