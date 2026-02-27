@@ -86,7 +86,7 @@ const std::vector<int64_t> kPingFifoSizes = {4096};
 // Shared sweep parameters for D2H multi-chip throughput benchmarks.
 const std::vector<int64_t> kMultiChipD2HFifoSizes = {256LL << 20};
 const std::vector<int64_t> kMultiChipH2DFifoSizes = {1LL << 20};
-const std::vector<int64_t> kMultiChipPageSizes = {65536};
+const std::vector<int64_t> kMultiChipPageSizes = {262144};
 const std::vector<int64_t> kMultiChipTotalData = {1LL << 30};
 
 struct DeviceFixture {
