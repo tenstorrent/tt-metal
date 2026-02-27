@@ -16,7 +16,7 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
 
     ttnn::Tensor squares = ttnn::square(X);
     ttnn::Tensor sum_squares =
-        ttnn::sum(squares, ttnn::SmallVector<int>{-2, -1}, true, std::nullopt, core::ComputeKernelConfig::precise());
+        ttnn::sum(squares, ttsl::SmallVector<int>{-2, -1}, true, std::nullopt, core::ComputeKernelConfig::precise());
     ttnn::Tensor norm_tensor = ttnn::sqrt(sum_squares);
 
     ttnn::Tensor norm_plus_eps = ttnn::add(norm_tensor, eps);
