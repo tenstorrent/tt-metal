@@ -198,8 +198,8 @@ void kernel_main() {
                             uint32_t patch_rows_left = num_patches;
                             tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
                             for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                                // Reader produces row pages, which may not be tile aligned. Wait on the correct
-                                // number of rows.
+                                // Reader produces row pages, which may not be tile aligned. Wait on the correct number
+                                // of rows.
                                 uint32_t current_patch_rows = patch_rows_left < tt::constants::TILE_HEIGHT
                                                                   ? patch_rows_left
                                                                   : tt::constants::TILE_HEIGHT;
@@ -256,8 +256,8 @@ void kernel_main() {
                                     // Add partial results from workers and pop them
                                     add_block_inplace<output_tiles>(cb_matmul_interm_tiled, cb_reduction_tiled);
 
-                                    // By freeing the reduction buffer, we signal to the writer that we have used
-                                    // the partial results. This is done inside add_block_inplace.
+                                    // By freeing the reduction buffer, we signal to the writer that we have used the
+                                    // partial results. This is done inside add_block_inplace.
                                 }
 
                                 // Apply bias only if we are a reducer, and do it after reduction
