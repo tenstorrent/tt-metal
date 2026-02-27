@@ -1692,7 +1692,7 @@ void MetalContext::initialize_firmware(
         }
         default:
             TT_THROW(
-                "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
+                "Unsupported programmable core type {} to initialize build states", enchantum::to_string(core_type));
     }
 }
 
@@ -1761,7 +1761,7 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
             {dev_msgs::CORE_COORD_INVALID, dev_msgs::CORE_COORD_INVALID},
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
-    // On Blackhole, virtualized Tensix coordinates overlap with NoC1 physical DRAM and PCIe coordinates beause
+    // On Blackhole, virtualized Tensix coordinates overlap with NoC1 physical DRAM and PCIe coordinates because
     // virtualized Tensix coordinates == NoC0 Tensix physical coordinates. This causes false negative Watcher
     // sanitization errors because it appears as a mixed use of physical and virtual To workaround this, skip over
     // populating `non_worker_cores` for BH DRAM when virtualization is enabled
