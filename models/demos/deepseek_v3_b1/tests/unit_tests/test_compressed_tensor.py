@@ -5,16 +5,23 @@
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor import (
+    COMPRESSED_FORMATS,
     CompressedTensor,
     CompressedTensorAssigner,
     bfp_tile_packed_size,
     ttnn_quantize_fn,
 )
 from models.demos.deepseek_v3_b1.compressed_tensor.metrics import metric_value
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import (
+    pack_bfp_tile,
+    quantize_dequantize_bfp,
+    unpack_bfp_tile,
+)
 
 
 def test_from_torch_round_trip():
@@ -80,6 +87,79 @@ def test_packed_size_savings():
     assert (
         ct.data_bytes <= uniform_bfp8_bytes
     ), f"Mixed ({ct.data_bytes}) should be <= uniform bfp8 ({uniform_bfp8_bytes})"
+
+
+def test_bfp0_tiles():
+    """bfp0 regions unpack as zeros, bfp8 regions preserve data."""
+    torch.manual_seed(42)
+    x = torch.randn(128, 128)
+    # Top-left 2x2 tiles: large values → need bfp8
+    x[:64, :64] *= 100.0
+    # Bottom-right 2x2 tiles: tiny values (~1e-5) → bfp0 is acceptable
+    x[64:, 64:] *= 1e-5
+
+    # PCC for bfp8 quality, bfp0 uses its own MAE threshold internally
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.99, formats=["bfp8", "bfp0"], bfp0_mae_threshold=1e-4)
+    ct = CompressedTensor.from_torch(x, assigner)
+
+    print(f"{ct}")
+    assert ct.tile_counts["bfp0"] > 0, f"Expected some bfp0 tiles: {ct.tile_counts}"
+    assert ct.tile_counts["bfp8"] > 0, f"Expected some bfp8 tiles: {ct.tile_counts}"
+    assert ct.data_bytes < ct.num_tiles * bfp_tile_packed_size(7), "bfp0 should reduce total bytes"
+
+    recovered = ct.to_torch()
+    tile_hw = 32
+    assign = ct.get_assignment_numpy()
+
+    for tr in range(ct.tiles_h):
+        for tc in range(ct.tiles_w):
+            fmt = COMPRESSED_FORMATS[assign[tr, tc]]
+            ref_tile = x[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
+            rec_tile = recovered[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
+            if fmt == "bfp0":
+                assert (rec_tile == 0).all(), f"bfp0 tile ({tr},{tc}) should be all zeros"
+            else:
+                assert rec_tile.abs().max() > 0, f"bfp8 tile ({tr},{tc}) should be non-zero"
+                pcc = metric_value(ref_tile.numpy(), rec_tile.numpy(), "pcc")
+                print(f"  tile ({tr},{tc}) [{fmt}]: PCC={pcc:.6f}")
+                assert pcc > 0.99, f"bfp8 tile ({tr},{tc}) PCC {pcc:.4f} too low"
+
+
+def test_bfp2_cpp_matches_python():
+    """Validate C++ bfp2 pack→unpack matches the Python quantize_dequantize_bfp emulation.
+
+    Tests multiple tiles with varied data: random, large, small, negative, zero.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(256, 256)  # 8x8 = 64 tiles
+    # Add variety: some large, some tiny, some zeros
+    x[:64, :64] *= 100.0
+    x[64:128, 64:128] *= 1e-4
+    x[128:160, 128:160] = 0.0
+
+    xn = x.numpy()
+    tile_hw = 32
+    tiles_h, tiles_w = xn.shape[0] // tile_hw, xn.shape[1] // tile_hw
+    num_mismatches = 0
+
+    for tr in range(tiles_h):
+        for tc in range(tiles_w):
+            tile_np = xn[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw].copy()
+
+            # C++ path: pack then unpack
+            packed = pack_bfp_tile(tile_np, mant_bits=1)
+            cpp_result = unpack_bfp_tile(packed, mant_bits=1)
+
+            # Python path
+            py_result = quantize_dequantize_bfp(tile_np, mant_bits=1)
+
+            if not np.array_equal(cpp_result, py_result):
+                max_diff = np.max(np.abs(cpp_result - py_result))
+                print(f"  MISMATCH tile ({tr},{tc}): max diff = {max_diff}")
+                num_mismatches += 1
+
+    print(f"bfp2 C++ vs Python: {tiles_h * tiles_w} tiles, {num_mismatches} mismatches")
+    assert num_mismatches == 0, f"{num_mismatches} tiles had C++ vs Python mismatch"
 
 
 def test_4d_tensor_round_trip():
@@ -535,3 +615,70 @@ def test_device_4d_uneven_block_shard(device):
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"4D uneven block-shard PCC: {pcc:.6f}")
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+
+
+# ---------------------------------------------------------------------------
+# Mixed format with bfp0 on device
+# ---------------------------------------------------------------------------
+
+
+def test_device_bfp0_bfp2_bfp4_uneven_height_shard(device):
+    """All 3 compressed formats (bfp4/bfp2/bfp0) on device with uneven height sharding.
+
+    Tensor has 3 distinct regions:
+      - Rows 0-63: large values → bfp4
+      - Rows 64-127: moderate values → bfp2
+      - Rows 128-159: near-zero values → bfp0
+
+    5 tile rows across 3 cores (uneven: 2, 2, 1).
+    """
+    torch.manual_seed(42)
+    x = torch.randn(160, 128)  # 5x4 tile grid
+    x[:64, :] *= 50.0  # rows 0-63: large → bfp4
+    x[64:128, :] *= 1.0  # rows 64-127: moderate → bfp2
+    x[128:, :] *= 1e-6  # rows 128-159: tiny → bfp0
+
+    assigner = CompressedTensorAssigner(
+        metric="pcc", threshold=0.89, formats=["bfp4", "bfp2", "bfp0"], bfp0_mae_threshold=1e-4
+    )
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
+    data_mem = _make_sharded_mem_config(x.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, grid)
+
+    ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
+
+    print(f"{ct}")
+    _print_shard_distribution(ct, data_mem)
+    assert ttnn.is_tensor_storage_on_device(ct.data)
+
+    # Should have a mix of all 3 formats
+    assert ct.tile_counts["bfp4"] > 0, f"Expected bfp4 tiles: {ct.tile_counts}"
+    assert ct.tile_counts["bfp2"] > 0, f"Expected bfp2 tiles: {ct.tile_counts}"
+    assert ct.tile_counts["bfp0"] > 0, f"Expected bfp0 tiles: {ct.tile_counts}"
+
+    recovered = ct.to_torch()
+    tile_hw = 32
+    assign = ct.get_assignment_numpy()
+
+    # Log per-tile format assignment as a grid
+    print("Format assignment grid:")
+    for tr in range(ct.tiles_h):
+        row_fmts = [COMPRESSED_FORMATS[assign[tr, tc]] for tc in range(ct.tiles_w)]
+        print(f"  row {tr}: {row_fmts}")
+
+    # Verify per-tile: bfp0 tiles are zeros, others are non-zero with reasonable quality
+    for tr in range(ct.tiles_h):
+        for tc in range(ct.tiles_w):
+            fmt = COMPRESSED_FORMATS[assign[tr, tc]]
+            ref_tile = x[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
+            rec_tile = recovered[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
+            if fmt == "bfp0":
+                assert (rec_tile == 0).all(), f"bfp0 tile ({tr},{tc}) should be all zeros"
+            else:
+                assert rec_tile.abs().max() > 0, f"{fmt} tile ({tr},{tc}) should be non-zero"
+                pcc = metric_value(ref_tile.numpy(), rec_tile.numpy(), "pcc")
+                print(f"  tile ({tr},{tc}) [{fmt}]: PCC={pcc:.6f}")
+
+    # Overall PCC including bfp0 tiles (zeroed regions lower the PCC, that's the tradeoff)
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"Overall PCC (including bfp0): {pcc:.6f}")
+    assert pcc > 0.93, f"Overall PCC {pcc:.6f} too low"
