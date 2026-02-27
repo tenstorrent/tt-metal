@@ -534,7 +534,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle sum_experts reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts annd reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
             tp_size = cfg["mesh_device"].shape[1]
@@ -543,7 +543,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     output,
                     dim=0,
-                    split_size=output[-1] // tp_size,
+                    split_size=int(output[-1] // tp_size),
                     output_memory_config=cfg["ring_sum_experts_output_memory_config"],
                 )
                 output = ttnn.experimental.deepseek_moe_reduce_scatter(output, cfg["ring_final_output_reduce_scatter"])
