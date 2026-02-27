@@ -5,6 +5,8 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from tracy import signpost
+
 """
 Design Note: Expert-Centric MoE Dispatch/Combine Prototype
 
@@ -304,12 +306,6 @@ class TtDispatchModule(LightweightModule):
         torch.set_printoptions(profile="full")
         # logger.info(f"{indices.shape=}")
         # logger.info(f"{indices=}")
-        host_tt_dispatched_buffer = ttnn.to_torch(tt_dispatched_buffer, mesh_composer=mesh_composer)
-        host_tt_dispatched_metadata = ttnn.to_torch(tt_dispatch_metadata, mesh_composer=mesh_composer)
-
-        logger.info(f"{host_tt_dispatched_buffer[0][0][0][0]=}")
-        logger.info(f"{host_tt_dispatched_buffer[1][0][0][0]=}")
-        logger.warning(f"{host_tt_dispatched_metadata.shape=}")
         # logger.info(f"{host_tt_dispatched_metadata=}")
         # logger.info(f"{host_tt_dispatched_metadata[..., 0]=}")
         torch.set_printoptions(profile="default")
@@ -328,7 +324,14 @@ class TtDispatchModule(LightweightModule):
         # metadata and chip_to_routed_expert_tokens are needed for combine step to route expert outputs back to original token positions
 
         # Return actual kernel outputs (no mockup)
-        return tt_dispatched_buffer, tt_dispatch_metadata, tt_chip_to_routed_expert_tokens
+        return (
+            tt_dispatched_buffer,
+            tt_dispatch_metadata,
+            # tt_chip_to_routed_expert_tokens,
+            chip_to_routed_expert_tokens,  # needed for combine, actually comes from previous op
+            chip_to_n_routed_expert_offset,  # needed for testing
+            cum_sum,  # needed for testing
+        )
 
 
 class TorchCombineModule(torch.nn.Module):
@@ -496,7 +499,12 @@ def initialize_predictable_test_inputs(
     for chip in range(num_chips):
         for token in range(seq_len_per_chip):
             for k in range(num_experts_per_tok):
-                indices[chip, token, k] = expert_idx % n_routed_experts
+                if chip % 2 == 0:
+                    indices[chip, token, k] = max(
+                        0, expert_idx % (n_routed_experts) - 1
+                    )  # max (0, x -1) to create a of unequal distribution
+                else:
+                    indices[chip, token, k] = n_routed_experts - 1 - (expert_idx % n_routed_experts)  # reverse order
                 expert_idx += 1
 
     return x, weights, indices
@@ -575,22 +583,39 @@ def test_torch_dispatch_combine(
     ), f"Expected output to match input, but got max diff {torch.max(torch.abs(x-y)).item()}"
 
 
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 @pytest.mark.parametrize(
     "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor",
     [
-        (32, 64, 16, 4, 2, 2),
+        # (32, 64, 16, 4, 2, 2),
+        # (128, 7168, 16, 4, 2, 2),
+        (512, 7168, 16, 4, 2, 2),
+        # (1024, 7168, 16, 4, 2, 2),
+        # (2048, 7168, 16, 4, 2, 2),
+        # (3200, 7168, 16, 4, 2, 2),
+        # (4096, 7168, 16, 4, 2, 2),
+        # (512, 7 * 1024, 16, 4, 2, 2),
         # (512, 32, 256, 8, 4, 2),
         # (4096, 32, 256, 8, 32, 2),
     ],
     # ids=["xs", "small", "large"],
 )
-# @pytest.mark.parametrize(
-#     "device_params",
-#     [
-#         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-#     ],
-#     indirect=["device_params"],
-# )
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+        },
+    ],
+    indirect=["device_params"],
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -599,6 +624,7 @@ def test_torch_dispatch_combine(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -608,14 +634,23 @@ def test_ttnn_dispatch_combine(
     num_chips,
     capacity_factor,
     use_predictable_data,
+    verbose,
 ):
+    signpost(
+        f"Dispatch {mesh_device=} {seq_len_per_chip=} {hidden_dim=} {n_routed_experts=} {num_experts_per_tok=} {num_chips=} {capacity_factor=} {use_predictable_data=}"
+    )
     print("\n")
+
+    # cfg = ttnn._ttnn.fabric.FabricRouterConfig()
+    # cfg.max_packet_payload_size_bytes = 7 * 1024
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+
     num_devices = mesh_device.get_num_devices()
+    assert num_chips == num_devices, f"num_chips {num_chips} must match number of devices in mesh {num_devices}"
     mesh_shape = mesh_device.shape
     logger.info(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -699,20 +734,8 @@ def test_ttnn_dispatch_combine(
     logger.info(f"{indices.shape=}")
     dispatched, metadata, experts_counter = dispatch_module(x, weights, indices)
 
-    # Compute offset information (needed for comparison later)
-    chip_to_n_routed_expert_counter = torch.zeros((num_chips, n_routed_experts), dtype=torch.int32)
-    for chip in range(num_chips):
-        for token in range(seq_len_per_chip):
-            for topk_indice in range(num_experts_per_tok):
-                routed_expert = indices[chip, token, topk_indice]
-                chip_to_n_routed_expert_counter[chip, routed_expert] += 1
-
-    cum_sum = torch.cumsum(chip_to_n_routed_expert_counter, dim=0)
-    chip_to_n_routed_expert_offset = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-    chip_to_routed_expert_tokens = cum_sum[-1].view(num_chips, experts_per_chip)
-
     # Forward pass through dispatch module
-    tt_dispatched, tt_metadata, tt_experts_counter = tt_dispatch_module(tt_x, tt_weights, tt_indices)
+    tt_dispatched, tt_metadata, counter, offsets, cum_sum = tt_dispatch_module(tt_x, tt_weights, tt_indices)
 
     # Create mesh composer to concatenate sharded tensors
     # Mesh [2, 1] with sharding dims=(0, None): axis 0 sharded on dim 0, axis 1 replicated
@@ -726,139 +749,61 @@ def test_ttnn_dispatch_combine(
 
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
-    tt_out_experts_counter = ttnn.to_torch(tt_experts_counter, mesh_composer=mesh_composer)
 
     # Kernel counter is garbage - use torch-computed counter instead
-    tt_out_experts_counter = chip_to_routed_expert_tokens.to(torch.int32)
 
     # Quick sanity check of first elements
-    logger.info(f"{tt_out_dispatched[0][0][0][0]=} | {dispatched[0][0][0][0]=}")
-    logger.info(f"{tt_out_dispatched[1][0][0][0]=} | {dispatched[1][0][0][0]=}")
+    logger.info(f"{tt_out_dispatched[0][0][0][0]=} | {tt_out_dispatched[1][0][0][0]=}")
+    logger.info(f"{dispatched[0][0][0][0]=} | {dispatched[1][0][0][0]=}")
+    logger.info(f"{tt_out_metadata[0][0][0][0:4]=} | {tt_out_metadata[1][0][0][0:4]=}")
+    logger.info(f"{metadata[0][0][0][0:4]=} | {metadata[1][0][0][0:4]=}")
+    logger.info(f"{counter.shape=}, {counter=}")
+    logger.info(f"{offsets.shape=}, {offsets=}")
+    logger.info(f"{cum_sum.shape=}, {cum_sum=}")
 
-    # Compare local dispatch only (chip i writes to experts i*experts_per_chip ... (i+1)*experts_per_chip-1)
-    logger.info("Comparing locally-dispatched slots only...")
-
-    for chip_id in range(num_chips):
+    data_ok = True
+    metadata_ok = True
+    logger.warning("Comparing ALL dispatched buffer slots (including remote dispatch)...")
+    for dst_chip_id in range(num_chips):
         for expert_id in range(experts_per_chip):
-            # Compute global expert index
-            global_expert_idx = chip_id * experts_per_chip + expert_id
+            count = counter[dst_chip_id, expert_id].item()
+            out = tt_out_dispatched[dst_chip_id, expert_id, :count, :]
+            ref = dispatched[dst_chip_id, expert_id, :count, :]
+            if torch.allclose(out, ref, atol=1e-6):
+                logger.info(f"✅ Data {dst_chip_id=} {expert_id=} {count=}")
+            else:
+                logger.error(f"❌ Data {dst_chip_id=} {expert_id=} {count=}")
+                data_ok = False
+                if verbose:
+                    for slot in range(count):
+                        torch_data = dispatched[dst_chip_id, expert_id, slot]
+                        kernel_data = tt_out_dispatched[dst_chip_id, expert_id, slot]
+                        data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
+                        if not data_match:
+                            logger.error(
+                                f"    Slot {slot}: Data mismatch at chip={dst_chip_id}, expert={expert_id}, slot={slot}: "
+                                f"{torch_data=}, {kernel_data=}"
+                            )
 
-            # Get count for this (chip, expert) pair
-            count = int(chip_to_n_routed_expert_counter[chip_id, global_expert_idx])
-
-            # Get start offset from offset tensor
-            start_offset = int(chip_to_n_routed_expert_offset[chip_id, global_expert_idx])
-
-            # Compare slots [start_offset : start_offset + count]
-            for slot_idx in range(count):
-                slot = start_offset + slot_idx
-
-                # Compare data
-                torch_data = dispatched[chip_id, expert_id, slot]
-                kernel_data = tt_out_dispatched[chip_id, expert_id, slot]
-
-                data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
-                assert data_match, (
-                    f"Data mismatch at chip={chip_id}, expert={expert_id}, slot={slot}: "
-                    f"max_diff={torch.max(torch.abs(torch_data - kernel_data)).item()}"
-                )
-
-                # Compare metadata (first 4 fields: chip, token, k, routed_expert)
-                # Skip weight field (index 4) as torch stores float value while kernel stores bfloat16 bits
-                torch_meta = metadata[chip_id, expert_id, slot, :4]
-                kernel_meta = tt_out_metadata[chip_id, expert_id, slot, :4]
-
-                meta_match = torch.allclose(torch_meta, kernel_meta, atol=1e-6)
-                assert meta_match, (
-                    f"Metadata mismatch at chip={chip_id}, expert={expert_id}, slot={slot}: "
-                    f"torch={torch_meta}, kernel={kernel_meta}"
-                )
-
-    logger.info("✓ All locally-dispatched slots match")
-
-    # Verify remote dispatch is NOT implemented (should fail when you implement it)
-    logger.info("Verifying remote dispatch is NOT yet implemented...")
-
-    remote_slots_checked = 0
-    remote_dispatch_working = False
-
-    # Check a few remote dispatch slots - they should NOT match (should be garbage)
-    for chip_id in range(num_chips):
+    logger.info("Comparing ALL dispatched metadata slots (including remote dispatch)...")
+    for dst_chip_id in range(num_chips):
         for expert_id in range(experts_per_chip):
-            global_expert_idx = chip_id * experts_per_chip + expert_id
-
-            # Check if OTHER chips dispatch to this expert (remote dispatch)
-            for other_chip in range(num_chips):
-                if other_chip == chip_id:
-                    continue  # Skip local dispatch
-
-                count = int(chip_to_n_routed_expert_counter[other_chip, global_expert_idx])
-                if count == 0:
-                    continue  # No remote dispatch from this chip to this expert
-
-                # Found remote dispatch - check if kernel output matches torch
-                start_offset = int(chip_to_n_routed_expert_offset[other_chip, global_expert_idx])
-                slot = start_offset
-
-                torch_data = dispatched[chip_id, expert_id, slot]
-                kernel_data = tt_out_dispatched[chip_id, expert_id, slot]
-
-                remote_slots_checked += 1
-
-                # If they match, remote dispatch is working!
-                if torch.allclose(torch_data, kernel_data, atol=1e-6):
-                    remote_dispatch_working = True
-                    logger.error(
-                        f"❌ Remote dispatch is WORKING! Slot matched: "
-                        f"chip {other_chip} -> expert {global_expert_idx} (on chip {chip_id}), slot {slot}"
-                    )
-                    logger.error(
-                        "This test needs to be updated to compare remote dispatch slots. "
-                        "Remove the remote dispatch check and include remote slots in comparison!"
-                    )
-                    break
-
-            if remote_dispatch_working:
-                break
-        if remote_dispatch_working:
-            break
-
-    if remote_dispatch_working:
-        raise AssertionError(
-            "Remote dispatch appears to be implemented! "
-            "Update this test to compare remote dispatch slots (not just local). "
-            "Remove the remote dispatch verification section."
-        )
-    elif remote_slots_checked > 0:
-        logger.info(
-            f"✓ Verified {remote_slots_checked} remote slots do NOT match (remote dispatch not yet implemented)"
-        )
-    else:
-        logger.info("ℹ No remote dispatch slots to check in this test configuration")
-
-    # torch.set_printoptions(profile="full")
-    # # logger.info(f"{indices.shape=}")
-    # # logger.info(f"{indices=}")
-    # logger.info(f"{tt_out_dispatched=}")
-    # logger.info(f"{dispatched=}")
-    # torch.set_printoptions(profile="default")
-
-    # torch.set_printoptions(profile="full")
-    # logger.info(f"{experts_counter.shape=}")
-    # logger.info(f"{metadata.shape=}")
-    # logger.info(f"{dispatched.shape=}")
-    # torch.set_printoptions(profile="default")
-
-    # # Forward pass through combine module
-    # y = combine_module(
-    #     dispatched,
-    #     metadata,
-    #     experts_counter,
-    # )
-    # logger.info(f"{y.shape=}")
-    # y /= num_experts_per_tok  # since we are summing contributions from multiple experts, we need to average them
-    # y = y.sum(dim=2)  # sum contributions from multiple experts per token
-    # logger.info(f"{y.shape=}")
-    # assert torch.allclose(
-    #     x, y, atol=1e-6
-    # ), f"Expected output to match input, but got max diff {torch.max(torch.abs(x-y)).item()}"
+            count = counter[dst_chip_id, expert_id].item()
+            out = tt_out_metadata[dst_chip_id, expert_id, :count, :4]
+            ref = metadata[dst_chip_id, expert_id, :count, :4]
+            if torch.allclose(out, ref, atol=1e-6):
+                logger.info(f"✅ Metadata {dst_chip_id=} {expert_id=} {count=}")
+            else:
+                logger.error(f"❌ Metadata {dst_chip_id=} {expert_id=} {count=}")
+                metadata_ok = False
+                if verbose:
+                    for slot in range(count):
+                        torch_data = metadata[dst_chip_id, expert_id, slot, :4]
+                        kernel_data = tt_out_metadata[dst_chip_id, expert_id, slot, :4]
+                        data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
+                        if not data_match:
+                            logger.error(
+                                f"    Slot {slot}: Metadata mismatch at chip={dst_chip_id}, expert={expert_id}, slot={slot}: "
+                                f"{torch_data=}, {kernel_data=}"
+                            )
+    assert data_ok and metadata_ok, f"Some slots did not match! {data_ok=} {metadata_ok=} Check logs for details."

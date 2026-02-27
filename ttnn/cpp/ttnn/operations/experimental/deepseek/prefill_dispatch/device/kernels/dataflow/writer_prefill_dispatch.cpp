@@ -8,66 +8,74 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 void kernel_main() {
+    using namespace ttnn::operations::ccl::common;
+
     // ===== Compile Time Args =====
-    // CB IDs (indices 0-4)
+    // CB IDs (indices 0-5)
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weights_id = get_compile_time_arg_val(2);
     constexpr uint32_t cb_offsets_id = get_compile_time_arg_val(3);
     constexpr uint32_t cb_metadata_temp_id = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(5);
 
-    // Page counts (indices 5-11)
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t weights_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t offsets_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(9);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(10);
-    constexpr uint32_t experts_counter_pages = get_compile_time_arg_val(11);
+    // Page counts (indices 6-12)
+    constexpr uint32_t input_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t indices_pages = get_compile_time_arg_val(7);
+    constexpr uint32_t weights_pages = get_compile_time_arg_val(8);
+    constexpr uint32_t offsets_pages = get_compile_time_arg_val(9);
+    constexpr uint32_t output_pages = get_compile_time_arg_val(10);
+    constexpr uint32_t metadata_pages = get_compile_time_arg_val(11);
+    constexpr uint32_t experts_counter_pages = get_compile_time_arg_val(12);
 
-    // Page sizes (indices 12-18)
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t weights_page_size = get_compile_time_arg_val(14);
-    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t experts_counter_page_size = get_compile_time_arg_val(18);
+    // Page sizes (indices 13-19)
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(13);
+    constexpr uint32_t indices_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t weights_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(17);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(18);
+    constexpr uint32_t experts_counter_page_size = get_compile_time_arg_val(19);
 
-    // Operation parameters (indices 19-26)
-    constexpr uint32_t num_devices = get_compile_time_arg_val(19);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(20);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(21);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(22);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(23);
-    constexpr uint32_t metadata_len = get_compile_time_arg_val(24);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(25);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(26);
+    // Operation parameters (indices 20-27)
+    constexpr uint32_t num_devices = get_compile_time_arg_val(20);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(21);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(22);
+    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(23);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(24);
+    constexpr uint32_t metadata_len = get_compile_time_arg_val(25);
+    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(26);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(27);
 
-    // Mesh information (indices 27-31)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(27);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(28);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(29);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(30);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(31);
+    // Mesh information (indices 28-32)
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(32);
 
-    // Aligned page sizes (indices 32-38)
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(33);
-    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(35);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(37);
-    constexpr uint32_t aligned_experts_counter_page_size = get_compile_time_arg_val(38);
+    // Aligned page sizes (indices 33-39)
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(33);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(34);
+    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(35);
+    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(36);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(37);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(38);
+    constexpr uint32_t aligned_experts_counter_page_size = get_compile_time_arg_val(39);
 
-    // Fabric configuration (indices 39-40)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(39);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(40);
+    // Fabric configuration (indices 40-43)
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(40);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(41);
+    constexpr uint32_t num_links = get_compile_time_arg_val(42);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(43);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 41)
-    constexpr auto input_args = TensorAccessorArgs<41>();
+    // TensorAccessorArgs for all 7 tensors (starting at index 44)
+    constexpr auto input_args = TensorAccessorArgs<44>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -99,6 +107,100 @@ void kernel_main() {
     DPRINT << "Writer kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
            << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
            << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
+
+#ifndef DEST_CHIP_ID
+#define DEST_CHIP_ID  // TODO
+#endif
+
+#ifdef DEST_CHIP_ID
+    // Fabric is enabled - set up connections
+    DPRINT << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
+    DPRINT << "DEBUG: Before creating dest arrays, rt_args_idx=" << rt_args_idx << ENDL();
+
+    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
+    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
+    constexpr std::array<bool, 4> directions = DIRECTIONS;
+
+    DPRINT << "dst_chip_ids: ";
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        DPRINT << (uint32_t)dest_chip_ids[i] << " ";
+    }
+    DPRINT << ENDL();
+    DPRINT << "dst_mesh_ids: ";
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        DPRINT << (uint32_t)dest_mesh_ids[i] << " ";
+    }
+    DPRINT << ENDL();
+    DPRINT << "directions: ";
+    for (uint32_t i = 0; i < directions.size(); ++i) {
+        DPRINT << (int)directions[i] << " ";
+    }
+    DPRINT << ENDL();
+    //
+
+    DPRINT << "DEBUG: Before open_direction_connections_async" << ENDL();
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
+    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
+    DPRINT << "DEBUG: After open_direction_connections_async" << ENDL();
+
+    // Set up packet headers from CB (cb_packet_header_id from compile-time args)
+    uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
+    auto* unicast_packet_header =
+        reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
+    auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
+        packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
+
+    DPRINT << "DEBUG: Before open_direction_connections_barrier" << ENDL();
+    open_direction_connections_barrier(directions, fabric_connections);
+    DPRINT << "DEBUG: After open_direction_connections_barrier" << ENDL();
+
+    // CRITICAL: Send init semaphore increments to other devices BEFORE waiting
+    // Each device sends to configured targets, then waits for (num_devices - 1) increments
+    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    DPRINT << "DEBUG: Before send_init_semaphore_to_configured_targets" << ENDL();
+    send_init_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        src_chip_id,
+        mesh_rows,
+        mesh_cols,
+        ReplicateGroup::NONE,  // Send to all devices
+        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+    DPRINT << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
+
+#ifdef AXIS
+    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
+    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
+    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
+    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
+    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
+    // device_end_idx is the end of the column
+    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (axis == ReplicateGroup::COLS)
+            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+#else
+    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
+    constexpr uint32_t dispatch_devices = num_devices;
+    constexpr uint32_t dispatch_index = linearized_mesh_coord;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_devices;
+    constexpr uint32_t device_stride = 1;
+#endif
+
+    // Wait for all devices to complete fabric initialization
+    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
+
+    DPRINT << "Fabric setup complete" << ENDL();
+#endif
 
     // ====
     // wait for offsets to be ready
@@ -154,10 +256,6 @@ void kernel_main() {
                 DPRINT << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
                 // For local dispatch, we can directly write to the output buffer without going through the fabric
                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
-                // noc_async_write(
-                //     input_token_read_addr,
-                //     output_addr_gen.get_noc_addr(page_idx),     // Correct: let AddrGen compute address
-                //     aligned_output_page_size * 2);               // Correct: use OUTPUT page size in bytes
                 noc_async_writes_flushed();  // is it formally needed?
 
                 uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
@@ -175,42 +273,92 @@ void kernel_main() {
                 noc_async_writes_flushed();
 
             } else {
-                DPRINT << "    Expert [" << k << "]=" << routed_expert << " is remote. Fabric not implemented."
+                DPRINT << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip << " chip."
                        << ENDL();
-                // if the expert lives on a remote device, we dispatch the input token to it
-                // if axis is specified then we only send to the devices that are along the axis
-                // if axis is not specified then we send to all devices
-                // if constexpr (is_1d_topology<topology>()) {
-                //     fabric_send_chip_unicast_noc_unicast_1d<
-                //         linearized_mesh_coord,
-                //         topology,
-                //         mesh_rows,
-                //         mesh_cols,
-                //         fabric_max_packet_size>(
-                //         output_addr_gen,
-                //         fabric_connections,
-                //         unicast_packet_header,
-                //         d,
-                //         input_token_read_addr,
-                //         global_token,
-                //         (int)output_page_size,
-                //         alignment);
+                if constexpr (is_1d_topology<topology>()) {
+                    fabric_send_chip_unicast_noc_unicast_1d<
+                        linearized_mesh_coord,
+                        topology,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        expert_chip,  // linearized_dest_mesh_coord
+                        input_token_read_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,  // bfloat16 = 2 bytes
+                        l1_alignment);
+
+                    uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
+                    volatile tt_l1_ptr int32_t* metadata =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
+
+                    // Set actual metadata values
+                    metadata[0] = linearized_mesh_coord;
+                    metadata[1] = token_idx;
+                    metadata[2] = k;
+                    metadata[3] = routed_expert;
+                    metadata[4] = weights[k];
+
+                    fabric_send_chip_unicast_noc_unicast_1d<
+                        linearized_mesh_coord,
+                        topology,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        fabric_connections,
+                        metadata_packet_header,
+                        expert_chip,  // linearized_dest_mesh_coord
+                        metadata_cb_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,  // int32 = 4 bytes
+                        l1_alignment);
+                }
                 // } else {
+                // TODO:
+                //     // Fast fail - untested path
+                //     DPRINT << "Fabric send for non-1D topology is currently untested. Failing fast." << ENDL();
+                //     return;
+
                 //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
                 //         output_addr_gen,
                 //         fabric_connections,
                 //         unicast_packet_header,
-                //         dest_chip_ids[d],
-                //         dest_mesh_ids[d],
+                //         dest_chip_ids[expert_chip],
+                //         dest_mesh_ids[expert_chip],
                 //         input_token_read_addr,
-                //         global_token,
-                //         (int)output_page_size,
-                //         alignment);
+                //         page_idx,
+                //         (int)aligned_output_page_size * 2,  // bfloat16 = 2 bytes
+                //         l1_alignment);
+
+                //     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
+                //     volatile tt_l1_ptr int32_t* metadata =
+                //         reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
+
+                //     // Set actual metadata values
+                //     metadata[0] = linearized_mesh_coord;
+                //     metadata[1] = token_idx;
+                //     metadata[2] = k;
+                //     metadata[3] = routed_expert;
+                //     metadata[4] = weights[k];
+
+                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+                //         metadata_addr_gen,
+                //         fabric_connections,
+                //         metadata_packet_header,
+                //         dest_chip_ids[expert_chip],
+                //         dest_mesh_ids[expert_chip],
+                //         metadata_cb_addr,
+                //         page_idx,
+                //         (int)aligned_metadata_page_size,  // int32 = 4 bytes
+                //         l1_alignment);
                 // }
             }
 
-            // offset++;
-            offsets[routed_expert] += 1;
+            offset++;
         }
         noc_async_write_barrier();  // not needed if there were no local dispatches
 
@@ -221,10 +369,4 @@ void kernel_main() {
 
     // Release CB for next use
     cb_push_back(cb_metadata_temp_id, 1);
-
-    // TODO: Implement writer kernel logic
-    // - Read from input CBs (data prepared by reader)
-    // - Send dispatched tokens via fabric to other devices
-    // - Write metadata and experts counter to output tensors
-    // - Coordinate with other devices using semaphores
 }
