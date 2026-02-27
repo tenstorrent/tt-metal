@@ -28,6 +28,238 @@ from models.experimental.tt_symbiote.modules.rope import (
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
+try:
+    from transformers.cache_utils import Cache, CacheLayerMixin
+except ImportError:
+    Cache = object
+    CacheLayerMixin = None
+
+
+class _PagedCacheLayer(CacheLayerMixin if CacheLayerMixin is not None else object):
+    """CacheLayerMixin stub so HF Cache.__init__ is satisfied."""
+
+    def lazy_initialization(self, key_states, value_states):
+        pass
+
+    def update(self, key_states, value_states, cache_kwargs=None):
+        return key_states, value_states
+
+    def get_mask_sizes(self, cache_position):
+        return 0, 0
+
+    def get_seq_length(self):
+        return 0
+
+    def get_max_cache_shape(self):
+        return 0
+
+
+@dataclass
+class PagedAttentionConfig:
+    block_size: int = 64
+    max_num_blocks: int = 2048
+    batch_size: int = 1
+
+    @property
+    def max_seq_length(self) -> int:
+        return self.max_num_blocks * self.block_size
+
+    @property
+    def blocks_per_sequence(self) -> int:
+        return self.max_num_blocks // self.batch_size
+
+
+class TTNNPagedAttentionKVCache(Cache):
+    def __init__(
+        self,
+        num_layers: int,
+        num_kv_heads: int,
+        head_dim: int,
+        config: PagedAttentionConfig,
+        device=None,
+        dtype: torch.dtype = torch.bfloat16,
+    ):
+        if Cache is not object:
+            super().__init__(layer_class_to_replicate=_PagedCacheLayer)
+        else:
+            super().__init__()
+
+        self.num_layers = num_layers
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
+        self.config = config
+        self.dtype = dtype
+        self._device = device
+        self._seq_lengths: list[int] = [0] * num_layers
+        self._seen_tokens = 0
+
+        page_table = torch.arange(config.max_num_blocks, dtype=torch.int32)
+        self.page_table = page_table.reshape(config.batch_size, config.blocks_per_sequence)
+
+        self._tt_key_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
+        self._tt_value_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
+        self._tt_page_table: Optional[ttnn.Tensor] = None
+        self._is_on_device = False
+
+    def to_device(self, device) -> "TTNNPagedAttentionKVCache":
+        if self._is_on_device and self._device == device:
+            return self
+
+        self._device = device
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+
+        cache_shape = (
+            self.config.max_num_blocks,
+            self.num_kv_heads,
+            self.config.block_size,
+            self.head_dim,
+        )
+
+        for layer_idx in range(self.num_layers):
+            self._tt_key_cache[layer_idx] = ttnn.zeros(
+                cache_shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._tt_value_cache[layer_idx] = ttnn.zeros(
+                cache_shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self._tt_page_table = ttnn.from_torch(
+            self.page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self._is_on_device = True
+        return self
+
+    def paged_fill_on_device(
+        self,
+        key_states: ttnn.Tensor,
+        value_states: ttnn.Tensor,
+        layer_idx: int,
+        batch_idx: int = 0,
+    ):
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        k_cache = self._tt_key_cache[layer_idx]
+        v_cache = self._tt_value_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        max_len = self.config.blocks_per_sequence * self.config.block_size
+        seq_len = key_states.shape[2]
+        if seq_len > max_len:
+            key_states = key_states[:, :, :max_len, :]
+            value_states = value_states[:, :, :max_len, :]
+            seq_len = max_len
+
+        ttnn.experimental.paged_fill_cache(k_cache, key_states, page_table, batch_idx=batch_idx)
+        ttnn.experimental.paged_fill_cache(v_cache, value_states, page_table, batch_idx=batch_idx)
+
+        self._seq_lengths[layer_idx] += seq_len
+        if layer_idx == 0:
+            self._seen_tokens += seq_len
+
+    def paged_update_on_device(
+        self,
+        key_states: ttnn.Tensor,
+        value_states: ttnn.Tensor,
+        layer_idx: int,
+        current_pos: ttnn.Tensor,
+    ):
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        k_cache = self._tt_key_cache[layer_idx]
+        v_cache = self._tt_value_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        ttnn.experimental.paged_update_cache(
+            k_cache,
+            key_states,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+        )
+        ttnn.experimental.paged_update_cache(
+            v_cache,
+            value_states,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+        )
+
+        seq_len = key_states.shape[0]
+        self._seq_lengths[layer_idx] += seq_len
+        if layer_idx == 0:
+            self._seen_tokens += seq_len
+
+    def paged_sdpa_decode(
+        self,
+        query: ttnn.Tensor,
+        layer_idx: int,
+        current_pos: ttnn.Tensor,
+        scale: float = 1.0,
+        program_config=None,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        k_cache = self._tt_key_cache[layer_idx]
+        v_cache = self._tt_value_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            query,
+            k_cache,
+            v_cache,
+            page_table_tensor=page_table,
+            cur_pos_tensor=current_pos,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: Optional[dict] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(key_states, TorchTTNNTensor):
+            key_states = key_states.to_torch
+        if isinstance(value_states, TorchTTNNTensor):
+            value_states = value_states.to_torch
+        if isinstance(key_states, ttnn.Tensor):
+            key_states = ttnn.to_torch(key_states)
+        if isinstance(value_states, ttnn.Tensor):
+            value_states = ttnn.to_torch(value_states)
+
+        seq_len = key_states.shape[2]
+        self._seq_lengths[layer_idx] += seq_len
+        if layer_idx == 0:
+            self._seen_tokens += seq_len
+
+        return key_states, value_states
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        return self._seq_lengths[layer_idx]
+
+    def get_max_cache_shape(self) -> Optional[int]:
+        return self.config.max_seq_length
+
 
 class TorchSDPAAttention(torch.nn.Module):
     def forward(
@@ -66,6 +298,35 @@ class TTNNSDPAAttention(TTNNModule):
         self.program_config = None
         self.compute_kernel_config = None
         self.memory_config = None
+        self._sdpa_available = True
+
+    def _matmul_attention(self, query, key, value, is_causal, scaling, attention_mask, transpose_output):
+        import math
+
+        scale = scaling if scaling is not None else 1.0 / math.sqrt(query.shape[-1])
+        key_t = ttnn.permute(key, (0, 1, 3, 2))
+        scores = ttnn.matmul(query, key_t)
+        scores = ttnn.multiply(scores, scale)
+
+        if is_causal:
+            seq_len = query.shape[2]
+            causal_mask = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1).to(torch.bfloat16)
+            causal_mask = ttnn.from_torch(
+                causal_mask.unsqueeze(0).unsqueeze(0),
+                layout=ttnn.TILE_LAYOUT,
+                device=query.device(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            scores = ttnn.add(scores, causal_mask)
+        elif attention_mask is not None:
+            scores = ttnn.add(scores, attention_mask)
+
+        scores = ttnn.softmax(scores, dim=-1)
+        attn_output = ttnn.matmul(scores, value)
+
+        if transpose_output:
+            attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
+        return attn_output
 
     def forward(
         self,
@@ -98,20 +359,32 @@ class TTNNSDPAAttention(TTNNModule):
                 attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if attention_mask.dtype != query.dtype:
                 attention_mask = ttnn.typecast(attention_mask, query.dtype)
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            is_causal=is_causal,
-            scale=scaling,
-            program_config=self.program_config,
-            attn_mask=attention_mask,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=self.memory_config,
-        )
-        if transpose_output:
-            attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        return attn_output
+
+        if self._sdpa_available:
+            try:
+                attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    is_causal=is_causal,
+                    scale=scaling,
+                    program_config=self.program_config,
+                    attn_mask=attention_mask,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=self.memory_config,
+                )
+                if transpose_output:
+                    attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
+                return attn_output
+            except RuntimeError as e:
+                print(
+                    f"TTNNSDPAAttention: ttnn SDPA failed, falling back to matmul attention. "
+                    f"Q={query.shape} K={key.shape} V={value.shape} is_causal={is_causal} "
+                    f"Error: {e}"
+                )
+                self._sdpa_available = False
+
+        return self._matmul_attention(query, key, value, is_causal, scaling, attention_mask, transpose_output)
 
 
 class PytorchFusedQKVSelfAttention(torch.nn.Module):
@@ -290,21 +563,27 @@ class TTNNSelfAttention(TTNNModule):
             ),
         )
         new_self_attention.sdpa = TTNNSDPAAttention()
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_self_attention.core_grid.x, new_self_attention.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        new_self_attention.sdpa.program_config = program_config
-        new_self_attention.sdpa.compute_kernel_config = compute_kernel_config
         return new_self_attention
+
+    def move_weights_to_device_impl(self):
+        """Initialize SDPA config when device is available."""
+        super().move_weights_to_device_impl()
+        if self.sdpa.program_config is None:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.sdpa.program_config = program_config
+            self.sdpa.compute_kernel_config = compute_kernel_config
 
     def forward(self, hidden_states, head_mask=None, output_attentions: bool = False):
         """Forward pass through ViT self-attention."""
@@ -357,20 +636,6 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
             ),
         )
         new_self_attention.sdpa = TTNNSDPAAttention()
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_self_attention.core_grid.x, new_self_attention.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        new_self_attention.sdpa.program_config = program_config
-        new_self_attention.sdpa.compute_kernel_config = compute_kernel_config
         return new_self_attention
 
 
@@ -399,18 +664,24 @@ class TTNNWhisperAttention(TTNNModule):
 
         self.sdpa = TTNNSDPAAttention()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
-        self.sdpa.program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
-        self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+
+    def move_weights_to_device_impl(self):
+        """Initialize SDPA config when device is available."""
+        super().move_weights_to_device_impl()
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     @classmethod
     def from_torch(cls, whisper_attn: "WhisperAttention"):
@@ -602,19 +873,25 @@ class LlamaAttention(TTNNModule):
         self.sdpa = TTNNSDPAAttention()
         self.rope = TTNNRotaryPositionEmbedding()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
-        self.sdpa.program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
-        self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
         self.qkv_same_shape = True
+
+    def move_weights_to_device_impl(self):
+        """Initialize SDPA config when device is available."""
+        super().move_weights_to_device_impl()
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def init_fused_parameters(self, num_attention_heads, hidden_size: int):
         self.qkv_proj = TTNNFusedQKVSelfAttention.from_torch(
@@ -732,13 +1009,12 @@ class LlamaAttention(TTNNModule):
 class TTNNGlm4MoeLiteAttention(TTNNModule):
     """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
 
-    This implements the same MLA architecture as DeepSeek V3 but for Glm4MoeLite,
-    with latent compression for memory-efficient KV cache.
+    Supports both standard DynamicCache and TTNNPagedAttentionKVCache
+    for paged attention with on-device KV storage.
     """
 
     def __init__(self):
         super().__init__()
-        # Will be set in from_torch
         self.q_lora_rank = None
         self.kv_lora_rank = None
         self.qk_nope_head_dim = None
@@ -749,7 +1025,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self.scaling = None
         self.is_causal = True
 
-        # Submodules (set in from_torch)
         self.q_a_proj = None
         self.q_a_layernorm = None
         self.q_b_proj = None
@@ -761,19 +1036,10 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self.sdpa = None
 
     @classmethod
-    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention"):
-        """Create TTNNGlm4MoeLiteAttention from PyTorch Glm4MoeLiteAttention.
-
-        Args:
-            torch_attn: PyTorch Glm4MoeLiteAttention module
-
-        Returns:
-            TTNNGlm4MoeLiteAttention instance
-        """
+    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention", distributed: bool = True):
         new_attn = cls()
         new_attn._fallback_torch_layer = torch_attn
 
-        # Copy config parameters
         new_attn.q_lora_rank = torch_attn.q_lora_rank
         new_attn.kv_lora_rank = torch_attn.kv_lora_rank
         new_attn.qk_nope_head_dim = torch_attn.qk_nope_head_dim
@@ -783,71 +1049,128 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         new_attn.num_heads = torch_attn.num_heads
         new_attn.scaling = torch_attn.scaling
 
-        # Convert Q projection path (if using LoRA)
+        from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
+
+        LinearCls = TTNNLinearIColShardedWRowSharded if distributed else TTNNLinear
+        LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
+        NormCls = TTNNDistributedRMSNorm if distributed else TTNNRMSNorm
+
         if torch_attn.q_lora_rank is not None:
-            new_attn.q_a_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_a_proj)
-            new_attn.q_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.q_a_layernorm)
-            new_attn.q_b_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_b_proj)
+            new_attn.q_a_proj = LinearCls.from_torch(torch_attn.q_a_proj)
+            new_attn.q_a_layernorm = NormCls.from_torch(torch_attn.q_a_layernorm)
+            new_attn.q_b_proj = LinearCls.from_torch(torch_attn.q_b_proj)
         else:
-            # Direct Q projection (no LoRA)
-            new_attn.q_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.q_proj)
+            new_attn.q_proj = LinearCls.from_torch(torch_attn.q_proj)
 
-        # Convert KV projection path (always uses MQA + LoRA)
-        new_attn.kv_a_proj_with_mqa = TTNNLinearIColShardedWRowSharded.from_torch(torch_attn.kv_a_proj_with_mqa)
-        new_attn.kv_a_layernorm = TTNNDistributedRMSNorm.from_torch(torch_attn.kv_a_layernorm)
-        new_attn.kv_b_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.kv_b_proj)
+        new_attn.kv_a_proj_with_mqa = LinearCls.from_torch(torch_attn.kv_a_proj_with_mqa)
+        new_attn.kv_a_layernorm = NormCls.from_torch(torch_attn.kv_a_layernorm)
+        new_attn.kv_b_proj = LinearClsOut.from_torch(torch_attn.kv_b_proj)
 
-        # Convert output projection
-        new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.o_proj)
+        new_attn.o_proj = LinearClsOut.from_torch(torch_attn.o_proj)
 
-        # Initialize RoPE module
-        new_attn.rope = TTNNDistributedRotaryPositionEmbedding()
+        new_attn.rope = TTNNDistributedRotaryPositionEmbedding() if distributed else TTNNRotaryPositionEmbedding()
 
-        # Initialize SDPA module
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
-        new_attn.sdpa.program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_attn.core_grid.x, new_attn.core_grid.y),
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
-        new_attn.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
 
         return new_attn
 
-    def _forward_prefill(
-        self,
-        hidden_states: ttnn.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[ttnn.Tensor],
-        past_key_values: Optional["Cache"],
-        cache_position: Optional[torch.LongTensor],
-    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
-        """Forward pass for prefill mode (seq_len>1).
+    def move_weights_to_device_impl(self):
+        """Initialize SDPA config when device is available."""
+        super().move_weights_to_device_impl()
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
-        Args:
-            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
-            position_embeddings: (cos, sin) tensors for RoPE
-            attention_mask: Optional attention mask
-            past_key_values: KV cache
-            cache_position: Cache position indices
+        kv_a_ln = self._fallback_torch_layer.kv_a_layernorm
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        self._kv_a_ln_weight = ttnn.from_torch(
+            kv_a_ln.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._kv_a_ln_eps = kv_a_ln.variance_epsilon
 
-        Returns:
-            Tuple of (output_tensor, attention_weights)
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _maybe_all_gather(self, tensor):
+        if not self._is_distributed:
+            return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+        t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    def _permute_cos_sin_to_meta_format(self, cos, sin):
+        """Convert cos/sin from HF doubled-half format to Meta interleaved-pair format.
+
+        HF format:  [c(f0), c(f1), ..., c(f_{d/2-1}), c(f0), c(f1), ..., c(f_{d/2-1})]
+        Meta format: [c(f0), c(f0), c(f1), c(f1), ..., c(f_{d/2-1}), c(f_{d/2-1})]
+
+        rotary_embedding_llama expects Meta format where each adjacent pair shares
+        the same frequency, matching its interleaved rotation convention.
         """
-        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        half_dim = self.qk_rope_head_dim // 2
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
-        # Ensure TILE layout
+        if self._is_distributed:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+            cos_t = ttnn.to_torch(cos, mesh_composer=mesh_composer)[:1]
+            sin_t = ttnn.to_torch(sin, mesh_composer=mesh_composer)[:1]
+        else:
+            cos_t = ttnn.to_torch(cos)
+            sin_t = ttnn.to_torch(sin)
+
+        cos_t = cos_t[..., :half_dim].repeat_interleave(2, dim=-1)
+        sin_t = sin_t[..., :half_dim].repeat_interleave(2, dim=-1)
+
+        cos = ttnn.from_torch(
+            cos_t,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.from_torch(
+            sin_t,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return cos, sin
+
+    def _project_qkv(self, hidden_states, batch_size, seq_length, position_embeddings):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Q projection path
         if self.q_lora_rank is not None:
             q_latent = self.q_a_proj(hidden_states)
             q_latent = self.q_a_layernorm(q_latent)
@@ -855,20 +1178,11 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         else:
             q_states = self.q_proj(hidden_states)
 
-        q_states = ttnn.experimental.all_gather_async(
-            q_states.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
+        q_states = self._maybe_all_gather(q_states)
 
-        # Reshape Q
         q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
         q_states = ttnn.permute(q_states, (0, 2, 1, 3))
 
-        # Split Q into nope and rope parts
         q_pass = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
         q_rot = ttnn.slice(
             q_states,
@@ -876,123 +1190,112 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             (batch_size, self.num_heads, seq_length, self.qk_head_dim),
         )
 
-        # KV projection path
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+        compressed_kv = self._maybe_all_gather(compressed_kv)
 
-        compressed_kv = ttnn.experimental.all_gather_async(
-            compressed_kv.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-
-        # Split compressed KV
-        k_pass = ttnn.slice(compressed_kv, (0, 0, 0), (batch_size, seq_length, self.kv_lora_rank))
+        k_pass_flat = ttnn.slice(compressed_kv, (0, 0, 0), (batch_size, seq_length, self.kv_lora_rank))
         k_rot = ttnn.slice(
             compressed_kv,
             (0, 0, self.kv_lora_rank),
             (batch_size, seq_length, self.kv_lora_rank + self.qk_rope_head_dim),
         )
 
-        # Process k_pass
-        k_pass = ttnn.rms_norm(k_pass)
-        k_pass = self.kv_b_proj(k_pass)
-        k_pass = ttnn.experimental.all_gather_async(
-            k_pass.to_ttnn,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+        if len(k_pass_flat.shape) == 3:
+            k_pass_flat = ttnn.unsqueeze(k_pass_flat, 1)
+        k_pass_flat = ttnn.rms_norm(k_pass_flat, weight=self._kv_a_ln_weight, epsilon=self._kv_a_ln_eps)
+        k_pass_flat = ttnn.squeeze(k_pass_flat, 1)
+        kv_full = self.kv_b_proj(k_pass_flat)
+        kv_full = self._maybe_all_gather(kv_full)
+
+        kv_full = ttnn.reshape(
+            kv_full, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
         )
+        kv_full = ttnn.permute(kv_full, (0, 2, 1, 3))
 
-        k_pass = ttnn.reshape(k_pass, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim))
-        k_pass = ttnn.permute(k_pass, (0, 2, 1, 3))
-
-        # Split into key and value
-        key_nope = ttnn.slice(k_pass, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
+        key_nope = ttnn.slice(kv_full, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
         value_states = ttnn.slice(
-            k_pass,
+            kv_full,
             (0, 0, 0, self.qk_nope_head_dim),
             (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim + self.v_head_dim),
         )
 
-        # Reshape k_rot for RoPE
         k_rot = ttnn.reshape(k_rot, (batch_size, 1, seq_length, self.qk_rope_head_dim))
 
-        # Apply RoPE
         cos, sin = position_embeddings
         if len(cos.shape) == 3:
             cos = ttnn.unsqueeze(cos, 1)
-        cos = ttnn.experimental.all_gather_async(
-            cos,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
+        if self._is_distributed:
+            cos = self._maybe_all_gather(cos)
         if len(sin.shape) == 3:
             sin = ttnn.unsqueeze(sin, 1)
-        sin = ttnn.experimental.all_gather_async(
-            sin,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
+        if self._is_distributed:
+            sin = self._maybe_all_gather(sin)
+
+        cos, sin = self._permute_cos_sin_to_meta_format(cos, sin)
+
         q_rot, k_rot = self.rope(q_rot, k_rot, cos, sin)
 
-        # Expand k_rot to match heads
         k_rot = ttnn.repeat(k_rot.to_ttnn, (1, self.num_heads, 1, 1))
 
-        # Concatenate nope and rope parts
         query_states = ttnn.concat([q_pass, q_rot.to_ttnn], dim=-1)
         key_states = ttnn.concat([key_nope, k_rot], dim=-1)
 
-        # Update KV cache if provided
-        if past_key_values is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            torch_tensors = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-            orig_shapes = [key_states.shape, value_states.shape]
-            torch_tensors = [
-                torch_tensor.to_torch[: orig_shape[0], : orig_shape[1], : orig_shape[2], : orig_shape[3]]
-                for orig_shape, torch_tensor in zip(orig_shapes, torch_tensors)
-            ]
-            key_states, value_states = past_key_values.update(
-                *torch_tensors,
-                self._fallback_torch_layer.layer_idx,
-                cache_kwargs,
-            )
-            key_states, value_states = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-            key_states = ttnn.to_device(key_states.to_ttnn, self.device)
-            value_states = ttnn.to_device(value_states.to_ttnn, self.device)
-            key_states = ttnn.experimental.all_gather_async(
-                key_states,
-                dim=-1,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
-            value_states = ttnn.experimental.all_gather_async(
-                value_states,
-                dim=-1,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
+        return query_states, key_states, value_states, cos, sin
 
-        # Pad value_states if needed
+    def _forward_prefill(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values,
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+
+        query_states, key_states, value_states, cos, sin = self._project_qkv(
+            hidden_states, batch_size, seq_length, position_embeddings
+        )
+
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        print(f"use_paged: {use_paged}")
+
+        if past_key_values is not None:
+            layer_idx = self._fallback_torch_layer.layer_idx
+
+            if use_paged:
+                past_key_values.paged_fill_on_device(
+                    key_states,
+                    value_states,
+                    layer_idx=layer_idx,
+                    batch_idx=0,
+                )
+                # key_states / value_states are already all-gathered from
+                # _project_qkv — no second all-gather needed.
+            else:
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+                torch_tensors = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
+                orig_shapes = [key_states.shape, value_states.shape]
+
+                torch_tensors = [
+                    torch_tensor.to_torch[: orig_shape[0], : orig_shape[1], : orig_shape[2], : orig_shape[3]]
+                    for orig_shape, torch_tensor in zip(orig_shapes, torch_tensors)
+                ]
+
+                key_states, value_states = past_key_values.update(
+                    *torch_tensors,
+                    layer_idx,
+                    cache_kwargs,
+                )
+                key_states, value_states = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
+                key_states = ttnn.to_device(key_states.to_ttnn, self.device)
+                value_states = ttnn.to_device(value_states.to_ttnn, self.device)
+                key_states = self._maybe_all_gather(key_states)
+                value_states = self._maybe_all_gather(value_states)
+
         if self.qk_head_dim != self.v_head_dim:
             pad_size = self.qk_head_dim - self.v_head_dim
             value_states = ttnn.pad(value_states, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
 
-        # Scaled dot-product attention (causal for prefill)
         attn_output = self.sdpa(
             self,
             query_states,
@@ -1005,11 +1308,152 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             transpose_output=True,
         ).to_ttnn
 
-        # Remove padding
         if self.qk_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, : self.v_head_dim]
 
-        # Reshape and output projection
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None
+
+    def _to_replicated(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Convert a multi-device tensor to an explicitly replicated tensor.
+
+        After all-gather the data is identical on every device but the mesh
+        topology metadata differs from ReplicateTensorToMesh.  Paged-attention
+        kernels require the replicated topology, so we round-trip through the
+        host for decode tokens (tiny tensors, negligible overhead).
+        """
+        if self.device.get_num_devices() <= 1:
+            return tensor
+        t = tensor
+        if isinstance(t, TorchTTNNTensor):
+            t = t.to_ttnn
+        orig_shape = list(t.shape)
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        t_torch = ttnn.to_torch(t, mesh_composer=mesh_composer)
+        t_torch = t_torch[: orig_shape[0]]
+        return ttnn.from_torch(
+            t_torch,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            dtype=t.dtype,
+            layout=t.layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_decode_paged(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values: "TTNNPagedAttentionKVCache",
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        """Decode path using paged attention with on-device KV cache.
+
+        TTNN paged kernels require tensors in [1, batch, heads, head_dim]
+        layout (``S B H D``) whereas ``_project_qkv`` returns the standard
+        [batch, heads, seq, head_dim] (``B H S D``).  This method handles
+        the permute, L1 sharding required by ``paged_update_cache``, and
+        the MLA-aware SDPA decode call.
+        """
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+
+        query_states, key_states, value_states, cos, sin = self._project_qkv(
+            hidden_states, batch_size, seq_length, position_embeddings
+        )
+        # _project_qkv returns [B, H, S, D]:
+        #   Q : [B, num_heads, 1, qk_head_dim]
+        #   K : [B, num_heads, 1, qk_head_dim]
+        #   V : [B, num_heads, 1, v_head_dim]
+
+        layer_idx = self._fallback_torch_layer.layer_idx
+
+        # --- resolve cache position to a 1-D torch int32 tensor [batch] ---
+        if cache_position is None:
+            cur_pos = past_key_values.get_seq_length(layer_idx)
+            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+        else:
+            cp = cache_position
+            if isinstance(cp, TorchTTNNTensor):
+                cp = cp.to_torch
+            if isinstance(cp, ttnn.Tensor):
+                mesh_composer = None
+                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
+                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
+            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+
+        # 1-D [batch_size] tensor for paged_update_cache & paged_sdpa_decode
+        cur_pos_tt = ttnn.from_torch(
+            cache_position_tensor,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # --- permute B H S D  →  S B H D  (the layout paged kernels expect) ---
+        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
+        key_states = ttnn.permute(key_states, (2, 0, 1, 3))
+        value_states = ttnn.permute(value_states, (2, 0, 1, 3))
+
+        # --- pad V to qk_head_dim so K/V caches share the same last dim ---
+        if self.qk_head_dim != self.v_head_dim:
+            pad_size = self.qk_head_dim - self.v_head_dim
+            value_states = ttnn.pad(value_states, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+
+        # --- multi-device: convert all-gathered topology → replicated ---
+        if self.device.get_num_devices() > 1:
+            query_states = self._to_replicated(query_states)
+            key_states = self._to_replicated(key_states)
+            value_states = self._to_replicated(value_states)
+
+        # --- L1 HEIGHT_SHARDED config required by paged_update_cache ---
+        tile_size = 32
+        shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(shard_h, self.qk_head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        key_states = ttnn.to_memory_config(key_states, shard_cfg)
+        value_states = ttnn.to_memory_config(value_states, shard_cfg)
+
+        # --- update the on-device paged KV cache ---
+        past_key_values.paged_update_on_device(
+            key_states,
+            value_states,
+            layer_idx=layer_idx,
+            current_pos=cur_pos_tt,
+        )
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        past_key_values._seq_lengths[layer_idx] += seq_length
+        if layer_idx == 0:
+            past_key_values._seen_tokens += seq_length
+
+        # --- paged SDPA decode (Q stays in DRAM) ---
+        attn_output = past_key_values.paged_sdpa_decode(
+            query_states,
+            layer_idx,
+            current_pos=cur_pos_tt,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+        )
+        # attn_output: [1, B, H, qk_head_dim]
+
+        # --- convert back to [B, S, H*D_v] for the output projection ---
+        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
+        if self.qk_head_dim != self.v_head_dim:
+            attn_output = attn_output[:, :, :, : self.v_head_dim]
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
         attn_output = self.o_proj(attn_output)
 
@@ -1020,24 +1464,22 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         hidden_states: ttnn.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[ttnn.Tensor] = None,
-        past_key_values: Optional["Cache"] = None,
+        past_key_values=None,
         cache_position: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
-        """Forward pass with automatic decode/prefill dispatch.
+        seq_length = hidden_states.shape[1]
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
 
-        Args:
-            hidden_states: Input tensor [batch_size, seq_len, hidden_size]
-            position_embeddings: (cos, sin) tensors for RoPE
-            attention_mask: Optional attention mask
-            past_key_values: KV cache
-            cache_position: Cache position indices
-            **kwargs: Additional arguments
-
-        Returns:
-            Tuple of (output_tensor, attention_weights)
-        """
+        if use_paged and seq_length == 1:
+            return self._forward_decode_paged(
+                hidden_states,
+                position_embeddings,
+                attention_mask,
+                past_key_values,
+                cache_position,
+            )
 
         return self._forward_prefill(
             hidden_states,
