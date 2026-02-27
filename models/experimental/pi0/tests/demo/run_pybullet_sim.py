@@ -200,6 +200,7 @@ class PI0SimulationEnv:
         use_delta_actions=True,
         max_velocity=0.5,
         image_size=224,
+        delta_scale=1.0,
     ):
         """
         Initialize simulation environment and PI0 model.
@@ -218,6 +219,7 @@ class PI0SimulationEnv:
             use_delta_actions: Interpret actions as position deltas instead of absolute (default True, reduces oscillation)
             max_velocity: Maximum joint velocity in rad/s (default 0.5, lower = smoother but slower)
             image_size: Image resolution for observations (default 224, lower = faster inference)
+            delta_scale: Scale factor for delta actions (default 1.0, higher = faster motion, lower = more precise)
         """
         # Set random seeds for reproducibility
         self.seed = seed
@@ -226,6 +228,7 @@ class PI0SimulationEnv:
         self.use_delta_actions = use_delta_actions
         self.max_velocity = max_velocity
         self.image_size = image_size
+        self.delta_scale = delta_scale
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
@@ -616,8 +619,8 @@ class PI0SimulationEnv:
                         current_pos = p.getJointState(self.robot_id, joint_idx)[0]
                         current_positions.append(current_pos)
 
-                        # Scale action as a delta (smaller scale factor for smoother motion)
-                        delta = action_step[i] * 0.3  # 0.3 rad max change per step
+                        # Scale action as a delta (adjust scale factor for motion speed)
+                        delta = action_step[i] * self.delta_scale  # Configurable scale for motion speed
 
                         # New target = current + delta
                         new_pos = current_pos + delta
@@ -744,6 +747,8 @@ class PI0SimulationEnv:
             f"   Re-plan interval: {self.replan_interval} (execute {self.replan_interval} actions before re-planning)"
         )
         print(f"   Action mode: {'✅ Delta (incremental)' if self.use_delta_actions else 'Absolute positioning'}")
+        if self.use_delta_actions:
+            print(f"   Delta scale: {self.delta_scale} (higher = faster motion)")
         print(f"   Max velocity: {self.max_velocity} rad/s")
         print(f"   Random seed: {self.seed}")
 
@@ -1035,6 +1040,12 @@ def main():
         default=224,
         help="Image resolution for observations (default: 224, try 112 or 160 for faster inference)",
     )
+    parser.add_argument(
+        "--delta-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for delta actions (default: 1.0, try 2.0-3.0 for faster motion, 0.3-0.5 for more precise/slower motion)",
+    )
 
     args = parser.parse_args()
 
@@ -1074,6 +1085,7 @@ def main():
         use_delta_actions=args.use_delta_actions,
         max_velocity=args.max_velocity,
         image_size=args.image_size,
+        delta_scale=args.delta_scale,
     )
 
     try:
