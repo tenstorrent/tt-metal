@@ -80,26 +80,77 @@ namespace internal
 {
 }
 
+/**
+ * @brief Issues a load transaction that will block the core until the transaction is completed
+ * @param ptr address to read from
+ * @return value read from the address
+ */
+inline std::uint32_t load_blocking(volatile std::uint32_t *ptr)
+{
+    std::uint32_t val;
+
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md
+
+    // important note: FENCE on Wormhole is a NOP
+    //
+    // this code provides a blocking load by doing the following:
+    // - issue a LOAD transaction to the address
+    //     - actual load that was requested
+    // - issue an instruction that requires the data from the LOAD transaction
+    //     - block the pipeline until the LOAD transaction completes
+    // - memory clobber
+    //     - prevent reordering of transactions that occur after the load before the load by the COMPILER
+
+    asm volatile(
+        "lw %[val], (%[ptr])\n\t"
+        "and x0, x0, %[val]"
+        : [val] "=r"(val)
+        : [ptr] "r"(ptr));
+
+    asm volatile("" : ::"memory");
+
+    return val;
+}
+
+/**
+ * @brief Issues a store transaction that will block the core until the transaction is completed
+ * @param ptr address to write to
+ * @param val value that will be written to the address
+ */
+inline void store_blocking(volatile std::uint32_t *ptr, std::uint32_t val)
+{
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md
+
+    // important note: FENCE on Wormhole is a NOP
+    //
+    // this code provides a blocking store by doing the following:
+    // - issue a STORE transaction to the address
+    //     - actual store that was requested
+    // - issue a LOAD transaction to the address
+    //     - must complete after the STORE transaction
+    // - issue an instruction that requires the data from the LOAD transaction
+    //     - block the pipeline until the LOAD transaction completes, ensuring that the STORE is complete
+    // - memory clobber
+    //     - prevent reordering of transactions that occur after the store before the store by the COMPILER
+
+    asm volatile(
+        "sw %[val], (%[ptr])\n\t"
+        "lw %[val], (%[ptr])\n\t"
+        "and x0, x0, %[val]"
+        : [val] "+r"(val)
+        : [ptr] "r"(ptr));
+
+    asm volatile("" : ::"memory");
+}
+
 inline void tensix_sync()
 {
-    volatile std::uint32_t foo     = 0;
-    volatile std::uint32_t *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[1] = foo;
-
-    // Now read -- this read will block until we're idle
-    *fooptr = pc_buf_base[1];
+    store_blocking(&pc_buf_base[1], 0);
 }
 
 inline void mop_sync()
 {
-    volatile std::uint32_t foo     = 0;
-    volatile std::uint32_t *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[2] = foo;
-
-    // Now read -- this read will block until mops are done
-    *fooptr = pc_buf_base[2];
+    store_blocking(&pc_buf_base[2], 0);
 }
 
 inline void sync_regfile_write(const std::uint32_t index);
