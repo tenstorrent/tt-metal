@@ -10,7 +10,7 @@ Eight demos showcasing different fusion capabilities:
 1. Basic 3-op chain (RMS -> Matmul -> RMS) with DRAM I/O on a 4x2 grid
 2. Sharded 2-op chain (RMS -> LN) demonstrating pinned buffer address reassignment
 3. All-matmul symmetric branching (7 matmuls) on full 8x8 grid — same core grids both paths
-4. Two parallel independent chains on disjoint cores
+4. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 4×4 core groups
 5. GlobalCircularBuffer mid-kernel write to an external consumer
 6. All-LN symmetric branching on 2x8 grid
 7. Heterogeneous tree (LN → Slice → Matmul → Slice → LN) with interleaved DRAM I/O
@@ -901,40 +901,98 @@ class TestFusedDemo:
         print(f"\n  Demo 3 Unfused ({grid}, H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms")
 
     # -----------------------------------------------------------------
-    # Demo 4: Two parallel 2-op chains on disjoint 4x4 core groups
-    # Chain A: LN -> Matmul on cores (0,0)-(3,3)
-    # Chain B: RMS -> Matmul on cores (4,0)-(7,3)
-    # H must be divisible by 128 (in0_block_w=4 × tile=32)
+    # Demo 4: Two parallel sharded chains on disjoint 1×8 core columns
+    # Chain A: LN -> Matmul on cores col 0, rows 0-7
+    # Chain B: RMS -> Matmul on cores col 1, rows 0-7
+    # Block-sharded [1024,256] inputs, sharded [1024,128] outputs on
+    # 1×8 grid. B weight + norm weight/bias in L1 interleaved.
     # -----------------------------------------------------------------
 
-    def _demo4_setup(self, device, H):
+    def _demo4_setup(self, device):
         torch.manual_seed(42)
-        cores_a = _cores(0, 0, 3, 3)
-        cores_b = _cores(4, 0, 7, 3)
-        N_tiles = H // 32
-        mm_cfg = _mm_config(grid_x=4, grid_y=4, in0_block_w=4, per_core_M=1, per_core_N=N_tiles)
+        rows, K, N = 1024, 256, 128
 
-        torch_a = torch.randn(1, 1, 512, H, dtype=torch.bfloat16)
-        torch_b = torch.randn(1, 1, 512, H, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, H, dtype=torch.bfloat16)
-        torch_bias = torch.zeros(1, 1, 1, H, dtype=torch.bfloat16)
-        torch_B = torch.randn(1, 1, H, H, dtype=torch.bfloat16)
+        # 1-column grids: K (width) not split → matmul factory CB fits in shard
+        cores_a = _cores(0, 0, 0, 7)  # col 0, rows 0-7 = 8 cores
+        cores_b = _cores(1, 0, 1, 7)  # col 1, rows 0-7 = 8 cores
 
-        ta = _tt(torch_a, device)
-        tb = _tt(torch_b, device)
-        tw = _tt(torch_w, device)
-        tbi = _tt(torch_bias, device)
-        tB = _tt(torch_B, device)
+        shard_h = rows // 8  # 128
 
-        return cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB
+        def _shard_mem(cores, width):
+            spec = ttnn.ShardSpec(cores, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
 
-    @pytest.mark.parametrize("H", [128, 512], ids=["H128", "H512"])
-    def test_demo4_fused(self, device, H):
+        sharded_in_a = _shard_mem(cores_a, K)  # input shard [128, 256]
+        sharded_in_b = _shard_mem(cores_b, K)  # input shard [128, 256]
+        sharded_out_a = _shard_mem(cores_a, N)  # output shard [128, 128]
+        sharded_out_b = _shard_mem(cores_b, N)  # output shard [128, 128]
+        compute_cfg = _compute(fp32=False)
+
+        # [1024,256] × [256,128] on 1×8 grid
+        # M=32 tiles, K=8 tiles, N=4 tiles
+        # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
+        mm_cfg = _mm_config(grid_x=1, grid_y=8, in0_block_w=K // 32, per_core_M=shard_h // 32, per_core_N=N // 32)
+
+        torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_B = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        # Inputs block-sharded in L1
+        ta = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_a
+        )
+        tb = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_b
+        )
+
+        # Weight, bias, B in L1 interleaved
+        def _l1(t):
+            return ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+
+        tw = _l1(torch_w)
+        tbi = _l1(torch_bias)
+        tB = _l1(torch_B)
+
+        return (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            compute_cfg,
+            mm_cfg,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        )
+
+    def test_demo4_fused(self, device):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
-        cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB = self._demo4_setup(device, H)
+        (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            compute_cfg,
+            mm_cfg,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        ) = self._demo4_setup(device)
 
         la = layer_norm.layer_norm(
             ta,
@@ -942,29 +1000,39 @@ class TestFusedDemo:
             weight=tw,
             bias=tbi,
             epsilon=1e-5,
-            compute_kernel_config=_compute(),
+            compute_kernel_config=compute_cfg,
+            memory_config=sharded_in_a,
         )
         ma = matmul_desc(
             la.output_tensors[0],
             tB,
             core_range_set=cores_a,
             program_config=mm_cfg,
-            compute_kernel_config=_compute(),
+            compute_kernel_config=compute_cfg,
+            output_mem_config=sharded_out_a,
         )
-        rb = rms_norm.rms_norm(tb, core_range_set=cores_b, weight=tw, epsilon=1e-5)
+        rb = rms_norm.rms_norm(
+            tb,
+            core_range_set=cores_b,
+            weight=tw,
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+            memory_config=sharded_in_b,
+        )
         mb = matmul_desc(
             rb.output_tensors[0],
             tB,
             core_range_set=cores_b,
             program_config=mm_cfg,
-            compute_kernel_config=_compute(),
+            compute_kernel_config=compute_cfg,
+            output_mem_config=sharded_out_b,
         )
 
         if self._SINGLE_RUN_ONLY:
             fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
             fused.launch()
             ttnn.synchronize_device(device)
-            print(f"\n  Demo 4 Fused (H={H}): single run (for Tracy)")
+            print("\n  Demo 4 Fused: single run (for Tracy)")
         else:
             _, cold, warm = _time_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device), device)
 
@@ -974,37 +1042,55 @@ class TestFusedDemo:
             result_a = ttnn.to_torch(ma.output_tensors[0])
             result_b = ttnn.to_torch(mb.output_tensors[0])
 
-            # Unfused reference for PCC
-            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
-            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
+            # Unfused reference for PCC — interleaved to avoid core mapping constraints
+            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
 
             p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
             p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
 
-            print(f"\n  Demo 4 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
+            print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
             assert p_a, f"Chain A PCC: {pcc_a}"
             assert p_b, f"Chain B PCC: {pcc_b}"
 
-    @pytest.mark.parametrize("H", [128, 512], ids=["H128", "H512"])
-    def test_demo4_unfused(self, device, H):
-        cores_a, cores_b, mm_cfg, ta, tb, tw, tbi, tB = self._demo4_setup(device, H)
+    def test_demo4_unfused(self, device):
+        (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            compute_cfg,
+            mm_cfg,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        ) = self._demo4_setup(device)
+
+        # Convert to interleaved — ttnn.matmul with MatmulMultiCoreReuseProgramConfig
+        # can't handle sharded input on non-(0,0) core ranges.
+        ta_i = ttnn.to_memory_config(ta, ttnn.L1_MEMORY_CONFIG)
+        tb_i = ttnn.to_memory_config(tb, ttnn.L1_MEMORY_CONFIG)
 
         def unfused():
-            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=_compute())
-            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
-            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5)
-            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=_compute())
+            ua1 = ttnn.layer_norm(ta_i, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            ub1 = ttnn.rms_norm(tb_i, weight=tw, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
 
         if self._SINGLE_RUN_ONLY:
             unfused()
             ttnn.synchronize_device(device)
-            print(f"\n  Demo 4 Unfused (H={H}): single run (for Tracy)")
+            print("\n  Demo 4 Unfused: single run (for Tracy)")
         else:
             cold, warm = _time_cold_warm(unfused, device)
             e2e = _time_steady_state(unfused, device)
-            print(f"\n  Demo 4 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
     # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
@@ -1343,15 +1429,26 @@ class TestFusedDemo:
             # Unfused reference for PCC — use L1 interleaved intermediates
             # to avoid slice/matmul sharding constraints in the reference path
             u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+
+            # Left path: stem → slice top → matmul → slice top-left → LN
             u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=ttnn.L1_MEMORY_CONFIG)
             u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
             u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=ttnn.L1_MEMORY_CONFIG)
             ref_ll = ttnn.to_torch(ttnn.layer_norm(u_tl, epsilon=1e-5, compute_kernel_config=compute_cfg))
             result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
 
-            passing, pcc = comp_pcc(ref_ll, result_ll, pcc=0.97)
-            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC(ll)={pcc:.6f}")
-            assert passing, f"PCC: {pcc}"
+            # Right path: stem → slice bottom → matmul → slice top-right → LN
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=ttnn.L1_MEMORY_CONFIG)
+            u_right = ttnn.matmul(u_bot, tt_B_right, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=ttnn.L1_MEMORY_CONFIG)
+            ref_rl = ttnn.to_torch(ttnn.layer_norm(u_tr, epsilon=1e-5, compute_kernel_config=compute_cfg))
+            result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
+
+            p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
+            p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
+            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
+            assert p_ll, f"Left-left PCC: {pcc_ll}"
+            assert p_rl, f"Right-left PCC: {pcc_rl}"
 
     def test_demo8_unfused(self, device):
         """Launch the exact same OpDescriptors as the fused path, one at a time."""
