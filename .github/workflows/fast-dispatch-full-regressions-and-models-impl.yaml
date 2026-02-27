@@ -353,52 +353,49 @@ jobs:
           - model: stable_diffusion_xl_base
             timeout: 75
     name: Nightly BH ${{ matrix.test-config.model }}
+    # Use CIv2 P150b stable runner
+    runs-on: tt-ubuntu-2204-P150b-stable
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: blackhole
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        # CIv2 uses LFC via TT_GH_CI_INFRA, no HF_HUB_CACHE needed
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
-    # Use cloud BH runners with /mnt/MLPerf for HF model cache access
-    runs-on: ["in-service", "arch-blackhole", "pipeline-functional"]
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar --zstd -xvf ttm_any.tar.zst
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=blackhole
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-            ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7' || '' }}
-          run_args: |
-            PYTEST_CMD="${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}"
-            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+        env:
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '7,7' || '' }}
+        run: |
+          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        uses: ./.github/actions/prepare-tracy-reports
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
         with:
-          profiler-dir: ${{ github.workspace }}/generated/profiler
+          profiler-dir: /work/generated/profiler
           model-name: ${{ matrix.test-config.model }}
           card: P150b
       - name: Upload Tracy reports
@@ -406,13 +403,13 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
-          path: ${{ github.workspace }}/generated/profiler/reports
+          path: /work/generated/profiler/reports
           prefix: "tracy_ops_${{ matrix.test-config.model }}_P150b_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
+          path: /work/generated/test_reports/
           prefix: "test_reports_"
 
   aggregate-ops-recording:
