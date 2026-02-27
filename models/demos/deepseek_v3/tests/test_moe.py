@@ -117,9 +117,11 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass using utility function
+    # TTNN forward pass - collective operations handled inside forward functions
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config)
+
+    # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
