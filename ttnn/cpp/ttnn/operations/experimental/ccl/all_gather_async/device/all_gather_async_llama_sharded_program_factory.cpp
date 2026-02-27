@@ -80,13 +80,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     auto [num_targets_forward, num_targets_backward] =
         get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [forward_args, backward_args] = get_forward_backward_line_mcast_configuration(
-        topology,
-        sender_device_coord,
-        forward_coord,
-        backward_coord,
-        num_targets_forward,
-        num_targets_backward,
-        mesh_device);
+        sender_device_coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
