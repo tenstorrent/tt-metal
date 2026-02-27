@@ -24,7 +24,7 @@ constexpr int get_math_num_fidelity_phases(const MathFidelity math_fidelity)
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
-inline void matmul_configure_addrmod(
+inline void matmul_configure_addrmod_no_mop(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -126,11 +126,11 @@ inline void matmul_configure_addrmod_reinit(const bool transpose = false)
 {
     // Reinit must restore the full matmul address-modifier contract used by replay.
     // In particular, transpose affects ADDR_MOD_1/4 and fidelity/throttle use ADDR_MOD_5/6.
-    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose);
+    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose);
 }
 
 template <MathFidelity math_fidelity>
-inline void matmul_configure_mop(
+inline void matmul_configure_mop_custom(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -298,7 +298,7 @@ void run_throttled_sequence_no_mop<5>()
  * Level 5: throttle to 33% of max
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
-inline void matmul_configure_mop_throttled(
+inline void matmul_configure_mop_throttled_no_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -346,15 +346,15 @@ inline void _llk_math_matmul_init_no_mop_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
-    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
+        matmul_configure_mop_throttled_no_mop<math_fidelity, THROTTLE_LEVEL>(
             ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
-        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
