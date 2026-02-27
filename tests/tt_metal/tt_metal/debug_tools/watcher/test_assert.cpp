@@ -87,7 +87,7 @@ static void RunTest(
                             kernel,
                             logical_core,
                             tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                                .num_processors_per_cluster = 8, .compile_args = {dm_id}});
+                                .num_threads_per_cluster = 8, .compile_args = {dm_id}});
                     } else {
                         DataMovementConfig dm_config{};
                         dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
