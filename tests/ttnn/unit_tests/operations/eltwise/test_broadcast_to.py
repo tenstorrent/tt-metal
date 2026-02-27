@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from functools import reduce
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -50,6 +51,8 @@ input_bcast_shape_pairs = [
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
 def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+    if dtype_tt == ttnn.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     shape, broadcast_shape = shape_and_broadcast_spec
 
     # For float32, use values that expose TF32 precision loss (require >10 mantissa bits)

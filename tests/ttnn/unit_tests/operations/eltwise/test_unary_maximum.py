@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -34,6 +35,8 @@ pytestmark = pytest.mark.use_module_device
     ],
 )
 def test_unary_max_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
+    if (ttnn_dtype == ttnn.uint32) and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
