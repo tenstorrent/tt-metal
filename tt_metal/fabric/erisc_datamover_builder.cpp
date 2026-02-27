@@ -1229,7 +1229,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                                                       // receiver_channel_forwarding_sync_cmd_buf_ids
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        // TODO: pass this to the tranmission file
+        // TODO: pass this to the transmission file
         ct_args.push_back(
             config.receiver_channel_local_write_noc_ids[i]);  // maps to receiver_channel_local_write_noc_ids
     }

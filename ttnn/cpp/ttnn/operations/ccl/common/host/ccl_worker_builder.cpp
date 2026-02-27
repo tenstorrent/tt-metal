@@ -1091,7 +1091,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             rt_args.push_back(tensors[i]->buffer()->address());
         } else {
             // take up the rt arg with filler value  in case user built a kernel across a core range
-            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
+            // set with multiple command streams/tensors, but this particular core doesn't actually need/use
             // both tensors/command streams
             rt_args.push_back(0xdeaddead);
         }
