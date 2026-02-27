@@ -116,3 +116,6 @@ models:
   demo:
     wh_llmbox_perf: 1090
     wh_galaxy: 287
+  sweep:
+    wh_n150: 30
+    wh_llmbox_perf: 60
