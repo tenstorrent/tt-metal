@@ -201,17 +201,13 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 ttnn.deallocate(combined_out)
                 output = ttnn.experimental.reduce_scatter_minimal_async(
                     summed_experts,
-                    **ccl.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
+                    **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
                 )
 
             # Cleanup gathered tensor
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
         else:
-            output = ttnn.sum(
-                combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
-            )
-
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
