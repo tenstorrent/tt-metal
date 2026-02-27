@@ -62,6 +62,7 @@ public:
         for (uint32_t packet = 0; packet < packets_per_outpage; packet++) {
             auto packet_read_addr = cb_out_page_start + packet * packet_size;
             auto write_offset = packet * packet_size;
+            noc_async_writes_flushed();
             fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 fabric_connection,
                 unicast_route_id,
@@ -206,13 +207,8 @@ void kernel_main() {
             };
             auto out_page_start = l1_read_addr + output * out_page_size;
             auto tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
+            writer.send(out_page_start, tensor_page_addr);
             noc_async_write(out_page_start, tensor_page_addr, out_page_size);
-
-            if constexpr (unicast) {
-                writer.send(out_page_start, tensor_page_addr);
-            } else {
-                writer.send(out_page_start, tensor_page_addr);
-            }
         }
         page_id += outputs_per_cb_page;
 
