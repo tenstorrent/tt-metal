@@ -5,13 +5,16 @@
 """
 Fusion Infrastructure Demo Suite
 
-Five demos showcasing different fusion capabilities:
+Eight demos showcasing different fusion capabilities:
 
 1. Basic 3-op chain (RMS -> Matmul -> RMS) with DRAM I/O on a 4x2 grid
 2. Sharded 2-op chain (RMS -> LN) demonstrating pinned buffer address reassignment
 3. All-matmul symmetric branching (7 matmuls) on full 8x8 grid — same core grids both paths
 4. Two parallel independent chains on disjoint cores
 5. GlobalCircularBuffer mid-kernel write to an external consumer
+6. All-LN symmetric branching on 2x8 grid
+7. Heterogeneous tree (LN → Slice → Matmul → Slice → LN) with interleaved DRAM I/O
+8. Sharded heterogeneous tree — same topology as 7 with block-sharded L1 intermediates
 
 Each demo is split into separate fused and unfused tests, each with cold + warm timing.
 Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
@@ -1442,3 +1445,373 @@ class TestFusedDemo:
             e2e = _time_steady_state(unfused, device)
 
             print(f"\n  Demo 7 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # =================================================================
+    # Demo 8: Sharded Heterogeneous Tree
+    # =================================================================
+    #
+    # Same balanced binary tree topology as demo 7, but with block-sharded
+    # intermediates instead of interleaved DRAM I/O.  Scaled down to fit
+    # height-sharded in L1.
+    #
+    # Stem input is height-sharded across 16 cores for a fair comparison:
+    # both fused and unfused paths use the same core grids per op.
+    #
+    #   Level 0:  LN_stem            (16 cores)  [1,1,2048,256]  (sharded)
+    #   Level 1:  Slice → MM_left    ( 8 cores)  [1,1,1024,256] × B_left → [1,1,1024,128]
+    #             Slice → MM_right   ( 8 cores)  [1,1,1024,256] × B_right → [1,1,1024,128]
+    #   Level 2:  Slice → LN_ll/lr   ( 4 cores)  [1,1,512,128]
+    #             Slice → LN_rl/rr   ( 4 cores)  [1,1,512,128]
+
+    def _demo8_setup(self, device):
+        torch.manual_seed(42)
+        # Scaled down to fit block-sharded in L1.  Original was [8192, 1024].
+        rows, cols = 2048, 256
+        mm_n = 128  # matmul output width (B = [256, 128] = 64KB)
+
+        stem_cores = _cores(0, 0, 1, 7)  # 2x8 = 16 cores
+        left_cores = _cores(0, 0, 0, 7)  # 1x8 = 8 cores
+        right_cores = _cores(1, 0, 1, 7)  # 1x8 = 8 cores
+        ll_cores = _cores(0, 0, 0, 3)  # 1x4 = 4 cores
+        lr_cores = _cores(0, 4, 0, 7)  # 1x4 = 4 cores
+        rl_cores = _cores(1, 0, 1, 3)  # 1x4 = 4 cores
+        rr_cores = _cores(1, 4, 1, 7)  # 1x4 = 4 cores
+
+        compute_cfg = _compute(fp32=False)
+
+        # Matmul config for 8 cores (1x8 grid):
+        # A=[1,1,1024,256] → M=32 tiles, K=8 tiles
+        # B=[1,1,256,128] → output [1,1,1024,128]
+        # in0_block_w must equal shard_w / tile_w for block-sharded A input
+        # (shard [128,256] on 1-col grid → shard_w=256, so in0_block_w=256/32=8)
+        mm_cfg = _mm_config(
+            grid_x=1,
+            grid_y=8,
+            in0_block_w=cols // 32,  # 256/32 = 8 (full K)
+            per_core_M=4,  # 32 M-tiles / 8 cores = 4
+            per_core_N=mm_n // 32,  # 128/32 = 4 N-tiles
+        )
+
+        # Block-sharded: height ÷ grid_rows, width ÷ grid_cols.
+        def _shard_mem(cores, shard_h, shard_w):
+            spec = ttnn.ShardSpec(cores, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        # All intermediate shard configs, keyed by position in the tree.
+        # stem [2048,256] on 2×8 → [256,128]; left/right [1024,256] on 1×8 → [128,256]
+        # mm [1024,128] on 1×8 → [128,128]; leaf [512,128] on 1×4 → [128,128]
+        shards = {
+            "stem": _shard_mem(stem_cores, 256, 128),  # [256,128] × 16 cores
+            "left": _shard_mem(left_cores, 128, 256),  # [128,256] × 8 cores
+            "right": _shard_mem(right_cores, 128, 256),  # [128,256] × 8 cores
+            "mm_left": _shard_mem(left_cores, 128, 128),  # [128,128] × 8 cores
+            "mm_right": _shard_mem(right_cores, 128, 128),  # [128,128] × 8 cores
+            "ll": _shard_mem(ll_cores, 128, 128),  # [128,128] × 4 cores
+            "lr": _shard_mem(lr_cores, 128, 128),  # [128,128] × 4 cores
+            "rl": _shard_mem(rl_cores, 128, 128),  # [128,128] × 4 cores
+            "rr": _shard_mem(rr_cores, 128, 128),  # [128,128] × 4 cores
+        }
+
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=shards["stem"],
+        )
+
+        # B in L1 interleaved: eliminates DRAM bank contention when parallel
+        # matmuls read B simultaneously on disjoint core groups.
+        def _tt_l1(t):
+            return ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+
+        tt_B_left = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
+        tt_B_right = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
+
+        return (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        )
+
+    def _demo8_make_ops(self, device):
+        """Create all OpDescriptors for Demo 8's sharded tree."""
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            ll_cores,
+            lr_cores,
+            rl_cores,
+            rr_cores,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        ) = self._demo8_setup(device)
+
+        rows, cols = 2048, 256
+        half = rows // 2
+        quarter = rows // 4
+
+        # Level 0: stem LN on 16 cores (auto-detects sharded input grid)
+        ln_stem = layer_norm.layer_norm(
+            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        # Level 1: slice (sharded on 8 cores) → matmul (sharded output on 8 cores)
+        sl_top = slice_op(
+            ln_stem.output_tensors[0],
+            [0, 0, 0, 0],
+            [1, 1, half, cols],
+            core_range_set=left_cores,
+            memory_config=shards["left"],
+        )
+        sl_bot = slice_op(
+            ln_stem.output_tensors[0],
+            [0, 0, half, 0],
+            [1, 1, rows, cols],
+            core_range_set=right_cores,
+            memory_config=shards["right"],
+        )
+
+        mm_left = matmul_desc(
+            sl_top.output_tensors[0],
+            tt_B_left,
+            core_range_set=left_cores,
+            program_config=mm_cfg,
+            compute_kernel_config=compute_cfg,
+            output_mem_config=shards["mm_left"],
+        )
+        mm_right = matmul_desc(
+            sl_bot.output_tensors[0],
+            tt_B_right,
+            core_range_set=right_cores,
+            program_config=mm_cfg,
+            compute_kernel_config=compute_cfg,
+            output_mem_config=shards["mm_right"],
+        )
+
+        # Level 2: slice (sharded on 4 cores) → LN (auto-detects from sharded input)
+        sl_tl = slice_op(
+            mm_left.output_tensors[0],
+            [0, 0, 0, 0],
+            [1, 1, quarter, mm_n],
+            core_range_set=ll_cores,
+            memory_config=shards["ll"],
+        )
+        sl_bl = slice_op(
+            mm_left.output_tensors[0],
+            [0, 0, quarter, 0],
+            [1, 1, half, mm_n],
+            core_range_set=lr_cores,
+            memory_config=shards["lr"],
+        )
+        sl_tr = slice_op(
+            mm_right.output_tensors[0],
+            [0, 0, 0, 0],
+            [1, 1, quarter, mm_n],
+            core_range_set=rl_cores,
+            memory_config=shards["rl"],
+        )
+        sl_br = slice_op(
+            mm_right.output_tensors[0],
+            [0, 0, quarter, 0],
+            [1, 1, half, mm_n],
+            core_range_set=rr_cores,
+            memory_config=shards["rr"],
+        )
+
+        ln_ll = layer_norm.layer_norm(
+            sl_tl.output_tensors[0], core_range_set=ll_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_lr = layer_norm.layer_norm(
+            sl_bl.output_tensors[0], core_range_set=lr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rl = layer_norm.layer_norm(
+            sl_tr.output_tensors[0], core_range_set=rl_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+        ln_rr = layer_norm.layer_norm(
+            sl_br.output_tensors[0], core_range_set=rr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+        )
+
+        return (
+            ln_stem,
+            sl_top,
+            sl_bot,
+            mm_left,
+            mm_right,
+            sl_tl,
+            sl_bl,
+            sl_tr,
+            sl_br,
+            ln_ll,
+            ln_lr,
+            ln_rl,
+            ln_rr,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        )
+
+    def _demo8_build_fused(self, device, ops):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        return Sequential(
+            ln_stem,
+            Parallel(
+                Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
+                Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
+            ),
+        ).build(device)
+
+    def test_demo8_fused(self, device):
+        (
+            ln_stem,
+            sl_top,
+            sl_bot,
+            mm_left,
+            mm_right,
+            sl_tl,
+            sl_bl,
+            sl_tr,
+            sl_br,
+            ln_ll,
+            ln_lr,
+            ln_rl,
+            ln_rr,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        ) = self._demo8_make_ops(device)
+
+        rows, cols = 2048, 256
+        half = rows // 2
+        quarter = rows // 4
+        ops = (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr)
+
+        if self._SINGLE_RUN_ONLY:
+            fused = self._demo8_build_fused(device, ops)
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 8 Fused: single run (for Tracy)")
+        else:
+            # Cold start
+            _, cold, _ = _time_fused(lambda: self._demo8_build_fused(device, ops), device)
+
+            # Steady-state e2e
+            fused = self._demo8_build_fused(device, ops)
+            e2e = _time_steady_state(fused.launch, device)
+
+            # Unfused reference for PCC — use L1 interleaved intermediates
+            # to avoid slice/matmul sharding constraints in the reference path
+            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=ttnn.L1_MEMORY_CONFIG)
+            u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=ttnn.L1_MEMORY_CONFIG)
+            ref_ll = ttnn.to_torch(ttnn.layer_norm(u_tl, epsilon=1e-5, compute_kernel_config=compute_cfg))
+            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
+
+            passing, pcc = comp_pcc(ref_ll, result_ll, pcc=0.97)
+            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC(ll)={pcc:.6f}")
+            assert passing, f"PCC: {pcc}"
+
+    def test_demo8_unfused(self, device):
+        (
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            compute_cfg,
+            mm_cfg,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        ) = self._demo8_make_ops(device)
+
+        rows, cols = 2048, 256
+        half = rows // 2
+        quarter = rows // 4
+
+        L1 = ttnn.L1_MEMORY_CONFIG
+
+        def unfused():
+            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=L1)
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=L1)
+            u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            u_right = ttnn.matmul(u_bot, tt_B_right, program_config=mm_cfg, compute_kernel_config=compute_cfg)
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=L1),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=L1),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=L1),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.layer_norm(
+                ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=L1),
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+
+        if self._SINGLE_RUN_ONLY:
+            unfused()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 8 Unfused: single run (for Tracy)")
+        else:
+            # Cold start
+            cold, _ = _time_cold_warm(unfused, device)
+
+            # Steady-state e2e
+            e2e = _time_steady_state(unfused, device)
+
+            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
