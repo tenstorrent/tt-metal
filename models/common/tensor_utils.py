@@ -16,7 +16,7 @@ import ttnn
 TILE_SIZE = ttnn.TILE_SIZE  # 32
 
 
-def get_rot_transformation_mat() -> torch.Tensor:
+def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
     """
     Create rotation transformation matrix for RoPE.
 
@@ -26,7 +26,7 @@ def get_rot_transformation_mat() -> torch.Tensor:
 
     This is used by ttnn.experimental.rotary_embedding_llama.
     """
-    dhead = TILE_SIZE  # Always 32 for RoPE op
+    assert dhead == TILE_SIZE, "dhead must be equal to TILE_SIZE for RoPE op"
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
