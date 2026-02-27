@@ -798,6 +798,9 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::initialize_fabric_context() {
+    // Clear teardown flag to allow normal operation
+    teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
@@ -2218,8 +2221,16 @@ std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() con
 }
 
 void ControlPlane::clear_fabric_context() {
+    // Set teardown flag to warn concurrent callers and provide safe fallback behavior
+    teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
+
     this->fabric_context_.reset(nullptr);
-    asic_id_to_fabric_node_cache_.clear();
+
+    // Clear cache under mutex to avoid race with get_fabric_node_id_from_asic_id()
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        asic_id_to_fabric_node_cache_.clear();
+    }
 }
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
@@ -3374,7 +3385,7 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 }
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    if (teardown_in_progress_.load(std::memory_order_acquire)) {
+    if (teardown_in_progress_.test(std::memory_order_seq_cst)) {
         log_warning(
             tt::LogFabric,
             "get_asic_id_from_fabric_node_id called during teardown for Mesh {} Chip {}. "

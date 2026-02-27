@@ -284,8 +284,13 @@ public:
 
     // Set when MetalContext is tearing down; allows ControlPlane to return safe fallbacks
     // instead of throwing when router maps are incomplete (e.g. custom mesh descriptors).
+    // Note: This is now managed internally by initialize_fabric_context() and clear_fabric_context().
     void set_teardown_in_progress(bool in_progress) {
-        teardown_in_progress_.store(in_progress, std::memory_order_release);
+        if (in_progress) {
+            teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
+        } else {
+            teardown_in_progress_.clear(std::memory_order_seq_cst);
+        }
     }
 
     // Getters
@@ -530,7 +535,7 @@ private:
     // for triage when a lookup fails.
     void log_available_fabric_node_ids() const;
 
-    mutable std::atomic<bool> teardown_in_progress_{false};
+    mutable std::atomic_flag teardown_in_progress_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_fabric
