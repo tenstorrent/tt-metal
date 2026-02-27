@@ -302,7 +302,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             64 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 64 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
@@ -329,6 +329,7 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             True,  # run_in_ci
         ),
+        # Batch 128
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             1,  # data_parallel
@@ -418,6 +419,7 @@ def test_gpt_oss_demo(
     stop_at_eos,
     run_in_ci,
     is_ci_env,
+    request,
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
@@ -428,7 +430,8 @@ def test_gpt_oss_demo(
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:
-        pytest.skip(f"This test configuration is skipped in CI.")
+        config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
+        pytest.skip(f"This test configuration is skipped in CI: {config_id}")
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
