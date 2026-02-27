@@ -616,6 +616,13 @@ def run_sweeps(
     # Track test status counts across the entire run (only meaningful for non-dry runs)
     status_counts = {}
 
+    # One-time device reset at the start of the job to ensure clean state
+    try:
+        reset_util = tt_smi_util.ResetUtil(config.arch_name)
+        reset_util.reset()
+    except Exception as e:
+        logger.warning(f"Initial tt-smi reset failed: {e}. Continuing anyway.")
+
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
