@@ -66,7 +66,7 @@ public:
      */
     std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>, std::optional<std::vector<ttnn::Tensor>>, std::optional<std::vector<ttnn::Tensor>>> forward(
         const ttnn::Tensor& pixel_values,
-        const std::optional<torch::Tensor>& bool_masked_pos = std::nullopt,
+        const std::optional<ttnn::Tensor>& bool_masked_pos = std::nullopt,
         const ttnn::Tensor* head_mask = nullptr,
         bool output_attentions = false,
         bool output_hidden_states = false,

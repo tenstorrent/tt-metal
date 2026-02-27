@@ -64,9 +64,6 @@ TtDeiTSelfAttention::TtDeiTSelfAttention(
 }
 
 ttnn::Tensor TtDeiTSelfAttention::transpose_for_scores(ttnn::Tensor& x) {
-    // Convert to ROW_MAJOR layout for reshape (matching Python implementation)
-    x = ttnn::to_layout(x, ttnn::ROW_MAJOR_LAYOUT);
-
     // Get current shape
     auto current_shape = x.logical_shape();
 
@@ -93,9 +90,6 @@ ttnn::Tensor TtDeiTSelfAttention::transpose_for_scores(ttnn::Tensor& x) {
     // Since we don't have direct access to fallback_ops in C++, we'll use ttnn::reshape
     // but ensure the tensor is in the right layout
     auto reshaped = ttnn::reshape(x, new_shape);
-
-    // Convert back to TILE layout
-    reshaped = ttnn::to_layout(reshaped, ttnn::TILE_LAYOUT);
 
     // Debug: Print final tensor shape before permute
     auto final_shape = reshaped.logical_shape();
@@ -127,24 +121,23 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTSelfAttention::forwa
     value_layer = transpose_for_scores(value_layer);
 
     // Compute attention scores
-    auto key_transposed = ttnn::transpose(key_layer, -2, -1);
-    auto attention_scores = ttnn::matmul(query_layer, key_transposed);
+    auto attention_scores = ttnn::matmul(query_layer, key_layer, false, true, ttnn::L1_MEMORY_CONFIG);
 
     // Scale attention scores
     float scale_factor = 1.0f / std::sqrt(static_cast<float>(attention_head_size));
-    attention_scores = ttnn::multiply(attention_scores, scale_factor);
+    attention_scores = ttnn::multiply(attention_scores, scale_factor, std::nullopt, ttnn::L1_MEMORY_CONFIG);
 
     // Apply softmax to get attention probabilities
-    auto attention_probs = ttnn::softmax(attention_scores, -1);
-    attention_probs = ttnn::to_layout(attention_probs, ttnn::TILE_LAYOUT);
+    auto attention_probs = ttnn::softmax(attention_scores, -1, ttnn::L1_MEMORY_CONFIG);
+    attention_probs = ttnn::to_layout(attention_probs, ttnn::TILE_LAYOUT, std::nullopt, ttnn::L1_MEMORY_CONFIG);
 
     // Apply head mask if provided
     if (head_mask.has_value()) {
-        attention_probs = ttnn::multiply(attention_probs, head_mask.value());
+        attention_probs = ttnn::multiply(attention_probs, head_mask.value(), std::nullopt, ttnn::L1_MEMORY_CONFIG);
     }
 
     // Compute context layer
-    auto context_layer = ttnn::matmul(attention_probs, value_layer);
+    auto context_layer = ttnn::matmul(attention_probs, value_layer, false, false, ttnn::L1_MEMORY_CONFIG);
 
     // Python uses: ttnn.permute(context_layer, (0, 2, 1, 3))
     // [batch, num_heads, middle_dim, head_size] -> [batch, middle_dim, num_heads, head_size]
@@ -159,7 +152,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTSelfAttention::forwa
     // context_layer is [1, 198, 12, 64], we want [1, 198, 768]
     ttnn::Shape new_context_layer_shape({1, padded_shape[1], static_cast<uint32_t>(all_head_size)});
     auto final_context = ttnn::reshape(context_layer, new_context_layer_shape);
-    final_context = ttnn::to_layout(final_context, ttnn::TILE_LAYOUT);
+    // final_context = ttnn::to_layout(final_context, ttnn::TILE_LAYOUT);
 
     // Return results
     if (output_attentions) {

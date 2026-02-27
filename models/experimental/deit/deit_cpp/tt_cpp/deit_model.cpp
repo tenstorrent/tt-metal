@@ -77,7 +77,7 @@ TtDeiTModel::TtDeiTModel(
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>, std::optional<std::vector<ttnn::Tensor>>, std::optional<std::vector<ttnn::Tensor>>>
 TtDeiTModel::forward(
     const ttnn::Tensor& pixel_values,
-    const std::optional<torch::Tensor>& bool_masked_pos,
+    const std::optional<ttnn::Tensor>& bool_masked_pos,
     const ttnn::Tensor* head_mask,
     bool output_attentions,
     bool output_hidden_states,
@@ -97,20 +97,8 @@ TtDeiTModel::forward(
         // Process the provided head mask
         auto processed_head_mask = get_head_mask(head_mask, config_.num_hidden_layers);
 
-        // Convert bool_masked_pos to ttnn::Tensor if present
-        std::optional<ttnn::Tensor> ttnn_bool_masked_pos = std::nullopt;
-        if (bool_masked_pos.has_value()) {
-            auto mask = bool_masked_pos.value();
-            auto batch_size = mask.size(0);
-            auto num_patches = mask.size(1);
-            
-            auto float_mask_torch = mask.to(torch::kFloat32).reshape({static_cast<long>(batch_size), 1, static_cast<long>(num_patches), 1});
-            auto float_mask = helper_funcs::from_torch(float_mask_torch, std::nullopt, ttnn::Layout::ROW_MAJOR);
-            ttnn_bool_masked_pos = ttnn::to_device(float_mask, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
-        }
-
         // Apply embeddings
-        auto embedding_output = embeddings_->forward(pixel_values, ttnn_bool_masked_pos);
+        auto embedding_output = embeddings_->forward(pixel_values, bool_masked_pos);
 
         // Apply encoder
         std::optional<std::vector<ttnn::Tensor>> head_mask_opt = std::nullopt;

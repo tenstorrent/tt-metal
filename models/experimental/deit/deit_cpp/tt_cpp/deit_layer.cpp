@@ -77,7 +77,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
     auto attention_weights = std::get<1>(attention_outputs);
 
     // First residual connection
-    auto residual_output = ttnn::add(attention_output, hidden_states);
+    auto residual_output = ttnn::add(attention_output, hidden_states, std::nullopt, ttnn::L1_MEMORY_CONFIG);
 
     // Apply layer normalization after self-attention
     auto layer_output = helper_funcs::apply_layernorm(

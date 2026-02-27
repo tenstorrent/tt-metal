@@ -47,13 +47,13 @@ ttnn::Tensor TtDeiTIntermediate::forward(const ttnn::Tensor& hidden_states) {
 
 ttnn::Tensor TtDeiTIntermediate::apply_activation(const ttnn::Tensor& input) {
     if (activation_type == "gelu") {
-        return ttnn::gelu(input);
+        return ttnn::gelu(input, false, ttnn::L1_MEMORY_CONFIG);
     } else if (activation_type == "relu") {
-        return ttnn::relu(input);
+        return ttnn::relu(input, ttnn::L1_MEMORY_CONFIG);
     } else if (activation_type == "silu" || activation_type == "swish") {
-        return ttnn::silu(input);
+        return ttnn::silu(input, ttnn::L1_MEMORY_CONFIG);
     } else if (activation_type == "tanh") {
-        return ttnn::tanh(input);
+        return ttnn::tanh(input, ttnn::L1_MEMORY_CONFIG);
     } else {
         throw std::runtime_error("Unsupported activation function: " + activation_type);
     }

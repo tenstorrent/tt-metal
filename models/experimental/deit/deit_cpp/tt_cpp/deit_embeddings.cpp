@@ -43,25 +43,25 @@ TtDeiTEmbeddings::TtDeiTEmbeddings(
         throw std::runtime_error("Missing position_embeddings in state_dict: " + position_embeddings_key);
     }
 
-    // Convert to ttnn tensors with ROW_MAJOR layout for safe concatenation
+    // Convert to ttnn tensors with TILE layout for safe concatenation
     // cls_token: [1, 1, 1, hidden_size]
     auto cls_tensor = state_dict[cls_token_key].clone();
     cls_tensor = cls_tensor.reshape({1, 1, 1, hidden_size_});
-    cls_token_ = helper_funcs::from_torch(cls_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-    cls_token_ = ttnn::to_device(cls_token_, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
+    cls_token_ = helper_funcs::from_torch(cls_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
+    cls_token_ = ttnn::to_device(cls_token_, device_.get(), ttnn::L1_MEMORY_CONFIG);
 
     // distillation_token: [1, 1, 1, hidden_size]
     auto dist_tensor = state_dict[distillation_token_key].clone();
     dist_tensor = dist_tensor.reshape({1, 1, 1, hidden_size_});
-    distillation_token_ = helper_funcs::from_torch(dist_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-    distillation_token_ = ttnn::to_device(distillation_token_, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
+    distillation_token_ = helper_funcs::from_torch(dist_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
+    distillation_token_ = ttnn::to_device(distillation_token_, device_.get(), ttnn::L1_MEMORY_CONFIG);
 
     // position_embeddings: [1, 1, seq_len, hidden_size]
     auto pos_tensor = state_dict[position_embeddings_key].clone();
     int seq_len = pos_tensor.size(1);
     pos_tensor = pos_tensor.reshape({1, 1, seq_len, hidden_size_});
-    position_embeddings_ = helper_funcs::from_torch(pos_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-    position_embeddings_ = ttnn::to_device(position_embeddings_, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
+    position_embeddings_ = helper_funcs::from_torch(pos_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
+    position_embeddings_ = ttnn::to_device(position_embeddings_, device_.get(), ttnn::L1_MEMORY_CONFIG);
 
     // Load mask token if needed
     if (use_mask_token_) {
@@ -71,8 +71,8 @@ TtDeiTEmbeddings::TtDeiTEmbeddings(
         }
         auto mask_tensor = state_dict[mask_token_key].clone();
         mask_tensor = mask_tensor.reshape({1, 1, 1, hidden_size_});
-        mask_token_ = helper_funcs::from_torch(mask_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-        mask_token_ = ttnn::to_device(mask_token_, device_.get(), ttnn::DRAM_MEMORY_CONFIG);
+        mask_token_ = helper_funcs::from_torch(mask_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
+        mask_token_ = ttnn::to_device(mask_token_, device_.get(), ttnn::L1_MEMORY_CONFIG);
     } else {
         // Create a dummy mask token (copy of cls_token)
         mask_token_ = cls_token_;
@@ -91,8 +91,7 @@ ttnn::Tensor TtDeiTEmbeddings::forward(
     auto shape = embeddings.logical_shape();
     auto batch_size = shape[0];
 
-    // Convert to ROW_MAJOR for masking and concatenation operations
-    embeddings = ttnn::to_layout(embeddings, ttnn::Layout::ROW_MAJOR);
+    embeddings = ttnn::to_memory_config(embeddings, ttnn::L1_MEMORY_CONFIG);
 
     // Apply mask if provided
     if (bool_masked_pos.has_value() && use_mask_token_) {
@@ -106,13 +105,13 @@ ttnn::Tensor TtDeiTEmbeddings::forward(
     // Concatenate tokens: [cls_token, distillation_token, patch_embeddings]
     // All are ROW_MAJOR now.
     std::vector<ttnn::Tensor> tensors_to_concat = {cls_tokens, distillation_tokens, embeddings};
-    auto concatenated = ttnn::concat(tensors_to_concat, 2);
+    auto concatenated = ttnn::concat(tensors_to_concat, 2, ttnn::L1_MEMORY_CONFIG);
 
     // Add position embeddings
-    auto final_embeddings = ttnn::add(concatenated, position_embeddings_);
+    auto final_embeddings = ttnn::add(concatenated, position_embeddings_, std::nullopt, ttnn::L1_MEMORY_CONFIG);
 
     // Convert back to TILE layout for subsequent transformer layers
-    final_embeddings = ttnn::to_layout(final_embeddings, ttnn::Layout::TILE);
+    // final_embeddings = ttnn::to_layout(final_embeddings, ttnn::Layout::TILE);
 
     return final_embeddings;
 }
