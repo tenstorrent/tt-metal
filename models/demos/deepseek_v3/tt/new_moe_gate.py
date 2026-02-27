@@ -295,17 +295,12 @@ class MoEGate(AbstractModule):
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
         mesh_device = cfg["mesh_device"]
-        temp_a = ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
-        )
         num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
         assert num_experts == 256, "num_experts should be 256"
         batch_size_per_device = logits.shape[2]
 
         batch_size = batch_size_per_device * mesh_device.shape[0]
         reshaped_input_shape = (batch_size_per_device, 16, 16)
-        output_shape = (batch_size_per_device, 1, 16)
 
         logits = ttnn.reshape(logits, reshaped_input_shape)
 
@@ -411,15 +406,7 @@ class MoEGate(AbstractModule):
             enable_sigmoid,
         )
 
-        temp_b = ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
-        )
-
-        bias_tensor = torch.zeros((1, 16, 16), dtype=torch.bfloat16)
-        input_tensor = temp_b[0, :16, :].unsqueeze(0)
-
-        return topk_experts_scores_normalized, topk_experts_indices, logits
+        return topk_experts_scores_normalized, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:

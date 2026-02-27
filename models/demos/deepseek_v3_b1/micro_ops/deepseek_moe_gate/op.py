@@ -121,8 +121,8 @@ class DeepseekMoeGateSingleCore:
         assert output_tile == output_indices_tensor.tile
         # assert input_tile_height == expected_input_tile_size[0]
         # assert input_tile_width == expected_input_tile_size[1]
-        # assert output_tile_height == expected_output_tile_size[0]
-        # assert output_tile_width == expected_output_tile_size[1]
+        assert output_tile_height == expected_output_tile_size[0]
+        assert output_tile_width == expected_output_tile_size[1]
         # assert input_shard_spec.shape[0] == expected_input_tile_size[0]
         # assert input_shard_spec.shape[1] == expected_input_tile_size[1]
         assert output_shard_spec.shape[0] == expected_output_tile_size[0]

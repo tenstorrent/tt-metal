@@ -18,7 +18,6 @@ from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate as NewMoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
-from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 from tests.ttnn.utils_for_testing import comp_pcc
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
@@ -417,7 +416,7 @@ def test_new_forward_pass(
 
     # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_topk_weights, tt_topk_indices, logits = run_module_forward(NewMoEGate, mode, tt_input, run_config)
+    tt_topk_weights, tt_topk_indices = run_module_forward(NewMoEGate, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
@@ -442,24 +441,6 @@ def test_new_forward_pass(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
     )[:, 0, :8]
 
-    # test the golden
-    logits = ttnn.unsqueeze(logits, dim=0)
-    tt_logits_torch = ttnn.to_torch(
-        logits,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0, :, :, :].reshape(128, 8, 32)
-    bias_tensor = torch.zeros((128, 8, 32), dtype=torch.bfloat16)
-    top8_scores, top8_indices = DeepseekMoeGateSingleCore.golden(
-        tt_logits_torch[:32, :, :], bias_tensor[:32, :, :], 1e-20, 2.5, enable_sigmoid=True
-    )
-
-    torch.save(tt_logits_torch, "/home/ronnie/tt_logits_torch.pt")
-    # end here
-
-    import pdb
-
-    pdb.set_trace()
-
     # Cleanup
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)
@@ -472,18 +453,21 @@ def test_new_forward_pass(
         topk_weights_pcc_required = 0.98
     else:
         topk_weights_pcc_required = 0.99
-    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
 
-    logger.info(f"TopK experts weights PCC: {pcc_message}")
     logger.info(f"Using {'synthetic' if use_synthetic_weights else 'real'} weights")
-    assert (
-        passing
-    ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    topk_indices_pcc_required = 1.0
+    reference_topk_weights = torch.sort(reference_topk_weights.to(torch.bfloat16), dim=-1, stable=True)[0]
+    tt_topk_weights_torch = torch.sort(tt_topk_weights_torch, dim=-1, stable=True)[0]
+
     # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
     reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
     tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
+
+    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
+
+    assert (
+        passing
+    ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     # For synthetic weights, there can be ties in expert scores, so different experts might be selected
     # In this case, we only verify that the right number of experts are selected (shape matches)
