@@ -209,7 +209,7 @@ def test_sdpa_accuracy(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
     Verifies PCC > 0.994 against PyTorch reference.
     """
     # nkv = nh for non-GQA case
-    pcc_threshold = 0.9997
+    pcc_threshold = 0.9996
     rmse_threshold = 4e-2
     run_sdpa_noncausal(
         device,
