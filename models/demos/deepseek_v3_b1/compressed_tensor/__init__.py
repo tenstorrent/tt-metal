@@ -2,26 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .assigner import CompressedTensorAssigner, CompressedTensorResult
+from .compressed_tensor import CompressedTensor
 from .tile_utils import (
     COMPRESSED_FORMATS,
     COMPRESSED_BYTES_PER_ELEM,
+    BFP_MANT_BITS,
     ttnn_quantize_fn,
-    pack_bfp_tile,
-    unpack_bfp_tile,
-    pack_compressed_tiles,
-    unpack_compressed_tiles,
     bfp_tile_packed_size,
 )
 
 __all__ = [
+    "CompressedTensor",
     "CompressedTensorAssigner",
     "CompressedTensorResult",
     "COMPRESSED_FORMATS",
     "COMPRESSED_BYTES_PER_ELEM",
+    "BFP_MANT_BITS",
     "ttnn_quantize_fn",
-    "pack_bfp_tile",
-    "unpack_bfp_tile",
-    "pack_compressed_tiles",
-    "unpack_compressed_tiles",
     "bfp_tile_packed_size",
 ]
