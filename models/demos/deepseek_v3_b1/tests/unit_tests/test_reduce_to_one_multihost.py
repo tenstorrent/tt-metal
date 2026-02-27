@@ -34,7 +34,7 @@ def create_fabric_router_config(max_payload_size):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(7168),
         }
     ],
@@ -280,60 +280,58 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
         )
         logger.info("✓ Created PipelineBlock for Host 2")
 
-    for j in range(100):
-        logger.info(f"\n=== HOST {my_mesh_id}: Running pipeline ===")
-        pipeline_block.run()
-        logger.info(f"✓ PipelineBlock started on Host {my_mesh_id}")
+    logger.info(f"\n=== HOST {my_mesh_id}: Running pipeline ===")
+    pipeline_block.run()
+    logger.info(f"✓ PipelineBlock started on Host {my_mesh_id}")
 
-        if my_mesh_id == 1:
-            logger.info("\n=== HOST 1: Running Reduce-to-One with D2D_0 ===")
+    if my_mesh_id == 1:
+        logger.info("\n=== HOST 1: Running Reduce-to-One with D2D_0 ===")
 
-            result = ReduceToOneB1.op(
-                input_tensor,
-                intermediate_tensors,
-                output_tensor,
-                semaphores,
-                root_coord,
-                enable_d2d0_output=True,
-                d2d0_infrastructure=d2d0_infra,
-            )
+        result = ReduceToOneB1.op(
+            input_tensor,
+            intermediate_tensors,
+            output_tensor,
+            semaphores,
+            root_coord,
+            enable_d2d0_output=True,
+            d2d0_infrastructure=d2d0_infra,
+            num_iterations=100,
+        )
 
-            if isinstance(result, tuple):
-                output_tensor, _ = result
+        if isinstance(result, tuple):
+            output_tensor, _ = result
 
-            logger.info("✓ Reduce-to-one completed")
+        logger.info("✓ Reduce-to-one completed")
 
-        if my_mesh_id == 0:
-            logger.info("\n=== HOST 0: Waiting for result from D2H ===")
+    if my_mesh_id == 0:
+        logger.info("\n=== HOST 0: Waiting for result from D2H ===")
 
-            num_elements = aggregated_size_bytes // 2
-            received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
-            d2h_output_tensor = ttnn.from_torch(
-                received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+        num_elements = aggregated_size_bytes // 2
+        received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
+        d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-            pipeline_block.read_output(d2h_output_tensor)
-            logger.info("✓ Successfully read from D2H")
+        pipeline_block.read_output(d2h_output_tensor)
+        logger.info("✓ Successfully read from D2H")
 
-            # Validate result
-            d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
-            logger.info(f"D2H output (first 5): {d2h_result_torch[0, :5]}")
+        # Validate result
+        d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
+        logger.info(f"D2H output (first 5): {d2h_result_torch[0, :5]}")
 
-            expected_value = ReduceToOneB1.golden(data_per_device)
-            logger.info(f"Expected value (first 5): {expected_value[0, :5]}")
+        expected_value = ReduceToOneB1.golden(data_per_device)
+        logger.info(f"Expected value (first 5): {expected_value[0, :5]}")
 
-            rtol = 0.01
-            atol = 0.05
-            assert torch.allclose(
-                d2h_result_torch, expected_value, rtol=rtol, atol=atol
-            ), f"D2H output mismatch! Expected {expected_value[0, 0]}, got {d2h_result_torch[0, 0]}"
-            logger.info("✓ D2H output matches expected value")
+        rtol = 0.01
+        atol = 0.05
+        assert torch.allclose(
+            d2h_result_torch, expected_value, rtol=rtol, atol=atol
+        ), f"D2H output mismatch! Expected {expected_value[0, 0]}, got {d2h_result_torch[0, 0]}"
+        logger.info("✓ D2H output matches expected value")
 
-        logger.info(f"\n=== HOST {my_mesh_id}: Terminating PipelineBlock ===")
-        if my_mesh_id == 1:
-            # Signal termination to D2D_0 aggregator
-            termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
-            ttnn.reset_global_semaphore_value(termination_semaphore, 1)
-            logger.info("✓ D2D_0 termination signaled")
-        pipeline_block.terminate()
-        logger.info(f"✓ PipelineBlock terminated on Host {my_mesh_id}")
+    logger.info(f"\n=== HOST {my_mesh_id}: Terminating PipelineBlock ===")
+    if my_mesh_id == 1:
+        # Signal termination to D2D_0 aggregator
+        termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
+        ttnn.reset_global_semaphore_value(termination_semaphore, 1)
+        logger.info("✓ D2D_0 termination signaled")
+    pipeline_block.terminate()
+    logger.info(f"✓ PipelineBlock terminated on Host {my_mesh_id}")
