@@ -299,9 +299,9 @@ private:
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-}  // namespace tt::tt_metal
+std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
+}  // namespace tt::tt_metal
 
 namespace ttnn {
 

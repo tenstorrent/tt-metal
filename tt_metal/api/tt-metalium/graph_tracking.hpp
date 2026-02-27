@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -29,6 +30,98 @@ class IDevice;
 namespace tt::tt_metal {
 
 class Program;
+
+struct TrackedArgument {
+    std::any value;
+    std::string (*to_string_fn)(const std::any&);
+};
+
+// Serialization helpers for graph argument tracking.
+// The templates below rely on symbols from tt_stl/reflection.hpp (ttsl::reflection,
+// ttsl::is_specialization_v, ttsl::concepts::Reflectable, reflect::*).  These are
+// intentionally NOT included here to avoid pulling heavyweight headers into every
+// translation unit that includes graph_tracking.hpp.  The symbols are resolved at
+// template instantiation time via transitive includes in the calling TUs.
+namespace graph_detail {
+
+template <typename MemberT>
+void serialize_member(std::ostringstream& oss, const MemberT& member) {
+    if constexpr (std::is_enum_v<MemberT>) {
+        ttsl::reflection::operator<<(oss, member);
+    } else if constexpr (ttsl::is_specialization_v<MemberT, std::vector>) {
+        oss << "{";
+        for (size_t i = 0; i < member.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            serialize_member(oss, member[i]);
+        }
+        oss << "}";
+    } else if constexpr (ttsl::is_specialization_v<MemberT, std::optional>) {
+        if (member.has_value()) {
+            serialize_member(oss, member.value());
+        } else {
+            oss << "std::nullopt";
+        }
+    } else if constexpr (ttsl::is_specialization_v<MemberT, std::reference_wrapper>) {
+        serialize_member(oss, member.get());
+    } else if constexpr (ttsl::is_specialization_v<MemberT, std::pair>) {
+        oss << "{";
+        serialize_member(oss, member.first);
+        oss << ", ";
+        serialize_member(oss, member.second);
+        oss << "}";
+    } else if constexpr (requires { oss << member; }) {
+        oss << member;
+    } else if constexpr (ttsl::concepts::Reflectable<MemberT>) {
+        oss << reflect::type_name<MemberT>() << "(";
+        reflect::for_each(
+            [&oss, &member](auto I) {
+                if constexpr (I > 0) {
+                    oss << ", ";
+                }
+                serialize_member(oss, reflect::get<I>(member));
+            },
+            member);
+        oss << ")";
+    } else {
+        oss << "<" << reflect::type_name<MemberT>() << ">";
+    }
+}
+
+}  // namespace graph_detail
+
+template <typename T>
+std::string serialize_tracked_arg(const std::any& a) {
+    std::ostringstream oss;
+    const auto& ref = std::any_cast<const std::reference_wrapper<T>&>(a);
+    const auto& val = ref.get();
+    using CleanT = std::remove_cv_t<T>;
+
+    // Guard against incomplete types (e.g. forward-declared MeshCommandQueue)
+    // so that type traits below are never evaluated on them.
+    if constexpr (!requires { sizeof(CleanT); }) {
+        oss << "<incomplete type>";
+    } else if constexpr (ttsl::is_specialization_v<CleanT, std::vector>) {
+        ttsl::reflection::operator<<(oss, val);
+    } else if constexpr (requires { oss << val; }) {
+        oss << val;
+    } else if constexpr (ttsl::concepts::Reflectable<CleanT>) {
+        oss << reflect::type_name<CleanT>() << "(";
+        reflect::for_each(
+            [&oss, &val](auto I) {
+                if constexpr (I > 0) {
+                    oss << ", ";
+                }
+                graph_detail::serialize_member(oss, reflect::get<I>(val));
+            },
+            val);
+        oss << ")";
+    } else {
+        oss << "<" << reflect::type_name<T>() << ">";
+    }
+    return oss.str();
+}
 
 class IGraphProcessor {
 public:
@@ -54,7 +147,8 @@ public:
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
 
-    virtual void track_function_start(std::string_view /*function_name*/, std::span<std::any> /*input_parameters*/){};
+    virtual void track_function_start(
+        std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/){};
 
     virtual void track_function_end() {};
     virtual void track_function_end(const std::any& /*output_tensors*/) {};
@@ -121,7 +215,8 @@ public:
         if (processors.empty()) {
             return;
         }
-        std::array<std::any, sizeof...(Args)> params{std::any(std::ref(args))...};
+        std::array<TrackedArgument, sizeof...(Args)> params{
+            TrackedArgument{std::any(std::ref(args)), &serialize_tracked_arg<std::remove_reference_t<Args>>}...};
         for (auto& it : processors) {
             it->track_function_start(function_name, params);
         }

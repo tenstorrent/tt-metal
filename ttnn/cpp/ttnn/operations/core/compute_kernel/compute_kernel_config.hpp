@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <ostream>
 #include <tuple>
 #include <optional>
 #include <umd/device/types/arch.hpp>
@@ -23,6 +24,13 @@ struct ComputeKernelConfig {
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
+
+inline std::ostream& operator<<(std::ostream& os, const ComputeKernelConfig& cfg) {
+    os << "ComputeKernelConfig(math_fidelity=" << cfg.math_fidelity << ",math_approx_mode=" << cfg.math_approx_mode
+       << ",fp32_dest_acc_en=" << cfg.fp32_dest_acc_en << ",packer_l1_acc=" << cfg.packer_l1_acc
+       << ",dst_full_sync_en=" << cfg.dst_full_sync_en << ",throttle_level=" << cfg.throttle_level << ")";
+    return os;
+}
 
 // Type aliases for backward compatibility
 using DeviceComputeKernelConfig = ComputeKernelConfig;
