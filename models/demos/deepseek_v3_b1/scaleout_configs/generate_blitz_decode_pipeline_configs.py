@@ -163,6 +163,10 @@ def generate_pipeline_config_files(
             entry["host"] = host_map[entry["host"]]
         config_hosts = allocated_hosts
 
+    logger.info("Host index -> hostname mapping (for debugging):")
+    for idx, hostname in enumerate(config_hosts):
+        logger.info(f"  Host {idx}: {hostname}")
+
     host_vector = config_hosts
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
     actual_mapping_file = generate_slice_to_pcie_device_mapping(
