@@ -571,7 +571,7 @@ extern "C" {
 #define NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH 1
 #define NCRISC_CMD_ID (NCRISC_TRANS_EN_IRQ_ON_BLOB_END + NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH)
 #define NCRISC_CMD_ID_WIDTH 3
-// Kept for compatibility with grayskull, but doesn't not exist anymore in wormhole
+// Kept for compatibility with grayskull, but doesn't exist anymore in wormhole
 #define NEXT_NRISC_PIC_INT_ON_PHASE (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH)
 #define NEXT_NRISC_PIC_INT_ON_PHASE_WIDTH 19
 

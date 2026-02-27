@@ -732,7 +732,7 @@ const std::vector<OverlayReg> OLP::registers = {
       {"NEXT_NRISC_PIC_INT_ON_PHASE",
        (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH),
        19,
-       "// Kept for compatibility with grayskull, but doesn't not exist anymore in wormhole\n"}
+       "// Kept for compatibility with grayskull, but doesn't exist anymore in wormhole\n"}
 
      },
      ""},
@@ -1542,7 +1542,7 @@ const std::vector<OverlayField> OLP::fields = {
     {"NEXT_NRISC_PIC_INT_ON_PHASE",
      (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH),
      19,
-     "// Kept for compatibility with grayskull, but doesn't not exist anymore in wormhole\n"},
+     "// Kept for compatibility with grayskull, but doesn't exist anymore in wormhole\n"},
     {"DRAM_FIFO_RD_PTR_WORDS_LO", 0, 24, ""},
     {"NCRISC_LOOP_COUNT", 0, 24, ""},
     {"NCRISC_INIT_ENABLE_BLOB_DONE_IRQ", 0, 1, ""},
