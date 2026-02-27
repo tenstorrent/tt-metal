@@ -261,10 +261,15 @@ void kernel_main() {
                                 }
 
                                 // --- Phase 2: L1 Vol2col -> CB ---
+                                // Push patches in TILE_HEIGHT-sized chunks to keep cb_vol2col small.
                                 {
                                     DeviceZoneScopedN("CONV3D-RD-VOL2COL");
-                                    cb_reserve_back(cb_vol2col, num_patches);
+                                    constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
+                                    uint32_t patches_remaining = num_patches;
+                                    uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
+                                    cb_reserve_back(cb_vol2col, chunk_size);
                                     uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
+                                    uint32_t patches_in_chunk = 0;
 
                                     for (uint32_t t = t_block; t < t_block_end; t++) {
                                         const uint32_t t_base = (t - t_block) * stride_t;
@@ -287,16 +292,45 @@ void kernel_main() {
                                                         cb_write_addr += kW_bytes;
                                                     }
                                                 }
+
+                                                patches_in_chunk++;
+                                                if (patches_in_chunk == chunk_size) {
+                                                    noc_async_read_barrier();
+                                                    cb_push_back(cb_vol2col, chunk_size);
+                                                    patches_remaining -= chunk_size;
+                                                    patches_in_chunk = 0;
+                                                    if (patches_remaining > 0) {
+                                                        chunk_size = patches_remaining < chunk_max ? patches_remaining
+                                                                                                   : chunk_max;
+                                                        cb_reserve_back(cb_vol2col, chunk_size);
+                                                        cb_write_addr = get_write_ptr(cb_vol2col);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_vol2col, num_patches);
+
+                                    // Flush remaining patches at block boundaries where the
+                                    // actual loop count is less than num_patches.
+                                    if (patches_remaining > 0) {
+                                        if (patches_in_chunk > 0) {
+                                            noc_async_read_barrier();
+                                            cb_push_back(cb_vol2col, chunk_size);
+                                            patches_remaining -= chunk_size;
+                                        }
+                                        while (patches_remaining > 0) {
+                                            chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
+                                            cb_reserve_back(cb_vol2col, chunk_size);
+                                            cb_push_back(cb_vol2col, chunk_size);
+                                            patches_remaining -= chunk_size;
+                                        }
+                                    }
                                 }
 
                             } else {
                                 // ============================================================
                                 // DIRECT READER (for 1x1x1 or dilated kernels, no spatial reuse)
+                                // Push patches in TILE_HEIGHT-sized chunks to keep cb_vol2col small.
                                 // ============================================================
                                 const uint32_t t_block_s_start = t_block * stride_t;
                                 const uint32_t t_block_s_end = t_block_end * stride_t;
@@ -305,8 +339,12 @@ void kernel_main() {
                                 const uint32_t w_block_s_start = w_block * stride_w;
                                 const uint32_t w_block_s_end = w_block_end * stride_w;
 
-                                cb_reserve_back(cb_vol2col, num_patches);
+                                constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
+                                uint32_t patches_remaining = num_patches;
+                                uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
+                                cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
+                                uint32_t patches_in_chunk = 0;
 
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
                                     for (uint32_t h = h_block_s_start; h < h_block_s_end; h += stride_h) {
@@ -352,11 +390,39 @@ void kernel_main() {
                                                     }
                                                 }
                                             }
+
+                                            patches_in_chunk++;
+                                            if (patches_in_chunk == chunk_size) {
+                                                noc_async_read_barrier();
+                                                cb_push_back(cb_vol2col, chunk_size);
+                                                patches_remaining -= chunk_size;
+                                                patches_in_chunk = 0;
+                                                if (patches_remaining > 0) {
+                                                    chunk_size =
+                                                        patches_remaining < chunk_max ? patches_remaining : chunk_max;
+                                                    cb_reserve_back(cb_vol2col, chunk_size);
+                                                    cb_write_addr = get_write_ptr(cb_vol2col);
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                noc_async_read_barrier();
-                                cb_push_back(cb_vol2col, num_patches);
+
+                                // Flush remaining patches at block boundaries where the
+                                // actual loop count is less than num_patches.
+                                if (patches_remaining > 0) {
+                                    if (patches_in_chunk > 0) {
+                                        noc_async_read_barrier();
+                                        cb_push_back(cb_vol2col, chunk_size);
+                                        patches_remaining -= chunk_size;
+                                    }
+                                    while (patches_remaining > 0) {
+                                        chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
+                                        cb_reserve_back(cb_vol2col, chunk_size);
+                                        cb_push_back(cb_vol2col, chunk_size);
+                                        patches_remaining -= chunk_size;
+                                    }
+                                }
                             }
                             // End of w_block
                         }

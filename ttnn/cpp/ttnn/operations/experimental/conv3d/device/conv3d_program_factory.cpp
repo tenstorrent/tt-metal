@@ -142,8 +142,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
+    // Compute tilizes TILE_HEIGHT rows at a time, so vol2col_rm only needs to double-buffer
+    // that many patches. The reader pushes in matching chunks.
+    uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, num_patches, data_format);
+    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
@@ -191,8 +194,25 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // If the shard would exceed L1_PREFETCH_MAX_BYTES, fall back to the direct reader (no L1 prefetch).
-    constexpr uint32_t L1_PREFETCH_MAX_BYTES = 128 * 1024;
+    // Budget: compute remaining L1 after all other CBs, capped at 500 KB.
+    // BH has ~1496 KB usable L1; we reserve 200 KB for kernel code/stack/alignment.
+    constexpr uint32_t L1_USABLE_FOR_CBS = 1300 * 1024;
+    constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
+
+    uint32_t other_cbs_bytes = patch_size_bytes * vol2col_rm_pages +  // vol2col_rm
+                               tile_size * matmul_M_t * matmul_K_t +  // vol2col_tiled
+                               tile_size * matmul_K_t * matmul_N_t +  // weight_tiled
+                               tile_size * matmul_M_t * matmul_N_t +  // matmul_interm
+                               tile_size * matmul_M_t * matmul_N_t;   // matmul_result_rm
+    if (C_in_num_blocks > 1) {
+        other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;  // reduction
+        other_cbs_bytes += tile_size;                            // worker_ack
+    }
+    if (use_bias) {
+        other_cbs_bytes += tile_size * matmul_N_t;  // bias
+    }
+    uint32_t l1_prefetch_max_bytes =
+        (other_cbs_bytes < L1_USABLE_FOR_CBS) ? std::min(L1_USABLE_FOR_CBS - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
 
     const uint32_t kT = operation_attributes.kernel_size[0];
     const uint32_t kH = operation_attributes.kernel_size[1];
@@ -218,7 +238,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
         uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
 
-        if (shard_bytes <= L1_PREFETCH_MAX_BYTES) {
+        if (shard_bytes <= l1_prefetch_max_bytes) {
             cb_input_shard_id = next_cb_index++;
             tt::tt_metal::create_cb(
                 cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
@@ -238,7 +258,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                 tt::LogOp,
                 "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",
                 shard_bytes,
-                L1_PREFETCH_MAX_BYTES);
+                l1_prefetch_max_bytes);
             T_shard_max = 0;
             H_shard_max = 0;
             W_shard_max = 0;
