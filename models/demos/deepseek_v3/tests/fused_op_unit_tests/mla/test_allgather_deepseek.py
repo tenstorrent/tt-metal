@@ -17,9 +17,11 @@ def run_allgather_deepseek_with_trace(
     all_gather_topology,
     input_tensor_mesh,
     dim,
+    cluster_axis,
     num_links,
     output_mem_config,
     ccl_semaphore_handles,
+    barrier_semaphore,
     num_iter=100,
     warmup_iters=10,
     subdevice_id=None,
@@ -31,10 +33,14 @@ def run_allgather_deepseek_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        cluster_axis,
+        mesh_device,
+        all_gather_topology,
+        [ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_gather_topology,
+        use_broadcast=True,
+        barrier_semaphore=barrier_semaphore,
         subdevice_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -46,10 +52,14 @@ def run_allgather_deepseek_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            cluster_axis,
+            mesh_device,
+            all_gather_topology,
+            [ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
+            use_broadcast=True,
+            barrier_semaphore=barrier_semaphore,
             subdevice_id=subdevice_id,
         )
         tt_out_tensor.deallocate(True)
@@ -63,10 +73,14 @@ def run_allgather_deepseek_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            cluster_axis,
+            mesh_device,
+            all_gather_topology,
+            [ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
+            use_broadcast=True,
+            barrier_semaphore=barrier_semaphore,
             subdevice_id=subdevice_id,
         )
         if i != num_iter - 1:
@@ -94,32 +108,27 @@ def run_allgather_deepseek_with_trace(
 
 
 @pytest.mark.parametrize(
-    "op_name, num_devices, input_shape, output_shape, dim, layout",
+    "op_name, num_devices, input_shape, output_shape, dim, layout, cluster_axis",
     [
         (
-            "wq_kv_a_ag_decode",
-            8,  # 8 devices in a row for TG
-            [1, 1, 32, 2112],  # Input per device: [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-            [1, 8, 32, 2112],  # Output shape after all-gather: [1, num_devices, bsz, hidden]
-            1,  # Gather along dim 1
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            "wo_ag_decode",
-            8,  # 8 devices in a row for TG
-            [1, 4, 128, 128],  # Input per device: [1, bsz_local, num_heads, v_head_dim]
-            [1, 32, 128, 128],  # Output after all-gather: [1, bsz, num_heads, v_head_dim] (4*8=32)
-            1,  # Gather along dim 1
-            ttnn.TILE_LAYOUT,
+            "height_sharded_ag",
+            32,  # 32 devices (4x8 grid)
+            [1, 1, 4, 16384],  # Input per device: HEIGHT_SHARDED
+            [1, 1, 16, 16384],  # Output shape after all-gather along dim 2 (4*4=16)
+            2,  # Gather along dim 2
+            ttnn.ROW_MAJOR_LAYOUT,
+            1,  # Cluster axis 1
         ),
     ],
-    ids=["wq_kv_a_ag_decode", "wo_ag_decode"],
+    ids=["height_sharded_ag"],
 )
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
+@pytest.mark.parametrize("output_sharding", ["interleaved", "width_sharded"])
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("warmup_iters, num_iters", [(10, 100)])
 @pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -142,32 +151,33 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
     trace_mode,
     input_dtype,
     layout,
+    cluster_axis,
+    topology,
+    output_sharding,
     warmup_iters,
     num_iters,
     function_level_defaults,
 ):
     """
-    Test all-gather operations from mla1d.py decode path with trace mode for performance measurement.
+    Test all-gather operations with HEIGHT_SHARDED input and trace mode for performance measurement.
 
     This test captures traces of all-gather operations and executes them multiple times to measure performance.
     Uses signposts for Tracy profiling integration.
 
-    Operations tested:
-    1. wq_kv_a_ag_decode (line 1109): All-gather after fused wq_kv_a linear
-       - Input: [1, 1, 32, 2112] per device
-       - Output: [1, 8, 32, 2112] (gather along dim=1)
-
-    2. wo_ag_decode (line 1325): All-gather for v_out before wo linear
-       - Input: [1, 4, 128, 128] per device
-       - Output: [1, 32, 128, 128] (gather along dim=1, 4*8=32)
-
     Configuration:
-    - All-gather on dim=1 (across 8 devices in a row)
+    - Input shape: [1, 1, 4, 16384] per device (HEIGHT_SHARDED)
+    - Output shape: [1, 1, 16, 16384] (gather along dim=2, 4*4=16)
+    - All-gather on dim=2 (across cluster_axis=1 with 4x8 grid)
     - Warmup iterations: 10
     - Test iterations: 100
     - Trace mode: Enabled
-    - Topology: Linear
-    - Interleaved L1 memory
+    - Topology: Ring and Linear (parameterized)
+    - Input: HEIGHT_SHARDED L1 memory with shard_spec grid [0:0-1:1], shape [1, 16384]
+    - Output: INTERLEAVED or WIDTH_SHARDED L1 memory (parameterized)
+      - INTERLEAVED: no sharding
+      - WIDTH_SHARDED: shard_spec grid [0:0-7:1], shape [16, 1024], ROW_MAJOR
+    - Mesh device: 4x8 grid (32 devices)
+    - num_links: 4
     """
     torch.manual_seed(0)
 
@@ -190,10 +200,38 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
     ccl_semaphore_handles = [
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 2)
     ]
+    # Create barrier semaphore
+    barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
-    # Memory config - interleaved L1 (matching mla1d.py line 1108)
-    input_mem_config = ttnn.L1_MEMORY_CONFIG
-    output_mem_config = ttnn.L1_MEMORY_CONFIG
+    # Memory config - HEIGHT_SHARDED input, INTERLEAVED or WIDTH_SHARDED output
+    # Input: shape=[1, 16384], shard_spec grid=[{x:0,y:0}-{x:1,y:1}], ROW_MAJOR orientation
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        [1, 16384],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        input_shard_spec,
+    )
+
+    # Configure output memory config based on sharding type
+    if output_sharding == "width_sharded":
+        # WIDTH_SHARDED output: grid=[{x:0,y:0}-{x:7,y:1}], shape=[16, 1024], ROW_MAJOR
+        output_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            [16, 1024],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            output_shard_spec,
+        )
+    else:
+        # INTERLEAVED output
+        output_mem_config = ttnn.L1_MEMORY_CONFIG
 
     # Create golden output tensor and input
     logger.info(f"Running all-gather test: {op_name}")
@@ -203,8 +241,10 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
 
     output_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
 
-    # Create mesh tensor using MeshMapperConfig with PlacementShard on dim
+    # Create mesh tensor using MeshMapperConfig with PlacementShard on cluster_axis
     # This will automatically shard the tensor along the specified dimension
+    # For 4x8 mesh with cluster_axis=1, we shard along columns (8 devices)
+    # The dim=2 is the tensor dimension where all-gather happens
     input_tensor_mesh = ttnn.from_torch(
         output_tensor,
         device=mesh_device,
@@ -213,13 +253,11 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
         memory_config=input_mem_config,
         mesh_mapper=ttnn.create_mesh_mapper(
             mesh_device,
-            ttnn.MeshMapperConfig(
-                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
-            ),
+            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(4, 8)),
         ),
     )
 
-    all_gather_topology = ttnn.Topology.Ring
+    all_gather_topology = topology
     profiler = BenchmarkProfiler()
 
     try:
@@ -230,9 +268,11 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
                 all_gather_topology,
                 input_tensor_mesh,
                 dim,
+                cluster_axis,
                 num_links,
                 output_mem_config,
                 ccl_semaphore_handles=ccl_semaphore_handles,
+                barrier_semaphore=barrier_semaphore,
                 num_iter=num_iters,
                 warmup_iters=warmup_iters,
                 subdevice_id=worker_sub_device_id,
@@ -244,10 +284,14 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+                cluster_axis,
+                mesh_device,
+                all_gather_topology,
+                [ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
                 num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_gather_topology,
+                use_broadcast=True,
+                barrier_semaphore=barrier_semaphore,
                 subdevice_id=worker_sub_device_id,
             )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)

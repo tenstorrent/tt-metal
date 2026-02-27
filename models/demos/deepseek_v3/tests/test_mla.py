@@ -274,11 +274,13 @@ def run_test_forward_pass_mla2d(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+    for i in range(10):
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        if i != 9:
+            tt_output.deallocate()  # Deallocate intermediate tensors to avoid OOM
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
     ).reshape(
