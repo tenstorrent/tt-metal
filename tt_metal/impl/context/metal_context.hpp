@@ -66,6 +66,8 @@ public:
 
     static MetalContext& instance(ContextId context_id = SILICON_CONTEXT_ID);
 
+    // Destroy all instances. This function should be called before forking to ensure the child
+    // process has a clean state.
     static void destroy_all_instances(bool check_device_count = true);
 
     static void destroy_instance(ContextId context_id = SILICON_CONTEXT_ID, bool check_device_count = true);
@@ -171,7 +173,7 @@ private:
     MetalContext(ContextId context_id, const std::shared_ptr<MetalliumObjectDescriptor>& descriptor);
     ~MetalContext();
 
-    static void register_atexit_locked();
+    static void register_handlers_locked();
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();

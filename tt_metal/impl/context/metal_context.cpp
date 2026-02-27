@@ -357,22 +357,23 @@ void MetalContext::teardown() {
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
 std::mutex g_instance_mutex;
-bool registered_atexit = false;
+bool registered_handlers = false;
 
-void MetalContext::register_atexit_locked() {
-    if (!registered_atexit) {
+void MetalContext::register_handlers_locked() {
+    if (!registered_handlers) {
         std::atexit([]() {
             // Don't check device count because the destruction order is complicated and we can't guarantee that the
             // client isn't holding onto devices on process exit.
             MetalContext::destroy_instance(false);
         });
-        registered_atexit = true;
+        registered_handlers = true;
     }
 }
 
 ContextId MetalContext::create_instance(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) {
     std::lock_guard lock(g_instance_mutex);
-    register_atexit_locked();
+    register_handlers_locked();
+
     // Silicon context is always at SILICON_CONTEXT_ID
     if (!descriptor->is_mock_device()) {
         // Real hardware: only one instance allowed, always at context_id 0
@@ -380,7 +381,7 @@ ContextId MetalContext::create_instance(const std::shared_ptr<MetalliumObjectDes
             TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
         }
         MetalContext* instance = new MetalContext(SILICON_CONTEXT_ID, descriptor);
-        g_instances[SILICON_CONTEXT_ID] = instance;
+        g_instances[SILICON_CONTEXT_ID].store(instance, std::memory_order_release);
         return SILICON_CONTEXT_ID;
     }
 
@@ -388,11 +389,7 @@ ContextId MetalContext::create_instance(const std::shared_ptr<MetalliumObjectDes
     for (ContextId context_id = 1; context_id < MAX_CONTEXT_COUNT; ++context_id) {
         if (g_instances[context_id] == nullptr) {
             MetalContext* instance = new MetalContext(context_id, descriptor);
-            g_instances[context_id] = instance;
-            if (!registered_atexit) {
-                std::atexit([]() { MetalContext::destroy_all_instances(false); });
-                registered_atexit = true;
-            }
+            g_instances[context_id].store(instance, std::memory_order_release);
             return context_id;
         }
     }
@@ -420,7 +417,7 @@ MetalContext& MetalContext::instance(ContextId context_id) {
             context_id);
         instance = new MetalContext(context_id, std::make_shared<MetalliumObjectDescriptor>());
         g_instances[context_id].store(instance, std::memory_order_release);
-        register_atexit_locked();
+        register_handlers_locked();
     }
     return *instance;
 }
