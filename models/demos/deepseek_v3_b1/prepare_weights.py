@@ -328,6 +328,7 @@ def prepare_shared_expert_weights(
     layer_idx: int,
     *,
     is_moe: bool,
+    move_to_device: bool = False,
 ) -> SharedExpertWeights:
     """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer."""
     logger.debug("Converting shared expert weights for layer {} (is_moe={})", layer_idx, is_moe)
@@ -337,14 +338,14 @@ def prepare_shared_expert_weights(
         shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
         shared_down = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
         shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_moe_shared_expert_weights(
-            shared_gate, shared_up, shared_down, move_to_device=False
+            shared_gate, shared_up, shared_down, move_to_device=move_to_device
         )
     else:
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
         shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_mlp_shared_expert_weights(
-            mlp_gate, mlp_up, mlp_down, move_to_device=False
+            mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
         )
     logger.debug("  shared expert weights done in {:.3f}s", time.perf_counter() - t0)
     return SharedExpertWeights(
@@ -361,6 +362,7 @@ def prepare_routed_expert_weights(
     *,
     is_moe: bool,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    move_to_device: bool = False,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts)."""
     if is_moe:
@@ -387,7 +389,7 @@ def prepare_routed_expert_weights(
         up_stacked = torch.stack(up_list, dim=0)
         down_stacked = torch.stack(down_list, dim=0)
         routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
-            gate_stacked, up_stacked, down_stacked, move_to_device=False
+            gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
         return MoERoutedExpertWeights(
@@ -400,7 +402,7 @@ def prepare_routed_expert_weights(
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
         routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
-            mlp_gate, mlp_up, mlp_down, move_to_device=False
+            mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
         )
         return DenseRoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
