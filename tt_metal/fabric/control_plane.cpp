@@ -278,15 +278,15 @@ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     return UbbId{0, 0};  // Invalid UBB ID if not found
 }
 
-std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::compute_local_plane_counts(
+void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
     tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode) {
-    std::vector<LocalPlaneCounts> result;
-
     if (fabric_config == tt_fabric::FabricConfig::CUSTOM || fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        return result;
+        return;
     }
+
+    this->router_port_directions_to_num_routing_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
     auto apply_min =
@@ -302,6 +302,14 @@ std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::compute_local_plane_co
 
     // For each mesh in the system
     auto user_meshes = this->get_user_physical_mesh_ids();
+    if (reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+        for (const auto& [fabric_node_id, directions_and_eth_chans] :
+             this->router_port_directions_to_physical_eth_chan_map_) {
+            for (const auto& [direction, eth_chans] : directions_and_eth_chans) {
+                this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = eth_chans.size();
+            }
+        }
+    }
 
     std::unordered_map<MeshId, std::unordered_map<ChipId, std::unordered_map<RoutingDirection, size_t>>>
         golden_link_counts;
@@ -309,6 +317,15 @@ std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::compute_local_plane_co
     build_golden_link_counts(this->mesh_graph_->get_intra_mesh_connectivity(), golden_link_counts);
     build_golden_link_counts(this->mesh_graph_->get_inter_mesh_connectivity(), golden_link_counts);
 
+    auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+        if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
+            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
+            !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
+            this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
+        }
+    };
+
+    const auto& distributed_context = this->distributed_context_.get();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -316,10 +333,8 @@ std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::compute_local_plane_co
         TT_FATAL(mesh_shape[0] > 0, "ControlPlane: Mesh width must be greater than 0");
         TT_FATAL(mesh_shape[1] > 0, "ControlPlane: Mesh height must be greater than 0");
 
-        LocalPlaneCounts mesh_counts;
-        mesh_counts.mesh_id = MeshId{mesh_id};
-        mesh_counts.row_min_planes.resize(mesh_shape[0], std::numeric_limits<size_t>::max());
-        mesh_counts.col_min_planes.resize(mesh_shape[1], std::numeric_limits<size_t>::max());
+        std::vector<size_t> row_min_planes(mesh_shape[0], std::numeric_limits<size_t>::max());
+        std::vector<size_t> col_min_planes(mesh_shape[1], std::numeric_limits<size_t>::max());
 
         // First pass: Calculate minimums for each row/column
         size_t num_chips_in_mesh = intra_mesh_connectivity[mesh_id.get()].size();
@@ -337,139 +352,50 @@ std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::compute_local_plane_co
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
-                apply_min(
-                    port_directions, RoutingDirection::E, golden_counts, mesh_counts.row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    port_directions, RoutingDirection::W, golden_counts, mesh_counts.row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    port_directions, RoutingDirection::N, golden_counts, mesh_counts.col_min_planes.at(mesh_coord_y));
-                apply_min(
-                    port_directions, RoutingDirection::S, golden_counts, mesh_counts.col_min_planes.at(mesh_coord_y));
+                apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(mesh_coord_x));
+                apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(mesh_coord_x));
+                apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(mesh_coord_y));
+                apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(mesh_coord_y));
             }
 
-            // Compute local minimums for MPI exchange
-            mesh_counts.rows_min =
-                *std::min_element(mesh_counts.row_min_planes.begin(), mesh_counts.row_min_planes.end());
-            mesh_counts.cols_min =
-                *std::min_element(mesh_counts.col_min_planes.begin(), mesh_counts.col_min_planes.end());
-
-            // Apply topology-specific adjustments
+            // Collect row and column mins from all hosts in a BigMesh
+            auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
+            auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
+            std::vector<size_t> rows_min_buf(*distributed_context.size());
+            std::vector<size_t> cols_min_buf(*distributed_context.size());
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
+            distributed_context.barrier();
+            const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
+            const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
+            // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                auto global_mesh_min = std::min(mesh_counts.rows_min, mesh_counts.cols_min);
-                std::fill(mesh_counts.row_min_planes.begin(), mesh_counts.row_min_planes.end(), global_mesh_min);
-                std::fill(mesh_counts.col_min_planes.begin(), mesh_counts.col_min_planes.end(), global_mesh_min);
+                auto global_mesh_min = std::min(*global_rows_min, *global_cols_min);
+                std::fill(row_min_planes.begin(), row_min_planes.end(), global_mesh_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), global_mesh_min);
+            } else {
+                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_rows_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_cols_min);
             }
-        }
 
-        result.push_back(std::move(mesh_counts));
-    }
+            // Second pass: Apply minimums to each device
+            for (const auto& mesh_coord : local_mesh_coord_range) {
+                auto fabric_chip_id = this->mesh_graph_->coordinate_to_chip(mesh_id, mesh_coord);
+                const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
+                auto mesh_coord_x = mesh_coord[0];
+                auto mesh_coord_y = mesh_coord[1];
 
-    return result;
-}
-
-std::vector<ControlPlane::LocalPlaneCounts> ControlPlane::synchronize_plane_counts_across_hosts(
-    std::vector<LocalPlaneCounts> local_counts) const {
-    const auto& distributed_context = this->distributed_context_.get();
-
-    if (*distributed_context.size() == 1 || local_counts.empty()) {
-        return local_counts;
-    }
-
-    // Defensive check: Verify routing_tables_mutex_ is NOT held during MPI operations
-    // This is critical to prevent deadlocks - MPI collectives require all ranks to participate
-    // TT_ASSERT(!routing_tables_mutex_.try_lock(), "routing_tables_mutex_ must not be held during MPI all_gather");
-    // Note: try_lock on shared_mutex is not standard until C++17, using manual verification instead
-
-    // Exchange plane counts with all other hosts via MPI
-    // NO locks should be held during these MPI collective operations
-    for (auto& mesh_counts : local_counts) {
-        std::vector<size_t> rows_min_buf(*distributed_context.size());
-        std::vector<size_t> cols_min_buf(*distributed_context.size());
-
-        distributed_context.all_gather(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&mesh_counts.rows_min), sizeof(size_t)),
-            tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
-        distributed_context.all_gather(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&mesh_counts.cols_min), sizeof(size_t)),
-            tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
-        distributed_context.barrier();
-
-        // Compute global minimums
-        const auto global_rows_min = *std::min_element(rows_min_buf.begin(), rows_min_buf.end());
-        const auto global_cols_min = *std::min_element(cols_min_buf.begin(), cols_min_buf.end());
-
-        auto topology = FabricContext::get_topology_from_config(fabric_config_);
-        if (topology == Topology::Mesh || topology == Topology::Torus) {
-            auto global_mesh_min = std::min(global_rows_min, global_cols_min);
-            std::fill(mesh_counts.row_min_planes.begin(), mesh_counts.row_min_planes.end(), global_mesh_min);
-            std::fill(mesh_counts.col_min_planes.begin(), mesh_counts.col_min_planes.end(), global_mesh_min);
-        } else {
-            std::fill(mesh_counts.row_min_planes.begin(), mesh_counts.row_min_planes.end(), global_rows_min);
-            std::fill(mesh_counts.col_min_planes.begin(), mesh_counts.col_min_planes.end(), global_cols_min);
-        }
-    }
-
-    return local_counts;
-}
-
-void ControlPlane::commit_plane_counts_to_routing_tables(
-    const std::vector<LocalPlaneCounts>& global_counts,
-    const IntraMeshConnectivity& intra_mesh_connectivity,
-    tt_fabric::FabricConfig fabric_config) {
-    if (fabric_config == tt_fabric::FabricConfig::CUSTOM || fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        return;
-    }
-
-    auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
-        if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
-            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
-            !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
-            this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
-        }
-    };
-
-    // Apply global minimums to each device
-    for (const auto& mesh_counts : global_counts) {
-        const auto& local_mesh_coord_range = this->get_coord_range(mesh_counts.mesh_id, MeshScope::LOCAL);
-        for (const auto& mesh_coord : local_mesh_coord_range) {
-            auto fabric_chip_id = this->mesh_graph_->coordinate_to_chip(mesh_counts.mesh_id, mesh_coord);
-            const auto fabric_node_id = FabricNodeId(mesh_counts.mesh_id, fabric_chip_id);
-            auto mesh_coord_x = mesh_coord[0];
-            auto mesh_coord_y = mesh_coord[1];
-
-            apply_count(fabric_node_id, RoutingDirection::E, mesh_counts.row_min_planes.at(mesh_coord_x));
-            apply_count(fabric_node_id, RoutingDirection::W, mesh_counts.row_min_planes.at(mesh_coord_x));
-            apply_count(fabric_node_id, RoutingDirection::N, mesh_counts.col_min_planes.at(mesh_coord_y));
-            apply_count(fabric_node_id, RoutingDirection::S, mesh_counts.col_min_planes.at(mesh_coord_y));
-        }
-    }
-}
-
-void ControlPlane::initialize_dynamic_routing_plane_counts(
-    const IntraMeshConnectivity& intra_mesh_connectivity,
-    tt_fabric::FabricConfig fabric_config,
-    tt_fabric::FabricReliabilityMode reliability_mode) {
-    // Clear existing plane counts
-    this->router_port_directions_to_num_routing_planes_map_.clear();
-
-    // In strict mode, initialize with full eth channel counts
-    if (reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
-        for (const auto& [fabric_node_id, directions_and_eth_chans] :
-             this->router_port_directions_to_physical_eth_chan_map_) {
-            for (const auto& [direction, eth_chans] : directions_and_eth_chans) {
-                this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = eth_chans.size();
+                apply_count(fabric_node_id, RoutingDirection::E, row_min_planes.at(mesh_coord_x));
+                apply_count(fabric_node_id, RoutingDirection::W, row_min_planes.at(mesh_coord_x));
+                apply_count(fabric_node_id, RoutingDirection::N, col_min_planes.at(mesh_coord_y));
+                apply_count(fabric_node_id, RoutingDirection::S, col_min_planes.at(mesh_coord_y));
             }
         }
     }
-
-    // Phase 1: Compute local plane counts (no MPI, no locks needed)
-    auto local_counts = compute_local_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
-
-    // Phase 2: Synchronize across all hosts (NO locks held during MPI)
-    auto global_counts = synchronize_plane_counts_across_hosts(std::move(local_counts));
-
-    // Phase 3: Commit results to routing tables (called under routing_tables_mutex_)
-    commit_plane_counts_to_routing_tables(global_counts, intra_mesh_connectivity, fabric_config);
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
@@ -1407,16 +1333,8 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
-    // Three-phase pattern to avoid holding locks during MPI collective operations:
-    // Phase 1: Prepare local routing data (lock held for local modifications)
-    // Phase 2: Exchange data via MPI (NO locks held - critical for deadlock avoidance)
-    // Phase 3: Commit results (lock re-acquired for final data structure updates)
-    //
-    // CRITICAL: MPI collective operations (broadcast, all_gather, barrier) require all ranks
-    // to participate. Holding locks during these operations can cause deadlocks when other
-    // ranks are waiting for the same lock. Always release locks before MPI calls.
-
     // Exclusive lock for modifying routing tables during initialization
+    // Note: This lock is released before MPI collective operations to avoid deadlocks
     std::unique_lock lock(routing_tables_mutex_);
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
@@ -1544,36 +1462,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
         }
     }
 
-    // Phase 2a: Compute local plane counts (still under lock, but only local computation)
-    auto local_plane_counts =
-        compute_local_plane_counts(intra_mesh_connectivity, this->fabric_config_, this->fabric_reliability_mode_);
-
-    // CRITICAL: Release lock before MPI operations to prevent deadlocks
+    // Release lock before MPI operations to prevent deadlocks
     // MPI collectives require all ranks to participate - holding a lock while blocked
     // in MPI can cause deadlock if another rank is waiting for this lock
     lock.unlock();
 
-    // Phase 2b: Synchronize plane counts across all hosts (NO locks held during MPI)
-    auto global_plane_counts = synchronize_plane_counts_across_hosts(std::move(local_plane_counts));
-
-    // Prepare local router data for exchange (no lock needed, reading from local structures)
-    RouterPortDirectionsData local_router_data;
-    local_router_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
-    local_router_data.local_host_rank_id = this->get_local_host_rank_id_binding();
-    {
-        // Briefly lock to copy current state for exchange
-        std::shared_lock read_lock(routing_tables_mutex_);
-        local_router_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
-    }
-
-    // Phase 2c: Exchange router data with all hosts (NO locks held during MPI broadcast/barrier)
-    auto all_hosts_router_data = exchange_router_data_with_all_hosts(local_router_data);
-
-    // Phase 3: Re-acquire exclusive lock and commit all results
-    lock.lock();
-
-    // Commit plane counts to routing tables
-    commit_plane_counts_to_routing_tables(global_plane_counts, intra_mesh_connectivity, this->fabric_config_);
+    this->initialize_dynamic_routing_plane_counts(
+        intra_mesh_connectivity, this->fabric_config_, this->fabric_reliability_mode_);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
@@ -1583,8 +1478,10 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     // NOTE: This MUST be called after ordering ethernet channels
     this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
-    // Merge router port directions from all hosts (now under lock protection)
-    merge_router_port_directions_from_remote_hosts(all_hosts_router_data);
+    this->collect_and_merge_router_port_directions_from_all_hosts();
+
+    // Re-acquire lock for final data structure updates
+    lock.lock();
 
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
@@ -2952,24 +2849,21 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     }
 }
 
-std::vector<RouterPortDirectionsData> ControlPlane::exchange_router_data_with_all_hosts(
-    const RouterPortDirectionsData& local_data) const {
+void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     const auto& distributed_context = this->distributed_context_.get();
-    std::vector<RouterPortDirectionsData> all_hosts_data;
-
     if (*distributed_context.size() == 1) {
-        // Single process - just return local data
-        all_hosts_data.push_back(local_data);
-        return all_hosts_data;
+        // No need to collect from other hosts when running a single process
+        return;
     }
 
-    // Defensive check: Verify routing_tables_mutex_ is NOT held during MPI operations
-    // This is critical to prevent deadlocks - MPI collectives require all ranks to participate
-    // Note: We cannot directly check if a shared_mutex is locked by current thread, but the
-    // three-phase pattern ensures this by design: caller releases lock before calling MPI functions
+    // router_port_directions_to_physical_eth_chan_map_ is protected by routing_tables_mutex_,
+    // which is already held exclusively by the caller (configure_routing_tables_for_fabric_ethernet_channels)
 
-    // NO locks should be held during these MPI collective operations
-    // This is critical to avoid deadlocks with other ranks
+    // Create RouterPortDirectionsData from local data
+    RouterPortDirectionsData local_data;
+    local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+    local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
+    local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
 
     auto serialized_data = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
     std::vector<uint8_t> serialized_remote_data;
@@ -2987,9 +2881,6 @@ std::vector<RouterPortDirectionsData> ControlPlane::exchange_router_data_with_al
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
                 distributed_context.rank());
-
-            // Add local data to results
-            all_hosts_data.push_back(local_data);
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_data_size_bytes = 0;  // Receive the size of the serialized data
@@ -3006,80 +2897,36 @@ std::vector<RouterPortDirectionsData> ControlPlane::exchange_router_data_with_al
 
             RouterPortDirectionsData deserialized_remote_data =
                 tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
-            all_hosts_data.push_back(std::move(deserialized_remote_data));
-        }
-        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
-        // root
-        distributed_context.barrier();
-    }
 
-    return all_hosts_data;
-}
-
-void ControlPlane::merge_router_port_directions_from_remote_hosts(
-    const std::vector<RouterPortDirectionsData>& remote_data_list) {
-    // Merge data from remote hosts into local router_port_directions_to_physical_eth_chan_map_
-    // This function must be called while holding routing_tables_mutex_
-
-    for (const auto& remote_data : remote_data_list) {
-        // Skip local data (same mesh_id and host_rank_id)
-        if (remote_data.local_mesh_id == local_mesh_binding_.mesh_ids[0] &&
-            remote_data.local_host_rank_id == this->get_local_host_rank_id_binding()) {
-            continue;
-        }
-
-        for (const auto& [fabric_node_id, direction_map] : remote_data.router_port_directions_map) {
-            // Only merge if this fabric node is not already in our local map
-            if (!router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
-                router_port_directions_to_physical_eth_chan_map_[fabric_node_id] = direction_map;
-            } else {
-                // If fabric node exists, merge direction maps
-                for (const auto& [direction, channels] : direction_map) {
-                    auto& local_direction_map = router_port_directions_to_physical_eth_chan_map_[fabric_node_id];
-                    if (!local_direction_map.contains(direction)) {
-                        local_direction_map[direction] = channels;
-                    } else {
-                        // Merge channels, avoiding duplicates
-                        auto& local_channels = local_direction_map[direction];
-                        for (const auto& channel : channels) {
-                            if (std::find(local_channels.begin(), local_channels.end(), channel) ==
-                                local_channels.end()) {
-                                local_channels.push_back(channel);
+            // Merge remote data into local router_port_directions_to_physical_eth_chan_map_
+            for (const auto& [fabric_node_id, direction_map] : deserialized_remote_data.router_port_directions_map) {
+                // Only merge if this fabric node is not already in our local map
+                if (!router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
+                    router_port_directions_to_physical_eth_chan_map_[fabric_node_id] = direction_map;
+                } else {
+                    // If fabric node exists, merge direction maps
+                    for (const auto& [direction, channels] : direction_map) {
+                        auto& local_direction_map = router_port_directions_to_physical_eth_chan_map_[fabric_node_id];
+                        if (!local_direction_map.contains(direction)) {
+                            local_direction_map[direction] = channels;
+                        } else {
+                            // Merge channels, avoiding duplicates
+                            auto& local_channels = local_direction_map[direction];
+                            for (const auto& channel : channels) {
+                                if (std::find(local_channels.begin(), local_channels.end(), channel) ==
+                                    local_channels.end()) {
+                                    local_channels.push_back(channel);
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
+        // root
+        distributed_context.barrier();
     }
-}
-
-void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        // No need to collect from other hosts when running a single process
-        return;
-    }
-
-    // router_port_directions_to_physical_eth_chan_map_ is protected by routing_tables_mutex_,
-    // which is already held exclusively by the caller (configure_routing_tables_for_fabric_ethernet_channels)
-    // This is the problematic pattern - we hold the lock during MPI operations.
-    // Refactored to follow three-phase pattern:
-
-    // Phase 1: Prepare local data (lock already held, but only for reading)
-    RouterPortDirectionsData local_data;
-    local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
-    local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
-    local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
-
-    // Phase 2: Exchange data with all hosts (NO lock during MPI)
-    // Note: We temporarily release the lock by unlocking it before MPI operations
-    // The caller (configure_routing_tables_for_fabric_ethernet_channels) is being refactored
-    // to not hold the lock during this call
-    auto all_hosts_data = exchange_router_data_with_all_hosts(local_data);
-
-    // Phase 3: Merge data from all hosts (lock re-acquired by caller)
-    merge_router_port_directions_from_remote_hosts(all_hosts_data);
 }
 
 // Intermesh Connectivity Generation Functions
