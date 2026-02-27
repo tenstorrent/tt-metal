@@ -1125,8 +1125,7 @@ struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     }
 };
 
-namespace ttsl {
-namespace hash {
+namespace ttsl::hash {
 
 namespace detail {
 template <typename T, typename = std::void_t<>>
@@ -1316,8 +1315,7 @@ void hash_combine(std::size_t& seed, const T& value) {
     seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
-}  // namespace hash
-}  // namespace ttsl
+}  // namespace ttsl::hash
 
 template <typename T, size_t PREALLOCATED_SIZE>
 struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
@@ -1330,8 +1328,7 @@ struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     }
 };
 
-namespace ttsl {
-namespace json {
+namespace ttsl::json {
 
 template <typename T>
     requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
@@ -1684,8 +1681,7 @@ struct to_json_t {
     }
 };
 
-}  // namespace json
-}  // namespace ttsl
+}  // namespace ttsl::json
 
 namespace tt {
 namespace [[deprecated("Use ttsl namespace instead")]] stl {
