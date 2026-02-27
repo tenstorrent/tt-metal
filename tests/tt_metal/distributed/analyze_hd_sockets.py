@@ -131,6 +131,7 @@ def load_gbench_d2h_throughput_csv(path):
 
     arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS["BM_D2HSocketThroughput"])
     df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+    df = df.loc[:, ~df.columns.duplicated(keep="last")]
 
     if "label" in df.columns:
         df["device_coord"] = df["label"]
@@ -156,6 +157,7 @@ def load_gbench_h2d_throughput_csv(path):
 
     arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS["BM_H2DSocketThroughput"])
     df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+    df = df.loc[:, ~df.columns.duplicated(keep="last")]
 
     if "label" in df.columns:
         df["device_coord"] = df["label"]
@@ -179,6 +181,7 @@ def _load_gbench_latency(path, name_prefix):
 
     arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
     df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+    df = df.loc[:, ~df.columns.duplicated(keep="last")]
 
     if "label" in df.columns:
         df["device_coord"] = df["label"]
@@ -222,6 +225,7 @@ def load_gbench_multichip_csv(path, name_prefix):
 
     arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
     df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+    df = df.loc[:, ~df.columns.duplicated(keep="last")]
 
     _derive_throughput(df)
 
