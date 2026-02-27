@@ -145,14 +145,6 @@ void WatcherServer::Impl::detach_devices() {
     }
 
     if (server_thread_) {
-        // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
-        // Don't do this in test mode, to keep the tests running quickly.
-        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
-            int target_count = dump_count() + 1;
-            while (dump_count() < target_count) {
-                ;
-            }
-        }
         // Signal the server thread to finish
         stop_server_ = true;
         stop_server_cv_.notify_all();
@@ -518,11 +510,6 @@ void WatcherServer::Impl::poll_watcher_data() {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        std::unique_lock<std::mutex> lock(watch_mutex_);
-        if (stop_server_cv_.wait_for(lock, sleep_duration, [&] { return stop_server_.load(); })) {
-            break;
-        }
-
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
@@ -544,6 +531,23 @@ void WatcherServer::Impl::poll_watcher_data() {
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
         fflush(logfile_);
         dump_count_++;
+
+        // Wait for the interval, but check stop flag frequently to exit early
+        constexpr auto poll_interval = std::chrono::milliseconds(100);
+        auto remaining = sleep_duration;
+        while (remaining > std::chrono::milliseconds(0)) {
+            auto wait_time = std::min(remaining, poll_interval);
+            std::unique_lock<std::mutex> lock(watch_mutex_);
+            // wait_for with predicate returns true if stop requested, false on timeout
+            // Only decrement remaining on timeout (predicate handles spurious wakeups internally)
+            if (stop_server_cv_.wait_for(lock, wait_time, [&] { return stop_server_.load(); })) {
+                break;
+            }
+            remaining -= wait_time;
+        }
+        if (stop_server_.load()) {
+            break;
+        }
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
