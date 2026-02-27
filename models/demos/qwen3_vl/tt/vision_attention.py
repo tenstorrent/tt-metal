@@ -35,7 +35,7 @@ class VisionAttention(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=None,
-            batch_size=1,
+            batch_size=batch_size,
             user_id_tensor=None,
         )
 
