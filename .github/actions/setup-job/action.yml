@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ''
   use-evaluation-image:
-    description: 'Skip download and installation of build artifacts and wheel as they're pre-installed in evaluation image'
+    description: 'Skip download and installation of build artifacts and wheel as they''re pre-installed in evaluation image'
     default: false
     type: boolean
   auto-triage:
