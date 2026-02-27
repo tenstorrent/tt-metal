@@ -68,7 +68,7 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     ttnn_errored = False
     try:
         ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except RuntimeError:
+    except (IndexError, TypeError, RuntimeError):
         ttnn_errored = True
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
@@ -93,10 +93,9 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
-@pytest.mark.parametrize("tensor_shape", [(2,)])
+@pytest.mark.parametrize("tensor_shape", [(2,), (3, 6, 40, 63, 20)])
 # @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [0])
-# @pytest.mark.parametrize("dim", [0, -1])
+@pytest.mark.parametrize("dim", [0, None])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("k", [1])
@@ -110,7 +109,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     torch.manual_seed(0)
     rank = len(tensor_shape)
 
-    if dim < -rank or dim > rank - 1:
+    if dim is not None and (dim < -rank or dim > rank - 1):
         pytest.skip("Dimension not applicable for input shape")
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
@@ -125,7 +124,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     ttnn_errored = False
     try:
         ttnn_result = ttnn.topk(ttnn_tensor, k, dim=dim)
-    except IndexError:
+    except (IndexError, TypeError, RuntimeError):
         ttnn_errored = True
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
@@ -145,9 +144,10 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     # This is fixed by adding 2^16 to negative values.
     ttnn_indices = torch.where(ttnn_indices < 0, ttnn_indices + 65536, ttnn_indices)
 
+    cosine_sim_target = 0.99
     ttnn_gather_from_indices = torch.gather(torch_tensor, dim, ttnn_indices.to(torch.int64))
     cosine = torch.nn.CosineSimilarity(dim=dim)
-    cosine_sim = torch.mean(cosine(torch_values, ttnn_gather_from_indices))
+    cosine_sim = torch.mean(cosine(torch_values, ttnn_gather_from_indices)).float()
     assert (
-        cosine_sim > 0.99
-    ), f"Cosine similarity between topk values and gather from indices is {cosine_sim} which is less than 0.99"
+        cosine_sim >= cosine_sim_target
+    ), f"Cosine similarity between topk values and gather from indices is {cosine_sim} which is less than {cosine_sim_target}"
