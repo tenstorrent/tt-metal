@@ -20,21 +20,21 @@ import ttnn
 GRID_SIZE = (11, 10)
 TILE_SIZE = 32
 
-# Optimal (in0_block_w, out_subblock_h, out_subblock_w) from sweep_deepseek_v3_matmul_tune.py
+# Optimal (in0_block_w, out_subblock_h, out_subblock_w) from Tracy sweep (sweep_deepseek_v3_matmul_tune.py)
 OPTIMAL_PROGRAM_CONFIG = {
-    "dense_mlp_w1": (7, 1, 1),
+    "dense_mlp_w1": (14, 1, 7),
     "dense_mlp_w2": (9, 1, 7),
-    "dense_mlp_w3": (8, 1, 7),
+    "dense_mlp_w3": (14, 1, 7),
     "gate": (14, 1, 1),
     "q_wq_b": (8, 1, 6),
-    "routed_expert_w1": (28, 1, 3),
+    "routed_expert_w1": (28, 4, 1),
     "routed_expert_w2": (16, 1, 7),
-    "routed_expert_w3": (28, 4, 1),
+    "routed_expert_w3": (32, 4, 1),
     "shared_expert_w1": (14, 1, 2),
-    "shared_expert_w2": (16, 1, 1),
+    "shared_expert_w2": (16, 1, 7),
     "shared_expert_w3": (14, 1, 2),
-    "v_out_out_proj": (8, 1, 3),
-    "x_wkv_a": (14, 1, 1),
+    "v_out_out_proj": (8, 1, 7),
+    "x_wkv_a": (14, 1, 2),
     "x_wq_a": (14, 1, 5),
 }
 
@@ -91,8 +91,6 @@ def get_prefill_matmul_program_config(
     )
 
 
-# ---------------------------------------------------------------------------
-# Harmonized dtype and math_fidelity (all tests and sweep)
 # ---------------------------------------------------------------------------
 # MLA:  bfloat16 activations (in0), bfloat8_b weights (in1), HiFi2.
 # MoE:  bfloat4_b weights, LoFi (dense MLP, shared expert, routed expert).

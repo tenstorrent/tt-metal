@@ -6,8 +6,8 @@
 Sweep matmul program-config parameters for Deepseek V3 prefill and print timing.
 
 Usage:
-  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 50
-  pytest ... -k "dense_mlp_w1" --didt-workload-iterations 20
+  pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 1000
+  pytest ... -k "dense_mlp_w1" --didt-workload-iterations 100
   pytest ... --timeout=7200
 
 DRAM tensors, 11×10 grid. MLA/Gate: HiFi2; MoE: LoFi. With Tracy env vars set
@@ -66,8 +66,8 @@ def compute_utilization_pct(
 ) -> float:
     """
     Compute utilization % vs theoretical peak (ideal cycles / actual cycles).
-    num_cores should be the program's compute grid size (grid.x * grid.y) so that
-    ideal_cycles reflects peak FLOPS for the grid actually used.
+    num_cores is the grid size used for ideal_cycles (sweep uses full GRID_SIZE, e.g. 110,
+    so utilization is comparable across configs that may use fewer cores).
     Formula matches tests/ttnn/unit_tests/benchmarks/test_benchmark.py:
       ideal_cycle = M*K*N / (tile_h*tile_w*32) * cycle_per_tile / num_cores
       inference_cycle = duration_sec * device_freq_Hz = (duration_ns*1e-9) * (freq_MHz*1e6)
@@ -160,7 +160,7 @@ def _make_program_config(
 
 
 # ---------------------------------------------------------------------------
-# Workload definitions (aligned with DIDT: MLA/Gate HiFi2, MoE LoFi)
+# Workload definitions
 # ---------------------------------------------------------------------------
 
 
@@ -372,13 +372,16 @@ def _run_single_config(
             duration_ns = tracy_duration_ns * iterations
         else:
             duration_per_iter_ns = duration_ns // iterations
-        num_cores = tracy_core_count if tracy_core_count is not None else config_cores
+        num_cores_used = tracy_core_count if tracy_core_count is not None else config_cores
+        # Utilization vs full grid (110 cores) so configs are comparable
+        grid_x, grid_y = GRID_SIZE
+        num_cores_full_grid = grid_x * grid_y
         utilization_pct = compute_utilization_pct(
             wl.M,
             wl.K,
             wl.N,
             duration_per_iter_ns,
-            num_cores,
+            num_cores_full_grid,
             wl.math_fidelity,
         )
 
@@ -398,7 +401,7 @@ def _run_single_config(
             iterations=iterations,
             utilization_pct=utilization_pct,
             memory_configs=memory_configs,
-            core_count=num_cores,
+            core_count=num_cores_used,
         )
     except Exception as e:
         err_short = _short_error(e)
@@ -429,7 +432,7 @@ def test_sweep_deepseek_v3_matmul_tune(
     didt_workload_iterations: int,
 ) -> None:
     """Sweep program configs per workload; print timing and utilization. Use -s for output."""
-    iterations = max(1, min(didt_workload_iterations, 500))
+    iterations = max(1, min(didt_workload_iterations, 1000))
     workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1]
 
     print(SWEEP_CSV_HEADER, flush=True)
@@ -454,8 +457,8 @@ def test_sweep_deepseek_v3_matmul_tune(
             all_results.append(res)
             print(res.to_csv_row(), flush=True)
 
-    # Summary: best config per workload by compute utilization (%)
-    print("\n# Best config per workload (highest compute utilization %):", flush=True)
+    # Summary: best config per workload by compute utilization (% vs full grid)
+    print("\n# Best config per workload (highest compute utilization % vs full grid):", flush=True)
     by_workload: dict[str, list[SweepResult]] = {}
     for r in all_results:
         by_workload.setdefault(r.workload_id, []).append(r)

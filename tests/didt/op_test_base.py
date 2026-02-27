@@ -143,8 +143,10 @@ class OpTestBase:
 
         reference_out = None
         if self.determinism_check_enabled:
-            # One reference run per activation. Deallocate only for L1 to avoid running out of memory
-            # for DRAM do not deallocate so a_t stays valid for reuse.
+            # One reference run per activation; we then cycle through them and compare output to
+            # reference_out[act]. Deallocate only for L1 due to memory constraints.
+            # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
+            # determinism checking is unchanged (different inputs, match reference per activation).
             num_nd_outputs = [0] * num_devices
             reference_out = [None for _ in range(num_activation_tensors)]
             for act in range(num_activation_tensors):
