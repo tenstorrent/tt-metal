@@ -36,6 +36,9 @@ class SharedExpert(MLPDequant):  # The only difference with the regular Dequanti
             return super().forward_prefill(x, cfg)
         else:
             # When called from MoEDecoderBlock2D - skip CCLs
+            # Convert to expected memory config if needed (in case all_gather outputs different memory config)
+            if "input_memory_config" in cfg and x.memory_config() != cfg["input_memory_config"]:
+                x = ttnn.to_memory_config(x, cfg["input_memory_config"])
             return cls._forward_compute_only(x, cfg, mode="prefill")
 
     @classmethod
@@ -54,4 +57,7 @@ class SharedExpert(MLPDequant):  # The only difference with the regular Dequanti
             return super().forward_decode(x, cfg)
         else:
             # When called from MoEDecoderBlock2D - skip CCLs
+            # Convert to expected memory config if needed (MoE's all_gather outputs INTERLEAVED, we need WIDTH_SHARDED)
+            if "input_memory_config" in cfg and x.memory_config() != cfg["input_memory_config"]:
+                x = ttnn.to_memory_config(x, cfg["input_memory_config"])
             return cls._forward_compute_only(x, cfg, mode="decode")
