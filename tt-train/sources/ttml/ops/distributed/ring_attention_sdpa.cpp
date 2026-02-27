@@ -44,6 +44,9 @@ autograd::TensorPtr ring_attention_sdpa(
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
+    TT_FATAL(
+        !mask.has_value(),
+        "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();

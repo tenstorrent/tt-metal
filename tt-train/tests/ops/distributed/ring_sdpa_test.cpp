@@ -20,7 +20,7 @@
 #include "core/distributed/socket_manager.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ops/distributed/ring_attention.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
