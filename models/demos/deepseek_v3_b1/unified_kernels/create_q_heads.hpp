@@ -49,6 +49,17 @@ namespace deepseek_b1_ops {
 // ============================================================================
 struct CreateQHeads {
     // ========================================================================
+    // Compile-time args structs
+    // ========================================================================
+    template <uint32_t qnope_data_size_bytes_, uint32_t qrope_head_size_bytes_>
+    struct SenderCTArgs {
+        static constexpr uint32_t qnope_data_size_bytes = qnope_data_size_bytes_;
+        static constexpr uint32_t qrope_head_size_bytes = qrope_head_size_bytes_;
+    };
+    struct ReceiverCTArgs {};
+    struct ComputeCTArgs {};
+
+    // ========================================================================
     // Runtime args structs
     // ========================================================================
 
@@ -58,8 +69,6 @@ struct CreateQHeads {
         uint32_t sender_grid_start_x;
         uint32_t sender_grid_start_y;
         // Data sizes (in bytes)
-        uint32_t qnope_data_size_bytes;  // 512 elements * 2 = 1024 bytes
-        uint32_t qrope_head_size_bytes;  // 64 elements * 2 = 128 bytes (per head)
         uint32_t head_stride_bytes;      // 576 elements * 2 = 1152 bytes
         uint32_t qnope_cols;             // 8
         // CB indices
@@ -107,7 +116,7 @@ struct CreateQHeads {
     //   setup_sharded_input: whether to setup the sharded input CB
     //   pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src>
+    template <typename CTArgs, bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src>
     class Op {
     public:
         // Overload for sender args
@@ -167,7 +176,7 @@ struct CreateQHeads {
             uint32_t target_noc_y = (packed_coords >> 16) & 0xFFFF;  // Upper 16 bits
 
             const uint64_t dst_noc_coord = get_noc_addr(target_noc_x, target_noc_y, 0);
-            uint32_t half_qnope_data_size_bytes = args.qnope_data_size_bytes / 2;
+            constexpr uint32_t half_qnope_data_size_bytes = CTArgs::qnope_data_size_bytes / 2;
 
             if (is_qnope_core) {
                 // QNOPE core: Split 512 elements into two 256-element halves for tilization
@@ -181,14 +190,14 @@ struct CreateQHeads {
                 // First half: tight row-major packing
                 uint32_t dst_offset_0 = my_col * half_qnope_data_size_bytes;
                 uint64_t dst_data_noc_addr_0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_0);
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
                     src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes);
                 noc_semaphore_inc(phase1_semaphore_noc_addr, 1);
 
                 // Second half: continues after first block
                 uint32_t dst_offset_1 = (args.qnope_cols * half_qnope_data_size_bytes) + dst_offset_0;
                 uint64_t dst_data_noc_addr_1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_1);
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
                     src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes);
                 noc_semaphore_inc(phase2_semaphore_noc_addr, 1);
                 noc_async_atomic_barrier();
@@ -199,10 +208,11 @@ struct CreateQHeads {
                 uint32_t qrope_col = my_col - args.qnope_cols;
                 // Offset starts after full QNOPE region (8 cols × 512 elements each)
                 uint32_t dst_offset =
-                    (args.qnope_cols * args.qnope_data_size_bytes) + (2 * qrope_col * args.qrope_head_size_bytes);
+                    (args.qnope_cols * CTArgs::qnope_data_size_bytes) + (2 * qrope_col * CTArgs::qrope_head_size_bytes);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
-                    src_addr, dst_data_noc_addr, args.qrope_head_size_bytes * 2);
+                constexpr uint32_t double_qrope_head_size_bytes = CTArgs::qrope_head_size_bytes * 2;
+                noc_async_write<double_qrope_head_size_bytes, true, /*posted=*/true>(
+                    src_addr, dst_data_noc_addr, double_qrope_head_size_bytes);
                 noc_semaphore_inc(rope_semaphore_noc_addr, 1);
                 noc_async_atomic_barrier();
             }

@@ -168,6 +168,7 @@ file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
+    third_party/tt_llk/common/*.h
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
     third_party/tt_llk/tt_llk_quasar/**/*.h
@@ -238,6 +239,8 @@ target_sources(
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
             ${TT_LLK_HEADERS}
+            # SFPI Version for kernel caching
+            sfpi-version
 )
 
 include(CheckFunctionExists)
@@ -262,7 +265,6 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
-        Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -278,6 +280,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
+        Reflect::Reflect
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
