@@ -92,6 +92,7 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
 
 Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     std::cout << "_lgamma_fast" << std::endl;
+
     // // 1. Reflection for x < 0.5
     // Tensor is_small = ttnn::lt(x, 0.5f);
     // Tensor z = ttnn::where(is_small, ttnn::rsub_sfpu(x, 1.0f), x);
@@ -115,28 +116,22 @@ Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_m
     // Tensor correction = ttnn::multiply(ttnn::reciprocal(z), ttnn::add(ttnn::multiply(inv_z2, r1), r0));
     // res = ttnn::add(res, correction);
 
+    // lgamma_partial(x): for x >= 0.5 returns lgamma(x); for x < 0.5 returns lgamma(1-x) (Stirling + 1/12, -1/360).
     Tensor res_positive = ttnn::lgamma_partial(x, output_mem_config);
 
-    // 2. Calculate reflection_adj
-    // (Keep this in float32 if possible)
+    // Reflection term for x < 0.5: ln(pi) - log|sin(pi*x)|. Zero sin(pi*x) at integers handled via where.
     Tensor sin_pi_x = ttnn::sin(ttnn::multiply(x, (float)M_PI));
     Tensor is_integer = ttnn::eq(x, ttnn::floor(x));
     sin_pi_x = ttnn::where(is_integer, 0.0f, sin_pi_x);
-
     Tensor log_abs_sin = ttnn::log(ttnn::abs(sin_pi_x));
-    Tensor reflection_adj = ttnn::rsub_sfpu(log_abs_sin, 1.1447298858f);  // ln(pi) - log|sin|
+    Tensor reflection_adj = ttnn::rsub_sfpu(log_abs_sin, 1.1447298858f);  // ln(pi) - log|sin(pi*x)|
 
-    // 3. FINAL SUBTRACTION ORDER
-    // result = (ln(pi) - log|sin|) - lgamma(1-x)
-
-    // 4. Proceed with reflection formula
-    // reflection_adj - lgamma_pos(1-x)
-    // If log_sin is -inf, result becomes +inf ?
-
+    // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_positive.
     return ttnn::where(
         ttnn::lt(x, 0.5f), ttnn::subtract(reflection_adj, res_positive), res_positive, output_mem_config);
 }
 
+// FP32 implementation of lgamma. This is yet to be optimized.
 Tensor _lgamma_fp32(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     std::cout << "_lgamma_refined_g7" << std::endl;
     // 1. Handle Reflection for x < 0.5
@@ -190,6 +185,92 @@ Tensor _lgamma_fp32(const Tensor& x, const std::optional<MemoryConfig>& output_m
     return ttnn::where(ttnn::lt(x, 0.5f), res_reflected, res_positive, output_mem_config);
 }
 
+// Existing implementation of lgamma. This is used for testing purposes.
+Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor result(x);
+    {
+        Tensor t(x);
+        {
+            Tensor temp_log(x);
+            {
+                Tensor temp(x);
+                Tensor input = ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config);
+                {
+                    Tensor z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 1.0f, std::nullopt, output_mem_config), output_mem_config),
+                        76.18009172947146f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(z1, 1.0f, std::nullopt, output_mem_config);
+
+                    z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 2.0f, std::nullopt, output_mem_config), output_mem_config),
+                        -86.50532032941677f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 3.0f, std::nullopt, output_mem_config), output_mem_config),
+                        24.01409824083091f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 4.0f, std::nullopt, output_mem_config), output_mem_config),
+                        -1.231739572450155f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 5.0f, std::nullopt, output_mem_config), output_mem_config),
+                        0.1208650973866179e-2f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = ttnn::multiply(
+                        ttnn::reciprocal(ttnn::add(input, 6.0f, std::nullopt, output_mem_config), output_mem_config),
+                        -0.5395239384953e-5f,
+                        std::nullopt,
+                        output_mem_config);
+                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
+                }
+                {
+                    Tensor t_log(x);
+                    {
+                        t = ttnn::add(input, 5.5f, std::nullopt, output_mem_config);
+                        t_log = ttnn::log(t, true, output_mem_config);
+                    }
+                    temp_log = ttnn::log(temp, true, output_mem_config);
+                    result = ttnn::add(
+                        ttnn::multiply(
+                            ttnn::add(input, 0.5f, std::nullopt, output_mem_config),
+                            t_log,
+                            std::nullopt,
+                            output_mem_config),
+                        0.918938531357171f,
+                        std::nullopt,
+                        output_mem_config);
+                }
+            }
+            result = ttnn::add(result, temp_log, std::nullopt, output_mem_config);
+        }
+        result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
+        {
+            {
+                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
+            {
+                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
+        }
+    }
+    return result;
+}
+
 Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     if (x.dtype() == DataType::FLOAT32) {
         return _lgamma_fp32(x, output_mem_config);
@@ -198,9 +279,6 @@ Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output
     }
 }
 
-Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return Lgamma::invoke(x, output_mem_config);
-}
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {

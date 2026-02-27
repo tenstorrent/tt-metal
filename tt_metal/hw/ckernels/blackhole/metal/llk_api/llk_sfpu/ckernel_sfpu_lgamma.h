@@ -41,8 +41,7 @@ inline void calculate_lgamma_part_positive() {
         sfpi::vFloat correction = _sfpu_reciprocal_<2>(z) * (r0 + inv_z2 * r1);
         res = res + correction;
 
-        // adjustment for negative inputs are done in composite.
-
+        // adjustment for inputs < 0.5 are done in composite.
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
@@ -50,7 +49,6 @@ inline void calculate_lgamma_part_positive() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_init() {
-    // log_init<false, false, is_fp32_dest_acc_en>();
     _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
