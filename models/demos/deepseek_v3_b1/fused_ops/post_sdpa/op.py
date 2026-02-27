@@ -5,30 +5,30 @@
 """
 Post SDPA fused operation with CCL All-Reduce.
 
-This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
-- Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (kv_b2 grid: 5x8 + 12x2)
-- Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
-- Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast)
-- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
-- Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
+This implements Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce as a fused execution:
+- Matmul4: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (kv_b2 grid: 5x8 + 12x2)
+- Gather2: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
+- Mcast3: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast3)
+- Matmul5: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
+- Gather3: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices and reduce (local + remote + residual)
 
-The 13x10 mcast grid contains 130 cores, but only 112 are active for matmul2.
-The 18 inactive cores receive mcast data but skip matmul via is_matmul2_core=false.
+The 13x10 mcast3 grid contains 130 cores, but only 112 are active for matmul5.
+The 18 inactive cores receive mcast3 data but skip matmul via is_matmul5_core=false.
 
 CCL All-Reduce uses:
-- CCL Receiver core = Gather core (12, 9) - already has local data after Gather2
+- CCL Receiver core = Gather core (12, 9) - already has local data after Gather3
 - CCL Sender core = Adjacent core (11, 9) - reads from gather core, sends via fabric
 
 CB Layout:
-- CB 0: matmul1_in0 (kv_b2 grid: 5x8 + 12x2)
-- CB 1: matmul1_in1 (kv_b2 grid: 5x8 + 12x2)
-- CB 2: matmul1_out (kv_b2 grid: 5x8 + 12x2)
-- CB 3: gather1_dst = mcast_src (gather core)
-- CB 4: mcast_dst = matmul2_in0 (13x10 grid)
-- CB 5: matmul2_in1 (112 active matmul2 cores)
-- CB 6: matmul2_out (112 active matmul2 cores)
-- CB 7: gather2_dst = ccl_local_data (gather core)
+- CB 0: matmul4_in0 (kv_b2 grid: 5x8 + 12x2)
+- CB 1: matmul4_in1 (kv_b2 grid: 5x8 + 12x2)
+- CB 2: matmul4_out (kv_b2 grid: 5x8 + 12x2)
+- CB 3: gather2_dst = mcast3_src (gather core)
+- CB 4: mcast3_dst = matmul5_in0 (13x10 grid)
+- CB 5: matmul5_in1 (112 active matmul5 cores)
+- CB 6: matmul5_out (112 active matmul5 cores)
+- CB 7: gather3_dst = ccl_local_data (gather core)
 - CB 8: ccl_sender_in (ccl sender core)
 - CB 9: ccl_remote_data (gather/receiver core - intermediate tensor)
 - CB 10: ccl_residual (gather/receiver core - optional)
@@ -78,7 +78,7 @@ class PostSDPA:
     Post SDPA fused operation implementation using ttnn.generic_op.
 
     Implements the full post_sdpa fusion with CCL all-reduce:
-    - Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
+    - Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
     """
 
     @staticmethod
@@ -116,8 +116,8 @@ class PostSDPA:
         input_tensor_mesh,
         weights1_tensor,
         weights2_tensor,
-        gather1_output_tensor,
         gather2_output_tensor,
+        gather3_output_tensor,
         intermediate_tensor=None,
         output_tensor=None,
         semaphores=None,
@@ -158,7 +158,7 @@ class PostSDPA:
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         weights1_fused_tensors_per_device = ttnn.get_device_tensors(weights1_tensor.fused_tensor)
         weights2_fused_tensors_per_device = ttnn.get_device_tensors(weights2_tensor.fused_tensor)
-        gather2_output_tensors_per_device = ttnn.get_device_tensors(gather2_output_tensor)
+        gather3_output_tensors_per_device = ttnn.get_device_tensors(gather3_output_tensor)
         if ccl_enabled:
             intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
             output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
@@ -196,15 +196,15 @@ class PostSDPA:
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
         # ========================================================================
-        # Matmul1 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
+        # Matmul4 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
         kv_b12_spec = KVB12_PROJ_SingleDeviceOverlapSpec()
-        matmul1_core_grid = kv_b12_spec.kv_b2_core_range_set
-        num_matmul1_cores = matmul1_core_grid.num_cores()  # 64
+        matmul4_core_grid = kv_b12_spec.kv_b2_core_range_set
+        num_matmul4_cores = matmul4_core_grid.num_cores()  # 64
 
-        # Per-core gather1 sender index: contiguous 0..63 in row-major order.
+        # Per-core gather2 sender index: contiguous 0..63 in row-major order.
         # Needed because kv_b2 grid is non-rectangular (5×8 + 12×2).
-        matmul1_cores = ttnn.corerange_to_cores(matmul1_core_grid, row_wise=True)
-        gather1_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul1_cores)]
+        matmul4_cores = ttnn.corerange_to_cores(matmul4_core_grid, row_wise=True)
+        gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
 
         # Gather/CCL receiver core: (12, 9)
         gather_core = ttnn.CoreCoord(12, 9)
@@ -214,31 +214,31 @@ class PostSDPA:
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
 
-        # Mcast grid: 13x10 = 130 cores (full rectangular for efficient mcast)
+        # Mcast3 grid: 13x10 = 130 cores (full rectangular for efficient mcast3)
         MCAST_GRID_START_X = 0
         MCAST_GRID_START_Y = 0
         MCAST_GRID_END_X = 12  # 13 columns (0-12)
         MCAST_GRID_END_Y = 9  # 10 rows (0-9)
-        mcast_grid = ttnn.CoreRange(
+        mcast3_grid = ttnn.CoreRange(
             ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
             ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
         )
-        mcast_core_grid = ttnn.CoreRangeSet([mcast_grid])
-        num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 130
+        mcast3_core_grid = ttnn.CoreRangeSet([mcast3_grid])
+        num_mcast3_cores = mcast3_grid.grid_size().x * mcast3_grid.grid_size().y  # 130
 
-        # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+        # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul2_active_core_grid = o_proj_spec.o_proj_core_range_set
-        num_matmul2_cores = matmul2_active_core_grid.num_cores()  # 112
+        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
-        # Per-core gather2 sender index: contiguous 0..111 in row-major order.
+        # Per-core gather3 sender index: contiguous 0..111 in row-major order.
         # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
         # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
-        matmul2_cores = ttnn.corerange_to_cores(matmul2_active_core_grid, row_wise=True)
-        gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul2_cores)]
+        matmul5_cores = ttnn.corerange_to_cores(matmul5_active_core_grid, row_wise=True)
+        gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
 
         # Full grid (union of all cores for semaphore allocation)
-        full_grid = matmul1_core_grid.merge(gather_core_grid).merge(mcast_core_grid).merge(ccl_sender_core_grid)
+        full_grid = matmul4_core_grid.merge(gather_core_grid).merge(mcast3_core_grid).merge(ccl_sender_core_grid)
 
         # ========================================================================
         # SDPA Reduce-to-All configuration (optional)
@@ -305,8 +305,8 @@ class PostSDPA:
             sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
             sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
 
-            # SDPA scatter parameters (scatter output to matmul1 cores)
-            # Each SDPA worker scatters rows to matmul1 cores (one row per tile when using 8x32 tiles)
+            # SDPA scatter parameters (scatter output to matmul4 cores)
+            # Each SDPA worker scatters rows to matmul4 cores (one row per tile when using 8x32 tiles)
             sdpa_scatter_num_rows = sdpa_tile_height  # Rows per tile (8 for 8x32 tiles)
             sdpa_scatter_num_tiles = sdpa_l_tiles_per_worker  # Tiles per worker
             sdpa_scatter_src_tile_size = sdpa_l_tile_size  # Source tile size
@@ -364,29 +364,29 @@ class PostSDPA:
             sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
 
         # ========================================================================
-        # Matmul1 parameters: [1, 512] x [512, 128] -> [1, 128]
+        # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
         # ========================================================================
-        matmul1_k_num_tiles = 16  # 512 / 32 = 16 tiles
-        matmul1_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
+        matmul4_k_num_tiles = 16  # 512 / 32 = 16 tiles
+        matmul4_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
 
         # ========================================================================
-        # Matmul2 parameters: [1, 8192] x [8192, 64] -> [1, 64]
+        # Matmul5 parameters: [1, 8192] x [8192, 64] -> [1, 64]
         # ========================================================================
-        matmul2_k_num_tiles = 256  # 8192 / 32 = 256 tiles
-        matmul2_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
+        matmul5_k_num_tiles = 256  # 8192 / 32 = 256 tiles
+        matmul5_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
 
         # ========================================================================
         # CB indices
         # ========================================================================
-        matmul1_in0_cb = 0  # Matmul1 input (kv_b2 grid)
-        matmul1_in1_cb = 1  # Matmul1 weights (kv_b2 grid)
-        matmul1_out_cb = 2  # Matmul1 output (kv_b2 grid)
-        gather1_dst_cb = 3  # Gather1 output = Mcast source (gather core)
-        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x10 mcast grid)
-        matmul2_in1_cb = 5  # Matmul2 weights (112 active cores)
-        matmul2_out_cb = 6  # Matmul2 output (112 active cores)
-        gather2_dst_cb = 7  # Gather2 output = CCL local data (gather core)
-        ccl_sender_in_cb = 8  # CCL sender reads gather2 output (sender core)
+        matmul4_in0_cb = 0  # Matmul4 input (kv_b2 grid)
+        matmul4_in1_cb = 1  # Matmul4 weights (kv_b2 grid)
+        matmul4_out_cb = 2  # Matmul4 output (kv_b2 grid)
+        gather2_dst_cb = 3  # Gather2 output = Mcast3 source (gather core)
+        matmul5_in0_cb = 4  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
+        matmul5_in1_cb = 5  # Matmul5 weights (112 active cores)
+        matmul5_out_cb = 6  # Matmul5 output (112 active cores)
+        gather3_dst_cb = 7  # Gather3 output = CCL local data (gather core)
+        ccl_sender_in_cb = 8  # CCL sender reads gather3 output (sender core)
         ccl_remote_data_cb = 9  # CCL received remote data (receiver core)
         ccl_residual_cb = 10  # CCL residual (receiver core)
         ccl_temp_cb = 11  # CCL temp for compute (receiver core)
@@ -394,38 +394,38 @@ class PostSDPA:
         ccl_packet_header_cb = 13  # CCL packet headers (sender + receiver cores)
 
         # ========================================================================
-        # Gather1 parameters: 64 cores -> [1, 8192]
+        # Gather2 parameters: 64 cores -> [1, 8192]
         # ========================================================================
-        gather1_data_size_bytes = matmul1_out_w_per_core * tile_1x32_size
-        gather1_src_num_pages = matmul1_out_w_per_core  # 4 pages per sender
-        gather1_dst_num_pages = num_matmul1_cores * matmul1_out_w_per_core  # 64 * 4 = 256 pages
-        gather1_noc0_num_senders = num_matmul1_cores
-        gather1_noc1_num_senders = 0
-
-        # ========================================================================
-        # Mcast parameters: [1, 8192] to 130 cores (13x10 grid)
-        # ========================================================================
-        mcast_data_size_bytes = gather1_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
-        mcast_src_num_pages = gather1_dst_num_pages  # 256 pages
-        mcast_dst_num_pages = gather1_dst_num_pages  # 256 pages per receiver
-
-        # ========================================================================
-        # Gather2 parameters: 112 cores -> [1, 7168]
-        # ========================================================================
-        gather2_data_size_bytes = matmul2_out_w_per_core * tile_1x32_size
-        gather2_src_num_pages = matmul2_out_w_per_core  # 2 pages per sender
-        gather2_dst_num_pages = num_matmul2_cores * matmul2_out_w_per_core  # 112 * 2 = 224 pages
-        gather2_noc0_num_senders = num_matmul2_cores
+        gather2_data_size_bytes = matmul4_out_w_per_core * tile_1x32_size
+        gather2_src_num_pages = matmul4_out_w_per_core  # 4 pages per sender
+        gather2_dst_num_pages = num_matmul4_cores * matmul4_out_w_per_core  # 64 * 4 = 256 pages
+        gather2_noc0_num_senders = num_matmul4_cores
         gather2_noc1_num_senders = 0
+
+        # ========================================================================
+        # Mcast3 parameters: [1, 8192] to 130 cores (13x10 grid)
+        # ========================================================================
+        mcast3_data_size_bytes = gather2_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
+        mcast3_src_num_pages = gather2_dst_num_pages  # 256 pages
+        mcast3_dst_num_pages = gather2_dst_num_pages  # 256 pages per receiver
+
+        # ========================================================================
+        # Gather3 parameters: 112 cores -> [1, 7168]
+        # ========================================================================
+        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
+        gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
+        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core  # 112 * 2 = 224 pages
+        gather3_noc0_num_senders = num_matmul5_cores
+        gather3_noc1_num_senders = 0
 
         # ========================================================================
         # CCL parameters: [1, 7168] all-reduce
         # ========================================================================
-        # Using 1x32 tiles to match gather2 output format (for tile-compatible reduction)
+        # Using 1x32 tiles to match gather3 output format (for tile-compatible reduction)
         # 7168 elements = 224 tiles of 1x32 (32 elements each)
-        ccl_num_tiles = gather2_dst_num_pages  # 224 tiles of 1x32
+        ccl_num_tiles = gather3_dst_num_pages  # 224 tiles of 1x32
         ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
-        ccl_num_pages = gather2_dst_num_pages  # 224 pages of 1x32
+        ccl_num_pages = gather3_dst_num_pages  # 224 pages of 1x32
         ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
         ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         l1_alignment = 16
@@ -435,13 +435,13 @@ class PostSDPA:
         # ========================================================================
         # Semaphore IDs
         # ========================================================================
-        gather1_noc0_receiver_semaphore_id = 0
-        gather1_noc1_receiver_semaphore_id = 1
-        mcast_data_sender_semaphore_id = 2
-        mcast_data_receiver_semaphore_id = 3
-        gather2_noc0_receiver_semaphore_id = 4
-        gather2_noc1_receiver_semaphore_id = 5
-        gather2_completion_semaphore_id = 6  # Gather2 signals, CCL sender waits
+        gather2_noc0_receiver_semaphore_id = 0
+        gather2_noc1_receiver_semaphore_id = 1
+        mcast3_data_sender_semaphore_id = 2
+        mcast3_data_receiver_semaphore_id = 3
+        gather3_noc0_receiver_semaphore_id = 4
+        gather3_noc1_receiver_semaphore_id = 5
+        gather3_completion_semaphore_id = 6  # Gather3 signals, CCL sender waits
         # CCL uses global semaphores (passed via runtime args)
 
         per_device_contexts = []
@@ -460,7 +460,7 @@ class PostSDPA:
                 input_tensor_device = input_tensors_per_device[device_idx]
                 weights1_fused_tensor_device = weights1_fused_tensors_per_device[device_idx]
                 weights2_fused_tensor_device = weights2_fused_tensors_per_device[device_idx]
-                gather2_output_tensor_device = gather2_output_tensors_per_device[device_idx]
+                gather3_output_tensor_device = gather3_output_tensors_per_device[device_idx]
                 if ccl_enabled:
                     output_tensor_device = output_tensors_per_device[device_idx]
                     intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -474,8 +474,8 @@ class PostSDPA:
 
                 # Get NOC coordinates for this device
                 gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
-                mcast_dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid.start)
-                mcast_dest_noc_end_core = device.worker_core_from_logical_core(mcast_grid.end)
+                mcast3_dest_noc_start_core = device.worker_core_from_logical_core(mcast3_grid.start)
+                mcast3_dest_noc_end_core = device.worker_core_from_logical_core(mcast3_grid.end)
                 ccl_sender_noc_core = device.worker_core_from_logical_core(ccl_sender_core)
                 ccl_receiver_noc_core = gather_dest_noc_core  # Same as gather core
 
@@ -495,51 +495,28 @@ class PostSDPA:
                         neighbor_col = col if cluster_axis == 0 else col - 1
 
                 # Buffer addresses
-                gather1_receiver_data_addr = gather1_output_tensor.buffer_address()
-                # Gather2 writes to gather2_output_tensor, CCL reads from there and writes to output_tensor
-                gather2_receiver_data_addr = gather2_output_tensor_device.buffer_address()
+                gather2_receiver_data_addr = gather2_output_tensor.buffer_address()
+                # Gather3 writes to gather3_output_tensor, CCL reads from there and writes to output_tensor
+                gather3_receiver_data_addr = gather3_output_tensor_device.buffer_address()
 
-                mcast_is_part_of_receiver_grid = mcast_grid.contains(gather_core)
+                mcast3_is_part_of_receiver_grid = mcast3_grid.contains(gather_core)
 
                 # ========================================================================
                 # NCRISC compile-time args
                 # ========================================================================
                 ncrisc_named_compile_time_args = [
-                    # Matmul1
-                    ("matmul1_in0", matmul1_in0_cb),
-                    ("matmul1_in1", matmul1_in1_cb),
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul1_k_num_tiles", matmul1_k_num_tiles),
-                    ("matmul1_out_w_per_core", matmul1_out_w_per_core),
-                    # Gather1 sender
-                    ("gather1_dest_noc_x", gather_dest_noc_core.x),
-                    ("gather1_dest_noc_y", gather_dest_noc_core.y),
-                    ("gather1_data_size_bytes", gather1_data_size_bytes),
-                    ("gather1_receiver_semaphore_id", gather1_noc0_receiver_semaphore_id),
-                    ("gather1_src_cb", matmul1_out_cb),
-                    ("gather1_src_num_pages", gather1_src_num_pages),
-                    ("gather1_sender_grid_start_x", 0),
-                    ("gather1_sender_grid_start_y", 0),
-                    ("gather1_sender_grid_end_x", 0),
-                    ("gather1_sender_grid_end_y", 0),
-                    ("gather1_row_major", 1),
-                    ("gather1_receiver_data_addr", gather1_receiver_data_addr),
-                    # Mcast receiver
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-                    ("mcast_dst_cb", matmul2_in0_cb),
-                    ("mcast_dst_num_pages", mcast_dst_num_pages),
-                    # Matmul2
-                    ("matmul2_in0", matmul2_in0_cb),
-                    ("matmul2_in1", matmul2_in1_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    ("matmul2_k_num_tiles", matmul2_k_num_tiles),
-                    ("matmul2_out_w_per_core", matmul2_out_w_per_core),
+                    # Matmul4
+                    ("matmul4_in0", matmul4_in0_cb),
+                    ("matmul4_in1", matmul4_in1_cb),
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul4_k_num_tiles", matmul4_k_num_tiles),
+                    ("matmul4_out_w_per_core", matmul4_out_w_per_core),
                     # Gather2 sender
                     ("gather2_dest_noc_x", gather_dest_noc_core.x),
                     ("gather2_dest_noc_y", gather_dest_noc_core.y),
                     ("gather2_data_size_bytes", gather2_data_size_bytes),
                     ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
-                    ("gather2_src_cb", matmul2_out_cb),
+                    ("gather2_src_cb", matmul4_out_cb),
                     ("gather2_src_num_pages", gather2_src_num_pages),
                     ("gather2_sender_grid_start_x", 0),
                     ("gather2_sender_grid_start_y", 0),
@@ -547,24 +524,47 @@ class PostSDPA:
                     ("gather2_sender_grid_end_y", 0),
                     ("gather2_row_major", 1),
                     ("gather2_receiver_data_addr", gather2_receiver_data_addr),
+                    # Mcast3 receiver
+                    ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+                    ("mcast3_dst_cb", matmul5_in0_cb),
+                    ("mcast3_dst_num_pages", mcast3_dst_num_pages),
+                    # Matmul5
+                    ("matmul5_in0", matmul5_in0_cb),
+                    ("matmul5_in1", matmul5_in1_cb),
+                    ("matmul5_out", matmul5_out_cb),
+                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
+                    ("matmul5_out_w_per_core", matmul5_out_w_per_core),
+                    # Gather3 sender
+                    ("gather3_dest_noc_x", gather_dest_noc_core.x),
+                    ("gather3_dest_noc_y", gather_dest_noc_core.y),
+                    ("gather3_data_size_bytes", gather3_data_size_bytes),
+                    ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+                    ("gather3_src_cb", matmul5_out_cb),
+                    ("gather3_src_num_pages", gather3_src_num_pages),
+                    ("gather3_sender_grid_start_x", 0),
+                    ("gather3_sender_grid_start_y", 0),
+                    ("gather3_sender_grid_end_x", 0),
+                    ("gather3_sender_grid_end_y", 0),
+                    ("gather3_row_major", 1),
+                    ("gather3_receiver_data_addr", gather3_receiver_data_addr),
                     # CCL sender (NCRISC reads from gather core)
                     ("ccl_sender_cb0_id", ccl_sender_in_cb),
                     ("ccl_sender_num_tiles", ccl_num_pages),
                     ("ccl_sender_tensor_page_size", ccl_page_size_bytes),
                     ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
                     ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-                    ("ccl_sender_gather2_completion_semaphore_id", gather2_completion_semaphore_id),
+                    ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
                     # CCL receiver (NCRISC waits for remote data)
                     ("ccl_receiver_packet_header_cb_id", ccl_packet_header_cb),
                     ("ccl_receiver_cb_in1", ccl_remote_data_cb),
                     ("ccl_receiver_l1_alignment", l1_alignment),
-                    ("ccl_receiver_cb_in2", gather2_dst_cb),  # Local data from gather2
+                    ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
                     ("ccl_receiver_remote_sender_noc_x", ccl_sender_noc_core.x),
                     ("ccl_receiver_remote_sender_noc_y", ccl_sender_noc_core.y),
                     ("ccl_receiver_num_standard_tiles", ccl_num_tiles),
                     ("ccl_receiver_cb_residual", ccl_residual_cb),
                     ("ccl_receiver_has_residual", has_residual),
-                    ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather2 already pushed to CB7
+                    ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather3 already pushed to CB7
                 ]
 
                 # Add SDPA NCRISC compile-time args when enabled
@@ -599,29 +599,9 @@ class PostSDPA:
                 # BRISC compile-time args
                 # ========================================================================
                 brisc_named_compile_time_args = [
-                    # Matmul1/2 (no-op)
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    # Gather1 receiver
-                    ("gather1_noc0_num_senders", gather1_noc0_num_senders),
-                    ("gather1_noc1_num_senders", gather1_noc1_num_senders),
-                    ("gather1_noc0_receiver_semaphore_id", gather1_noc0_receiver_semaphore_id),
-                    ("gather1_noc1_receiver_semaphore_id", gather1_noc1_receiver_semaphore_id),
-                    ("gather1_dst_cb", gather1_dst_cb),
-                    ("gather1_dst_num_pages", gather1_dst_num_pages),
-                    # Mcast sender
-                    ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
-                    ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
-                    ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
-                    ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
-                    ("mcast_num_cores", num_mcast_cores),
-                    ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-                    ("mcast_data_size_bytes", mcast_data_size_bytes),
-                    ("mcast_src_cb", gather1_dst_cb),
-                    ("mcast_src_num_pages", mcast_src_num_pages),
-                    ("mcast_dst_cb", matmul2_in0_cb),
-                    ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
+                    # Matmul4/2 (no-op)
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul5_out", matmul5_out_cb),
                     # Gather2 receiver
                     ("gather2_noc0_num_senders", gather2_noc0_num_senders),
                     ("gather2_noc1_num_senders", gather2_noc1_num_senders),
@@ -629,8 +609,28 @@ class PostSDPA:
                     ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
                     ("gather2_dst_cb", gather2_dst_cb),
                     ("gather2_dst_num_pages", gather2_dst_num_pages),
-                    # Gather2 completion signal for CCL sender synchronization
-                    ("gather2_completion_semaphore_id", gather2_completion_semaphore_id),
+                    # Mcast3 sender
+                    ("mcast3_dest_noc_start_x", mcast3_dest_noc_start_core.x),
+                    ("mcast3_dest_noc_start_y", mcast3_dest_noc_start_core.y),
+                    ("mcast3_dest_noc_end_x", mcast3_dest_noc_end_core.x),
+                    ("mcast3_dest_noc_end_y", mcast3_dest_noc_end_core.y),
+                    ("mcast3_num_cores", num_mcast3_cores),
+                    ("mcast3_data_sender_semaphore", mcast3_data_sender_semaphore_id),
+                    ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+                    ("mcast3_data_size_bytes", mcast3_data_size_bytes),
+                    ("mcast3_src_cb", gather2_dst_cb),
+                    ("mcast3_src_num_pages", mcast3_src_num_pages),
+                    ("mcast3_dst_cb", matmul5_in0_cb),
+                    ("mcast3_is_part_of_receiver_grid", mcast3_is_part_of_receiver_grid),
+                    # Gather3 receiver
+                    ("gather3_noc0_num_senders", gather3_noc0_num_senders),
+                    ("gather3_noc1_num_senders", gather3_noc1_num_senders),
+                    ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+                    ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
+                    ("gather3_dst_cb", gather3_dst_cb),
+                    ("gather3_dst_num_pages", gather3_dst_num_pages),
+                    # Gather3 completion signal for CCL sender synchronization
+                    ("gather3_completion_semaphore_id", gather3_completion_semaphore_id),
                     ("ccl_sender_noc_x", ccl_sender_noc_core.x),
                     ("ccl_sender_noc_y", ccl_sender_noc_core.y),
                     # CCL sender (BRISC sends via fabric)
@@ -686,21 +686,21 @@ class PostSDPA:
                 # TRISC compile-time args
                 # ========================================================================
                 trisc_named_compile_time_args = [
-                    # Matmul1
-                    ("matmul1_in0", matmul1_in0_cb),
-                    ("matmul1_in1", matmul1_in1_cb),
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul1_k_num_tiles", matmul1_k_num_tiles),
-                    ("matmul1_out_w_per_core", matmul1_out_w_per_core),
-                    # Matmul2
-                    ("matmul2_in0", matmul2_in0_cb),
-                    ("matmul2_in1", matmul2_in1_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    ("matmul2_k_num_tiles", matmul2_k_num_tiles),
-                    ("matmul2_out_w_per_core", matmul2_out_w_per_core),
+                    # Matmul4
+                    ("matmul4_in0", matmul4_in0_cb),
+                    ("matmul4_in1", matmul4_in1_cb),
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul4_k_num_tiles", matmul4_k_num_tiles),
+                    ("matmul4_out_w_per_core", matmul4_out_w_per_core),
+                    # Matmul5
+                    ("matmul5_in0", matmul5_in0_cb),
+                    ("matmul5_in1", matmul5_in1_cb),
+                    ("matmul5_out", matmul5_out_cb),
+                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
+                    ("matmul5_out_w_per_core", matmul5_out_w_per_core),
                     # CCL receiver compute (reduction)
                     ("ccl_receiver_cb_in0", ccl_remote_data_cb),
-                    ("ccl_receiver_cb_in1", gather2_dst_cb),  # Local data
+                    ("ccl_receiver_cb_in1", gather3_dst_cb),  # Local data
                     ("ccl_receiver_cb_out0", ccl_output_cb),
                     ("ccl_receiver_cb_residual", ccl_residual_cb),
                     ("ccl_receiver_cb_temp", ccl_temp_cb),
@@ -738,121 +738,121 @@ class PostSDPA:
                 # ========================================================================
                 running_address_offset = 0
 
-                # CB 0: Matmul1 input (from sharded tensor, kv_b2 grid)
-                matmul1_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in0_cb, input_tensor_device)
+                # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
+                matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul4_in0_cb, input_tensor_device)
 
-                # CB 1: Matmul1 weights (from kv_b2 overlapped tensor)
-                matmul1_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-                    matmul1_in1_cb, weights1_tensor, weights1_fused_tensor_device
+                # CB 1: Matmul4 weights (from kv_b2 overlapped tensor)
+                matmul4_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul4_in1_cb, weights1_tensor, weights1_fused_tensor_device
                 )
 
-                # CB 2: Matmul1 output (4 tiles of 1x32 per core, kv_b2 grid)
+                # CB 2: Matmul4 output (4 tiles of 1x32 per core, kv_b2 grid)
                 # When kv_cache buffer is available, overlap into it. Otherwise standalone.
-                matmul1_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-                matmul1_out_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul1_out_cb,
+                matmul4_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+                matmul4_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul4_out_cb,
                     data_format=data_format,
                     page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
+                    tile=matmul4_out_tile_descriptor,
                 )
                 if sdpa_kv_cache_buffer_device is not None:
-                    matmul1_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul1_out_cb,
+                    matmul4_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul4_out_cb,
                         sdpa_kv_cache_buffer_device,
                         address_offset=running_address_offset,
-                        total_size=matmul1_out_w_per_core * tile_1x32_size,
+                        total_size=matmul4_out_w_per_core * tile_1x32_size,
                     )
-                    matmul1_out_cb_descriptor.format_descriptors = [matmul1_out_cb_format]
-                    running_address_offset += matmul1_out_cb_descriptor.total_size
+                    matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
+                    running_address_offset += matmul4_out_cb_descriptor.total_size
                 else:
-                    matmul1_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=matmul1_out_w_per_core * tile_1x32_size,
-                        core_ranges=matmul1_core_grid,
-                        format_descriptors=[matmul1_out_cb_format],
+                    matmul4_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul4_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul4_core_grid,
+                        format_descriptors=[matmul4_out_cb_format],
                     )
 
-                # CB 3: Gather1 output = Mcast source (from sharded tensor, gather core)
-                gather1_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather1_dst_cb, gather1_output_tensor
-                )
-
-                # CB 4: Mcast destination = Matmul2 input (256 tiles of 1x32 per core)
-                matmul2_in0_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul2_in0_cb,
-                    data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
-                )
-                matmul2_in0_cb_grid = mcast_core_grid.merge(gather_core_grid)
-                if sdpa_kv_cache_buffer_device is not None:
-                    matmul2_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul2_in0_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,
-                        total_size=mcast_dst_num_pages * tile_1x32_size,
-                    )
-                    matmul2_in0_cb_descriptor.format_descriptors = [matmul2_in0_cb_format]
-                    running_address_offset += matmul2_in0_cb_descriptor.total_size
-                else:
-                    matmul2_in0_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=mcast_dst_num_pages * tile_1x32_size,
-                        core_ranges=matmul2_in0_cb_grid,
-                        format_descriptors=[matmul2_in0_cb_format],
-                    )
-
-                # CB 5: Matmul2 weights (from o_proj overlapped tensor)
-                matmul2_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-                    matmul2_in1_cb, weights2_tensor, weights2_fused_tensor_device
-                )
-
-                # CB 6: Matmul2 output (2 tiles of 1x32 per core, 112 active matmul2 cores)
-                matmul2_out_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul2_out_cb,
-                    data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
-                )
-                if sdpa_kv_cache_buffer_device is not None:
-                    matmul2_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul2_out_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,
-                        total_size=matmul2_out_w_per_core * tile_1x32_size,
-                    )
-                    matmul2_out_cb_descriptor.format_descriptors = [matmul2_out_cb_format]
-                    running_address_offset += matmul2_out_cb_descriptor.total_size
-                else:
-                    matmul2_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=matmul2_out_w_per_core * tile_1x32_size,
-                        core_ranges=matmul2_active_core_grid,
-                        format_descriptors=[matmul2_out_cb_format],
-                    )
-
-                # CB 7: Gather2 output = CCL local data (backed by tensor on gather core)
-                # CCL sender reads from this tensor via NOC, not from local CB
+                # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
                 gather2_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather2_dst_cb, gather2_output_tensor_device
+                    gather2_dst_cb, gather2_output_tensor
+                )
+
+                # CB 4: Mcast3 destination = Matmul5 input (256 tiles of 1x32 per core)
+                matmul5_in0_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul5_in0_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_out_tile_descriptor,
+                )
+                matmul5_in0_cb_grid = mcast3_core_grid.merge(gather_core_grid)
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul5_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul5_in0_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=mcast3_dst_num_pages * tile_1x32_size,
+                    )
+                    matmul5_in0_cb_descriptor.format_descriptors = [matmul5_in0_cb_format]
+                    running_address_offset += matmul5_in0_cb_descriptor.total_size
+                else:
+                    matmul5_in0_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=mcast3_dst_num_pages * tile_1x32_size,
+                        core_ranges=matmul5_in0_cb_grid,
+                        format_descriptors=[matmul5_in0_cb_format],
+                    )
+
+                # CB 5: Matmul5 weights (from o_proj overlapped tensor)
+                matmul5_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul5_in1_cb, weights2_tensor, weights2_fused_tensor_device
+                )
+
+                # CB 6: Matmul5 output (2 tiles of 1x32 per core, 112 active matmul5 cores)
+                matmul5_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul5_out_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_out_tile_descriptor,
+                )
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul5_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul5_out_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=matmul5_out_w_per_core * tile_1x32_size,
+                    )
+                    matmul5_out_cb_descriptor.format_descriptors = [matmul5_out_cb_format]
+                    running_address_offset += matmul5_out_cb_descriptor.total_size
+                else:
+                    matmul5_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul5_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul5_active_core_grid,
+                        format_descriptors=[matmul5_out_cb_format],
+                    )
+
+                # CB 7: Gather3 output = CCL local data (backed by tensor on gather core)
+                # CCL sender reads from this tensor via NOC, not from local CB
+                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather3_dst_cb, gather3_output_tensor_device
                 )
 
                 cb_list = [
-                    matmul1_in0_cb_descriptor,
-                    matmul1_in1_cb_descriptor,
-                    matmul1_out_cb_descriptor,
-                    gather1_dst_cb_descriptor,
-                    matmul2_in0_cb_descriptor,
-                    matmul2_in1_cb_descriptor,
-                    matmul2_out_cb_descriptor,
+                    matmul4_in0_cb_descriptor,
+                    matmul4_in1_cb_descriptor,
+                    matmul4_out_cb_descriptor,
                     gather2_dst_cb_descriptor,
+                    matmul5_in0_cb_descriptor,
+                    matmul5_in1_cb_descriptor,
+                    matmul5_out_cb_descriptor,
+                    gather3_dst_cb_descriptor,
                 ]
 
                 # CCL CBs (8-13): only when CCL is enabled
                 if ccl_enabled:
-                    # CB 8: CCL sender input (reads from gather2 output via NOC)
+                    # CB 8: CCL sender input (reads from gather3 output via NOC)
                     ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=ccl_sender_in_cb,
                         data_format=data_format,
                         page_size=tile_1x32_size,
-                        tile=matmul1_out_tile_descriptor,
+                        tile=matmul4_out_tile_descriptor,
                     )
                     if sdpa_kv_cache_buffer_device is not None:
                         ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -891,7 +891,7 @@ class PostSDPA:
                                 buffer_index=ccl_residual_cb,
                                 data_format=data_format,
                                 page_size=tile_1x32_size,
-                                tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
+                                tile=matmul4_out_tile_descriptor,  # 1x32 tiles to match gather3
                             )
                         ]
                         cb_list.append(ccl_residual_cb_descriptor)
@@ -901,7 +901,7 @@ class PostSDPA:
                             buffer_index=ccl_temp_cb,
                             data_format=data_format,
                             page_size=tile_1x32_size,
-                            tile=matmul1_out_tile_descriptor,
+                            tile=matmul4_out_tile_descriptor,
                         )
                         if sdpa_kv_cache_buffer_device is not None:
                             ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1085,26 +1085,6 @@ class PostSDPA:
                 # ========================================================================
                 # Semaphore descriptors
                 # ========================================================================
-                gather1_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather1_noc0_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                gather1_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather1_noc1_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_sender_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
                 gather2_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                     id=gather2_noc0_receiver_semaphore_id,
                     core_ranges=full_grid,
@@ -1115,23 +1095,43 @@ class PostSDPA:
                     core_ranges=full_grid,
                     initial_value=0,
                 )
+                mcast3_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=mcast3_data_sender_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                mcast3_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=mcast3_data_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                gather3_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=gather3_noc0_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                gather3_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=gather3_noc1_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
                 semaphore_list = [
-                    gather1_noc0_semaphore_descriptor,
-                    gather1_noc1_semaphore_descriptor,
-                    mcast_sender_semaphore_descriptor,
-                    mcast_receiver_semaphore_descriptor,
                     gather2_noc0_semaphore_descriptor,
                     gather2_noc1_semaphore_descriptor,
+                    mcast3_sender_semaphore_descriptor,
+                    mcast3_receiver_semaphore_descriptor,
+                    gather3_noc0_semaphore_descriptor,
+                    gather3_noc1_semaphore_descriptor,
                 ]
                 if ccl_enabled:
-                    gather2_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                        id=gather2_completion_semaphore_id,
+                    gather3_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                        id=gather3_completion_semaphore_id,
                         core_ranges=full_grid,
                         initial_value=0,
                     )
-                    semaphore_list.append(gather2_completion_semaphore_descriptor)
+                    semaphore_list.append(gather3_completion_semaphore_descriptor)
 
-                # SDPA scatter arrival semaphore (for matmul1 cores to wait for scatter data)
+                # SDPA scatter arrival semaphore (for matmul4 cores to wait for scatter data)
                 if sdpa_enabled:
                     scatter_arrival_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                         id=scatter_arrival_semaphore_id,
@@ -1181,8 +1181,8 @@ class PostSDPA:
 
                 unified_compile_time_core_descriptors = [
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_matmul1_core",
-                        core_range=matmul1_core_grid,
+                        named_compile_time_arg="is_matmul4_core",
+                        core_range=matmul4_core_grid,
                         value=1,
                         other_value=0,
                     ),
@@ -1193,14 +1193,14 @@ class PostSDPA:
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_matmul2_core",
-                        core_range=matmul2_active_core_grid,
+                        named_compile_time_arg="is_matmul5_core",
+                        core_range=matmul5_active_core_grid,
                         value=1,
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_mcast_receiver_core",
-                        core_range=mcast_core_grid,
+                        named_compile_time_arg="is_mcast3_receiver_core",
+                        core_range=mcast3_core_grid,
                         value=1,
                         other_value=0,
                     ),
@@ -1240,19 +1240,19 @@ class PostSDPA:
                 # ========================================================================
                 # Per-core compile-time descriptors
                 # ========================================================================
-                # gather1_sender_idx: each matmul1 core needs a unique index for
+                # gather2_sender_idx: each matmul4 core needs a unique index for
                 # non-rectangular kv_b2 grid offset calculation (UsePerCoreSenderIdx=true)
-                # gather2_sender_idx: each matmul2 core needs a unique index for
+                # gather3_sender_idx: each matmul5 core needs a unique index for
                 # non-rectangular o_proj grid offset calculation (UsePerCoreSenderIdx=true)
                 per_core_compile_time_descriptors = [
                     PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg="gather1_sender_idx",
-                        core_values=gather1_sender_idx_per_core,
+                        named_compile_time_arg="gather2_sender_idx",
+                        core_values=gather2_sender_idx_per_core,
                         other_value=0,
                     ),
                     PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg="gather2_sender_idx",
-                        core_values=gather2_sender_idx_per_core,
+                        named_compile_time_arg="gather3_sender_idx",
+                        core_values=gather3_sender_idx_per_core,
                         other_value=0,
                     ),
                 ]
@@ -1263,7 +1263,7 @@ class PostSDPA:
                 ccl_ctx = None
                 if ccl_enabled:
                     ccl_sender_ncrisc_common_rt_args = [
-                        gather2_receiver_data_addr,
+                        gather3_receiver_data_addr,
                     ]
                     ccl_sender_brisc_common_rt_args = [
                         intermediate_tensor_device.buffer_address(),
@@ -1334,7 +1334,7 @@ class PostSDPA:
                     sdpa_worker_brisc_rt_args = ttnn.RuntimeArgs()
                     sdpa_worker_trisc_rt_args = ttnn.RuntimeArgs() if sdpa_position_enabled else None
 
-                    # Get matmul1 input buffer address for scatter destination
+                    # Get matmul4 input buffer address for scatter destination
                     scatter_dest_l1_addr = input_tensor_device.buffer_address()
 
                     # Type A/B worker split (like original sdpa_reduce_to_all op)
@@ -1373,14 +1373,14 @@ class PostSDPA:
                         sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y] = ncrisc_base_args
 
                         # BRISC runtime args: fabric destinations, scatter destinations
-                        # Determine which matmul1 cores this worker scatters to (8 rows per worker)
+                        # Determine which matmul4 cores this worker scatters to (8 rows per worker)
                         scatter_dest_noc_coords = []
                         for scatter_row in range(sdpa_scatter_num_rows):
-                            matmul1_core_idx = worker_idx * sdpa_scatter_num_rows + scatter_row
-                            matmul1_core_logical = matmul1_cores[matmul1_core_idx]
+                            matmul4_core_idx = worker_idx * sdpa_scatter_num_rows + scatter_row
+                            matmul4_core_logical = matmul4_cores[matmul4_core_idx]
                             # Convert to NOC coordinates
-                            matmul1_core_noc = device.worker_core_from_logical_core(matmul1_core_logical)
-                            scatter_dest_noc_coords.append((matmul1_core_noc.x, matmul1_core_noc.y))
+                            matmul4_core_noc = device.worker_core_from_logical_core(matmul4_core_logical)
+                            scatter_dest_noc_coords.append((matmul4_core_noc.x, matmul4_core_noc.y))
 
                         # Get forwarder core for this worker (link index)
                         link_idx = worker_idx // 4  # First 4 workers use forwarder 0, next 4 use forwarder 1
@@ -1553,8 +1553,8 @@ class PostSDPA:
         input_tensor_mesh,
         weights1_tensor,
         weights2_tensor,
-        gather1_output_tensor,
         gather2_output_tensor,
+        gather3_output_tensor,
         intermediate_tensor=None,
         output_tensor=None,
         semaphores=None,
@@ -1580,7 +1580,7 @@ class PostSDPA:
 
         Returns:
             When ccl_enabled=True: output_tensor mesh with all-reduced result
-            When ccl_enabled=False: gather2_output_tensor mesh with per-device gather2 result
+            When ccl_enabled=False: gather3_output_tensor mesh with per-device gather3 result
         """
         sdpa_enabled = sdpa_input_l_mesh is not None
         sdpa_position_enabled = (
@@ -1591,8 +1591,8 @@ class PostSDPA:
             input_tensor_mesh,
             weights1_tensor,
             weights2_tensor,
-            gather1_output_tensor,
             gather2_output_tensor,
+            gather3_output_tensor,
             intermediate_tensor,
             output_tensor,
             semaphores,
@@ -1773,8 +1773,8 @@ class PostSDPA:
             input_tensor_mesh,
             weights1_tensor.fused_tensor,
             weights2_tensor.fused_tensor,
-            gather1_output_tensor,
             gather2_output_tensor,
+            gather3_output_tensor,
         ]
         if ccl_enabled:
             io_tensors.append(intermediate_tensor)
@@ -1799,4 +1799,4 @@ class PostSDPA:
 
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
-        return output_tensor if ccl_enabled else gather2_output_tensor
+        return output_tensor if ccl_enabled else gather3_output_tensor
