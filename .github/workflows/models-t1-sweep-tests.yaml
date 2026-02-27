@@ -1,6 +1,7 @@
 name: "[Tier 1] Models Sweep Tests"
 
 on:
+  push:
   workflow_dispatch:
     inputs:
       model:
