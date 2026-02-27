@@ -69,7 +69,7 @@ void kernel_main() {
         uint32_t token_casted = static_cast<uint32_t>(u.f);
         src_noc_addr = get_noc_addr(token_casted, weights);
 #else
-        src_noc_addr = weights.get_noc_addr(token);  // get_noc_addr(token, weights);
+        src_noc_addr = weights.get_noc_addr(token);
 #endif
 #endif
         noc_async_read(src_noc_addr, weight_l1_addr, width_size);
