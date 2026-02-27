@@ -286,7 +286,6 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 }
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
-    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
@@ -297,25 +296,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         auto chip_entry = chips_builder[chip_idx++];
         chip_entry.setChipId(static_cast<uint64_t>(device_id));
 
-        const auto& soc_desc = cluster.get_soc_desc(device_id);
-        std::vector<std::pair<uint32_t, uint32_t>> tensix_xy;
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
-        std::vector<std::pair<uint32_t, uint32_t>> eth_xy;
-
-        for (const tt::umd::CoreCoord& logical_core :
-             soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
-            tensix_xy.emplace_back(logical_core.x, logical_core.y);
-        }
 
         for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
-            eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
         for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
-            eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
         auto blocks = chip_entry.initBlocks();
@@ -326,10 +315,8 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
                 list[i].setY(xy[i].second);
             }
         };
-        set_coords([&blocks](size_t n) { return blocks.initTensix(n); }, tensix_xy);
         set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
         set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
-        set_coords([&blocks](size_t n) { return blocks.initEth(n); }, eth_xy);
     }
 }
 

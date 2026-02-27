@@ -143,10 +143,8 @@ struct LogicalCoord {
 
 # Per-chip: block type -> list of logical coordinates
 struct BlocksByTypePerChip {
-    tensix @0 :List(LogicalCoord);
-    activeEth @1 :List(LogicalCoord);
-    idleEth @2 :List(LogicalCoord);
-    eth @3 :List(LogicalCoord);
+    activeEth @0 :List(LogicalCoord);
+    idleEth @1 :List(LogicalCoord);
 }
 
 # One entry per chip: chipId -> blocks by type

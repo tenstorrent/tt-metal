@@ -37,7 +37,7 @@ script_config = ScriptConfig(
 # RISC cores to check for each block type
 BLOCK_RISC_CORES = {
     "tensix": ["brisc", "trisc0", "trisc1", "trisc2"],
-    "idleEth": ["erisc", "erisc0", "erisc1"],
+    "idle_eth": ["erisc", "erisc0", "erisc1"],
 }
 
 
@@ -123,7 +123,7 @@ def collect_debug_bus_signals(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
 
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)

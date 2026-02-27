@@ -365,7 +365,7 @@ def run(args, context: Context):
             return None
         return read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
         filtered_read_wait_globals,
         block_filter=BLOCK_TYPES_TO_CHECK,

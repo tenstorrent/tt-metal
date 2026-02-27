@@ -57,7 +57,7 @@ script_config = ScriptConfig(
     disabled=os.environ.get("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS") != "1",
 )
 
-BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
 DEFAULT_MAX_LOCATIONS = 10
 
 

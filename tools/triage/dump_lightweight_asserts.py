@@ -206,7 +206,7 @@ def dump_lightweight_asserts(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
 
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)

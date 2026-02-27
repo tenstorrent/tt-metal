@@ -13,7 +13,8 @@ Description:
     This mapping is necessary when TT_METAL_VISIBLE_DEVICES is used. When TT_METAL_VISIBLE_DEVICES
     restricts devices, Inspector RPC uses remapped metal device IDs (starting from 0), while
     tt-exalens uses the original device IDs from the full device set. This causes a
-    mismatch between Metal device IDs and Exalens device IDs.
+    mismatch between Metal device IDs and Exalens device IDs. This also can happen if workflow breaks
+    few devices and then UMD does not return theirs device IDs upon tt-exalens start-up.
 
 Owner:
     adjordjevic-TT
@@ -50,7 +51,8 @@ class MetalDeviceIdMapping:
             )
             self._metal_device_id_to_unique_id[metal_device_id] = unique_id
             self._unique_id_to_metal_device_id[unique_id] = metal_device_id
-            self._metal_device_id_to_device_id[metal_device_id] = device_id
+            if device_id is not None:
+                self._metal_device_id_to_device_id[metal_device_id] = device_id
 
     def get_unique_id(self, metal_device_id: int) -> int:
         log_check(
@@ -71,21 +73,12 @@ class MetalDeviceIdMapping:
     def has_unique_id(self, unique_id: int) -> bool:
         return unique_id in self._unique_id_to_metal_device_id
 
-    def get_device_id(self, metal_device_id: int) -> int:
-        log_check(
-            metal_device_id in self._metal_device_id_to_device_id,
-            f"Inspector doesn't know about metal_device_id: {metal_device_id}",
-        )
-        return self._metal_device_id_to_device_id[metal_device_id]
+    def get_device_id(self, metal_device_id: int) -> int | None:
+        return self._metal_device_id_to_device_id.get(metal_device_id, None)
 
     def mismatch_exists(self) -> bool:
-        return (
-            True
-            if any(
-                device_id != metal_device_id
-                for metal_device_id, device_id in self._metal_device_id_to_device_id.items()
-            )
-            else False
+        return any(
+            device_id != metal_device_id for metal_device_id, device_id in self._metal_device_id_to_device_id.items()
         )
 
 

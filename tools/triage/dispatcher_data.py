@@ -270,9 +270,9 @@ class DispatcherData:
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
-            case "idleEth":
+            case "idle_eth":
                 fw_elf = self._idle_erisc_elf
-            case "activeEth":
+            case "active_eth":
                 fw_elf = self._active_erisc_elf
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
@@ -286,10 +286,10 @@ class DispatcherData:
             case "tensix":
                 programmable_core_type = self._ProgrammableCoreTypes_TENSIX
                 enum_values = self._enum_values_tenisx
-            case "idleEth":
+            case "idle_eth":
                 programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
                 enum_values = self._enum_values_eth
-            case "activeEth":
+            case "active_eth":
                 programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
                 enum_values = self._enum_values_eth
             case _:

@@ -67,9 +67,9 @@ def get_expected_magic_for_location(
     match block_type:
         case "tensix":
             return magic_values.worker, "WORKER"
-        case "idleEth":
+        case "idle_eth":
             return magic_values.idle_eth, "IDLE_ETH"
-        case "activeEth":
+        case "active_eth":
             return magic_values.active_eth, "ACTIVE_ETH"
         case _:
             return magic_values.worker, "WORKER"
@@ -176,7 +176,7 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idleEth", "activeEth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
     # Use brisc for tensix, erisc/erisc0 for eth
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0"]
