@@ -143,7 +143,7 @@ public:
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
-    // If the tensor resides on a device, it will be brough back to host.
+    // If the tensor resides on a device, it will be brought back to host.
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
