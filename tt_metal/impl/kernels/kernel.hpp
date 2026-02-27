@@ -184,6 +184,8 @@ public:
     void add_defines(const std::map<std::string, std::string>& defines);
 
     virtual uint8_t expected_num_binaries() const = 0;
+    // Returns the HAL processor indices that use the given binary (for L1 offset / set_iram_text_size).
+    virtual std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
 
@@ -268,6 +270,7 @@ public:
     ~DataMovementKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
@@ -306,6 +309,7 @@ public:
     ~EthernetKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
@@ -348,6 +352,7 @@ public:
     ~ComputeKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
@@ -400,7 +405,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_processors) :
+        const std::set<DataMovementProcessor>& dm_processors_,
+        bool is_legacy_kernel) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -419,11 +425,13 @@ public:
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
+        this->is_legacy_kernel_ = is_legacy_kernel;
     }
 
     ~QuasarDataMovementKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
@@ -447,6 +455,8 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
+
+    bool is_legacy_kernel_;
 };
 
 class QuasarComputeKernel : public Kernel {
