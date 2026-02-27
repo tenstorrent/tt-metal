@@ -412,6 +412,24 @@ void py_module_types(nb::module_& mod) {
                 The tensor must be sharded (have a shard specification), otherwise this will raise an error.
         )pbdoc");
 
+    // Helper function for getting the L1 byte address of a CB descriptor
+    mod.def(
+        "get_cb_address",
+        &tt::tt_metal::get_cb_address,
+        nb::arg("descriptor"),
+        R"pbdoc(
+            Get the L1 byte address of a CB descriptor.
+
+            Returns buffer base address + address_offset when a buffer is present,
+            or just address_offset when no buffer is set (manually placed CB).
+
+            Args:
+                descriptor: A CBDescriptor to get the address from
+
+            Returns:
+                The L1 byte address of the circular buffer
+        )pbdoc");
+
     // Bind KernelDescriptor related types
     nb::class_<tt::tt_metal::ReaderConfigDescriptor>(mod, "ReaderConfigDescriptor", R"pbdoc(
         Configuration descriptor for reader components in a kernel.

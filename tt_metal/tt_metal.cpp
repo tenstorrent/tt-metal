@@ -91,28 +91,27 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
-                                              bool& local_noc0_usage,
-                                              bool& local_noc1_usage) {
-        int noc_value;
-        switch (programmable_core) {
-            case HalProgrammableCoreType::TENSIX:
-                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                break;
-            case HalProgrammableCoreType::ACTIVE_ETH:
-            case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                break;
-            default:
-                TT_THROW(
-                    "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    enchantum::to_string(programmable_core));
-        }
-        local_noc0_usage = noc_value == 0;
-        local_noc1_usage = noc_value == 1;
-        data_movement_config_status.noc0_in_use = local_noc0_usage;
-        data_movement_config_status.noc1_in_use = local_noc1_usage;
-    };
+    auto set_global_and_local_noc_usage =
+        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
+            int noc_value;
+            switch (programmable_core) {
+                case HalProgrammableCoreType::TENSIX:
+                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                    break;
+                case HalProgrammableCoreType::ACTIVE_ETH:
+                case HalProgrammableCoreType::IDLE_ETH:
+                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                    break;
+                default:
+                    TT_THROW(
+                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                        enchantum::to_string(programmable_core));
+            }
+            local_noc0_usage = noc_value == 0;
+            local_noc1_usage = noc_value == 1;
+            data_movement_config_status.noc0_in_use = local_noc0_usage;
+            data_movement_config_status.noc1_in_use = local_noc1_usage;
+        };
 
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
@@ -771,7 +770,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+                auto runtime_id = program.get_runtime_id();
+                kg->launch_msg.view().kernel_config().host_assigned_id() =
+                    runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -820,6 +821,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto device_id = device->id();
 
     program.impl().allocate_circular_buffers(device);
+    program.impl().validate_circular_buffer_core_ranges(device);
     program.impl().validate_circular_buffer_region(device);
     program.impl().allocate_dataflow_buffers(device);
     program.impl().validate_dataflow_buffer_region(device);
@@ -1141,6 +1143,12 @@ KernelHandle CreateEthernetKernel(
         kernel->add_defines(fabric_defines);
     }
 
+    // Disable watcher on ethernet cores if requested
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.watcher_eth_disabled()) {
+        kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
+    }
+
     TT_FATAL(
         ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
@@ -1395,6 +1403,17 @@ GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
+
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
+}
+}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
