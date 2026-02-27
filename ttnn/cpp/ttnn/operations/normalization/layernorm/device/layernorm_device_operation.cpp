@@ -32,7 +32,25 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& beta = tensor_args.bias;
     const auto& stats = tensor_args.stats;
 
-    TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
+    TT_FATAL(
+        a.layout() == Layout::TILE || (operation_attributes.allow_row_major_input && !a.is_sharded()),
+        "Input tensor must have TILE layout (ROW_MAJOR is only supported via dit_rms_norm_unary_fused "
+        "with non-sharded tensors), got: {}",
+        a.layout());
+    TT_FATAL(
+        !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
+    if (a.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            a.logical_shape()[-1] % TILE_WIDTH == 0,
+            "ROW_MAJOR input requires W ({}) to be a multiple of TILE_WIDTH ({})",
+            a.logical_shape()[-1],
+            TILE_WIDTH);
+        TT_FATAL(
+            a.padded_shape()[-2] % TILE_HEIGHT == 0,
+            "ROW_MAJOR input requires H ({}) to be a multiple of TILE_HEIGHT ({})",
+            a.padded_shape()[-2],
+            TILE_HEIGHT);
+    }
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
@@ -397,10 +415,14 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_shape,
                         output_padded_shape));
             } else {
+                const auto output_layout =
+                    (operation_attributes.allow_row_major_input && input_tensor.layout() == Layout::ROW_MAJOR)
+                        ? Layout::ROW_MAJOR
+                        : Layout::TILE;
                 return TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
+                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
@@ -437,7 +459,8 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
     const std::optional<const Tensor>& recip_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    bool allow_row_major_input) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -447,6 +470,7 @@ Tensor layer_norm(
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
         .fused_activation = fused_activation,
+        .allow_row_major_input = allow_row_major_input,
     };
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,

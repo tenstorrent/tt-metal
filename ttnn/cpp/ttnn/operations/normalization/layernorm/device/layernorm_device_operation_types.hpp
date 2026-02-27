@@ -23,6 +23,9 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
+    // Only set by dit_rms_norm_unary_fused. All other callers (ttnn::rms_norm, ttnn::layer_norm)
+    // leave this false, so they will still TT_FATAL if given a ROW_MAJOR input tensor.
+    bool allow_row_major_input = false;
 };
 
 struct LayerNormInputs {

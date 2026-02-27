@@ -16,6 +16,12 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef TILIZE_IN
+#include "api/compute/tilize.h"
+#endif
+#ifdef UNTILIZE_OUT
+#include "api/compute/pack_untilize.h"
+#endif
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -62,16 +68,36 @@ void kernel_main() {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
+#ifdef TILIZE_IN
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;
+#endif
+
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
+#ifndef TILIZE_IN
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
+#ifdef TILIZE_IN
+        // Pass 1: Tilize ROW_MAJOR input into cb_in (CB 0) for variance loop.
+        // The large_tensor kernel pops cb_in per block, so data must be provided twice per ncht.
+        tilize_init(cb_in_rm, blk, cb_in);
+        for (auto block : generic::blocks(Wt, blk)) {
+            cb_wait_front(cb_in_rm, block.full_block_size());
+            cb_reserve_back(cb_in, block.full_block_size());
+            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
+            cb_push_back(cb_in, block.full_block_size());
+            cb_pop_front(cb_in_rm, block.full_block_size());
+        }
+        tilize_uninit(cb_in_rm, cb_in);
+        binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #ifndef RMSNORM
         // Start of
         //  E[x]
@@ -228,6 +254,20 @@ void kernel_main() {
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+#ifdef TILIZE_IN
+        // Pass 2: Tilize ROW_MAJOR input again for the normalization loop.
+        // Reader provides the same data a second time via cb_in_rm.
+        tilize_init(cb_in_rm, blk, cb_in);
+        for (auto block : generic::blocks(Wt, blk)) {
+            cb_wait_front(cb_in_rm, block.full_block_size());
+            cb_reserve_back(cb_in, block.full_block_size());
+            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
+            cb_push_back(cb_in, block.full_block_size());
+            cb_pop_front(cb_in_rm, block.full_block_size());
+        }
+        tilize_uninit(cb_in_rm, cb_in);
+        binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             cb_wait_front(cb_in, block.full_block_size());
@@ -379,5 +419,22 @@ void kernel_main() {
         cb_pop_front(cb_ex, onetile);
 #endif
         cb_pop_front(cb_ex2pe, onetile);
+
+#ifdef UNTILIZE_OUT
+        // All Wt tiles for this ncht are now in cb_out (CB 16).
+        // Pack-untilize them block-by-block into cb_out_rm (CB 28) for the RM writer.
+        // pack_untilize_block<blk, blk> produces true row-major output in cb_out_rm:
+        //   row r starts at offset r * blk * TILE_W * elem_size from the CB base.
+        constexpr auto cb_out_rm = tt::CBIndex::c_28;
+        pack_untilize_init<blk, blk>(cb_out, cb_out_rm);
+        for (auto block : generic::blocks(Wt, blk)) {
+            cb_wait_front(cb_out, block.full_block_size());
+            cb_reserve_back(cb_out_rm, block.full_block_size());
+            pack_untilize_block<blk, blk>(cb_out, 1, cb_out_rm);
+            cb_push_back(cb_out_rm, block.full_block_size());
+            cb_pop_front(cb_out, block.full_block_size());
+        }
+        pack_untilize_uninit(cb_out_rm);
+#endif
     }  // NCHt loop
 }
