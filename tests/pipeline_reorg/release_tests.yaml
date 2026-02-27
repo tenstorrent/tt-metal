@@ -466,6 +466,42 @@
   team: models
   model-name: gpt-oss
 
+- name: t3k_motif_tests
+  cmd: run_t3000_motif_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 15
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  model-name: motif
+
+- name: t3k_qwenimage_tests
+  cmd: run_t3000_qwenimage_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 25
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  model-name: qwenimage
+
+- name: t3k_qwen25_vl_tests
+  cmd: run_t3000_qwen25_vl_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 30
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: qwen25_vl
+
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 10
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  model-name: qwen3_vl
+
 # ============================================================================
 # Galaxy Wormhole tests
 # ============================================================================
@@ -620,6 +656,28 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: Galaxy Motif-Image-6B-Preview demo tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
+    pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
+  model-name: motif
+  skus:
+    wh_galaxy_release:
+      timeout: 15
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
+- name: Galaxy QwenImage demo tests
+  cmd: |
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
+  model-name: qwenimage
+  skus:
+    wh_galaxy_release:
+      timeout: 20
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
 # ============================================================================
 # Blackhole tests
 # ============================================================================
@@ -645,6 +703,16 @@
   team: models
   model-name: whisper
 
+- name: unet-shallow P150 performance
+  cmd: |
+    pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
+  skus:
+    bh_p150_perf:
+      timeout: 30
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: models
+  model-name: unet-shallow
+
 - name: llama3.1-8b P150 performance
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
@@ -660,17 +728,6 @@
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
     bh_p150_perf:
-      timeout: 70
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-# P100 Single-card tests
-- name: llama3.1-8b P100 performance batch-32
-  cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
-  skus:
-    bh_p100:
       timeout: 70
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
@@ -737,6 +794,36 @@
   team: models
   model-name: llama3.1-8b
 
+- name: llama3.3-70b LLMBox batch-32 performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.3-70b
+
+- name: llama3.3-70b LLMBox batch-1 TP device perf prefill (layers=2)
+  cmd: |
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: llama3.3-70b
+
+- name: llama3.3-70b LLMBox batch-1 TP device perf decode (layers=10)
+  cmd: |
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: llama3.3-70b
+
 # LoudBox Multi-card tests
 - name: llama3.1-8b LoudBox data-parallel performance
   cmd: |
@@ -747,6 +834,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: llama3.1-8b
+
+- name: llama3.3-70b LoudBox batch-32 performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.3-70b
+
+- name: qwen3-32b LoudBox batch-32 performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768 --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 70
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen3-32b
 
 # P300 Multi-card tests
 - name: llama3.1-8b P300 data-parallel performance
