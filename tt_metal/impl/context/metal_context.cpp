@@ -853,6 +853,9 @@ void MetalContext::teardown_fabric_config() {
     // closed), which can trigger topology mapper failures.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (control_plane_) {
+        // Signal the control plane that teardown is in progress so lookups
+        // against partially-cleared router maps return safe fallbacks instead of throwing.
+        control_plane_->set_teardown_in_progress(true);
         control_plane_->clear_fabric_context();
     }
 }

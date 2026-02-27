@@ -467,13 +467,19 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
         }
     }
+
+    // Signal that global_logical_bindings_ is fully populated and safe to read
+    global_bindings_initialized_.test_and_set(std::memory_order_release);
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
-    // Check cache first for faster lookup
-    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
-    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
-        return cache_it->second;
+    // Check cache first; mutex guards concurrent reads/writes to the unordered_map
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+        if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+            return cache_it->second;
+        }
     }
 
     const auto& cluster = this->cluster_.get();
@@ -482,7 +488,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
         if (unique_id == asic_id) {
             FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-            // Cache the result for future lookups
+            std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
             asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
             return fabric_node_id;
         }
@@ -1297,6 +1303,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
     // inter_mesh_routing_tables_ should be populated for all hosts in BigMesh
+
+    // Validate that the fabric node mapping is complete; throws ControlPlaneInitFailure on
+    // transient failures so MetalContext can retry initialization with exponential backoff.
+    // Skip validation for mock devices - they use synthetic mappings that may be incomplete.
+    if (this->cluster_.get().get_target_device_type() != tt::TargetDevice::Mock) {
+        this->validate_fabric_node_mapping_complete();
+    }
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {
@@ -2367,7 +2380,22 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
 
 std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
 ControlPlane::get_global_logical_bindings() const {
+    std::shared_lock<std::shared_mutex> lock(global_bindings_mutex_);
     return global_logical_bindings_;
+}
+
+std::optional<std::pair<MeshId, MeshHostRankId>> ControlPlane::get_global_logical_binding(
+    tt_metal::distributed::multihost::Rank rank) const {
+    // Fast-path: if bindings have not been initialized yet, return nullopt without locking
+    if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    std::shared_lock<std::shared_mutex> lock(global_bindings_mutex_);
+    auto it = global_logical_bindings_.find(rank);
+    if (it == global_logical_bindings_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 // Helper function to fill connection info with common fields for fabric router configs
@@ -3346,7 +3374,50 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 }
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    if (teardown_in_progress_.load(std::memory_order_acquire)) {
+        log_warning(
+            tt::LogFabric,
+            "get_asic_id_from_fabric_node_id called during teardown for Mesh {} Chip {}. "
+            "Returning 0 as safe fallback.",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        return 0;
+    }
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
+void ControlPlane::log_available_fabric_node_ids() const {
+    log_warning(
+        tt::LogFabric,
+        "Available FabricNodeIds in router port directions map ({} entries):",
+        this->router_port_directions_to_physical_eth_chan_map_.size());
+    for (const auto& [fabric_node_id, _] : this->router_port_directions_to_physical_eth_chan_map_) {
+        log_warning(tt::LogFabric, "  Mesh {} Chip {}", fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    }
+}
+
+void ControlPlane::validate_fabric_node_mapping_complete() const {
+    if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+        throw ControlPlaneInitFailure(
+            "Fabric node to physical chip mapping is empty after initialization. "
+            "This indicates a transient race condition or incomplete mesh graph descriptor.");
+    }
+
+    for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
+            log_warning(
+                tt::LogFabric,
+                "FabricNodeId Mesh {} Chip {} is in the chip mapping but missing from router port directions map.",
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id);
+            log_available_fabric_node_ids();
+            throw ControlPlaneInitFailure(
+                "FabricNodeId Mesh " + std::to_string(*fabric_node_id.mesh_id) + " Chip " +
+                std::to_string(fabric_node_id.chip_id) +
+                " present in chip mapping but absent from router port directions map. "
+                "This may indicate a transient race condition during multi-process initialization.");
+        }
+    }
 }
 
 ControlPlane::~ControlPlane() = default;
