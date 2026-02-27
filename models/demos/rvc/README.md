@@ -35,13 +35,14 @@ Then set the required environment variables:
 ```sh
 export RVC_CONFIGS_DIR="$PWD/models/demos/rvc/data/configs"
 export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
+export RVC_TEST_INPUT="$PWD/models/demos/rvc/data/sample-speech.wav"
 ```
 
 Run inference using the helper script:
 
 ```sh
 mkdir -p ./models/demos/rvc/data/output
-uv run models/demos/rvc/scripts/infer.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output.wav
+uv run --active models/demos/rvc/scripts/infer.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output.wav
 ```
 
 Run inference using the Python API:

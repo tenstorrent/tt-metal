@@ -51,17 +51,14 @@ class Encoder(nn.Module):
             )
             self.norm_layers_2.append(LayerNorm(hidden_channels))
 
-    def forward(self, x, x_mask):
-        attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
-        x = x * x_mask
+    def forward(self, x):
         zippep = zip(self.attn_layers, self.norm_layers_1, self.ffn_layers, self.norm_layers_2, strict=True)
         for attn_layers, norm_layers_1, ffn_layers, norm_layers_2 in zippep:
-            y = attn_layers(x, x, attn_mask)
+            y = attn_layers(x, x)
             x = norm_layers_1(x + y)
 
-            y = ffn_layers(x, x_mask)
+            y = ffn_layers(x)
             x = norm_layers_2(x + y)
-        x = x * x_mask
         return x
 
 
@@ -91,16 +88,12 @@ class MultiHeadAttention(nn.Module):
             self.emb_rel_k = nn.Parameter(torch.randn(n_heads_rel, window_size * 2 + 1, self.k_channels) * rel_stddev)
             self.emb_rel_v = nn.Parameter(torch.randn(n_heads_rel, window_size * 2 + 1, self.k_channels) * rel_stddev)
 
-        nn.init.xavier_uniform_(self.conv_q.weight)
-        nn.init.xavier_uniform_(self.conv_k.weight)
-        nn.init.xavier_uniform_(self.conv_v.weight)
-
-    def forward(self, x: torch.Tensor, c: torch.Tensor, attn_mask: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor, c: torch.Tensor):
         q = self.conv_q(x)
         k = self.conv_k(c)
         v = self.conv_v(c)
 
-        x = self.attention(q, k, v, mask=attn_mask)
+        x = self.attention(q, k, v)
 
         x = self.conv_o(x)
         return x
@@ -110,7 +103,6 @@ class MultiHeadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        mask: torch.Tensor | None = None,
     ):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
         b, d, t_s = key.size()
@@ -126,8 +118,6 @@ class MultiHeadAttention(nn.Module):
             rel_logits = self._matmul_with_relative_keys(query / math.sqrt(self.k_channels), key_relative_embeddings)
             scores_local = self._relative_position_to_absolute_position(rel_logits)
             scores = scores + scores_local
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e4)
         p_attn = F.softmax(scores, dim=-1)  # [b, n_h, t_t, t_s]
         output = torch.matmul(p_attn, value)
         if self.window_size is not None:
@@ -213,17 +203,6 @@ class MultiHeadAttention(nn.Module):
         x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
-    def _attention_bias_proximal(self, length: int):
-        """Bias for self-attention to encourage attention to close positions.
-        Args:
-          length: an integer scalar.
-        Returns:
-          a Tensor with shape [1, 1, length, length]
-        """
-        r = torch.arange(length, dtype=torch.float32)
-        diff = torch.unsqueeze(r, 0) - torch.unsqueeze(r, 1)
-        return torch.unsqueeze(torch.unsqueeze(-torch.log1p(torch.abs(diff)), 0), 0)
-
 
 class FFN(nn.Module):
     def __init__(
@@ -237,27 +216,12 @@ class FFN(nn.Module):
         self.in_channels = in_channels
         self.kernel_size = kernel_size
 
-        self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size)
-        self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size)
+        self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size, padding="same")
+        self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size, padding="same")
 
-    def padding(self, x: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
-        padding = self._same_padding(x * x_mask)
-        return padding
-
-    def forward(self, x: torch.Tensor, x_mask: torch.Tensor):
-        x = self.conv_1(self.padding(x, x_mask))
+    def forward(self, x: torch.Tensor):
+        x = self.conv_1(x)
         x = torch.relu(x)
 
-        x = self.conv_2(self.padding(x, x_mask))
-        return x * x_mask
-
-    def _same_padding(self, x):
-        if self.kernel_size == 1:
-            return x
-        pad_l: int = (self.kernel_size - 1) // 2
-        pad_r: int = self.kernel_size // 2
-        x = F.pad(
-            x,
-            [pad_l, pad_r, 0, 0, 0, 0],
-        )
+        x = self.conv_2(x)
         return x
