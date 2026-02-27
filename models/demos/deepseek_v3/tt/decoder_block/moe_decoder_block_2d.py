@@ -177,6 +177,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
 
+        # Handle summing experts
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
@@ -186,7 +187,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
-                    split_size=combined_out[-1] // tp_size,
+                    split_size=int(combined_out[-1] // tp_size),
                     output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
                 )
                 ttnn.deallocate(combined_out)
