@@ -72,9 +72,10 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.layout() == Layout::TILE, "Bias tensor must be tiled.");
         TT_FATAL(
-            bias_tensor.dtype() == DataType::BFLOAT16 || bias_tensor.dtype() == DataType::FLOAT32,
-            "Bias tensor must be bfloat16 or float32. got {}",
-            bias_tensor.dtype());
+            bias_tensor.dtype() == input_tensor_a.dtype(),
+            "Bias tensor must have the same dtype as input tensor. got {} vs {}",
+            bias_tensor.dtype(),
+            input_tensor_a.dtype());
         TT_FATAL(
             bias_tensor.logical_shape().size() == 2,
             "Bias tensor must have 2 dimensions. got {}",
