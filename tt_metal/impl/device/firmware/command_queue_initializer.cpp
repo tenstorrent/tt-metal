@@ -82,11 +82,7 @@ void CommandQueueInitializer::initialize_host(Device* dev) const {
     // Create system memory writer for this device to have an associated interface to hardware command
     // queue (i.e. hugepage). Need to do this before FW init so we know what dispatch cores to reset.
     if (using_fast_dispatch()) {
-        detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
-    } else {
-        detail::DispatchStateCheck(false);
-        TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 }
 

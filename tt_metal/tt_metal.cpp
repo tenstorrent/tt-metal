@@ -91,28 +91,27 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
-                                              bool& local_noc0_usage,
-                                              bool& local_noc1_usage) {
-        int noc_value;
-        switch (programmable_core) {
-            case HalProgrammableCoreType::TENSIX:
-                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                break;
-            case HalProgrammableCoreType::ACTIVE_ETH:
-            case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                break;
-            default:
-                TT_THROW(
-                    "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    enchantum::to_string(programmable_core));
-        }
-        local_noc0_usage = noc_value == 0;
-        local_noc1_usage = noc_value == 1;
-        data_movement_config_status.noc0_in_use = local_noc0_usage;
-        data_movement_config_status.noc1_in_use = local_noc1_usage;
-    };
+    auto set_global_and_local_noc_usage =
+        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
+            int noc_value;
+            switch (programmable_core) {
+                case HalProgrammableCoreType::TENSIX:
+                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                    break;
+                case HalProgrammableCoreType::ACTIVE_ETH:
+                case HalProgrammableCoreType::IDLE_ETH:
+                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                    break;
+                default:
+                    TT_THROW(
+                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                        enchantum::to_string(programmable_core));
+            }
+            local_noc0_usage = noc_value == 0;
+            local_noc1_usage = noc_value == 1;
+            data_movement_config_status.noc0_in_use = local_noc0_usage;
+            data_movement_config_status.noc1_in_use = local_noc1_usage;
+        };
 
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
@@ -771,7 +770,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+                auto runtime_id = program.get_runtime_id();
+                kg->launch_msg.view().kernel_config().host_assigned_id() =
+                    runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -1142,6 +1143,12 @@ KernelHandle CreateEthernetKernel(
         kernel->add_defines(fabric_defines);
     }
 
+    // Disable watcher on ethernet cores if requested
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.watcher_eth_disabled()) {
+        kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
+    }
+
     TT_FATAL(
         ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
@@ -1397,6 +1404,17 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
+}
+}  // namespace experimental
+
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
@@ -1588,19 +1606,13 @@ void UpdateDynamicCircularBufferAddress(
 
 namespace quasar {
 
-std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
+template <typename ProcessorClassType>
+std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
-    TT_FATAL(
-        core_ranges.num_cores() == 1,
-        "Currently, data movement kernels can only be created on a single cluster in Quasar.");
+    TT_FATAL(core_ranges.num_cores() == 1, "Currently, kernels can only be created on a single cluster in Quasar.");
 
-    TT_FATAL(
-        1 <= num_processors_per_cluster && num_processors_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
-        "Requested number of data movement processors per cluster must be between 1 and {} (inclusive)",
-        QUASAR_NUM_DM_CORES_PER_CLUSTER);
-
-    std::set<DataMovementProcessor> dm_cores(
-        enchantum::values<DataMovementProcessor>.begin(), enchantum::values<DataMovementProcessor>.end());
+    std::set<ProcessorClassType> processors(
+        enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1610,15 +1622,22 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
                 if (kernel_group != nullptr) {
                     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
                         const auto kernel = program.impl().get_kernel(kernel_id);
-                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                            const QuasarDataMovementConfig config =
-                                std::get<QuasarDataMovementConfig>(kernel->config());
-                            const uint32_t num_processors_in_use = config.num_processors_per_cluster;
-                            const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
-                            for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
-                                 i++) {
-                                TT_ASSERT(dm_cores.contains(static_cast<DataMovementProcessor>(i)));
-                                dm_cores.erase(static_cast<DataMovementProcessor>(i));
+                        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                                const QuasarDataMovementConfig config =
+                                    std::get<QuasarDataMovementConfig>(kernel->config());
+                                const uint32_t num_processors_in_use = config.num_threads_per_cluster;
+                                const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
+                                for (uint32_t i = start_processor_type;
+                                     i < start_processor_type + num_processors_in_use;
+                                     i++) {
+                                    TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
+                                    processors.erase(static_cast<ProcessorClassType>(i));
+                                }
+                            }
+                        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+                                TT_THROW("In Quasar, each cluster can only have a single compute kernel.");
                             }
                         }
                     }
@@ -1627,17 +1646,31 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
         }
     }
 
-    while (dm_cores.size() > num_processors_per_cluster) {
-        dm_cores.erase(std::prev(dm_cores.end()));
+    while (processors.size() > num_processors_per_cluster) {
+        processors.erase(std::prev(processors.end()));
     }
 
-    TT_FATAL(
-        dm_cores.size() == num_processors_per_cluster,
-        "Unable to reserve {} data movement processors per cluster as only {} processors per cluster are available.",
-        num_processors_per_cluster,
-        dm_cores.size());
+    if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} data movement processors per cluster as only {} data movement processors per cluster "
+            "are available.",
+            num_processors_per_cluster,
+            processors.size());
+    } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+        TT_FATAL(
+            processors.size() % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
+            "Number of compute processors reserved per cluster must be a multiple of {}.",
+            QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} compute processors per cluster as only {} compute processors per cluster are "
+            "available.",
+            num_processors_per_cluster,
+            processors.size());
+    }
 
-    return dm_cores;
+    return processors;
 }
 
 KernelHandle CreateQuasarDataMovementKernel(
@@ -1645,10 +1678,14 @@ KernelHandle CreateQuasarDataMovementKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
     const QuasarDataMovementConfig& config) {
-    const std::set<DataMovementProcessor> dm_cores =
-        GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
+        "Requested number of data movement cores per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_DM_CORES_PER_CLUSTER);
+    const std::set<DataMovementProcessor> dm_processors =
+        GetProcessorsPerClusterQuasar<DataMovementProcessor>(program, core_ranges, config.num_threads_per_cluster);
     std::shared_ptr<Kernel> kernel =
-        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
+        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1660,6 +1697,31 @@ KernelHandle CreateKernel(
     const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
         program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+}
+
+KernelHandle CreateQuasarComputeKernel(
+    Program& program,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_ranges,
+    const QuasarComputeConfig& config) {
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
+        "Requested number of Tensix engines per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER);
+    const std::set<QuasarComputeProcessor> compute_processors = GetProcessorsPerClusterQuasar<QuasarComputeProcessor>(
+        program, core_ranges, config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarComputeConfig& config) {
+    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return CreateQuasarComputeKernel(program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
 
 }  // namespace quasar
