@@ -331,8 +331,11 @@ def run_unet_inference(
     [
         # 1024x1024 image resolution
         (1024, 1024),
-        # 512x512 image resolution
-        (512, 512),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
     ids=["1024x1024", "512x512"],
 )
