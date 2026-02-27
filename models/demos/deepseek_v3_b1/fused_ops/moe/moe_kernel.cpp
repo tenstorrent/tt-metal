@@ -933,6 +933,12 @@ void kernel_main() {
             rmsnorm(moe.routed.rmsnorm_args);
         }
 
+        // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(moe.routed.mcast_args);
+        }
+
 #ifdef ENABLE_BCAST
         // Pop CB 25 after consumers (residual mcast + RMSNorm) are done,
         // so next iteration's setup_sharded_buffer can push new data
