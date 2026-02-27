@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "context/context_id.hpp"
 #include "mesh_command_queue_base.hpp"
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -231,7 +232,8 @@ public:
         std::shared_ptr<ThreadPool>& reader_thread_pool,
         std::shared_ptr<CQSharedState>& cq_shared_state,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
-        std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context);
+        std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context,
+        ContextId context_id);
 
     ~FDMeshCommandQueue() override;
 

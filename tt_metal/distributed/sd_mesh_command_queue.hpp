@@ -40,7 +40,8 @@ public:
         MeshDevice* mesh_device,
         uint32_t id,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
-        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context,
+        ContextId context_id);
     ~SDMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;

@@ -18,6 +18,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include "impl/context/context_id.hpp"
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
@@ -41,7 +42,8 @@ public:
         bool minimal = false,
         uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0,
-        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        ContextId context_id = SILICON_CONTEXT_ID);
 
     ~Device() override;
 
@@ -157,6 +159,8 @@ public:
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
     bool is_mmio_capable() const override;
+
+    ContextId get_context_id() const override { return context_id_; }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -209,6 +213,7 @@ private:
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     ChipId id_;
+    ContextId context_id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
     bool initialized_ = false;

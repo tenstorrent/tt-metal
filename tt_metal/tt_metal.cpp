@@ -9,6 +9,9 @@
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include "device/device_manager.hpp"
+#include "impl/device/create_devices_internal.hpp"
+#include "experimental/mock_device.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -375,9 +378,13 @@ std::map<ChipId, IDevice*> CreateDevices(
     bool init_profiler,
     [[maybe_unused]] bool ignored,
     bool initialize_fabric_and_dispatch_fw) {
-    ZoneScoped;
-    bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();
-    MetalContext::instance().initialize_device_manager(
+    ContextId context_id = SILICON_CONTEXT_ID;
+    if (experimental::is_mock_mode_registered()) {
+        context_id = MetalContext::create_instance(
+            std::make_shared<MetalliumObjectDescriptor>(experimental::get_mock_cluster_desc().value()));
+    }
+    return CreateDevices(
+        context_id,
         device_ids,
         num_hw_cqs,
         l1_small_size,
@@ -386,21 +393,44 @@ std::map<ChipId, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
+        ignored,
+        initialize_fabric_and_dispatch_fw);
+}
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    const uint8_t num_hw_cqs,
+    const size_t l1_small_size,
+    const size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& l1_bank_remap,
+    const size_t worker_l1_size,
+    bool init_profiler,
+    [[maybe_unused]] bool ignored,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        l1_bank_remap,
+        worker_l1_size,
+        init_profiler,
         initialize_fabric_and_dispatch_fw);
 
-    const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
+    const auto devices = ctx.device_manager()->get_all_active_devices();
     std::map<ChipId, IDevice*> ret_devices;
-    // Only include the mmio device in the active devices set returned to the caller if we are not running
-    // on a Galaxy cluster.
-    // On Galaxy, gateway (mmio devices) cannot run compute workloads.
-
     for (IDevice* dev : devices) {
         if (is_galaxy and dev->is_mmio_capable()) {
             continue;
         }
         ret_devices.insert({dev->id(), dev});
     }
-
     return ret_devices;
 }
 
@@ -1012,12 +1042,19 @@ IDevice* CreateDevice(
     const size_t worker_l1_size) {
     ZoneScoped;
 
+    ContextId context_id = SILICON_CONTEXT_ID;
+    if (experimental::is_mock_mode_registered()) {
+        context_id = MetalContext::create_instance(
+            std::make_shared<MetalliumObjectDescriptor>(experimental::get_mock_cluster_desc().value()));
+    }
+    auto& ctx = MetalContext::instance(context_id);
+
     // MMIO devices do not support dispatch on galaxy cluster
     // Suggest the user to use the CreateDevices API
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (ctx.rtoptions().get_fast_dispatch()) {
         TT_FATAL(
-            !(MetalContext::instance().get_cluster().is_galaxy_cluster() &&
-              MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            !(ctx.get_cluster().is_galaxy_cluster() &&
+              ctx.get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
             "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
             "devices for dispatch.");
     }
@@ -1025,15 +1062,15 @@ IDevice* CreateDevice(
     // This API may not be used to create single remote device or multi chip clusters
     // CreateDevices should be used instead to ensure proper init/teardown
     TT_FATAL(
-        MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        ctx.get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
         "must use "
         "CreateDevices().",
         device_id);
 
-    MetalContext::instance().initialize_device_manager(
+    ctx.initialize_device_manager(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto* dev = MetalContext::instance().device_manager()->get_active_device(device_id);
+    auto* dev = ctx.device_manager()->get_active_device(device_id);
     return dev;
 }
 

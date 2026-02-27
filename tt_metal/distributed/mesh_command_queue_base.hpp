@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "context/context_id.hpp"
 #include "mesh_command_queue.hpp"
 
 #include "tt_metal/common/thread_pool.hpp"
@@ -15,6 +16,8 @@ namespace tt::tt_metal::distributed {
 
 class MeshCommandQueueBase : public MeshCommandQueue {
 protected:
+    ContextId context_id_;
+
     std::shared_ptr<ThreadPool>
         dispatch_thread_pool_;  // Thread pool used to dispatch to the Mesh (used by main thread)
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
@@ -64,8 +67,10 @@ public:
         MeshDevice* mesh_device,
         uint32_t id,
         std::shared_ptr<ThreadPool> dispatch_thread_pool,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        ContextId context_id) :
         MeshCommandQueue(mesh_device, id),
+        context_id_(context_id),
         dispatch_thread_pool_(std::move(dispatch_thread_pool)),
         lock_api_function_(std::move(lock_api_function)) {}
 

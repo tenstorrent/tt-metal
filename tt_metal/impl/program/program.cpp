@@ -1724,23 +1724,34 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
-
-    const auto& hal = MetalContext::instance().hal();
+    ContextId context_id = device->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
+            kernels_getter(index),
+            kernel_groups_getter(index),
+            state.config_base_offset,
+            index,
+            state.rta_offset,
+            context_id);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        state.offset =
-            program_dispatch::finalize_sems(index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
+        state.offset = program_dispatch::finalize_sems(
+            index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size, context_id);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_cbs(
-            index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+            index,
+            kernel_groups_getter(index),
+            state.offset,
+            state.cb_offset,
+            state.cb_size,
+            state.local_cb_size,
+            context_id);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/context/context_id.hpp"
 // needed for private members
 #include "system_memory_cq_interface.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
@@ -21,7 +22,7 @@ namespace tt::tt_metal {
 
 class SystemMemoryManager {
 public:
-    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs);
+    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
 
     uint32_t get_next_event(uint8_t cq_id);
 
@@ -65,6 +66,8 @@ public:
 
     ChipId get_device_id() const;
 
+    ContextId get_context_id() const { return context_id_; }
+
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
     void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
@@ -96,6 +99,7 @@ public:
 
 private:
     ChipId device_id = 0;
+    ContextId context_id_ = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;

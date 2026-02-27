@@ -8,9 +8,11 @@
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
+#include "context/context_id.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
+#include "experimental/mock_device.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
@@ -43,6 +45,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
+#include "impl/device/create_devices_internal.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -138,9 +141,12 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     size_t trace_region_size,
     size_t num_command_queues,
     size_t worker_l1_size,
-    const DispatchCoreConfig& dispatch_core_config) {
+    const DispatchCoreConfig& dispatch_core_config,
+    ContextId context_id) :
+    context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
     opened_local_devices_ = tt_metal::detail::CreateDevices(
+        context_id_,
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -172,14 +178,24 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         // Catch any exceptions during device close - destructors must not throw.
         // This can happen when a device is hung and times out during close.
         try {
-            tt_metal::MetalContext::instance().device_manager()->close_devices(
-                devices_to_close, /*skip_synchronize=*/true);
+            tt_metal::MetalContext::instance(context_id_)
+                .device_manager()
+                ->close_devices(devices_to_close, /*skip_synchronize=*/true);
         } catch (const std::exception& e) {
             log_warning(
                 LogMetal,
                 "Exception during device close in ScopedDevices destructor: {}. "
                 "The device may be in an unrecoverable state and require a reset.",
                 e.what());
+        }
+    }
+    // Clean up context when this device pool closes. We do not do this for the silicon context because it is created
+    // implicitly. The silicon context is torn down automatically atexit or when the user calls destroy_instance()
+    if (context_id_ != SILICON_CONTEXT_ID) {
+        try {
+            tt_metal::MetalContext::destroy_instance(context_id_, /*check_device_count=*/false);
+        } catch (const std::exception& e) {
+            log_warning(LogMetal, "Exception during mock context destroy in ScopedDevices destructor: {}.", e.what());
         }
     }
 }
@@ -229,16 +245,18 @@ void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allo
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
-    std::shared_ptr<MeshDevice> parent_mesh) :
+    std::shared_ptr<MeshDevice> parent_mesh,
+    ContextId context_id) :
     scoped_devices_(std::move(mesh_handle)),
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
+    context_id_(context_id),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
-    const auto& mpi_context = MetalContext::instance().global_distributed_context();
+    const auto& mpi_context = MetalContext::instance(SILICON_CONTEXT_ID).global_distributed_context();
     distributed_context_ =
         mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
 }
@@ -269,12 +287,17 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+    ContextId context_id = SILICON_CONTEXT_ID;
+    if (experimental::is_mock_mode_registered()) {
+        context_id = MetalContext::create_instance(
+            std::make_shared<MetalliumObjectDescriptor>(experimental::get_mock_cluster_desc().value()));
+    }
+    auto& ctx = MetalContext::instance(context_id);
+    const auto& mesh_graph = ctx.get_control_plane().get_mesh_graph();
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
-            auto mapped_devices =
-                MetalContext::instance().get_system_mesh().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto mapped_devices = ctx.get_system_mesh().get_mapped_devices(config.mesh_shape(), config.offset());
             // Validate that none of the fabric node IDs are on switch meshes
             for (const auto& fabric_node_id : mapped_devices.fabric_node_ids) {
                 TT_FATAL(
@@ -285,8 +308,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     *fabric_node_id.mesh_id);
             }
             auto mapped_devices_full_system_device_ids =
-                (*MetalContext::instance().global_distributed_context().size() > 1)
-                    ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
+                (*ctx.global_distributed_context().size() > 1)
+                    ? ctx.get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                     : mapped_devices.device_ids;
             return std::make_tuple(
                 std::make_shared<MeshDeviceImpl::ScopedDevices>(
@@ -296,7 +319,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     trace_region_size,
                     num_command_queues,
                     worker_l1_size,
-                    dispatch_core_config),
+                    dispatch_core_config,
+                    context_id),
                 mapped_devices.fabric_node_ids,
                 mapped_devices.mesh_shape);
         }  // Initialize fabric node ids manually.
@@ -305,8 +329,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
         const auto& supplied_ids = config.physical_device_ids();
         for (int supplied_id : supplied_ids) {
-            auto fabric_node_id =
-                MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
+            auto fabric_node_id = ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
             TT_FATAL(
                 !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
                 "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
@@ -316,8 +339,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
             fabric_node_ids.push_back(fabric_node_id);
         }
         auto mapped_devices_full_system_device_ids =
-            (*MetalContext::instance().global_distributed_context().size() > 1)
-                ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
+            (*ctx.global_distributed_context().size() > 1)
+                ? ctx.get_system_mesh().get_mapped_devices(std::nullopt).device_ids
                 : wrap_to_maybe_remote(supplied_ids);
         return std::make_tuple(
             std::make_shared<ScopedDevices>(
@@ -327,7 +350,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                 trace_region_size,
                 num_command_queues,
                 worker_l1_size,
-                dispatch_core_config),
+                dispatch_core_config,
+                context_id),
             fabric_node_ids,
             config.mesh_shape().value());
     }();
@@ -339,7 +363,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>());
+        std::shared_ptr<MeshDevice>(),
+        context_id);
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
 
@@ -351,8 +376,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
-    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance(context_id).device_manager()->initialize_profiler();
+    tt_metal::MetalContext::instance(context_id).device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -389,13 +414,22 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     TT_FATAL(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
 
+    // Derive the context ID
+    // Consider removing this implicit derivation of the context ID and instead pass it in as an argument to the
+    // create_unit_meshes function This will require the user to call MetalContext::create_context() beforehand
+    ContextId context_id = SILICON_CONTEXT_ID;
+    if (experimental::is_mock_mode_registered()) {
+        context_id = MetalContext::create_instance(
+            std::make_shared<MetalliumObjectDescriptor>(experimental::get_mock_cluster_desc().value()));
+    }
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
-    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mesh_graph = MetalContext::instance(context_id).get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     fabric_node_ids.reserve(device_ids.size());
     for (const auto& device_id : device_ids) {
         auto fabric_node_id =
-            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
+            MetalContext::instance(context_id).get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         TT_FATAL(
             !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
             "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
@@ -407,8 +441,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     // Now create ScopedDevices after validation passes
     auto mapped_devices_full_system_device_ids =
-        (*MetalContext::instance().global_distributed_context().size() > 1)
-            ? MetalContext::instance().get_system_mesh().get_mapped_devices(std::nullopt).device_ids
+        (*MetalContext::instance(context_id).global_distributed_context().size() > 1)
+            ? MetalContext::instance(context_id).get_system_mesh().get_mapped_devices(std::nullopt).device_ids
             : wrap_to_maybe_remote(device_ids);
     auto scoped_devices = std::make_shared<MeshDeviceImpl::ScopedDevices>(
         mapped_devices_full_system_device_ids,
@@ -417,7 +451,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         trace_region_size,
         num_command_queues,
         worker_l1_size,
-        dispatch_core_config);
+        dispatch_core_config,
+        context_id);
 
     // Make a copy because we std::move the scoped_devices when creating MeshDeviceImpl
     const auto root_devices = scoped_devices->root_devices();
@@ -426,7 +461,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>());
+        std::shared_ptr<MeshDevice>(),
+        context_id);
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -442,8 +478,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
-    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance(context_id).device_manager()->initialize_profiler();
+    tt_metal::MetalContext::instance(context_id).device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -540,7 +576,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     submesh->pimpl_ = std::make_unique<MeshDeviceImpl>(
         scoped_devices_,
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
-        parent_mesh);
+        parent_mesh,
+        context_id_);
 
     const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
@@ -656,7 +693,7 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance(context_id_).get_cluster().arch(); }
 
 size_t MeshDeviceImpl::num_rows() const { return view_->num_rows(); }
 
@@ -708,8 +745,9 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
         // device in the original mesh.
-        auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
-            new_shape, compute_system_mesh_offset(*view_));
+        auto new_mapped_devices = MetalContext::instance(context_id_)
+                                      .get_system_mesh()
+                                      .get_mapped_devices(new_shape, compute_system_mesh_offset(*view_));
         for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
@@ -1160,8 +1198,8 @@ bool MeshDeviceImpl::initialize_impl(
     if (view_->get_devices().empty()) {
         active_distributed_context_ = distributed_context_->split(
             distributed::multihost::Color(1), distributed::multihost::Key(*distributed_context_->rank()));
-        mesh_command_queues_.push_back(
-            std::make_unique<DummyMeshCommandQueue>(pimpl_wrapper, 0, std::bind(&MeshDeviceImpl::lock_api, this)));
+        mesh_command_queues_.push_back(std::make_unique<DummyMeshCommandQueue>(
+            pimpl_wrapper, 0, std::bind(&MeshDeviceImpl::lock_api, this), context_id_));
         return false;
     }
 
@@ -1184,9 +1222,9 @@ bool MeshDeviceImpl::initialize_impl(
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
-        tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
+        tt_metal::MetalContext::instance(context_id_).device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
@@ -1195,12 +1233,17 @@ bool MeshDeviceImpl::initialize_impl(
                 reader_thread_pool_,
                 cq_shared_state,
                 std::bind(&MeshDeviceImpl::lock_api, this),
-                active_distributed_context_));
+                active_distributed_context_,
+                context_id_));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
-                pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                pimpl_wrapper,
+                cq_id,
+                std::bind(&MeshDeviceImpl::lock_api, this),
+                active_distributed_context_,
+                context_id_));
         }
     }
     Inspector::mesh_device_initialized(this);
@@ -1528,6 +1571,7 @@ void MeshDevice::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub
 void MeshDevice::reset_sub_device_stall_group() { pimpl_->reset_sub_device_stall_group(); }
 uint32_t MeshDevice::num_sub_devices() const { return pimpl_->num_sub_devices(); }
 bool MeshDevice::is_mmio_capable() const { return pimpl_->is_mmio_capable(); }
+ContextId MeshDevice::get_context_id() const { return pimpl_->get_context_id(); }
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 std::vector<IDevice*> MeshDevice::get_devices() const { return pimpl_->get_devices(); }
 IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }

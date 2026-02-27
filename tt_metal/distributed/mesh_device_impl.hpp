@@ -34,6 +34,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "context/context_id.hpp"
 
 namespace tt::tt_metal {
 class Allocator;
@@ -81,6 +82,7 @@ private:
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
         std::map<ChipId, IDevice*> opened_local_devices_;
+        ContextId context_id_;
 
     public:
         // Constructor acquires physical resources
@@ -90,7 +92,8 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            const MeshDeviceConfig& config);
+            const MeshDeviceConfig& config,
+            ContextId context_id);
         ScopedDevices(
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
@@ -98,7 +101,8 @@ private:
             size_t trace_region_size,
             size_t num_command_queues,
             size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config);
+            const DispatchCoreConfig& dispatch_core_config,
+            ContextId context_id);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -125,6 +129,7 @@ private:
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+    ContextId context_id_;
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
@@ -166,7 +171,8 @@ public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {},
+        ContextId context_id = SILICON_CONTEXT_ID);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -285,6 +291,7 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    ContextId get_context_id() const override { return context_id_; }
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

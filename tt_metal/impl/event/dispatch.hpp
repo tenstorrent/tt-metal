@@ -10,6 +10,7 @@
 
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "impl/context/context_id.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -40,10 +41,15 @@ void issue_record_event_commands(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host = true,
-    bool clear_count = false);
+    bool clear_count = false,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 void issue_wait_for_event_commands(
-    uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);
+    uint8_t cq_id,
+    uint8_t event_cq_id,
+    SystemMemoryManager& sysmem_manager,
+    uint32_t event_id,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
@@ -51,7 +57,8 @@ void read_events_from_completion_queue(
     ChipId device_id,
     uint16_t channel,
     uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager);
+    SystemMemoryManager& sysmem_manager,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 }  // namespace event_dispatch
 

@@ -21,6 +21,7 @@
 #include "program_impl.hpp"
 #include "sub_device_types.hpp"
 #include "dispatch/worker_config_buffer.hpp"
+#include "impl/context/context_id.hpp"
 #include "trace/trace_node.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
@@ -80,14 +81,16 @@ uint32_t finalize_rt_args(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
-    uint32_t& rta_offset);
+    uint32_t& rta_offset,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 uint32_t finalize_sems(
     uint32_t programmable_core_type_index,
     uint32_t sem_base_offset,
     const std::vector<Semaphore>& semaphores,
     uint32_t& semaphore_offset,
-    uint32_t& semaphore_size);
+    uint32_t& semaphore_size,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 uint32_t finalize_cbs(
     uint32_t programmable_core_type_index,
@@ -95,7 +98,8 @@ uint32_t finalize_cbs(
     uint32_t base_offset,
     uint32_t& cb_offset,
     uint32_t& cb_size,
-    uint32_t& local_cb_size);
+    uint32_t& local_cb_size,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,
@@ -110,7 +114,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
+void initialize_worker_config_buf_mgr(
+    WorkerConfigBufferMgr& config_buffer_mgr, ContextId context_id = SILICON_CONTEXT_ID);
 
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
@@ -118,7 +123,8 @@ void reserve_space_in_kernel_config_buffer(
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,
-    ProgramDispatchMetadata& dispatch_md);
+    ProgramDispatchMetadata& dispatch_md,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 void update_program_dispatch_commands(
     detail::ProgramImpl& program,
@@ -131,7 +137,8 @@ void update_program_dispatch_commands(
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+    std::pair<bool, int> unicast_go_signal_update = {false, -1},
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
@@ -143,7 +150,8 @@ void update_traced_program_dispatch_commands(
     CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+    std::pair<bool, int> unicast_go_signal_update = {false, -1},
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device, bool use_prefetcher_cache);
 
@@ -162,7 +170,8 @@ void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
-    uint32_t worker_l1_unreserved_start);
+    uint32_t worker_l1_unreserved_start,
+    ContextId context_id = SILICON_CONTEXT_ID);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,

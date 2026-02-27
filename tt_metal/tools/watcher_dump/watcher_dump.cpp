@@ -10,6 +10,7 @@
 
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
+#include "impl/context/context_id.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
@@ -58,7 +59,8 @@ void dump_data(
         devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-            std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
+            std::unique_ptr<SystemMemoryManager> sysmem_manager =
+                std::make_unique<SystemMemoryManager>(id, num_hw_cqs, SILICON_CONTEXT_ID);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }

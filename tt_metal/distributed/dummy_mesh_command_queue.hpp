@@ -33,7 +33,10 @@ protected:
 
 public:
     DummyMeshCommandQueue(
-        MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        MeshDevice* mesh_device,
+        uint32_t id,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        ContextId context_id);
     ~DummyMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
