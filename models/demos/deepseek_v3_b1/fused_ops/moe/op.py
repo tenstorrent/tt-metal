@@ -697,6 +697,7 @@ class MoeRoutedExpertOp:
         bcast_intermediate_tensor=None,
         bcast_semaphores=None,
         bcast_sender_coord=None,
+        worker_core_grid: Optional[ttnn.CoreRangeSet] = None,
         # Semaphore IDs (caller-provided, see MoeOp for top-level definitions)
         mcast_data_sender_semaphore_id=0,
         mcast_data_receiver_semaphore_id=1,
@@ -734,10 +735,12 @@ class MoeRoutedExpertOp:
         mcast_grid = mcast_output_tensor.memory_config().shard_spec.grid
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
-        # Full device grid
-        full_device_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-        )
+        # Worker core grid: default to full device grid unless caller overrides.
+        full_device_grid = worker_core_grid
+        if full_device_grid is None:
+            full_device_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+            )
 
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender semaphore
 
@@ -2060,6 +2063,7 @@ class MoeSharedExpertOp:
         sender_core,
         sender_core_grid,
         mcast_grid,
+        num_dram_worker_cores,
         k_parallel=8,
         n_parallel=8,
         # Semaphore IDs (overridable, defaults match MoeOp layout)
@@ -2271,14 +2275,12 @@ class MoeSharedExpertOp:
             dst_tensor=shared_output_tensor,
             noc0_receiver_semaphore_id=output_gather_noc0_receiver_semaphore_id,
             noc1_receiver_semaphore_id=output_gather_noc1_receiver_semaphore_id,
+            use_explicit_sender_index=True,
         )
 
         # ==================================================================
         # Output Mcast (sender → all cores, DRAM cores receive into add_cb_in1)
         # ==================================================================
-        mcast_total_cores = mcast_grid.num_cores()
-        num_phantom_cores = sender_core.y  # col 12, rows 0..(sender.y-1)
-        num_dram_worker_cores = mcast_total_cores - num_matmul_cores - num_phantom_cores - 1
         output_mcast_params = MoeSharedExpertOp.setup_output_mcast(
             gather_dst_num_pages=output_gather_params["dst_num_pages"],
             tile_size=tile_1x32_size,
@@ -2573,7 +2575,7 @@ class MoeOp:
     # Gather sems overlap with mcast receiver sems (different physical cores).
     # noc1_num_senders=0 for all gathers, so only noc0 sem is used.
     MCAST_SENDER_SEM = 0
-    MCAST_DATA_RECEIVER_SEM = 1  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
+    MCAST_DATA_RECEIVER_SEM = 13  # mcast grid; overlaps with DOWN_PROJ_GATHER_SEM on sender core
     DOWN_PROJ_GATHER_SEM = 1  # sender core
     RESIDUAL_MCAST_RECEIVER_SEM = 2  # mcast grid; overlaps with AG_GATHER_SEM on sender core
     AG_GATHER_SEM = 2  # sender core
@@ -2652,10 +2654,9 @@ class MoeOp:
             Dictionary with mcast parameters for compile-time args
         """
         # Get mcast grid bounds
-        mcast_ranges = list(mcast_grid.ranges())
-        mcast_grid_range = mcast_ranges[0]  # Single rectangular range
-        mcast_grid_start = mcast_grid_range.start
-        mcast_grid_end = mcast_grid_range.end
+        mcast_grid_bbox = mcast_grid.bounding_box()
+        mcast_grid_start = mcast_grid_bbox.start
+        mcast_grid_end = mcast_grid_bbox.end
 
         # Get NOC coordinates for mcast destination
         dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid_start)
@@ -2982,6 +2983,11 @@ class MoeOp:
         bcast_intermediate_tensor=None,
         bcast_semaphores=None,
         bcast_sender_coord=None,
+        # Socket: when provided, sender device BRISC receives the bcast payload over socket
+        # instead of reading from a pre-loaded bcast_input_tensor.
+        socket=None,
+        # Optional worker-core grid override (used to avoid overlap with external micro-ops).
+        worker_core_grid: Optional[ttnn.CoreRangeSet] = None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -3041,6 +3047,7 @@ class MoeOp:
             bcast_intermediate_tensor=bcast_intermediate_tensor,
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
+            worker_core_grid=worker_core_grid,
             # Semaphore IDs from top-level
             mcast_data_sender_semaphore_id=MoeOp.MCAST_SENDER_SEM,
             mcast_data_receiver_semaphore_id=MoeOp.MCAST_DATA_RECEIVER_SEM,
@@ -3082,6 +3089,7 @@ class MoeOp:
             sender_core=routed_ctx.sender_core,
             sender_core_grid=routed_ctx.input_core_grid,
             mcast_grid=routed_ctx.mcast_grid,
+            num_dram_worker_cores=routed_ctx.gate_proj_core_ranges.num_cores(),
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
             # Semaphore IDs from top-level
@@ -3498,16 +3506,27 @@ class MoeOp:
                 if bcast_input_tensor is not None:
                     bcast_pkt_cb = 46
                     bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, bcast_input_tensor)
+                    bcast_pkt_cb_descriptor.format_descriptors[
+                        0
+                    ].tile = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0].tile
+                    bcast_pkt_cb_descriptor.format_descriptors[
+                        0
+                    ].page_size = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0].page_size
                     device_cb_descriptors.append(bcast_pkt_cb_descriptor)
 
                 # Broadcast per-device setup
                 bcast_fabric_node_id = None
                 bcast_dst_nodes = []
                 bcast_num_connections = 0
+                bcast_use_socket = False  # set inside enable_bcast when socket is provided
+                brisc_common_rt_args = []  # populated inside enable_bcast for socket mode
                 if enable_bcast:
                     bp = bcast_params
                     sender_row, sender_col = bp["sender_coord"]
                     bcast_is_sender = (row == sender_row) and (col == sender_col)
+                    # socket_page_size: size of ONE embedding payload (single-shot per iteration)
+                    bcast_socket_page_size = bp["page_size_bytes"] * bp["input_num_pages"]
+                    bcast_use_socket = socket is not None and bcast_is_sender
                     bcast_is_secondary_sender = routed_ctx.mesh_cols > 1 and (row == sender_row) and (col != sender_col)
                     bcast_has_secondary_target = bcast_is_sender and routed_ctx.mesh_cols > 1
 
@@ -3555,6 +3574,7 @@ class MoeOp:
                             ("bcast_range_hops_forward", bcast_range_hops_forward),
                             ("bcast_start_distance_in_hops_backward", bcast_start_distance_backward),
                             ("bcast_range_hops_backward", bcast_range_hops_backward),
+                            ("bcast_use_socket", int(bcast_use_socket)),
                         ]
                     )
 
@@ -3563,8 +3583,18 @@ class MoeOp:
                         [
                             ("bcast_num_pages_to_read", bp["input_num_pages"]),
                             ("bcast_is_sender", int(bcast_is_sender)),
+                            ("bcast_use_socket", int(bcast_use_socket)),
                         ]
                     )
+
+                    # BRISC common runtime args: socket config for sender, zeros for all others.
+                    # Position 0/1/2 map to socket_config_addr / socket_page_size / socket_num_pages
+                    # in the BRISC Broadcast::ReaderArgs (get_common_arg_val(0/1/2)).
+                    brisc_common_rt_args = [
+                        int(socket.get_config_buffer_address()) if bcast_use_socket else 0,
+                        int(bcast_socket_page_size) if bcast_use_socket else 0,
+                        1 if bcast_use_socket else 0,  # single-shot: one full embedding per iteration
+                    ]
 
                     # NCRISC common runtime args for broadcast writer
                     bcast_ncrisc_common_rt_args = [
@@ -3646,6 +3676,8 @@ class MoeOp:
                     kernel_defines.append(("ENABLE_REDUCE_TO_ONE", "1"))
                 if enable_bcast:
                     kernel_defines.append(("ENABLE_BCAST", "1"))
+                    if bcast_use_socket:
+                        kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
@@ -3655,6 +3687,7 @@ class MoeOp:
                     brisc_named_compile_time_args=brisc_args,
                     trisc_named_compile_time_args=trisc_args,
                     ncrisc_common_runtime_args=ncrisc_common_rt_args,
+                    brisc_common_runtime_args=brisc_common_rt_args,
                     trisc_common_runtime_args=[
                         routed_ctx.rmsnorm_epsilon_packed,
                         routed_ctx.rmsnorm_scalar_packed,
@@ -3669,6 +3702,7 @@ class MoeOp:
                     per_core_compile_time_descriptors=device_per_core_ct_descs,
                     per_core_runtime_args_descriptor=device_runtime_args_descriptor,
                     defines=kernel_defines,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()

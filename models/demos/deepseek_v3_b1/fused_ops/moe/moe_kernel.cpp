@@ -336,10 +336,14 @@ void kernel_main() {
             get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
 #else
-        // Broadcast pkt_cb: tensor-backed input staging buffer
-        constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
-        constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
-        unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
+        // Broadcast pkt_cb: tensor-backed input staging buffer.
+        // Skip when using socket — BRISC signals the CB each iteration via socket recv + cb_push_back.
+        constexpr bool bcast_use_socket = get_named_compile_time_arg_val("bcast_use_socket") == 1;
+        if constexpr (!bcast_use_socket) {
+            constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
+            constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
+            unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
+        }
 #endif
     }
     if constexpr (Core::Routed::is_gate_mm_core) {
@@ -947,8 +951,12 @@ void kernel_main() {
                 get_named_compile_time_arg_val("bcast_pkt_cb"),
                 get_named_compile_time_arg_val("bcast_num_pages_to_read"),
                 get_named_compile_time_arg_val("bcast_is_sender"),
-                0>;
-            deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+                get_named_compile_time_arg_val("bcast_use_socket")>;
+            deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+                get_common_arg_val<uint32_t>(0),  // socket_config_addr
+                get_common_arg_val<uint32_t>(1),  // socket_page_size
+                get_common_arg_val<uint32_t>(2),  // socket_num_pages
+            };
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
             bcast_op(bcast_args);
 #else
@@ -986,6 +994,12 @@ void kernel_main() {
             rmsnorm(moe.routed.rmsnorm_args);
         }
 
+        // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(moe.routed.mcast_args);
+        }
+
 #ifdef ENABLE_BCAST
         // Pop CB 25 after consumers (residual mcast + RMSNorm) are done,
         // so next iteration's setup_sharded_buffer can push new data
@@ -998,12 +1012,6 @@ void kernel_main() {
         }
 #endif
 #endif
-
-        // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(moe.routed.mcast_args);
-        }
 
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
         {
