@@ -215,7 +215,6 @@ class LMHeadSampling:
         enable_socket_output = socket_output is not None
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
-
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -242,7 +241,6 @@ class LMHeadSampling:
             secondary_cluster_axis = 1
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
-
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
@@ -296,7 +294,6 @@ class LMHeadSampling:
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         in0_tile = input_tensor_sample.get_tile()
-
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
         element_size = 2
@@ -821,7 +818,7 @@ class LMHeadSampling:
 
                     # Secondary axis connection (for sender to secondary sender)
                     if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1)
+                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
                     num_connections = len(dst_nodes)
@@ -1221,12 +1218,10 @@ class LMHeadSampling:
                     ].extend(persistent_fabric_rt_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
         # Execute generic op
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-
         return result

@@ -2474,7 +2474,7 @@ def test_persistent_mode(mesh_device, use_fp32):
         pass
 
 
-@pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
+# @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -2770,6 +2770,8 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
 
         if my_mesh_id == LMHEAD_STAGE:
             logger.info(f"Running LMHeadSampling for stage {my_mesh_id + 1}")
+            logger.info(f"entry_node_coord: {pipeline_config[my_mesh_id].entry_node_coord}")
+            logger.info(f"exit_node_coord: {pipeline_config[my_mesh_id].exit_node_coord}")
             LMHeadSampling.op(
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
