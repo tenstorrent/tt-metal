@@ -75,7 +75,7 @@ void bind_moe_compute(nb::module_& mod) {
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
     const auto* doc = R"doc(Return the ordered list of cores assigned to A2A Combine for the MoE module flow )doc";
-    ttnn::bind_function<"get_moe_combine_cores">(
+    ttnn::bind_function<"get_moe_combine_cores", "ttnn.experimental.">(
         mod,
         doc,
         // Overload 1: single split_size (int64_t)
