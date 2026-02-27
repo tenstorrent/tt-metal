@@ -1,6 +1,6 @@
 # SDPA Single-Core Kernel Analysis
 
-Comprehensive analysis of the in-progress single-core Scaled Dot-Product Attention (SDPA) implementation at `tt_metal/programming_examples/sdpa_single_core/`. Intended as a starting point for evolving this perf-benchmarking playground into a numerically correct SDPA.
+Comprehensive analysis of the single-core Scaled Dot-Product Attention (SDPA) implementation at `tt_metal/programming_examples/sdpa_single_core/`. A performance benchmarking playground and numerically correct bidirectional SDPA.
 
 ---
 
@@ -64,7 +64,10 @@ Runs on RISCV_0 (BRISC) via NOC0. Responsibilities:
 Runs on RISCV_1 (NCRISC) via NOC1. Responsibilities:
 - Generates the identity scaler tile (all 1.0s) for `reduce_block_max_row` → `cb_identity_scale_in` (c5)
 - Generates a column identity tile (1.0 in column 0, zeros elsewhere) → `cb_col_identity` (c8) for matmul_reduce normalization
-- Streams normalized output tiles from `cb_normalized_out` (c9) to DRAM, one row of tiles at a time
+- If padded_k_tiles > 0, generates a single -inf tile → `cb_mask_in` (c7), stays fronted for reuse
+- Streams normalized output tiles from `cb_normalized_out` (c9) to DRAM
+
+**Writer batching:** The writer waits for a full `head_dim_t`-tile batch per `cb_wait_front`/`cb_pop_front` cycle, then issues all `noc_async_write_tile` calls back-to-back before a single `noc_async_write_barrier`. This pipelines NoC transactions: 4 pipelined 2048 B writes complete in ~543 cycles vs 4x427 = 1708 cycles serialized (3.15x speedup). The `cb_normalized_out` CB is double-buffered (`2 * head_dim_t` pages) so compute can fill the next batch while the writer drains the current one.
 
 ### 2.3 Compute Kernel (`kernels/compute/sdpa.cpp`)
 
@@ -85,7 +88,7 @@ Runs on the Math+Pack RISC-V cores (TRISC_MATH, TRISC_PACK). This is the main ke
 | c5 | `cb_identity_scale_in` | 1 | Identity scaler (all 1.0s) | Writer | Compute |
 | c7 | `cb_mask_in` | 1 (optional) | -inf tile for padded K masking | Writer | Compute |
 | c8 | `cb_col_identity` | 1 | Column identity for matmul_reduce | Writer | Compute |
-| c9 | `cb_normalized_out` | 4 | Normalized output streaming | Compute | Writer |
+| c9 | `cb_normalized_out` | 2 × 4 = 8 | Normalized output streaming (double-buffered) | Compute | Writer |
 | c10 | `cb_recip_scratch` | 1 | 1/sum scratch | Compute | Compute |
 | c25 | `cb_out_A` | 7×4 = 28 | Ping-pong output accumulator A | Compute | Compute |
 | c26 | `cb_out_B` | 7×4 = 28 | Ping-pong output accumulator B | Compute | Compute |
@@ -95,7 +98,7 @@ Runs on the Math+Pack RISC-V cores (TRISC_MATH, TRISC_PACK). This is the main ke
 | c30 | `cb_sum_B` | 7 | Ping-pong sum B | Compute | Compute |
 | c31 | `cb_exp_max_diff` | 7 | exp(prev_max - cur_max) | Compute | Compute |
 
-**Total L1 usage (tiles):** 56 + 128 + 112 + 128 + 1 + 1 + 4 + 1 + 28 + 28 + 7 + 7 + 7 + 7 + 7 = **521 tiles** × 2048 bytes = **~1.04 MB** (well within 1.5 MB L1)
+**Total L1 usage (tiles):** 56 + 128 + 112 + 128 + 1 + 1 + 8 + 1 + 28 + 28 + 7 + 7 + 7 + 7 + 7 = **525 tiles** × 2048 bytes = **~1.05 MB** (well within 1.5 MB L1)
 
 **Note:** CB indices c4 and c6 are unused. The row buffers that previously occupied these slots were eliminated by the `cb_push_back_hold_wr_ptr` optimization (see Section 5.2), saving 32 tiles (64 KB) of L1.
 
@@ -112,10 +115,12 @@ for each Q chunk (q = 0..num_q_chunks-1):
         sdpa_inner_loop_step(..., is_last, is_first)
         # Post-iteration: pop prev buffers (skip on first iter), swap ping-pong aliases
         # On last K: per-row normalize → cb_normalized_out → writer drains to DRAM
-    pop Q
+    # Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk
 ```
 
 No `InitPrevBuffers` is needed — the first K-chunk iteration uses `is_first_iter` gating to skip all prev-buffer reads (eltwise_max, SALAD corrections, exp_max_diff). This follows the same pattern as the reference SDPA's `processed_k_chunks > 0` guard.
+
+**Early Q pop:** Q tiles are only used during Phase 1 (Q@KT matmul). On the last K chunk, Q is popped immediately after Phase 1 completes (before Phase 2 begins), allowing the reader to start prefetching the next Q chunk while Phase 2 (QKT@V, SALAD, normalization) is still running. On non-last K chunks, Q is kept in the CB for the next iteration's Phase 1.
 
 ### Data Flow Diagram (one K-chunk iteration, sbh=1)
 
@@ -133,6 +138,7 @@ No `InitPrevBuffers` is needed — the first K-chunk iteration uses `is_first_it
                               │      → row_sum (L1 accum)   │
                               │    cb_push_back_hold_wr_ptr │
                               │                             │
+                              │  if last_k: pop Q early     │
                               ├─────────────────────────────┤
                               │  PHASE 2: QKT@V + SALAD     │
                               │                             │
@@ -144,6 +150,8 @@ No `InitPrevBuffers` is needed — the first K-chunk iteration uses `is_first_it
                               │    if last_k: normalize     │
                               │      → cb_normalized_out ──→│──→ DRAM
                               └─────────────────────────────┘
+    (if last_k: start
+     fetching next Q)
 ```
 
 ### Ping-Pong Buffer Strategy
@@ -171,6 +179,8 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 
 ### 5.2 sdpa_inner_loop_step — Phase 1: Q@KT with Softmax
 
+**One-time initialization:** At the start of `kernel_main`, `cb_wait_front(cb_identity_scale_in, 1)` is issued once to ensure the scaler tile is ready. This avoids repeated waits inside `reduce_c_row_group`.
+
 **Derived constants:**
 - `qkt_subblock_w` = 8/sbh (8 when sbh=1, 4 when sbh=2)
 - `q_num_subblocks` = Sq_chunk_t/sbh
@@ -185,23 +195,33 @@ This matches the reference SDPA's `processed_k_chunks > 0` pattern and eliminate
 | 2   | 8   | 4              | 2                | 2×4=8     |
 | 2   | 4   | 4              | 1                | 2×4=8     |
 
-**Flow for each q_subblock (0..6):**
+**Flow for each q_subblock (0..N-1):**
 
 All Q@KT matmul output is written directly to `cb_qkt_im` at absolute tile offsets via `pack_tile<true>`. The entire `cb_qkt_im` (Sq_chunk_t × Sk_chunk_t tiles) is reserved upfront. After each row is written, `cb_push_back_hold_wr_ptr` makes the row visible to UNPACK (for reading) while rewinding the PACK `wr_ptr` back — so all subsequent `pack_tile<true>` offsets remain relative to the same stable base.
 
 1. **Wait for Q tiles** (cumulative: already loaded by reader)
-2. **For each kt_subblock (0..kt_num_subblocks-1):**
+2. **Init matmul HW** for this q_subblock: `mm_block_init_short` (Wormhole) or `mm_no_mop_init_short` (Blackhole).
+3. **For each kt_subblock (0..kt_num_subblocks-1):**
    - If q_subblock > 0: in-place sub_exp of the *previous* row for this kt_subblock
      - `sub_exp_block_bcast_cols()`: reads from cb_qkt_im at the previous row's absolute position (already pushed/fronted via held push), subtracts cur_max, applies exp with scale, writes back to the same position via `pack_tile<true>`, and reduces (L1 accum) to cur_sum. L1 acc is reset at the start of each sub-row (i) when at the first kt_subblock, ensuring the first write to each reduce position overwrites rather than accumulating with stale data.
-   - `blocked_matmul_and_pack()`: Q × KT for this subblock, packs to cb_qkt_im at absolute offset `(q_subblock * sbh + r) * Sk_chunk_t + kt_subblock * qkt_subblock_w + c`.
-3. **If padded_k_tiles > 0 and last K chunk:** `apply_padded_mask()` — L1-accumulates -inf onto padded tile positions in cb_qkt_im at `(q_subblock * sbh + row) * Sk_chunk_t + col` (still in reserved state). Processes in batches of up to 8 tiles (DST capacity).
-4. **`cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles)`** — makes the row visible to UNPACK for reading while keeping PACK's wr_ptr at the original base.
-5. **Max reduce:** reads from cb_qkt_im at `in0_row_group_index = q_subblock`, writes to cur_max
+     - After sub_exp: re-init matmul HW (`mm_block_init_short` / `mm_no_mop_reinit_short`) since sub_exp reconfigures the unpacker.
+   - `blocked_matmul_and_pack()`: Q × KT for this subblock, packs to cb_qkt_im at absolute offset `(q_subblock * sbh + r) * Sk_chunk_t + kt_subblock * qkt_subblock_w + c`. Matmul init is done by the caller (not inside `blocked_matmul_and_pack`) for better control over re-init patterns.
+4. **If padded_k_tiles > 0 and last K chunk:** `apply_padded_mask()` — L1-accumulates -inf onto padded tile positions in cb_qkt_im at `(q_subblock * sbh + row) * Sk_chunk_t + col` (still in reserved state). Processes in batches of up to 8 tiles (DST capacity).
+5. **`cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles)`** — makes the row visible to UNPACK for reading while keeping PACK's wr_ptr at the original base.
+6. **Max reduce:** reads from cb_qkt_im at `in0_row_group_index = q_subblock`, writes to cur_max
    - `reduce_c_row_group()`: uses `reduce_block_max_row` (block-based, not per-tile reduce_tile), plus eltwise_max with prev_max (skipped on first K-chunk via `do_eltwise_max = !is_first_iter`)
+
+**After all q_subblocks:** Pop KT. On the last K chunk, also pop Q early (see Early Q Pop above).
 
 **Key optimization:** The in-place sub_exp of the *previous* row overlaps with the matmul of the *current* row's subblock. Since sub_exp uses SFPU (exp) while matmul uses FPU, they can overlap.
 
 **Key optimization (L1 savings):** By writing directly to cb_qkt_im and using `cb_push_back_hold_wr_ptr` to keep wr_ptr stable, the two ping-pong row buffers (c4/c6, 32 tiles = 64 KB) are eliminated. The PACK side always sees wr_ptr at the beginning of cb_qkt_im, so absolute offsets address the correct positions regardless of how many rows have been pushed to the UNPACK side.
+
+**Blackhole-specific optimizations (ARCH_BLACKHOLE):** On Blackhole, several LLK-level optimizations are enabled:
+- **`matmul_block_no_mop` / `mm_no_mop_init_short` / `mm_no_mop_reinit_short`**: Bypass the MOP (Machine Operation Processor) for matmul, reducing overhead.
+- **`blocked_pack=true`**: Both `blocked_matmul_and_pack` and `sub_exp_block_bcast_cols` use blocked packing — a single `pack_tile<true>` call per row writes `SUBBLOCK_W` contiguous tiles, instead of individual per-tile packing.
+- **`sub_bcast_cols_init_short_custom` / `sub_tiles_bcast_cols_custom`**: Custom blocked subtraction that processes `tiles_per_column` tiles in a single call.
+- **`llk_pack_mop_config`**: Configures the packing MOP for different tile widths at transition points (e.g., switching between qkt_subblock_w-wide matmul packing and 1-wide reduce packing).
 
 ### 5.3 sdpa_inner_loop_step — Phase 2: QKT@V + SALAD
 
@@ -219,11 +239,13 @@ The drain performs in-place sub_exp on the last row of cb_qkt_im (row N-1, which
 
 **sbh>1:** Can't split along inner dimension because `matmul_block` uses `INNER_DIM` as the in0 row stride, which must equal `Sk_chunk_t` for multi-row subblocks. Instead, drains all sub_exp in-place first, then runs a single full-inner-dim matmul. SFPU/FPU overlap still occurs between the last sub_exp's EXP phase and the matmul's FPU phase.
 
-**q_subblocks 1..6 (SALAD interleaved with V matmul):**
+**q_subblocks 1..N-1 (SALAD interleaved with V matmul):**
+
+Before the loop, `exp_packthread_tile_init<EXP_APPROX_MODE, false>()` is called once to configure the exp hardware for sub_exp_first_col_blocks (used in exp_max_diff computation).
 
 For each q_subblock:
 1. **exp_max_diff** for *previous* row (**skipped on first K-chunk**): `sub_exp_first_col_blocks(prev_max, cur_max)` → cb_exp_max_diff
-2. **Full V matmul** for *current* row: QKT_im[row_q, :] @ V → cur_out[row_q]
+2. **Full V matmul** for *current* row: QKT_im[row_q, :] @ V → cur_out[row_q]. Matmul init (`mm_block_init_short` / `mm_no_mop_init_short`) is done per-subblock.
 3. **SALAD corrections** for *previous* row (**skipped on first K-chunk**):
    - `mul_bcast_cols_l1_acc(prev_sum, exp_max_diff, cur_sum)`: rescale prev_sum into cur_sum
    - `mul_block_bcast_cols_acc(prev_out, exp_max_diff, cur_out)`: rescale prev_out into cur_out
@@ -251,6 +273,8 @@ The kernel uses `exp_packthread_tile` (PACK-thread variant of exp) and `calculat
 3. Reconstruction: exp(x) = exp(r) · 2^k
 
 Packer ReLU is enabled during exp to clamp any negative results from approximation errors (InputClamping::None mode).
+
+**Init hoisting:** `exp_packthread_tile_init` for the Schraudolph fast-approx path (used in sub_exp_block_bcast_cols) is called at the start of `sdpa_inner_loop_step`. For the polynomial path (used in sub_exp_first_col_blocks), `exp_packthread_tile_init<EXP_APPROX_MODE, false>()` is called once before the Phase 2 q_subblock loop.
 
 ---
 
@@ -334,16 +358,17 @@ Protocol: correct. 1-tile scratch, used and freed per row.
 **cb_normalized_out (c9):**
 ```
 reserve_back(head_dim_t=4) → pack head_dim_t tiles → push_back(4)
-  → writer reads 1 tile at a time: wait_front(1) → write → pop_front(1)
+  → writer waits for head_dim_t batch: wait_front(4) → write 4 tiles back-to-back → pop_front(4)
 ```
-Protocol: correct. Writer consumes tiles as they become available.
+Protocol: correct. Double-buffered (2 × head_dim_t = 8 pages), so compute can fill the next batch while the writer drains. Writer issues all `noc_async_write_tile` calls before the barrier.
 
 ### 6.4 One-Off Push/Pop Operations
 
 | Operation | Location | Description | Assessment |
 |-----------|----------|-------------|------------|
-| `cb_identity_scale_in` push (writer) | writer.cpp:19 | generate_reduce_scaler pushes 1, never popped | **Correct** — permanent scaler |
-| `cb_col_identity` push (writer) | writer.cpp:23 | generate_bcast_col_scalar pushes 1, never popped | **Correct** — permanent tile |
+| `cb_identity_scale_in` push (writer) | writer.cpp:21 | generate_reduce_scaler pushes 1, never popped | **Correct** — permanent scaler |
+| `cb_identity_scale_in` wait (compute) | sdpa.cpp:kernel_main | cb_wait_front once at init | **Correct** — ensures scaler ready before any reduce |
+| `cb_col_identity` push (writer) | writer.cpp:25 | generate_bcast_col_scalar pushes 1, never popped | **Correct** — permanent tile |
 
 ### 6.5 L1 Accumulation Discipline
 
@@ -356,7 +381,7 @@ All L1 accumulate uses follow the pattern:
 6. `cb_push_back` publishes
 
 In `sub_exp_block_bcast_cols`: The L1 accum enable/disable logic for the reduce is handled per-row:
-- Lines 511-519: For `global_col_base > 0`, enables L1 accum before the first tile. For `global_col_base == 0`, enables after the first tile (first tile overwrites, subsequent tiles accumulate). This is **correct** — the first kt_subblock of each row writes fresh, subsequent subblocks accumulate.
+- For `global_col_base > 0`, enables L1 accum before the first tile. For `global_col_base == 0`, enables after the first tile (first tile overwrites, subsequent tiles accumulate). This is **correct** — the first kt_subblock of each row writes fresh, subsequent subblocks accumulate.
 
 ---
 
@@ -406,6 +431,8 @@ For q_subblock=2, kt_subblock=1 (sbh=1):
 pack_tile<true>(dst_index++, inout_cb, in0_tile_index)  // same absolute position
 ```
 Writes back to the same position it was read from. ✓
+
+On Blackhole with `blocked_pack=true`: a single `pack_tile<true>(dst_index, inout_cb, in0_tile_index)` writes `tiles_per_column` contiguous tiles starting at `in0_tile_index`, with `dst_index` advancing by `tiles_per_column`. Same positions, fewer pack calls.
 
 **Reduce L1 accum to reduce_cb (cur_sum):**
 ```cpp
@@ -493,6 +520,9 @@ The kernel uses cumulative `cb_wait_front` calls extensively. Checking:
 | **QKT@V matmul** | Single `matmul_blocks()` call | Subblock-by-subblock with overlap |
 | **Final normalization** | `matmul_reduce` + `recip_block_inplace` + `mul_block_bcast_cols` (all in-place) | `normalize_row_streaming()` — per-row streaming with fused matmul+recip |
 | **Row buffering** | Full cb_qkt_im written at once (no row buffers needed) | `cb_push_back_hold_wr_ptr` keeps wr_ptr stable (no row buffers needed) |
+| **Q pop timing** | After all K chunks complete | After Phase 1 of last K chunk (early pop) |
+| **Normalized output buffering** | Single-buffered | Double-buffered (2 × head_dim_t), batched NoC writes |
+| **Blackhole LLK optimizations** | None | blocked_pack, no_mop matmul, custom blocked sub/bcast, MOP config |
 | **Causal masking** | Full support via `add_block_inplace(qk, mask)` | **NOT IMPLEMENTED** |
 | **Attention sink** | Full support | **NOT IMPLEMENTED** |
 | **Ring attention** | Full support (RING type) | **NOT IMPLEMENTED** |
@@ -517,11 +547,13 @@ The kernel uses cumulative `cb_wait_front` calls extensively. Checking:
    - `cb_push_back_hold_wr_ptr` exposes each row to UNPACK without advancing PACK's wr_ptr — all absolute offsets stay valid
    - Max reduce per row immediately after push, reading from cb_qkt_im at the row's position
    - First K-chunk: `do_eltwise_max=false` — no prev_max comparison (same as reference's `processed_k_chunks > 0`)
+   - On last K chunk: pop Q early after Phase 1 (reader can start next Q fetch)
 2. Phase 2: Row-by-row QKT@V with interleaved SALAD
    - Pipelined: V matmul for row N while SALAD-correcting row N-1
    - Overlap drain loop: last row's softmax done in-place on cb_qkt_im (all rows already pushed), interleaved with first V matmul
    - First K-chunk: exp_max_diff and SALAD entirely skipped (same as reference's `if (processed_k_chunks > 0)`)
 3. On last K-chunk: per-row normalization streamed directly to output (decoupled from SALAD, runs even when first == last)
+   - Double-buffered normalized_out CB with batched writer NoC writes
 
 This approach is significantly more pipelined than the reference, overlapping FPU (matmul) with SFPU (exp) and minimizing idle time. The `cb_push_back_hold_wr_ptr` trick eliminates the need for separate row buffers, saving 64 KB of L1.
 
@@ -615,8 +647,9 @@ Bidirectional attention is numerically correct. Test results against PyTorch `F.
 | `1q_5k-random-sk4-sbh2` | 0.999821 | 0.083144 | 0.003283 |
 | `1q_5k-random-sk8-sbh2` | 0.999862 | 0.068657 | 0.004281 |
 | `3q_5k-random-sk4-sbh2-pad1` | 0.999763 | 0.102592 | 0.003703 |
+| `3q_19k-random-sk16-pad8-sq9` | PCC > 0.99 | — | — |
 
-The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with Sk_chunk_t=16/8 (sbh=1) and Sk_chunk_t=4/8 (sbh=2). Padded tests (`-padN`) verify that zero-padded K tiles are correctly masked out via `apply_padded_mask`. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
+The `1q_1k` tests exercise `is_first && is_last` (single K chunk — no SALAD). The multi-K tests exercise the full ping-pong loop with SALAD corrections. Tests run with Sk_chunk_t=16/8 (sbh=1) and Sk_chunk_t=4/8 (sbh=2). Padded tests (`-padN`) verify that zero-padded K tiles are correctly masked out via `apply_padded_mask`. The WAN-like test (`3q_19k-random-sk16-pad8-sq9`) exercises Sq_chunk_t=9 with a large number of K chunks and padding. Using `EXP_APPROX_MODE=0` (polynomial exp, degree 2).
 
 ### Step 2: Add Causal Masking
 
@@ -635,6 +668,7 @@ Wrap the current single-core kernel in a multi-core dispatch that assigns differ
 1. **Double-buffering K/V:** The reader already double-buffers, but the compute kernel processes one K-chunk at a time. Consider prefetching the next K-chunk while computing on the current one.
 2. **Granularity tuning:** The reference uses `SUB_EXP_GRANULARITY`, `DHT_GRANULARITY`, `STATS_GRANULARITY`, `REDUCE_GRANULARITY` for tile-processing granularity. Adding similar configurability here could help tune for different problem sizes.
 3. **In-place operations:** The current implementation uses `cb_push_back_hold_wr_ptr` for in-place sub_exp on cb_qkt_im, eliminating the need for separate row buffers. Further in-place opportunities exist for SALAD corrections.
+4. **Blackhole LLK optimizations (IN PROGRESS):** Blocked packing, no-MOP matmul, custom blocked sub/bcast operations are implemented. Further LLK-level optimizations may include blocked reduce and additional MOP bypasses.
 
 ### Step 5: Ring Attention (Future)
 
@@ -647,11 +681,11 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | Function | Purpose |
 |----------|---------|
 | `cb_push_back_hold_wr_ptr` | Push tiles (UNPACK sees them) but rewind PACK's wr_ptr, keeping pack_tile\<true\> offsets stable |
-| `sub_exp_block_bcast_cols` | In-place on inout_cb: subtract max (bcast cols), apply exp, pack back + L1 accum reduce |
+| `sub_exp_block_bcast_cols` | In-place on inout_cb: subtract max (bcast cols), apply exp, pack back + L1 accum reduce. On Blackhole with `blocked_pack=true`: uses blocked sub/pack for fewer HW calls. |
 | `sub_exp_first_col_blocks` | Subtract prev_max from cur_max, apply exp (column 0 only) → correction factor |
 | `mul_bcast_cols_l1_acc` | Multiply + bcast_cols, L1 accumulate into output |
 | `mul_block_bcast_cols_acc` | Block multiply + bcast_cols, L1 accumulate (for output rescaling) |
-| `blocked_matmul_and_pack` | Blocked matmul with pack to CB via pack_tile\<true\> at absolute offsets |
+| `blocked_matmul_and_pack` | Blocked matmul with pack to CB via pack_tile\<true\> at absolute offsets. On Blackhole with `blocked_pack=true`: blocked packing (one call per row). Matmul init is done by the caller. |
 | `reduce_c_row_group` | Max reduce across rows using reduce_block_max_row + eltwise_max |
 | `normalize_row_streaming` | Per-row normalization: matmul_reduce + recip + bcast multiply |
 | `normalize_row` (lambda) | Push sum/out tiles, call normalize_row_streaming (decoupled from SALAD) |
@@ -691,3 +725,16 @@ For multi-device scenarios, implement the ring attention pattern from the refere
 | `EXP_APPROX_MODE` | 0=polynomial exp, 1=Schraudolph piecewise approximation |
 | `PROFILE_KERNEL` | Enable Tracy profiling zones |
 | `MM_THROTTLE` | Matmul throttle level (1-5) |
+
+## Appendix D: Blackhole-Specific LLK Functions
+
+These functions are used via `#ifdef ARCH_BLACKHOLE` guards and provide performance optimizations specific to the Blackhole architecture:
+
+| Function | Purpose |
+|----------|---------|
+| `matmul_block_no_mop` | Matmul bypassing MOP for reduced overhead |
+| `mm_no_mop_init_short` | Initialize matmul HW without MOP setup |
+| `mm_no_mop_reinit_short` | Re-initialize matmul HW after operation switch (lighter than full init) |
+| `sub_bcast_cols_init_short_custom` | Initialize blocked column-broadcast subtraction |
+| `sub_tiles_bcast_cols_custom` | Blocked column-broadcast subtraction (processes `tiles_per_column` tiles per call) |
+| `llk_pack_mop_config` | Configure packing MOP for a specific tile width (called at operation transitions) |

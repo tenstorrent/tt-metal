@@ -31,7 +31,7 @@ Binary output: `build/programming_examples/metal_example_sdpa_single_core`
 ./build/programming_examples/metal_example_sdpa_single_core
 ```
 
-Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=1, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0`.
+Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=2, num_k_chunks=3, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0`.
 
 ### Test mode (file-based I/O)
 
@@ -57,7 +57,7 @@ Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, 
 
 Where `Sq = num_q_chunks * Sq_chunk_t * 32`, `Sk = num_k_chunks * Sk_chunk_t * 32`, `d = head_dim_t * 32`.
 
-**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_chunks=3, num_k_chunks=5, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0, padded_k_tiles=0`.
+**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0, padded_k_tiles=0`. `num_q_chunks` and `num_k_chunks` default to 2/3 (benchmark mode) or 3/5 (test mode).
 
 **Padded K masking:** When `--padded_k_tiles N` is nonzero, the last N tiles of the last K chunk are treated as zero-padding and masked with -inf before softmax. K/V input files must still have the full padded shape.
 
@@ -78,26 +78,38 @@ tt-smi -r $(tt-smi -ls 2>&1 | grep -oP '^\│ \K\d+' | head -1)
 pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py -v
 ```
 
-### Test cases
+### Main test cases
 
-| ID | Q chunks | K/V chunks | Sk_chunk_t | sbh | Padded | Data |
-|----|----------|------------|------------|-----|--------|------|
-| `1q_1k-zeros-sk16` | 1 | 1 | 16 | 1 | 0 | All zeros |
-| `1q_1k-ones-sk16` | 1 | 1 | 16 | 1 | 0 | All ones |
-| `1q_1k-random-sk16` | 1 | 1 | 16 | 1 | 0 | `fa_rand` (FlashAttention-style) |
-| `1q_5k-random-sk16` | 1 | 5 | 16 | 1 | 0 | `fa_rand` |
-| `3q_5k-random-sk16` | 3 | 5 | 16 | 1 | 0 | `fa_rand` |
-| `1q_1k-random-sk8` | 1 | 1 | 8 | 1 | 0 | `fa_rand` |
-| `1q_5k-random-sk8` | 1 | 5 | 8 | 1 | 0 | `fa_rand` |
-| `3q_5k-random-sk8` | 3 | 5 | 8 | 1 | 0 | `fa_rand` |
-| `1q_5k-random-sk16-pad4` | 1 | 5 | 16 | 1 | 4 | `fa_rand` |
-| `1q_5k-random-sk8-pad2` | 1 | 5 | 8 | 1 | 2 | `fa_rand` |
-| `3q_5k-random-sk16-pad8` | 3 | 5 | 16 | 1 | 8 | `fa_rand` |
-| `1q_1k-random-sk4-sbh2` | 1 | 1 | 4 | 2 | 0 | `fa_rand` |
-| `1q_5k-random-sk4-sbh2` | 1 | 5 | 4 | 2 | 0 | `fa_rand` |
-| `1q_5k-random-sk8-sbh2` | 1 | 5 | 8 | 2 | 0 | `fa_rand` |
-| `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 2 | 1 | `fa_rand` |
-| `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 16 | 1 | 8 | `fa_rand` |
+| ID | Q chunks | K/V chunks | Sq_chunk_t | Sk_chunk_t | sbh | Padded | Data |
+|----|----------|------------|------------|------------|-----|--------|------|
+| `1q_1k-zeros-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | All zeros |
+| `1q_1k-ones-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | All ones |
+| `1q_1k-random-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | `fa_rand` |
+| `1q_5k-random-sk16` | 1 | 5 | 7 | 16 | 1 | 0 | `fa_rand` |
+| `3q_5k-random-sk16` | 3 | 5 | 7 | 16 | 1 | 0 | `fa_rand` |
+| `1q_1k-random-sk8` | 1 | 1 | 7 | 8 | 1 | 0 | `fa_rand` |
+| `1q_5k-random-sk8` | 1 | 5 | 7 | 8 | 1 | 0 | `fa_rand` |
+| `3q_5k-random-sk8` | 3 | 5 | 7 | 8 | 1 | 0 | `fa_rand` |
+| `1q_5k-random-sk16-pad4` | 1 | 5 | 7 | 16 | 1 | 4 | `fa_rand` |
+| `1q_5k-random-sk8-pad2` | 1 | 5 | 7 | 8 | 1 | 2 | `fa_rand` |
+| `3q_5k-random-sk16-pad8` | 3 | 5 | 7 | 16 | 1 | 8 | `fa_rand` |
+| `1q_1k-random-sk4-sbh2` | 1 | 1 | 4 | 4 | 2 | 0 | `fa_rand` |
+| `1q_5k-random-sk4-sbh2` | 1 | 5 | 4 | 4 | 2 | 0 | `fa_rand` |
+| `1q_5k-random-sk8-sbh2` | 1 | 5 | 4 | 8 | 2 | 0 | `fa_rand` |
+| `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 4 | 2 | 1 | `fa_rand` |
+| `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 9 | 16 | 1 | 8 | `fa_rand` |
+
+### Padding PCC impact tests
+
+Additional tests that sweep padding levels (0, 1, 2, 4, 8, 12, 15 tiles) on a fixed config (Sq_chunk_t=9, Sk_chunk_t=16, head_dim_t=4, 1 Q chunk, 3 K chunks) and verify PCC stays above threshold. `test_padding_pcc_correlation` also reports correlation between padding amount and PCC degradation.
+
+```bash
+# Run individual padding level tests
+pytest generate_and_test_sdpa.py -v -k "test_padding_pcc_impact"
+
+# Run the sweep/correlation test
+pytest generate_and_test_sdpa.py -v -k "test_padding_pcc_correlation"
+```
 
 ### Run a single test
 
@@ -123,7 +135,7 @@ Then point your IDE launch configuration at the generated directory:
 {
     "program": "${workspaceFolder}/build/programming_examples/metal_example_sdpa_single_core",
     "args": [
-        "--test", "${workspaceFolder}/tt_metal/programming_examples/sdpa_single_core/test_inputs/1q_5k-random",
+        "--test", "${workspaceFolder}/tt_metal/programming_examples/sdpa_single_core/test_inputs/1q_5k-random-sk16",
         "--Sq_chunk_t", "7", "--Sk_chunk_t", "16", "--head_dim_t", "4",
         "--num_q_chunks", "1", "--num_k_chunks", "5",
         "--subblock_h", "1", "--mm_throttle_level", "0", "--exp_approx_mode", "0"
