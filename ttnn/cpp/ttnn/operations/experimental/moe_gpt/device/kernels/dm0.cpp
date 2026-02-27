@@ -152,12 +152,23 @@ void kernel_main() {
 
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    constexpr uint32_t bias_trid = 4;
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //-------------------------------------------------------------------------
         // Pipelined reading of W0/W1
         //-------------------------------------------------------------------------
         uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+
+        // Issue reads with current trid
+        noc_async_read_set_trid(bias_trid);
+        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+            dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], bias_trid);
+        // w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+
+        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+            dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, bias_trid);
+        // w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
 
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
@@ -184,6 +195,9 @@ void kernel_main() {
                 // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                 // This accounts for the one we already have reserved (for in-flight read)
                 cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+            } else {
+                // For the Bias transactions in flight
+                noc_async_read_barrier_with_trid(bias_trid);
             }
             txns_in_flight = true;
         }

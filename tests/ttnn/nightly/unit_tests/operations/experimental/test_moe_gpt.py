@@ -606,7 +606,7 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
 
     tt_b0_b1 = ttnn.from_torch(
         torch_b0_b1_reordered,
-        dtype=ttnn.bfloat16,
+        dtype=w0_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b0_b1_mem_config,
@@ -617,7 +617,7 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
 
     tt_b2 = ttnn.from_torch(
         torch_b2_reordered,
-        dtype=ttnn.bfloat16,
+        dtype=w0_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b2_mem_config,

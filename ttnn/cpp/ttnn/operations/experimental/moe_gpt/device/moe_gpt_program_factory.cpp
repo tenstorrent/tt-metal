@@ -39,8 +39,9 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
         | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |   8*6    |      98304      |
+        | cb_r2c_bias    | CBIndex::c_5  | Bfp4_b     | true  |   20     |      11520      |
         ------------------------------------------------------------------------------------
-        Total L1 ~= 530 KB (fits in 1.2 MB L1)
+        Total L1 ~= 541 KB (fits in 1.2 MB L1)
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
@@ -53,6 +54,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 8 * 6},
+        {"cb_r2c_bias", tt::CBIndex::c_5, tt::DataFormat::Bfp4_b, true, 20},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
