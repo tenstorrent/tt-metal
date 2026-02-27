@@ -557,13 +557,70 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 N=5120,
                 dim=3,
                 mm_block_m=256,
-                mm_block_k=256,
+                mm_block_k=128,
                 mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 4),
-                chunk_width_in_mm_blocks=1,
+                mm_core_grid=ttnn.CoreCoord(8, 7),
+                chunk_width_in_mm_blocks=2,
                 num_workers_per_link=3,
             ),
-            id="xlarge_9472_3456_5120_cwimb1_rs3_fullgrid",
+            id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(7, 7),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,
+            ),
+            id="xlarge_9472_3456_5120_x7_y7_cwimb1_rs3_fullgrid",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                # Non-divisible slice_Wt: mm_core_grid.x=6 (not a power of 2) breaks the
+                # usual alignment between slice_Wt and mm_N_full_block_wt.
+                # N_tiles=48, mm_N_full_block_wt=48/6=8, slice_Wt=48/8=6. 6 % 8 ≠ 0.
+                # chip k: skip_cols_left = (k*6) % 8 = {0,6,4,2,0,6,4,2} — 4 distinct values.
+                # chunk_width_in_tiles=8 > effective_advance=2 → cross-column 2-tile packets
+                # in the fused reader/writer. Tests all three rs_mode paths.
+                M=512,
+                K=256,
+                N=1536,
+                dim=3,
+                mm_block_m=128,
+                mm_block_k=64,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(6, 2),
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="non_div_Wt_6x2_cwimb1",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                # Non-divisible slice_Wt with multi-worker cross-column packets.
+                # mm_core_grid.x=5, N_tiles=160, mm_N_full_block_wt=32, slice_Wt=20. 20%32≠0.
+                # chip k: skip = (k*20)%32 = {0,20,8,28,16,4,24,12} — 8 distinct skip values.
+                # chunk_width_in_mm_blocks=2 → chunk_width_in_tiles=16; num_workers=4 →
+                # effective_advance=8. 8 % 16 ≠ 0 → consecutive packet slots visit different
+                # columns; with skip=20 a packet (col=0,col=8) spans (invalid,invalid) but
+                # (col=4,col=12) spans (invalid,valid) — exercises the CB-packing fix.
+                M=3072,
+                K=512,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(5, 6),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=4,
+            ),
+            id="non_div_Wt_large_5x6_cwimb2_rs4",
         ),
     ],
 )
