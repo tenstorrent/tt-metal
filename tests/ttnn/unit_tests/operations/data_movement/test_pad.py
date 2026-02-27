@@ -50,7 +50,7 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch_input_tensor.dtype)
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
@@ -153,7 +153,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
 
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor).to(torch_output_tensor.dtype)
 
     assert tt_output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, tt_output_tensor)
@@ -479,7 +479,7 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=layout)
     output_tt = ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore)
-    output_tt = ttnn.to_torch(output_tt)
+    output_tt = ttnn.to_torch(output_tt).to(torch_input.dtype)
     assert output_tt.shape == torch.Size(padshape)
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
