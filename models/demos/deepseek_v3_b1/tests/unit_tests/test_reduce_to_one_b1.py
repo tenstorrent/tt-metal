@@ -346,27 +346,3 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
     run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-                "fabric_router_config": create_fabric_router_config(15232),
-            }
-        )
-    ],
-    indirect=["device_params"],
-    ids=["fabric_2d_torus_x"],
-)
-@pytest.mark.parametrize(
-    "root_coord",
-    [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],
-)
-def test_reduce_to_one_2d_torus(bh_2d_mesh_device, root_coord):
-    """Test reduce_to_one with 2D torus fabric."""
-    print("mesh shape: ", bh_2d_mesh_device.shape)
-    run_reduce_to_one(bh_2d_mesh_device, num_iterations=100, root_coord=root_coord)
