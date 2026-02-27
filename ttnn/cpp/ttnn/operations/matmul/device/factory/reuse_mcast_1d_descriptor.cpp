@@ -968,6 +968,11 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
 
         // Core range setup
         CoreCoord start_core = {0, 0};
+        if (sub_device_id.has_value()) {
+            auto sub_device_cores =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+            start_core = sub_device_cores.bounding_box().start_coord;
+        }
         uint32_t start_core_x = start_core.x;
         uint32_t start_core_y = start_core.y;
         uint32_t num_cores_c = compute_with_storage_grid_size.x;
@@ -983,11 +988,11 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             num_cores_to_corerangeset(start_core, num_cores_local, compute_with_storage_grid_size, row_major);
 
         CoreRangeSet in0_mcast_sender_cores =
-            num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+            num_cores_to_corerangeset(start_core, in0_sender_num_cores, compute_with_storage_grid_size, row_major);
         CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
         CoreRangeSet all_cores_with_work =
-            num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+            num_cores_to_corerangeset(start_core, num_cores_with_work, compute_with_storage_grid_size, row_major);
         CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
         uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();
         uint32_t in0_mcast_receiver_num_dests = std::min(in0_mcast_receiver_num_cores, num_cores_local);
@@ -1821,6 +1826,11 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
         CoreCoord start_core = {0, 0};
+        if (sub_device_id.has_value()) {
+            auto sub_device_cores =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+            start_core = sub_device_cores.bounding_box().start_coord;
+        }
         uint32_t num_cores_local = num_blocks_total;
 
         constexpr bool row_major = true;
