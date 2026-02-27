@@ -2045,7 +2045,7 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
     auto launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     DeviceAddr launch_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
-
+    log_info(tt::LogMetal, "Reading launch message for device {} core {} at {}", device_id, virtual_core.str(), launch_addr);
     cluster_->read_core(
         launch_msg.data(), launch_msg.size(), {static_cast<size_t>(device_id), virtual_core}, launch_addr);
 
