@@ -1930,7 +1930,6 @@ void sdpa_inner_loop_step(
             }
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                 blocked_matmul_and_pack<
                     true,
                     qkt_subblock_w,
