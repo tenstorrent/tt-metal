@@ -8,6 +8,7 @@ import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
 from math import isnan
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def torch_equal_nan(a, b):
@@ -532,6 +533,7 @@ def test_where_TSS_int_types(scalars, input_shapes, device):
     assert torch.equal(tt_result, torch_result)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "scalars",
     [

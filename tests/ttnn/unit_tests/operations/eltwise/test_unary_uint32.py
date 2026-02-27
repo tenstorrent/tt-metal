@@ -5,8 +5,10 @@
 import torch
 import pytest
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 def create_full_range_tensor(input_shape, dtype, value_ranges):
     num_elements = torch.prod(torch.tensor(input_shape)).item()
 
@@ -26,6 +28,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
     return in_data
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "ttnn_op, value_ranges",
     [
@@ -103,6 +106,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 )
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "a_shape",
     [(torch.Size([5, 7, 64, 128]))],
@@ -148,6 +152,7 @@ def test_unary_uint32_sharded(a_shape, sharded_config, ttnn_op, device):
 
 # Inputs beyond 65535 will give an output > 2^32-1 when squared, causing overflow.
 # This test checks that overflow is handled correctly.
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 def test_unary_square_uint32_overflow(device):
     torch_input_tensor = torch.tensor([0, 1, 46340, 65535, 65536, 70000])
     input_tensor = ttnn.from_torch(

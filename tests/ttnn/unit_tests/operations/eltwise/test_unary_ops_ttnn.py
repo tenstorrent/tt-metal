@@ -12,6 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -903,6 +904,8 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
     ],
 )
 def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
+    if torch_dtype == torch.uint32 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch.manual_seed(0)
 
     if torch_dtype.is_floating_point:
