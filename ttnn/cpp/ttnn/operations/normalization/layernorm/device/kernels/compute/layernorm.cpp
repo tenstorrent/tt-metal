@@ -14,11 +14,22 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#ifdef TILIZE_IN
+#include "api/compute/tilize.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tensix.h"
+#endif
+#ifdef UNTILIZE_OUT
+#include "api/compute/pack_untilize.h"
+#endif
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -27,6 +38,35 @@ namespace policies = kutil::compute::policies;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
+
+template <typename To>
+ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
+    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
+}
+
+void print_cb_tile(uint32_t cb, uint32_t tile_idx) {
+    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb, tile_idx);
+    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
+        // Iterate through 16 rows within each subtile row
+        for (int local_row = 0; local_row < 16; local_row++) {
+            // Calculate the actual row in original matrix
+            int row = subtile_i * 16 + local_row;
+            // Iterate through 2x2 subtiles horizontally
+            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+                // Iterate through 16 columns within each subtile
+                for (int local_col = 0; local_col < 16; local_col++) {
+                    // Calculate the actual column in original matrix
+                    int col = subtile_j * 16 + local_col;
+                    // Calculate index using only multiplication and addition
+                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+                    // /*element_offset=*/index);ptr
+                    PACK(DPRINT << BF16(ptr[index]) << ", ");
+                }
+            }
+            PACK(DPRINT << ENDL());
+        }
+    }  // subtile_i
+}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -76,11 +116,17 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
+#ifndef TILIZE_IN
 #ifdef RMSNORM
     binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
 #else
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
+#endif
+#endif
+
+#ifdef TILIZE_IN
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;
 #endif
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -92,6 +138,56 @@ void kernel_main() {
     const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifdef TILIZE_IN
+        // Tilize ROW_MAJOR input into cb_in (CB 0) one block at a time.
+        // tilize_init/uninit wrap each ncht iteration; tilize_block is called per block.
+        DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " blk=" << blk << ENDL();)
+        reconfig_data_format(cb_in_rm, cb_in_rm);
+        pack_reconfig_data_format(cb_in);
+
+        unary_op_init_common(cb_in_rm, cb_in_rm, cb_in_rm);
+        tilize_init(cb_in_rm, blk, cb_in);
+        for (auto block : generic::blocks(Wt, blk)) {
+            DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" << block.size()
+                               << " full=" << block.full_block_size() << ENDL();)
+            cb_wait_front(cb_in_rm, block.full_block_size());
+            cb_reserve_back(cb_in, block.full_block_size());
+            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
+
+            // DEBUG: DO NOT REMOVE THIS CODE
+            // for (auto i : block.local()) {
+            //     tile_regs_acquire();
+            //     copy_tile_to_dst_init_short(cb_in_rm);
+            //     copy_tile(cb_in_rm, i, 0);
+            //     fill_tile_init();
+            //     fill_tile(0, static_cast<float>(i));
+
+            //                     dprint_tensix_dest_reg(0);
+
+            //     tile_regs_commit();
+
+            //     tile_regs_wait();
+            //     pack_tile(0, cb_in);
+            //     tile_regs_release();
+            // }
+
+            // PACK(
+            //     DPRINT << "[layernorm] cb_in tile 0:" << ENDL();
+            // );
+            // print_cb_tile(cb_in, 0);
+
+            cb_push_back(cb_in, block.full_block_size());
+            cb_pop_front(cb_in_rm, block.full_block_size());
+        }
+        tilize_uninit(cb_in_rm, cb_in);
+        DPRINT_MATH(DPRINT << "[layernorm] tilize_uninit done, re-initing binary ops" << ENDL();)
+        // Re-init binary ops after tilize hardware reconfiguration.
+#ifdef RMSNORM
+        binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
+#else
+        binary_op_init_common(cb_x, cb_scaler, cb_ex);
+#endif
+#endif
 /*
  * X + Y
  */
@@ -299,5 +395,23 @@ void kernel_main() {
         }
         cb_pop_front(cb_ex2pe, 1);
         cb_pop_front(cb_xmm, total_buffer_size);
+
+#ifdef UNTILIZE_OUT
+        // All Wt tiles for this ncht are now in cb_out (CB 16).
+        // Pack-untilize them block-by-block into cb_out_rm (CB 28) for the RM writer.
+        // pack_untilize_block<blk, blk> produces true row-major output in cb_out_rm:
+        //   row r starts at offset r * blk * TILE_W * elem_size from the CB base.
+        constexpr auto cb_out_rm = tt::CBIndex::c_28;
+        pack_untilize_init<blk, blk>(cb_out, cb_out_rm);
+        for (auto block : generic::blocks(Wt, blk)) {
+            cb_wait_front(cb_out, block.full_block_size());
+            cb_reserve_back(cb_out_rm, block.full_block_size());
+            pack_untilize_block<blk, blk>(cb_out, 1, cb_out_rm);
+            cb_push_back(cb_out_rm, block.full_block_size());
+            cb_pop_front(cb_out, block.full_block_size());
+        }
+        pack_untilize_uninit(cb_out_rm);
+        // The next ncht iteration re-initialises hardware via tilize_init, so no reinit needed here.
+#endif
     }  // NCHt loop
 }

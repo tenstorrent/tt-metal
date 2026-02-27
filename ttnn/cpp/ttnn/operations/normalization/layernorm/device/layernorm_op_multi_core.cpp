@@ -65,6 +65,7 @@ bool CB_can_fit_in_L1(
     uint32_t in3_size,
     uint32_t im2_size,
     uint32_t recip_size,
+    uint32_t in_rm_size,
     uint32_t l1_size) {
     uint32_t sum = 0;
     sum += in0_size;
@@ -82,6 +83,7 @@ bool CB_can_fit_in_L1(
     sum += in3_size;
     sum += im2_size;
     sum += recip_size;
+    sum += in_rm_size;
     return sum < l1_size * 0.95;
 }
 
@@ -241,12 +243,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    const bool input_is_row_major = operation_attributes.allow_row_major_input && (a.layout() == Layout::ROW_MAJOR);
     // Size the small-kernel CBs to be a multiple of the block size
     uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
     uint32_t in0_t =
         Wt_next_block_up;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
-    uint32_t out0_t = block_size * 2;
+    // For RM input we accumulate the full ncht into cb_out before the untilize pass,
+    // so the writer no longer drains cb_out concurrently.
+    uint32_t out0_t = input_is_row_major ? Wt_next_block_up : block_size * 2;
     uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
     uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
     uint32_t in5_t = Wt_next_block_up;  // buffer for gamma
@@ -272,6 +277,12 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // but having two constants for all cases is simpler.
     constexpr uint32_t with_weights_max_size = 56;
     constexpr uint32_t without_weights_max_size = 112;
+    // cb_in_rm (CB 27) holds `block_size` tiles of row-major input for in-flight tilization.
+    // Only allocated when input_is_row_major; always a small buffer (block_size * tile_size).
+    const uint32_t in_rm_size = input_is_row_major ? block_size * in_single_tile_size : 0;
+    // cb_out_rm (CB 28) double-buffers the untilized output for the RM writer.
+    const uint32_t out_rm_size = input_is_row_major ? block_size * 2 * out_single_tile_size : 0;
+
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -288,8 +299,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
+        in_rm_size + out_rm_size,
         a.device()->l1_size_per_core());
-    if (!use_row_major_kernel) {
+    // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
+    // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
+    if (!use_row_major_kernel || input_is_row_major) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handled by the single pass
             large_tensor_needed = true;
@@ -308,6 +322,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         if (b) {
             im6_t = Wt_next_block_up;
             in0_t = 2 * block_size;
+        }
+        if (input_is_row_major) {
+            out0_t = Wt_next_block_up;  // keep in sync with capped value
         }
     }
 
@@ -337,7 +354,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+    if (input_is_row_major) {
+        // For rm_input readers: element size of input tensor for address stride calculations
+        reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
+    } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         reader_compile_time_args.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
@@ -350,6 +370,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // Build compile time args for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    if (input_is_row_major) {
+        // RM writer needs elem_size to compute per-row NOC write sizes
+        writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
+    }
 
     // Build defines for reader and compute kernels
     KernelDescriptor::Defines reader_defines;
@@ -375,6 +399,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         compute_defines.emplace_back("RMSNORM", "1");
     }
 
+    if (input_is_row_major) {
+        compute_defines.emplace_back("TILIZE_IN", "1");
+        compute_defines.emplace_back("UNTILIZE_OUT", "1");
+    }
+
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         auto act_defines =
@@ -385,18 +414,25 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     // Select reader kernel path
-    const auto* reader_kernel_path = use_row_major_kernel
-                                         ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                           "reader_unary_interleaved_ln_rm_gb.cpp"
-                                         : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                           "reader_unary_interleaved_ln.cpp";
-    reader_kernel_path = large_tensor_needed
-                             ? (use_welford_and_not_rms_norm
-                                    ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+    const auto* reader_kernel_path = [&]() -> const char* {
+        if (input_is_row_major) {
+            return large_tensor_needed ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                         "reader_unary_interleaved_ln_large_tensor_rm_input.cpp"
+                                       : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                         "reader_unary_interleaved_ln_rm_input.cpp";
+        }
+        if (large_tensor_needed) {
+            return use_welford_and_not_rms_norm
+                       ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                         "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                       : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                         "reader_unary_interleaved_ln_large_tensor.cpp";
+        }
+        return use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                      "reader_unary_interleaved_ln_rm_gb.cpp"
                                     : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln_large_tensor.cpp")
-                             : reader_kernel_path;
+                                      "reader_unary_interleaved_ln.cpp";
+    }();
 
     // Build compute args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
@@ -420,9 +456,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         unpack_to_dest_mode[large_tensor_acc_cb] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    // Select compute kernel path
+    // Select compute kernel path.
+    // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.
+    // use_row_major_kernel (row-major gamma/beta only) still prevents large_tensor as before.
     const auto* compute_kernel_path =
-        large_tensor_needed and !use_row_major_kernel
+        (large_tensor_needed && (!use_row_major_kernel || input_is_row_major))
             ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
                                               "layernorm_large_tensor_welford.cpp"
                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
@@ -460,11 +498,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
         uint32_t tile_offset = curr_row * Wt;
 
+        // For rm_input readers, arg[3] is row_offset (actual row index, not tile offset).
+        // For tile readers, arg[3] is tile_offset (curr_row * Wt).
+        const uint32_t reader_arg3 = input_is_row_major ? curr_row * TILE_HEIGHT : tile_offset;
+
         std::vector<uint32_t> reader_args = {
             a_addr,
             num_tile_rows_per_core,
             Wt,
-            tile_offset,
+            reader_arg3,
             packed_one_value,
             std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
@@ -475,8 +517,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
+        // For the RM output writer arg[3] is the starting tile-row index (curr_row),
+        // not the flat tile offset, because the RM writer computes row addresses directly.
+        const uint32_t writer_arg3 = input_is_row_major ? curr_row : tile_offset;
         writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_addr, Wt, num_tile_rows_per_core, tile_offset});
+            core, std::vector<uint32_t>{dst_addr, Wt, num_tile_rows_per_core, writer_arg3});
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
@@ -500,9 +545,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build KernelDescriptor for writer kernel
     KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp";
+    writer_kernel_desc.kernel_source = input_is_row_major
+                                           ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
+                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "writer_unary_interleaved_start_id_blocked.cpp";
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
@@ -594,6 +641,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         const auto large_tensor_acc_tile_size = tt::tile_size(large_tensor_acc_data_format);
         program_descriptor.cbs.push_back(make_cb_descriptor(
             large_tensor_acc_tile_size, large_tensor_acc_cb, large_tensor_acc_data_format, large_tensor_acc_tile_size));
+    }
+
+    // CB 27: Row-major input staging buffer (only when input is ROW_MAJOR).
+    // Holds block_size tiles worth of row-major data for in-flight tilization via tilize_block().
+    if (input_is_row_major) {
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(in_rm_size, tt::CBIndex::c_27, in_data_format, in_single_tile_size));
+    }
+
+    // CB 28: Row-major output staging buffer (only when input is ROW_MAJOR → output also ROW_MAJOR).
+    // The compute kernel untilizes completed tiles from cb_out (CB 16) into this CB block-by-block;
+    // the RM writer kernel drains it and writes row-by-row to DRAM.
+    if (input_is_row_major) {
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(out_rm_size, tt::CBIndex::c_28, out_data_format, out_single_tile_size));
     }
 
     // CB 22: Intermediate 5 (if gamma or beta)
