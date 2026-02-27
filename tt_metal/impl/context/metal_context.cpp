@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -452,17 +453,25 @@ void MetalContext::teardown() {
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::atomic<MetalContext*> g_instance{nullptr};
 std::mutex g_instance_mutex;
+std::condition_variable g_instance_cv;
 bool registered_atexit = false;
+// Atomic flag to signal that shutdown is in progress. This prevents instance() from returning
+// a reference to an object that is about to be deleted by destroy_instance().
+// Using atomic_flag (guaranteed lock-free) instead of atomic<bool>.
+std::atomic_flag g_shutdown_in_progress = ATOMIC_FLAG_INIT;
 
 MetalContext& MetalContext::instance() {
+    // Fast path: check if instance exists and shutdown is not in progress
     MetalContext* instance = g_instance.load(std::memory_order_acquire);
-    if (instance) {
-        // There is a potential race condition here if the instance is being torn down while this call is running or
-        // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
-        // from the teardown process (maybe on one of several threads) and is synchronized with the teardown.
+    if (instance && !g_shutdown_in_progress.test(std::memory_order_acquire)) {
         return *instance;
     }
-    std::lock_guard lock(g_instance_mutex);
+
+    std::unique_lock<std::mutex> lock(g_instance_mutex);
+
+    // Wait if shutdown is in progress (another thread is destroying the instance)
+    g_instance_cv.wait(lock, []() { return !g_shutdown_in_progress.test(std::memory_order_acquire); });
+
     // Check again in case another thread created the instance while we were waiting for the lock.
     instance = g_instance.load(std::memory_order_acquire);
     if (!instance) {
@@ -481,20 +490,36 @@ MetalContext& MetalContext::instance() {
 }
 
 void MetalContext::destroy_instance(bool check_device_count) {
-    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
-    // one thread while no work is being done on the MetalContext.
+    std::unique_lock<std::mutex> lock(g_instance_mutex);
+
     MetalContext* instance = g_instance.load(std::memory_order_acquire);
     if (!instance) {
         return;
     }
+
     if (check_device_count && instance->device_manager() && instance->device_manager()->is_initialized() &&
         !instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
+
+    // Set shutdown flag to prevent new instance() calls from proceeding
+    g_shutdown_in_progress.test_and_set(std::memory_order_release);
+
+    // Notify any waiting threads that shutdown is in progress
+    lock.unlock();
+    g_instance_cv.notify_all();
+
+    // Delete the instance
     delete instance;
-    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
-    // return the old instance.
+
+    // Clear the instance pointer
     g_instance.store(nullptr, std::memory_order_release);
+
+    // Reset shutdown flag to allow future instance creation (if needed)
+    g_shutdown_in_progress.clear(std::memory_order_release);
+
+    // Notify any waiting threads that shutdown is complete
+    g_instance_cv.notify_all();
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
