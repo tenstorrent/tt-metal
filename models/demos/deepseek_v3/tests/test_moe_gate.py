@@ -53,7 +53,14 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
-        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoEGate,
+        hf_config,
+        (hf_state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe_gate",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function
@@ -127,11 +134,10 @@ def test_forward_pass(
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    topk_indices_pcc_required = 1.0
     # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
-    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
-    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
-    assert torch.allclose(reference_topk_indices, tt_topk_indices_torch), f"TopK experts indices output does not match"
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
+    assert torch.equal(reference_topk_indices, tt_topk_indices_torch), "TopK experts indices output does not match"
 
 
 if __name__ == "__main__":

@@ -3,19 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal_2xx_common.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::hal_2xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& l1_cache_enable_processors =
-        rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
-    auto processor_index = MetalContext::instance().hal().get_processor_index(
-        params.core_type, params.processor_class, params.processor_id);
-    defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
-    if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
+        params.rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
+    auto processor_index = hal_.get_processor_index(params.core_type, params.processor_class, params.processor_id);
+    if (params.rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
         l1_cache_enable_processors.contains(params.core_type, processor_index)) {
         defines.push_back("ENABLE_L1_DATA_CACHE");
     }
@@ -63,18 +61,25 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             }
             break;
         case HalProgrammableCoreType::ACTIVE_ETH: {
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
             defines.push_back("COMPILE_FOR_ERISC");
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
             break;
         }
         case HalProgrammableCoreType::IDLE_ETH: {
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
             defines.push_back(fmt::format("COMPILE_FOR_IDLE_ERISC={}", params.processor_id));
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
             break;
         }
-        default: TT_ASSERT(false, "Unsupported programmable core type {} to query defines", params.core_type); break;
+        default:
+            TT_ASSERT(
+                false,
+                "Unsupported programmable core type {} to query defines",
+                enchantum::to_string(params.core_type));
+            break;
     }
     return defines;
 }
@@ -123,7 +128,10 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                 default: TT_THROW("Invalid processor id {}", params.processor_id);
             }
             break;
-        default: TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", params.core_type); break;
+        default:
+            TT_ASSERT(
+                false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
+            break;
     }
     return srcs;
 }
@@ -147,6 +155,10 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
 std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params& params) const {
     if (params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM) {
         return "dm0";
+    }
+    if (params.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor_class == HalProcessorClassType::COMPUTE) {
+        return fmt::format("trisc{}", params.processor_id % 4);
     }
     return target_name(params);
 }

@@ -65,6 +65,7 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
+    uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
@@ -92,11 +93,6 @@ struct ComputeConfigDescriptor {
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
 };
-struct EthernetConfigDescriptor {
-    Eth eth_mode = Eth::SENDER;
-    NOC noc = NOC::NOC_0;
-    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
-};
 
 struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
@@ -107,12 +103,8 @@ struct KernelDescriptor {
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
-    using ConfigDescriptor = std::variant<
-        ReaderConfigDescriptor,
-        WriterConfigDescriptor,
-        DataMovementConfigDescriptor,
-        ComputeConfigDescriptor,
-        EthernetConfigDescriptor>;
+    using ConfigDescriptor = std::
+        variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
     std::string kernel_source;
