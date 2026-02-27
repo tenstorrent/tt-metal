@@ -93,12 +93,12 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
-@pytest.mark.parametrize("tensor_shape", [(2,), (3, 6, 40, 63, 20)])
-# @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
+@pytest.mark.parametrize("tensor_shape", [(170,), (3, 6, 40, 63, 20)])
+# @pytest.mark.parametrize("tensor_shape", [(), (17,), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [0, None])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("k", [1])
+@pytest.mark.parametrize("k", [50])
 def test_topk(device, tensor_shape, dim, dtype, layout, k):
     """
     Test the compatibility of the torch and ttnn topk output for different tensor shapes.
