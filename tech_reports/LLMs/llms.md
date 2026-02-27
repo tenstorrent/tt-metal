@@ -671,7 +671,7 @@ The first set of operations in the MLP are:
 w1_out = FF1(x)
 w3_out = FF3(x)
 ```
-Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the outputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
+Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the outputs are L1 sharded in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
 
 ```py
 compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(

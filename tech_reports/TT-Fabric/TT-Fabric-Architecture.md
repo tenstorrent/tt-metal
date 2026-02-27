@@ -393,7 +393,7 @@ The following diagram shows how the four ethernet ports per direction on WH mesh
 
 ## 2.3 TT-transport (Layer 4) <a id="layer_4"></a>
 
-TT-Transport implements virtual channels that are used to carry packets in the routing network. A virtual channel is composed of multiple buffers where each buffer holds packets packets from a dedicated source. Virtual channel buffer size depends upon amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
+TT-Transport implements virtual channels that are used to carry packets in the routing network. A virtual channel is composed of multiple buffers where each buffer holds packets from a dedicated source. Virtual channel buffer size depends upon amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
 
 ### 2.3.1 Bubble Flow Control <a id="dvc"></a>
 

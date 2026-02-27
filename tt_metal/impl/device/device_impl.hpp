@@ -141,7 +141,7 @@ public:
     // Puts device into reset
     bool close() override;
 
-    // Program cache interface. Synchronize with worker worker threads before querying or
+    // Program cache interface. Synchronize with worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
     void clear_program_cache() override;
