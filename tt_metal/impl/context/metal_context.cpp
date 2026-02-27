@@ -349,9 +349,12 @@ void MetalContext::teardown() {
     auto all_devices = cluster_->all_chip_ids();
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {
+        log_info(tt::LogMetal, "Teardown simulator ethernet cores");
         if (hal_->get_eth_fw_is_cooperative()) {
             for (ChipId device_id : all_devices) {
+                log_info(tt::LogMetal, "Teardown simulator ethernet cores for device {}", device_id);
                 for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                    log_info(tt::LogMetal, "Teardown simulator ethernet cores for logical core {}", logical_core.str());
                     CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::ETH);
                     erisc_send_exit_signal(device_id, virtual_core, false);
@@ -360,6 +363,7 @@ void MetalContext::teardown() {
                 }
             }
         }
+        log_info(tt::LogMetal, "Teardown simulator ethernet cores completed");
     }
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
