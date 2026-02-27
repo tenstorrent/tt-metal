@@ -92,14 +92,17 @@ class CBPoolAllocator:
 
     CBs from different phases that share the same (data_format, page_size,
     unpack_to_dest_mode) configuration are assigned to the same slot.
-    Different configs get separate slots.  Raises ValueError if the total
-    number of slots exceeds the device limit.
+    Different configs get separate slots.
+
+    The allocator itself imposes no slot limit.  The 32-slot hardware limit
+    is enforced externally when projecting to a per-group pool via
+    ``project_to_group()``, or by the caller when using the pool directly
+    for single-group builds.
     """
 
     MAX_SLOTS = 32
 
-    def __init__(self, max_slots: int = MAX_SLOTS):
-        self.max_slots = max_slots
+    def __init__(self):
         self._slots: Dict[int, CBSlot] = {}  # slot_index -> CBSlot
         # Maps CBPoolKey -> list of slot indices with that config.
         # Within a phase, each CB gets its own slot even if configs match;
@@ -124,47 +127,6 @@ class CBPoolAllocator:
         not be pool-allocated, remapped, or included in per-phase CB reset.
         """
         self._allocated_indices.add(index)
-
-    def force_phase_remap(
-        self,
-        phase_idx: int,
-        cb_info: Dict[int, "CBInfo"],
-        forced_remap: Dict[int, int],
-    ) -> None:
-        """Apply a pre-determined remap for a phase.
-
-        Used when multiple groups share a phase (e.g. stem LN in a branching
-        tree) and must produce identical CB slot assignments so that cross-group
-        multicast addresses match.  The forced_remap was computed by a reference
-        pool allocation and is replayed here to ensure consistency.
-
-        Registers slots/configs as if they were freshly allocated, so subsequent
-        phases can reuse them normally.  Phantom indices (present in the remap
-        but not in cb_info) are reserved without creating pool slots.
-        """
-        for orig_idx, slot_idx in forced_remap.items():
-            self._allocated_indices.add(slot_idx)
-            info = cb_info.get(orig_idx)
-            if info is None:
-                # Phantom CB — just reserve the index.
-                continue
-            key = info.pool_key
-            if slot_idx in self._slots:
-                # Slot already exists (from an earlier forced phase) — just update size.
-                self._slots[slot_idx].total_size = max(self._slots[slot_idx].total_size, info.total_size)
-            else:
-                self._slots[slot_idx] = CBSlot(
-                    slot_index=slot_idx,
-                    config=key,
-                    total_size=info.total_size,
-                    source_cb=info.source_cb,
-                    source_fmt=info.source_fmt,
-                )
-                self._slot_to_orig_index[slot_idx] = orig_idx
-                if key not in self._config_to_slots:
-                    self._config_to_slots[key] = []
-                self._config_to_slots[key].append(slot_idx)
-        self.phase_remaps.append(dict(forced_remap))
 
     def _alloc_index(self) -> int:
         """Find the next free slot index."""
@@ -369,27 +331,15 @@ class CBPoolAllocator:
         slot.total_size = max(slot.total_size, info.total_size)
 
     def _allocate_new_slot(self, key: CBPoolKey, info: CBInfo, orig_idx: int, phase_idx: int) -> int:
-        """Allocate a fresh slot, raising ValueError on overflow.
+        """Allocate a fresh slot.
 
         Prefers identity mapping (orig_idx -> orig_idx) when the slot is free,
         so that CBs keep their original hardware indices.
         """
-        if orig_idx not in self._allocated_indices and orig_idx < self.max_slots:
+        if orig_idx not in self._allocated_indices:
             slot_idx = orig_idx
         else:
             slot_idx = self._alloc_index()
-        if len(self._slots) + 1 > self.max_slots:
-            breakdown = [
-                f"  slot {si}: fmt={sl.config.data_format}, "
-                f"page_size={sl.config.page_size}, "
-                f"unpack={sl.config.unpack_to_dest_mode}"
-                for si, sl in sorted(self._slots.items())
-            ]
-            raise ValueError(
-                f"CB pool overflow: need {len(self._slots) + 1} slots but "
-                f"device limit is {self.max_slots}.\n"
-                f"Allocated slots:\n" + "\n".join(breakdown)
-            )
         self._allocated_indices.add(slot_idx)
         self._slots[slot_idx] = CBSlot(
             slot_index=slot_idx,
@@ -543,11 +493,11 @@ class CBPoolAllocator:
     def build_unpack_to_dest_mode(self) -> list:
         """Build merged unpack_to_dest_mode vector indexed by slot index.
 
-        Returns a list of exactly max_slots entries (matching the device's
+        Returns a list of exactly MAX_SLOTS entries (matching the device's
         NUM_CIRCULAR_BUFFERS) with the correct mode at each slot's index,
         Default elsewhere.
         """
-        result = [UnpackToDestMode.Default] * self.max_slots
+        result = [UnpackToDestMode.Default] * self.MAX_SLOTS
         for slot_idx, slot in self._slots.items():
             if slot.config.unpack_to_dest_mode is not None:
                 result[slot_idx] = slot.config.unpack_to_dest_mode
@@ -556,6 +506,99 @@ class CBPoolAllocator:
     def get_all_slot_indices(self) -> Set[int]:
         """All allocated slot indices (for sweep/clear)."""
         return set(self._slots.keys())
+
+    def project_to_group(
+        self,
+        group_global_indices: List[int],
+        padding_slots: Set[int],
+    ) -> "CBPoolAllocator":
+        """Project this global pool to a per-group pool for a core group.
+
+        Takes a list of global phase indices (one per group-local phase) and
+        a set of padding slot indices (for L1 alignment), and returns a new
+        ``CBPoolAllocator`` with:
+
+        - ``phase_remaps`` re-indexed from the global pool's remaps
+        - ``_slots`` containing referenced slots PLUS padding slots
+        - ``_config_to_slots``, ``_slot_to_orig_index``, ``_allocated_indices``
+          copied for all included slots
+        - ``_slot_alias_groups`` / ``_unique_alias_groups`` filtered to included
+
+        Validates that the projected pool has <= 32 slots.
+
+        Args:
+            group_global_indices: Index into this pool's ``phase_remaps`` for
+                each phase the group executes.  E.g., if the group runs
+                global ops [0, 2, 3], pass ``[0, 2, 3]``.
+            padding_slots: Extra slot indices to include for L1 alignment
+                (ensures identical CB L1 layout across groups sharing slots).
+
+        Returns:
+            A new ``CBPoolAllocator`` whose ``phase_remaps`` are local (0..K)
+            and whose ``_slots`` are the union of referenced + padding slots.
+
+        Raises:
+            ValueError: If the projected pool has > 32 slots.
+        """
+        projected = CBPoolAllocator()
+
+        # Collect phase_remaps for this group (re-indexed to local 0..K)
+        for global_idx in group_global_indices:
+            projected.phase_remaps.append(dict(self.phase_remaps[global_idx]))
+
+        # Determine which slots are referenced by this group
+        referenced_slots: Set[int] = set()
+        for remap in projected.phase_remaps:
+            referenced_slots.update(remap.values())
+
+        # Include padding slots
+        included_slots = referenced_slots | padding_slots
+
+        # Copy slot data for all included slots
+        for slot_idx in included_slots:
+            if slot_idx in self._slots:
+                projected._slots[slot_idx] = self._slots[slot_idx]
+                projected._allocated_indices.add(slot_idx)
+                if slot_idx in self._slot_to_orig_index:
+                    projected._slot_to_orig_index[slot_idx] = self._slot_to_orig_index[slot_idx]
+
+        # Rebuild _config_to_slots for included slots
+        for slot_idx, slot in projected._slots.items():
+            key = slot.config
+            if key not in projected._config_to_slots:
+                projected._config_to_slots[key] = []
+            projected._config_to_slots[key].append(slot_idx)
+
+        # Copy reserved indices (e.g. remote CB indices)
+        for idx in self._allocated_indices:
+            if idx not in projected._allocated_indices:
+                # Only copy reserved-but-no-slot indices if they would
+                # conflict with included slots
+                projected._allocated_indices.add(idx)
+
+        # Filter alias groups to included slots
+        for slot_idx, group in self._slot_alias_groups.items():
+            if slot_idx in included_slots:
+                projected._slot_alias_groups[slot_idx] = group
+        for group in self._unique_alias_groups:
+            if group & included_slots:
+                projected._unique_alias_groups.add(group)
+
+        # Validate 32-slot hardware limit
+        if len(projected._slots) > self.MAX_SLOTS:
+            breakdown = [
+                f"  slot {si}: fmt={sl.config.data_format}, "
+                f"page_size={sl.config.page_size}, "
+                f"unpack={sl.config.unpack_to_dest_mode}"
+                for si, sl in sorted(projected._slots.items())
+            ]
+            raise ValueError(
+                f"CB pool overflow: group projection needs {len(projected._slots)} "
+                f"slots but device limit is {self.MAX_SLOTS}.\n"
+                f"Allocated slots:\n" + "\n".join(breakdown)
+            )
+
+        return projected
 
 
 # =============================================================================

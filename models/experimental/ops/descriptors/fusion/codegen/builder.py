@@ -153,11 +153,16 @@ def _build_fused_descriptor(
     device: Any,
     target_core_range: Optional[Any] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
-    forced_phase_remaps: Optional[Dict[int, Dict[int, int]]] = None,
+    cb_pool: Optional[CBPoolAllocator] = None,
 ) -> _BuildResult:
     """Build a fused ProgramDescriptor from multiple phases with barrier sync.
 
     Discovers kernel roles dynamically via ``(risc_type, core_ranges)`` keys.
+
+    Args:
+        cb_pool: If provided, use this pre-built pool for CB allocation
+            (from global pool projection).  Otherwise, self-allocate
+            (used by the linear-chain path).
     """
     # Validate fp32 consistency
     _validate_fp32_consistency([p.op_descriptor for p in phases])
@@ -197,16 +202,17 @@ def _build_fused_descriptor(
         phase_kernel_indices.append(idx_map)
 
     # Pool-allocate CB slots based on compatibility keys.
-    # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
-    # without adding to remaps, so they are excluded from inter-phase CB reset.
-    pool = CBPoolAllocator(max_slots=32)
-    for phase in phases:
-        for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
-            pool.reserve_index(remote_idx)
-    for phase_idx, phase in enumerate(phases):
-        if forced_phase_remaps and phase_idx in forced_phase_remaps:
-            pool.force_phase_remap(phase_idx, phase.cb_info, forced_phase_remaps[phase_idx])
-        else:
+    if cb_pool is not None:
+        pool = cb_pool
+    else:
+        # Self-allocate (linear-chain path or single-group trees).
+        # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
+        # without adding to remaps, so they are excluded from inter-phase CB reset.
+        pool = CBPoolAllocator()
+        for phase in phases:
+            for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
+                pool.reserve_index(remote_idx)
+        for phase_idx, phase in enumerate(phases):
             phantom_indices = _get_phantom_cb_indices(phase)
             pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
 
