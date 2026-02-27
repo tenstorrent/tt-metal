@@ -290,7 +290,12 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
             pcie_devices_per_tray_[hostname],
             pcie_id_to_asic_location_[hostname]);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
-            TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
+            TrayID{tray_id},
+            asic_location,
+            cluster_desc_->get_board_type(src_chip_id),
+            src_unique_id,
+            src_chip_id,
+            hostname};
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
@@ -744,6 +749,11 @@ TrayID PhysicalSystemDescriptor::get_tray_id(AsicID asic_id) const {
 ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).asic_location;
+}
+
+ChipId PhysicalSystemDescriptor::get_umd_unique_id(AsicID asic_id) const {
+    TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
+    return asic_descriptors_.at(asic_id).umd_unique_id;
 }
 
 std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
