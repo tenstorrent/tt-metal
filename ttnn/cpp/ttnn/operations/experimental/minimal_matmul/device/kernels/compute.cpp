@@ -151,7 +151,9 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
             // LLK BUG: unary_bcast gives bad values if mixing fp32_acc_to_dest=True and bfloat16 circular buffer
             // (https://github.com/tenstorrent/tt-llk/issues/1338)
-            // Workaround is to use mul_tiles_bcast instead of unary_bcast/mul_binary_tile.
+            // To avoid the bug, we use:
+            // - unary_bcast/mul_binary_tile for fp32 (more accurate)
+            // - mul_tiles_bcast for bfloat16 (LLK bug workaround).
 
             // ternary_b_cb is [1, N], broadcast across M rows
             mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);

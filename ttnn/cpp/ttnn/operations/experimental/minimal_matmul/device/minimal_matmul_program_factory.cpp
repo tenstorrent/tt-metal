@@ -382,6 +382,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         defines["FUSE_TERNARY"] = "1";
 
         // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
+        // - If ternary_b / gate is float32 then use unary_bcast (row broadcast) + mul_binary_tile (accurate)
+        // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
         if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
