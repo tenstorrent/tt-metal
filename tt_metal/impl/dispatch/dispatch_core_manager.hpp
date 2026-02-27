@@ -61,12 +61,12 @@ public:
     /// dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
+    /// @param dispatch_core_config specifies the core type that is designated for dispatch functionality
     dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
 
-    /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command
+    /// @brief Gets the location of the kernel designated to read from the issue queue region from a particular command
     /// queue
     ///         Each command queue has an issue queue where host enqueues commands. This core relays to the dispatcher
     ///         core to interpret and launch For remote devices, this core is located on the associated MMIO device
@@ -79,7 +79,7 @@ public:
 
     bool is_prefetcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    /// @brief Gets the location of the kernel desginated to interface with prefetcher kernel running on mmio device.
+    /// @brief Gets the location of the kernel designated to interface with prefetcher kernel running on mmio device.
     ///         Prefetcher kernel on mmio device relays commands to prefetcher_d running on remote device.
     /// @param device_id ID of the device that a fast dispatch command targets
     /// @param channel assigned to the command queue where commands are enqueued
@@ -89,11 +89,11 @@ public:
 
     bool is_prefetcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular
+    /// @brief Gets the location of the kernel designated to write to the completion queue region for a particular
     /// command queue
     ///         Each command queue has one completion queue
     ///         For MMIO devices this core is the same as the issue queue reader core core because one kernel is
-    ///         responisble for interpreting + relaying commands and writing to completion queue For remote devices,
+    ///         responsible for interpreting + relaying commands and writing to completion queue For remote devices,
     ///         this core is located on the associated MMIO device since it can access sysmem (location of command
     ///         queue)
     /// @param device_id ID of the device that a fast dispatch command targets
@@ -152,7 +152,7 @@ public:
 
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
-    /// @param dispatch_core_config specfies the core type for dispatch kernels
+    /// @param dispatch_core_config specifies the core type for dispatch kernels
     void reset_dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
     /// @brief getting any available dispatch core for a device

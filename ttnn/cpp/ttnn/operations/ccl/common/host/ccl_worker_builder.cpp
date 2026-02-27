@@ -705,11 +705,11 @@ void generate_ccl_command_stream_to_kernel_args(
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW(
-                    "CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_EDM_TO_TENSOR is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
                 TT_THROW(
-                    "CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_TENSOR_TO_EDM is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
 

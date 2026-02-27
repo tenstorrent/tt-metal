@@ -70,7 +70,7 @@ CoreRange in0_sender_in1_sender(
     {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 ```
 
-Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1). These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section. We also ensure they are desginated as receiver cores because they will also take on in1 column work.
+Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1). These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section. We also ensure they are designated as receiver cores because they will also take on in1 column work.
 
 ``` cpp
 CoreRange in0_sender_in1_receiver(
@@ -121,7 +121,7 @@ Please refer to the CircularBuffers page for further details.
 
 ## Multicast Reader/Writer Kernel Setup
 
-In datareuse, we spawned reader and writer kernels per core. In mcast, we have desginated core ranges (or more generally speaking, `groups`), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
+In datareuse, we spawned reader and writer kernels per core. In mcast, we have designated core ranges (or more generally speaking, `groups`), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
 
 Below, let's set some core ID\'s associated with a specific sender-receiver kernel. Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the
 [tt_metal/impl/kernels/data_types.hpp](../../../tt_metal/impl/kernels/data_types.hpp) file.
@@ -241,7 +241,7 @@ auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores
 
 ## Kernel Runtime Arguments
 
-Recall that we just desginated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.
+Recall that we just designated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordinates.
 
 ``` cpp
 std::vector<uint32_tmm_reader_args = {

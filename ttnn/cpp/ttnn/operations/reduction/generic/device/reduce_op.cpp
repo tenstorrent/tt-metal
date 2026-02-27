@@ -95,7 +95,7 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
-    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto tilized_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());
