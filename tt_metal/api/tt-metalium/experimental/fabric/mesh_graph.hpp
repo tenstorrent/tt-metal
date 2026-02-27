@@ -92,7 +92,7 @@ using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<ChipId,
 using AnnotatedIntermeshConnections =
     std::vector<std::tuple<std::pair<uint32_t, port_id_t>, std::pair<uint32_t, port_id_t>>>;
 
-// Parsed from the Mesh Graph Descriptor. The user can specify the number of channels betweeen meshes (relaxed mode)
+// Parsed from the Mesh Graph Descriptor. The user can specify the number of channels between meshes (relaxed mode)
 // or pin connectiosn to specific exit nodes (strict mode).
 // Stores connections specified in relaxed mode. Mapping: src_mesh -> dst_mesh -> num_channels
 using RequestedIntermeshConnections = std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>;
