@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "llrt/rtoptions.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -20,15 +21,13 @@ using namespace tt::tt_metal;
 // This test requires simulator environment
 TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
+    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
     auto mesh_device = devices_[0];
 
-    env_var = std::getenv("TT_METAL_DPRINT_CORES");
-    if (env_var == nullptr) {
+    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Compute kernels."
                   << std::endl;
@@ -70,15 +69,13 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 // This test requires simulator environment
 TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
+    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
     auto mesh_device = devices_[0];
 
-    env_var = std::getenv("TT_METAL_DPRINT_CORES");
-    if (env_var == nullptr) {
+    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Compute kernels."
                   << std::endl;
@@ -120,8 +117,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 // This test requires simulator environment
 TEST_F(MeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
     // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
+    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
