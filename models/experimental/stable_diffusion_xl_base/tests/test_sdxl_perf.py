@@ -133,20 +133,40 @@ def test_refiner_unet(
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
         ),
         (
-            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'",
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_1024x1024_decode'",
             663_083_865,
             "sdxl_vae",
-            "sdxl_vae_decode",
+            "sdxl_vae_decode_1024x1024",
             VAE_DEVICE_TEST_TOTAL_ITERATIONS,
             1,
             0.015,
             "",
         ),
         (
-            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'",
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_512x512_decode'",
+            171_560_642,
+            "sdxl_vae",
+            "sdxl_vae_decode_512x512",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_1024x1024_encode'",
             324_271_938,
             "sdxl_vae",
-            "sdxl_vae_encode",
+            "sdxl_vae_encode_1024x1024",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_512x512_encode'",
+            83_537_085,
+            "sdxl_vae",
+            "sdxl_vae_encode_512x512",
             VAE_DEVICE_TEST_TOTAL_ITERATIONS,
             1,
             0.015,
@@ -154,7 +174,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'",
-            14_609_421,
+            13_112_562,
             "sdxl_clip_encoder_1",
             "sdxl_clip_encoder_1",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -164,7 +184,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_2'",
-            70_551_148,  # Note: this is an average value of 30 test runs due to high variability
+            63_591_763,  # Note: this is an average value of 30 test runs due to high variability
             "sdxl_clip_encoder_2",
             "sdxl_clip_encoder_2",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -177,8 +197,10 @@ def test_refiner_unet(
         "test_sdxl_unet_1024x1024",
         "test_sdxl_unet_512x512",
         "test_sdxl_refiner_unet",
-        "test_sdxl_vae_decode",
-        "test_sdxl_vae_encode",
+        "test_sdxl_vae_decode_1024x1024",
+        "test_sdxl_vae_decode_512x512",
+        "test_sdxl_vae_encode_1024x1024",
+        "test_sdxl_vae_encode_512x512",
         "test_sdxl_clip_encoder_1",
         "test_sdxl_clip_encoder_2",
     ],
@@ -187,7 +209,7 @@ def test_refiner_unet(
 def test_sdxl_perf_device(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    os.environ["TT_MM_THROTTLE_PERF"] = "0" if "clip_encoder" in command else "5"
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,

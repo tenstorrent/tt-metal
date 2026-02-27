@@ -201,7 +201,7 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
         size_t idx = 0;
         for (const auto& [logical_id, pcie_id] : chips_with_mmio) {
             local_mapping[2 * idx] = static_cast<uint32_t>(pcie_id);
-            local_mapping[2 * idx + 1] = static_cast<uint32_t>(logical_id);
+            local_mapping[(2 * idx) + 1] = static_cast<uint32_t>(logical_id);
             idx++;
         }
     }
@@ -248,11 +248,11 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
             std::string hostname(&all_hostnames_buf[r * max_hostname_len]);
             auto& mapping = host_pcie_to_logical[hostname];
             for (uint32_t i = 0; i < max_num_devices; i++) {
-                uint32_t pcie_id = all_mappings[r * 2 * max_num_devices + 2 * i];
+                uint32_t pcie_id = all_mappings[(r * 2 * max_num_devices) + (2 * i)];
                 if (pcie_id == UINT32_MAX) {
                     break;
                 }
-                mapping[pcie_id] = all_mappings[r * 2 * max_num_devices + 2 * i + 1];
+                mapping[pcie_id] = all_mappings[(r * 2 * max_num_devices) + (2 * i) + 1];
             }
         }
 
@@ -313,7 +313,6 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
-
     // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as
     // logical IDs (BDF-sorted indices), not PCI device IDs. The cluster descriptor's chip_id is the
     // logical ID; chips_with_mmio maps chip_id (logical) -> pci_device_id.
@@ -325,15 +324,12 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     YAML::Node tray_to_pcie_device_mapping;
     YAML::Node device_mapping;
     for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(my_host)) {
-        std::vector<uint32_t> logical_devices_vec;
-        for (uint32_t pcie_id : pcie_devices) {
-            auto it = pcie_id_to_logical_id.find(pcie_id);
-            if (it != pcie_id_to_logical_id.end()) {
-                logical_devices_vec.push_back(it->second);
-            }
+        // Convert unordered_set to vector for YAML serialization
+        std::vector<uint32_t> logical_ids;
+        for (const auto& pcie_device : pcie_devices) {
+            logical_ids.push_back(pcie_id_to_logical_id.at(pcie_device));
         }
-        std::sort(logical_devices_vec.begin(), logical_devices_vec.end());
-        device_mapping[tray_id] = logical_devices_vec;
+        device_mapping[tray_id] = logical_ids;
     }
     tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());

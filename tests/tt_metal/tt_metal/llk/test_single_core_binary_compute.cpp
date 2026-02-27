@@ -311,6 +311,7 @@ bool single_core_binary(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking

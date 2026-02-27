@@ -936,6 +936,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& cr : cb->core_ranges().ranges()) {
+            TT_FATAL(
+                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                cr.str(),
+                this->id,
+                grid_size.x,
+                grid_size.y);
+        }
+    }
+}
+
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     const auto& hal = MetalContext::instance().hal();
@@ -1456,6 +1471,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
@@ -1699,17 +1716,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
-    detail::DataflowBuffersGetter dataflow_buffers_getter =
-        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
-        return this->dataflow_buffers_;
-    };
-
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
+        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
 }
@@ -1721,11 +1733,18 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance().hal();
+
+    // Collect dataflow buffers from all programs
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+    for (ProgramImpl* program : programs) {
+        for (const auto& dfb : program->dataflow_buffers()) {
+            dataflow_buffers.push_back(dfb);
+        }
+    }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
@@ -1747,7 +1766,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index,
             kernel_groups_getter(index),
-            dataflow_buffers_getter(),
+            dataflow_buffers,
             state.offset,
             state.dfb_offset,
             state.dfb_size);

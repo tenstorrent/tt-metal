@@ -24,7 +24,7 @@ The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast d
 but skip matmul2 via is_matmul2_core=false (col 12 rows 0-8 + row 9 cols 4-11).
 
 Core Layout:
-- SDPA Workers: (2,8)-(5,8), (2,9)-(5,9) = 8 cores
+- SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
 - TP All-Reduce Receiver = Gather core (12, 9): already has local data after Gather2
 - TP All-Reduce Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
 
 
@@ -678,12 +679,9 @@ def test_post_sdpa_with_sdpa_phase(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-    # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
+    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),  # 4 cores
-            ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),  # 4 cores
-        ]
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
     )
 
     # SDPA forwarder cores

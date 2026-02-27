@@ -157,30 +157,37 @@ jobs:
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
-      # Note: This checkout is needed because this is a separate job that runs before ttnn-pytests.
-      # Each job runs in a fresh environment, so we can't reuse the checkout from ttnn-pytests.
-      # We use sparse checkout to efficiently fetch only the test definitions YAML file.
       - name: Checkout repository for test definitions
         uses: actions/checkout@v4
         with:
-          sparse-checkout: ${{ env.TTNN_TESTS_YAML }}
-          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
 
       - name: Compute TTSim-compatible tests
         shell: bash
         id: compute-tests
         run: |
           set -euo pipefail
-
-          # Read test definitions from shared YAML file and filter for ttsim-compatible tests
-          echo "[info] Reading test definitions from $TTNN_TESTS_YAML"
-          ttsim_tests=$(yq -o=json '.tests | [.[] | select(.ttsim == true)]' "$TTNN_TESTS_YAML")
-          echo "[info] TTSim-compatible tests:"
-          echo "$ttsim_tests" | jq
-
-          # Check that we have a valid test list
-          echo "$ttsim_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
-          echo "ttnn-tests=$(echo $ttsim_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          pip3 install -q PyYAML
+          python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
+          import json, sys, yaml
+          path, out_path = sys.argv[1], sys.argv[2]
+          with open(path) as f:
+              tests = yaml.safe_load(f)
+          # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
+          TTSIM_TIMEOUT_MINUTES = 20
+          entries = []
+          for t in tests:
+              if not t.get("ttsim") or not t.get("cmd"):
+                  continue
+              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": t.get("cmd", ""), "timeout": TTSIM_TIMEOUT_MINUTES})
+          if not entries:
+              raise SystemExit("No TTSim-compatible TTNN tests found (ttsim: true)")
+          with open(out_path, "a") as f:
+              f.write("ttnn-tests<<EOF\n" + json.dumps(entries) + "\nEOF\n")
+          PY
 
   # ---------------------------------------------------------------------------
   # TTNN Pytests on TTSim (uses shared test definitions)
@@ -215,7 +222,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}:/work
       env:
-        ARCH_NAME: ${{ matrix.arch.name }}
         TT_METAL_SIMULATOR_HOME: /work/sim
         TT_METAL_SIMULATOR: /work/sim/libttsim.so
         TT_METAL_SLOW_DISPATCH_MODE: 1

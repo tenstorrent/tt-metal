@@ -371,6 +371,7 @@ void run_single_core_broadcast(
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
