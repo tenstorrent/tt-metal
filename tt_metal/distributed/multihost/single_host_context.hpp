@@ -40,6 +40,7 @@ public:
 
     /* --------------- the rest of the methods are unsupported and throw --------- */
     void barrier() const override;
+    bool barrier_with_timeout(std::chrono::milliseconds timeout) const override;
 
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;

@@ -7,9 +7,11 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
@@ -248,6 +250,34 @@ Rank MPIContext::rank() const { return Rank(rank_); }
 Size MPIContext::size() const { return Size(size_); }
 bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
 void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
+
+bool MPIContext::barrier_with_timeout(std::chrono::milliseconds timeout) const {
+    MPI_Request req{};
+    MPI_CHECK(MPI_Ibarrier(comm_, &req));
+
+    auto start_time = std::chrono::steady_clock::now();
+    int flag = 0;
+
+    while (!flag) {
+        MPI_CHECK(MPI_Test(&req, &flag, MPI_STATUS_IGNORE));
+        if (flag) {
+            return true;  // Barrier completed successfully
+        }
+
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed) >= timeout) {
+            // Cancel the request on timeout (best effort)
+            MPI_Cancel(&req);
+            MPI_Request_free(&req);
+            return false;  // Timeout occurred
+        }
+
+        // Small sleep to avoid busy-waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    return true;
+}
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 

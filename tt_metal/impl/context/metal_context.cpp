@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-#include <condition_variable>
+#include <atomic>
 #include <cstdint>
-#include <exception>
 #include <filesystem>
 #include <algorithm>
 #include <mutex>
 #include <future>
-#include <thread>
 #include <vector>
 #include <unordered_set>
 
@@ -25,6 +22,7 @@
 #include "hal_types.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -37,6 +35,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
@@ -46,7 +45,6 @@
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
-#include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -206,13 +204,14 @@ void MetalContext::initialize(
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
-    bool is_galaxy_cluster = cluster_->is_galaxy_cluster();
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
+    // Need DispatchMemMap for both dispatch core types
+    tt_metal::DispatchSettings::initialize(*cluster_);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
+        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
     rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -233,7 +232,6 @@ void MetalContext::initialize(
     }
 
     if (rtoptions_.get_profiler_enabled()) {
-        TT_FATAL(cluster_->arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -354,31 +352,13 @@ void MetalContext::teardown() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {
         if (hal_->get_eth_fw_is_cooperative()) {
-            // RAII guard to ensure teardown_in_progress is always reset, even if exceptions occur
-            struct TeardownInProgressGuard {
-                tt::tt_fabric::ControlPlane& control_plane_;
-                explicit TeardownInProgressGuard(tt::tt_fabric::ControlPlane& cp) : control_plane_(cp) {
-                    control_plane_.set_teardown_in_progress(true);
-                }
-                ~TeardownInProgressGuard() { control_plane_.set_teardown_in_progress(false); }
-            };
-
-            TeardownInProgressGuard guard(this->get_control_plane());
             for (ChipId device_id : all_devices) {
-                try {
-                    for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-                        CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
-                            device_id, logical_core, CoreType::ETH);
-                        erisc_send_exit_signal(device_id, virtual_core, false);
-                        while (erisc_app_still_running(device_id, virtual_core)) {
-                        }
+                for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                    CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core, CoreType::ETH);
+                    erisc_send_exit_signal(device_id, virtual_core, false);
+                    while (erisc_app_still_running(device_id, virtual_core)) {
                     }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "Skipping ethernet core cleanup for chip {} during teardown: {}",
-                        device_id,
-                        e.what());
                 }
             }
         }
@@ -425,7 +405,6 @@ void MetalContext::teardown() {
     // Deinitialize inspector
     inspector_data_.reset();
 
-    system_mesh_.reset();
     control_plane_.reset();
 
     noc_debug_state_.reset();
@@ -433,16 +412,12 @@ void MetalContext::teardown() {
     // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
     // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
     // when context is re-initialized).
-    // Hold mutex to prevent races with concurrent readers
-    {
-        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
-        dram_bank_offset_map_.clear();
-        l1_bank_offset_map_.clear();
-        dram_bank_to_noc_xy_.clear();
-        l1_bank_to_noc_xy_.clear();
-        worker_logical_col_to_virtual_col_.clear();
-        worker_logical_row_to_virtual_row_.clear();
-    }
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
@@ -453,25 +428,17 @@ void MetalContext::teardown() {
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::atomic<MetalContext*> g_instance{nullptr};
 std::mutex g_instance_mutex;
-std::condition_variable g_instance_cv;
 bool registered_atexit = false;
-// Atomic flag to signal that shutdown is in progress. This prevents instance() from returning
-// a reference to an object that is about to be deleted by destroy_instance().
-// Using atomic_flag (guaranteed lock-free) instead of atomic<bool>.
-std::atomic_flag g_shutdown_in_progress = ATOMIC_FLAG_INIT;
 
 MetalContext& MetalContext::instance() {
-    // Fast path: check if instance exists and shutdown is not in progress
     MetalContext* instance = g_instance.load(std::memory_order_acquire);
-    if (instance && !g_shutdown_in_progress.test(std::memory_order_acquire)) {
+    if (instance) {
+        // There is a potential race condition here if the instance is being torn down while this call is running or
+        // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
+        // from the teardown process (maybe on one of several threads) and is synchronized with the teardown.
         return *instance;
     }
-
-    std::unique_lock<std::mutex> lock(g_instance_mutex);
-
-    // Wait if shutdown is in progress (another thread is destroying the instance)
-    g_instance_cv.wait(lock, []() { return !g_shutdown_in_progress.test(std::memory_order_acquire); });
-
+    std::lock_guard lock(g_instance_mutex);
     // Check again in case another thread created the instance while we were waiting for the lock.
     instance = g_instance.load(std::memory_order_acquire);
     if (!instance) {
@@ -490,36 +457,20 @@ MetalContext& MetalContext::instance() {
 }
 
 void MetalContext::destroy_instance(bool check_device_count) {
-    std::unique_lock<std::mutex> lock(g_instance_mutex);
-
+    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
+    // one thread while no work is being done on the MetalContext.
     MetalContext* instance = g_instance.load(std::memory_order_acquire);
     if (!instance) {
         return;
     }
-
     if (check_device_count && instance->device_manager() && instance->device_manager()->is_initialized() &&
         !instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
-
-    // Set shutdown flag to prevent new instance() calls from proceeding
-    g_shutdown_in_progress.test_and_set(std::memory_order_release);
-
-    // Notify any waiting threads that shutdown is in progress
-    lock.unlock();
-    g_instance_cv.notify_all();
-
-    // Delete the instance
     delete instance;
-
-    // Clear the instance pointer
+    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
+    // return the old instance.
     g_instance.store(nullptr, std::memory_order_release);
-
-    // Reset shutdown flag to allow future instance creation (if needed)
-    g_shutdown_in_progress.clear(std::memory_order_release);
-
-    // Notify any waiting threads that shutdown is complete
-    g_instance_cv.notify_all();
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
@@ -556,30 +507,26 @@ void MetalContext::reinitialize_for_real_hardware() {
 
     // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
     // must be cleared after switching to the new cluster configuration.
-    // Hold mutex to prevent races with concurrent readers
-    {
-        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
-        dram_bank_offset_map_.clear();
-        l1_bank_offset_map_.clear();
-        dram_bank_to_noc_xy_.clear();
-        l1_bank_to_noc_xy_.clear();
-        worker_logical_col_to_virtual_col_.clear();
-        worker_logical_row_to_virtual_row_.clear();
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 
-        dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-        l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-        dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-        l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-        worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-        worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-        for (ChipId device_id : cluster_->all_chip_ids()) {
-            dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-            l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-            dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-            l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-            worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-            worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-        }
+    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+    for (ChipId device_id : cluster_->all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
     teardown_dispatch_state();
@@ -589,9 +536,14 @@ void MetalContext::reinitialize_for_real_hardware() {
 }
 
 void MetalContext::teardown_base_objects() {
+    // Set flag to prevent lazy initialization during teardown
+    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
+
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
-    system_mesh_.reset();
-    control_plane_.reset();
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        control_plane_.reset();
+    }
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
@@ -653,23 +605,19 @@ MetalContext::MetalContext() {
     initialize_base_objects();
 
     // Initialize some container members to allow threadsafe operations on them later
-    // Hold mutex during initialization to prevent races with concurrent access
-    {
-        std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
-        dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-        l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-        dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-        l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-        worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-        worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-        for (ChipId device_id : cluster_->all_chip_ids()) {
-            dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-            l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-            dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-            l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-            worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-            worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-        }
+    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+    for (ChipId device_id : cluster_->all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
     device_manager_ = std::make_unique<DeviceManager>();
@@ -681,16 +629,11 @@ const distributed::multihost::DistributedContext& MetalContext::full_world_distr
 }
 
 const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
-    // If control plane is not initialized, return the global distributed context.
-    // Read control_plane_ under its mutex to avoid racing with initialization/reset.
-    {
-        std::lock_guard<std::mutex> lock(control_plane_mutex_);
-        if (!control_plane_) {
-            return *distributed_context_;
-        }
+    // If control plane is not initilazed, return the global distributed context
+    if (!control_plane_) {
+        return *distributed_context_;
     }
-    // Thread-safe lazy initialization of compute-only distributed context
-    std::lock_guard<std::mutex> lock(compute_only_context_mutex_);
+    // Lazy initilazation of compute only distributed context
     if (!compute_only_distributed_context_) {
         compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
     }
@@ -833,22 +776,20 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
+
+    // Prevent lazy initialization during teardown to avoid deadlocks and use-after-free
+    if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
+        TT_THROW(
+            "ControlPlane is being destroyed. Cannot access control plane during teardown. "
+            "Ensure all devices are closed before destroying MetalContext.");
+    }
+
     if (!control_plane_) {
         // Initialize control plane (creates stub for mock devices)
+        log_debug(tt::LogDistributed, "Lazy initializing ControlPlane from get_control_plane()");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
-}
-
-distributed::SystemMesh& MetalContext::get_system_mesh() {
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    if (!system_mesh_) {
-        if (!control_plane_) {
-            this->initialize_control_plane_impl();
-        }
-        system_mesh_ = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
-    }
-    return *system_mesh_;
 }
 
 void MetalContext::set_custom_fabric_topology(
@@ -860,7 +801,6 @@ void MetalContext::set_custom_fabric_topology(
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
     custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
-    // set_fabric_config will acquire control_plane_mutex_ where needed for thread safety
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -868,13 +808,8 @@ void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
-    // Reset the system mesh and control plane, since they were initialized with custom parameters.
-    // Hold mutex when modifying control_plane_ and system_mesh_ for thread safety
-    {
-        std::lock_guard<std::mutex> lock(control_plane_mutex_);
-        system_mesh_.reset();
-        control_plane_.reset();
-    }
+    // Reset the control plane, since it was initialized with custom parameters.
+    control_plane_.reset();
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
@@ -894,6 +829,9 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
+
+    // Set flag to prevent lazy initialization during teardown
+    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
 
     // Only clear if control plane exists; do not call get_control_plane() or
     // we may lazily create one during teardown (e.g. after devices are
@@ -980,15 +918,12 @@ void MetalContext::set_fabric_config(
     this->fabric_router_config_ = router_config;
 
     // Reinitialize control plane with updated fabric settings
-    // Hold mutex when modifying control_plane_ and system_mesh_ for thread safety
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (control_plane_ != nullptr) {
         log_info(
             tt::LogMetal,
             "Fabric config changed from {} to {}, reinitializing control plane",
-            control_plane_->get_fabric_config(),
+            this->get_control_plane().get_fabric_config(),
             this->fabric_config_);
-        system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 }
@@ -1120,66 +1055,42 @@ void MetalContext::initialize_control_plane() {
 }
 
 void MetalContext::initialize_control_plane_impl() {
-    constexpr int kMaxControlPlaneInitAttempts = 5;
-    constexpr std::chrono::seconds kInitialBackoff(1);
+    // Reset teardown flag to allow control plane initialization
+    // This is needed when re-initializing after a previous teardown
+    control_plane_teardown_in_progress_.clear(std::memory_order_release);
 
-    for (int attempt = 1; attempt <= kMaxControlPlaneInitAttempts; attempt++) {
-        try {
-            control_plane_.reset();
-            if (custom_mesh_graph_desc_path_.has_value()) {
-                log_debug(
-                    tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
-                std::filesystem::path mesh_graph_desc_path =
-                    std::filesystem::path(custom_mesh_graph_desc_path_.value());
-                TT_FATAL(
-                    std::filesystem::exists(mesh_graph_desc_path),
-                    "Custom mesh graph descriptor file not found: {}",
-                    mesh_graph_desc_path.string());
+    if (custom_mesh_graph_desc_path_.has_value()) {
+        log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
+        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Custom mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
 
-                log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-                this->construct_control_plane(mesh_graph_desc_path);
-                return;
-            }
-            // If no custom mesh graph descriptor use auto discovery to generate mesh graph
-            log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
+        log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
+        return;
+    }
+    // If no custom mesh graph descriptor use auto discovery to generate mesh graph
+    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
-            if (*distributed_context_->size() == 1) {
-                this->construct_control_plane();
-            } else {
-                auto cluster_type = cluster_->get_cluster_type();
-                auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
-                std::filesystem::path mesh_graph_desc_path =
-                    tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-                        cluster_type, rtoptions_.get_root_dir(), fabric_type);
+    if (*distributed_context_->size() == 1) {
+        this->construct_control_plane();
+    } else {
+        auto cluster_type = cluster_->get_cluster_type();
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
+        std::filesystem::path mesh_graph_desc_path =
+            tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
-                log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+        log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
-                TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
-                TT_FATAL(
-                    std::filesystem::exists(mesh_graph_desc_path),
-                    "Mesh graph descriptor file not found: {}",
-                    mesh_graph_desc_path.string());
-                this->construct_control_plane(mesh_graph_desc_path);
-            }
-            return;
-        } catch (const tt::tt_fabric::ControlPlaneInitFailure& e) {
-            if (attempt == kMaxControlPlaneInitAttempts) {
-                TT_FATAL(
-                    false,
-                    "Control plane initialization failed after {} attempts: {}",
-                    kMaxControlPlaneInitAttempts,
-                    e.what());
-            }
-            auto backoff = kInitialBackoff * (1 << (attempt - 1));
-            log_warning(
-                tt::LogDistributed,
-                "Control plane init failed (attempt {}/{}): {}. Retrying in {}s...",
-                attempt,
-                kMaxControlPlaneInitAttempts,
-                e.what(),
-                backoff.count());
-            std::this_thread::sleep_for(backoff);
-        }
+        TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
     }
 }
 
@@ -1436,9 +1347,6 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    // Hold lock while reading bank tables to prevent races with table generation
-    std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
-
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1524,9 +1432,6 @@ void MetalContext::initialize_device_bank_to_noc_tables(
 void MetalContext::initialize_worker_logical_to_virtual_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core) {
     // Generate logical to virtual map for DRAM and L1 banks
-    // Hold lock while reading worker logical tables to prevent races with table generation
-    std::lock_guard<std::mutex> lock(bank_to_noc_tables_mutex_);
-
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
         worker_logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
@@ -1656,8 +1561,9 @@ void MetalContext::initialize_firmware(
                 auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
                     core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
-                        device_id, core_type_idx, processor_class, riscv_id);
+                    auto fw_path = BuildEnvManager::get_instance()
+                                       .get_firmware_build_state(device_id, core_type_idx, processor_class, riscv_id)
+                                       .get_target_out_path("");
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
                     hal_->set_iram_text_size(
@@ -1738,8 +1644,10 @@ void MetalContext::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_->get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
-                            device_id, core_type_idx, processor_class, eriscv_id);
+                        auto fw_path =
+                            BuildEnvManager::get_instance()
+                                .get_firmware_build_state(device_id, core_type_idx, processor_class, eriscv_id)
+                                .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         [[maybe_unused]] uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(

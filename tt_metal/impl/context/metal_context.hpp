@@ -228,6 +228,10 @@ private:
     // Mutex to protect control_plane_ for thread-safe access
     std::mutex control_plane_mutex_;
 
+    // Atomic flag to prevent control plane initialization during teardown
+    // This prevents deadlocks where get_control_plane() is called during destruction
+    std::atomic_flag control_plane_teardown_in_progress_ = ATOMIC_FLAG_INIT;
+
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;

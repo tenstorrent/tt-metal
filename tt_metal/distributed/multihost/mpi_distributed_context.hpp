@@ -73,6 +73,7 @@ public:
     [[nodiscard]] Size size() const override;
     [[nodiscard]] bool supports_fault_tolerance() const override;
     void barrier() const override;
+    bool barrier_with_timeout(std::chrono::milliseconds timeout) const override;
 
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;

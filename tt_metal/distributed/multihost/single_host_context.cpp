@@ -63,6 +63,11 @@ void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
 void SingleHostContext::barrier() const { return; }
 
+bool SingleHostContext::barrier_with_timeout(std::chrono::milliseconds timeout [[maybe_unused]]) const {
+    // Single host context always returns immediately
+    return true;
+}
+
   /* Remaining methods throw for single-host context */
 void SingleHostContext::send(
     tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
