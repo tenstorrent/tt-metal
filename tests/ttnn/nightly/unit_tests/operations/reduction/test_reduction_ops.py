@@ -91,3 +91,63 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize("tensor_shape", [(2,)])
+# @pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
+@pytest.mark.parametrize("dim", [0])
+# @pytest.mark.parametrize("dim", [0, -1])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("k", [1])
+def test_topk(device, tensor_shape, dim, dtype, layout, k):
+    """
+    Test the compatibility of the torch and ttnn topk output for different tensor shapes.
+    topk returns a tuple of (values, indices). We compare values via PCC and validate
+    indices semantically by gathering from the original tensor and checking cosine similarity,
+    since torch and ttnn may break ties differently in bfloat16.
+    """
+    torch.manual_seed(0)
+    rank = len(tensor_shape)
+
+    if dim < -rank or dim > rank - 1:
+        pytest.skip("Dimension not applicable for input shape")
+
+    torch_tensor = torch.randn(tensor_shape, dtype=dtype)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)
+
+    torch_errored = False
+    try:
+        torch_values, torch_indices = torch.topk(torch_tensor, k, dim=dim)
+    except (IndexError, TypeError, RuntimeError):
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        ttnn_result = ttnn.topk(ttnn_tensor, k, dim=dim)
+    except IndexError:
+        ttnn_errored = True
+
+    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
+
+    if torch_errored:
+        return
+
+    ttnn_values = ttnn.to_torch(ttnn.from_device(ttnn_result[0]))
+    ttnn_indices = ttnn.to_torch(ttnn.from_device(ttnn_result[1]))
+
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=0.1, atol=0.1)
+    assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
+
+    ttnn_indices = ttnn_indices.to(torch.int32)
+    # Indices can come back as negative values from ttnn (stored as unsigned in bfloat16).
+    # This is fixed by adding 2^16 to negative values.
+    ttnn_indices = torch.where(ttnn_indices < 0, ttnn_indices + 65536, ttnn_indices)
+
+    ttnn_gather_from_indices = torch.gather(torch_tensor, dim, ttnn_indices.to(torch.int64))
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    cosine_sim = torch.mean(cosine(torch_values, ttnn_gather_from_indices))
+    assert (
+        cosine_sim > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {cosine_sim} which is less than 0.99"
