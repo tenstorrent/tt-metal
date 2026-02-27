@@ -51,7 +51,7 @@ inline PhysicalSystemDescriptor make_physical_system_descriptor() {
 
 // Create an L1 mesh buffer sharded to a single logical core.
 inline std::shared_ptr<MeshBuffer> make_l1_mesh_buffer(
-    MeshDevice* mesh_device, const CoreCoord& core, uint32_t size) {
+    MeshDevice* mesh_device, const CoreCoord& core, DeviceAddr size) {
     auto shard_params = ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     const DeviceLocalBufferConfig local_config{
         .page_size = size,

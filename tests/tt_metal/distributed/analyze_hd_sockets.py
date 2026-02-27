@@ -2,17 +2,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Analyze H2D/D2H socket benchmark results (throughput or latency).
+"""Analyze H2D/D2H socket benchmark results.
+
+Input: Google Benchmark CSV from distributed_benchmarks
+  (--benchmark_format=csv --benchmark_out=results.csv)
 
 Usage:
-  python3 analyze_hd_sockets.py --d2h-throughput  results.csv
-  python3 analyze_hd_sockets.py --d2h-latency     latency_results.csv
-  python3 analyze_hd_sockets.py --d2h-ping        ping_dir/
-  python3 analyze_hd_sockets.py --d2h-multichip   multichip.log
-  python3 analyze_hd_sockets.py --h2d-throughput  h2d_results.csv
-  python3 analyze_hd_sockets.py --h2d-latency     h2d_latency.csv
-  python3 analyze_hd_sockets.py --h2d-ping        h2d_ping_dir/
-  python3 analyze_hd_sockets.py --h2d-multichip   h2d_multichip.log
+  python3 analyze_hd_sockets.py --gbench          results.csv   # auto-detect type
+  python3 analyze_hd_sockets.py --d2h-throughput   results.csv
+  python3 analyze_hd_sockets.py --d2h-latency      results.csv
+  python3 analyze_hd_sockets.py --d2h-ping         ping_dir/
+  python3 analyze_hd_sockets.py --d2h-multichip    results.csv
+  python3 analyze_hd_sockets.py --h2d-throughput   results.csv
+  python3 analyze_hd_sockets.py --h2d-latency      results.csv
+  python3 analyze_hd_sockets.py --h2d-ping         ping_dir/
+  python3 analyze_hd_sockets.py --h2d-multichip    results.csv
 """
 
 import argparse
@@ -36,227 +40,289 @@ def human_bytes(n):
     return f"{n:.1f}T"
 
 
-# ── data loading ──────────────────────────────────────────────────────────────
+# ── CSV loading ───────────────────────────────────────────────────────────────
+
+# Positional arg names parsed from the gbench 'name' column
+# (e.g. "BM_D2HSocketThroughput/32768/134217728/536870912").
+# Keep in sync with ArgNames(...) in benchmark_hd_sockets.cpp.
+_GBENCH_BENCH_ARGS = {
+    "BM_D2HSocketThroughput": ["page_size", "socket_fifo_size", "total_data"],
+    "BM_H2DSocketThroughput": ["page_size", "socket_fifo_size", "total_data", "mode_index"],
+    "BM_D2HSocketLatency": ["page_size", "socket_fifo_size"],
+    "BM_H2DSocketLatency": ["page_size", "socket_fifo_size", "mode_index"],
+    "BM_D2HSocketPing": ["page_size", "socket_fifo_size"],
+    "BM_H2DSocketPing": ["mode_index"],
+    "BM_D2HSocketMultiChipThroughput": ["chip_index", "socket_fifo_size"],
+    "BM_H2DSocketMultiChipThroughput": ["chip_index", "socket_fifo_size"],
+}
+
+# Latency counters expected in the CSV.
+_GBENCH_LATENCY_COUNTERS = [
+    "num_iterations",
+    "avg_us",
+    "min_us",
+    "max_us",
+    "p50_us",
+    "p99_us",
+    "avg_cycles",
+    "min_cycles",
+    "max_cycles",
+]
 
 
-def _read_split_rows(path):
-    header = ""
-    rows = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            # Header: first comma-containing line that doesn't start with a digit
-            if not header and "," in line and not line[0].isdigit():
-                header = line
-                continue
-            # Data row: first token must be numeric
-            try:
-                float(line.split(",")[0])
-            except (ValueError, IndexError):
-                continue
-            rows.append(line.split(","))
-    return header, rows
+def load_gbench_csv(path):
+    return pd.read_csv(path)
 
 
-def _to_dataframe(rows, cols, numeric_cols):
-    df = pd.DataFrame([r[: len(cols)] for r in rows], columns=cols)
-    for c in numeric_cols:
-        df[c] = pd.to_numeric(df[c])
+def _gbench_name_prefix(name: str) -> str:
+    return name.split("/")[0]
+
+
+def _gbench_extract_args(df: pd.DataFrame, arg_names: list) -> pd.DataFrame:
+    """Split '/'-delimited args from the 'name' column into named columns."""
+
+    def _parse(name):
+        parts = name.split("/")
+        return {k: int(parts[i + 1]) for i, k in enumerate(arg_names) if i + 1 < len(parts)}
+
+    return df["name"].apply(_parse).apply(pd.Series)
+
+
+def load_gbench_d2h_throughput_csv(path):
+    df = load_gbench_csv(path)
+    df = df[df["name"].str.startswith("BM_D2HSocketThroughput")].copy()
+    if df.empty:
+        raise ValueError(f"No BM_D2HSocketThroughput rows found in {path}")
+
+    arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS["BM_D2HSocketThroughput"])
+    df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+
+    if "label" in df.columns:
+        df["device_coord"] = df["label"]
+
+    if "throughput_gbps" not in df.columns and "per_page_us" in df.columns:
+        df["throughput_gbps"] = df["page_size"] / (df["per_page_us"] * 1e3)
+
+    required = ["page_size", "socket_fifo_size", "total_data", "per_page_us", "throughput_gbps"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"gbench CSV is missing expected columns: {missing}")
+
     return df
 
 
-def load_d2h_throughput_csv(path):
-    """Load D2H throughput benchmark CSV. Handles commas in MeshCoordinate."""
-    header, rows = _read_split_rows(path)
+_H2D_MODE_MAP = {0: "HOST_PUSH", 1: "DEVICE_PULL"}
 
-    hcols = [h.strip() for h in header.split(",")]
-    if "throughput_gbps" in hcols:
-        cols = [
-            "page_size",
-            "socket_fifo_size",
-            "total_data",
-            "data_size",
-            "pages_per_iter",
-            "num_iterations",
-            "total_pages",
-            "avg_per_page_us",
-            "avg_per_page_cycles",
-            "throughput_gbps",
-        ]
-    elif "data_size" in hcols:
-        cols = [
-            "page_size",
-            "socket_fifo_size",
-            "total_data",
-            "data_size",
-            "num_iterations",
-            "avg_per_page_us",
-            "avg_per_page_cycles",
-        ]
-    else:
-        cols = [
-            "page_size",
-            "socket_fifo_size",
-            "total_data",
-            "num_iterations",
-            "avg_per_page_us",
-            "avg_per_page_cycles",
-        ]
 
-    df = _to_dataframe(rows, cols, cols)
+def load_gbench_h2d_throughput_csv(path):
+    df = load_gbench_csv(path)
+    df = df[df["name"].str.startswith("BM_H2DSocketThroughput")].copy()
+    if df.empty:
+        raise ValueError(f"No BM_H2DSocketThroughput rows found in {path}")
 
-    if "data_size" not in df:
-        df["data_size"] = (df.total_data / df.num_iterations).astype(int)
-    if "throughput_gbps" not in df:
-        df["throughput_gbps"] = df.page_size / (df.avg_per_page_us * 1e3)
+    arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS["BM_H2DSocketThroughput"])
+    df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+
+    if "label" in df.columns:
+        df["device_coord"] = df["label"]
+
+    if "mode_index" in df.columns:
+        df["h2d_mode"] = df["mode_index"].map(_H2D_MODE_MAP).fillna("UNKNOWN")
+    elif "h2d_mode" not in df.columns:
+        df["h2d_mode"] = "UNKNOWN"
+
+    if "throughput_gbps" not in df.columns and "per_page_us" in df.columns:
+        df["throughput_gbps"] = df["page_size"] / (df["per_page_us"] * 1e3)
+
     return df
 
 
-def load_d2h_latency_csv(path):
-    """Load D2H latency benchmark CSV (d2h_socket_loopback_latency output)."""
-    _, rows = _read_split_rows(path)
-    cols = [
-        "page_size",
-        "socket_fifo_size",
-        "num_iterations",
-        "avg_us",
-        "min_us",
-        "max_us",
-        "p50_us",
-        "p99_us",
-        "avg_cycles",
-        "min_cycles",
-        "max_cycles",
-    ]
-    return _to_dataframe(rows, cols, cols)
+def _load_gbench_latency(path, name_prefix):
+    """Shared loader for latency and ping CSVs."""
+    df = load_gbench_csv(path)
+    df = df[df["name"].str.startswith(name_prefix)].copy()
+    if df.empty:
+        raise ValueError(f"No {name_prefix} rows found in {path}")
+
+    arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
+    df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+
+    if "label" in df.columns:
+        df["device_coord"] = df["label"]
+
+    for col in _GBENCH_LATENCY_COUNTERS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col])
+
+    return df
 
 
-def load_h2d_throughput_csv(path):
-    """Load H2D throughput benchmark CSV (with h2d_mode column)."""
-    _, rows = _read_split_rows(path)
-    cols = [
-        "page_size",
-        "socket_fifo_size",
-        "h2d_mode",
-        "total_data",
-        "data_size",
-        "pages_per_iter",
-        "num_iterations",
-        "total_pages",
-        "avg_per_page_us",
-        "avg_per_page_cycles",
-        "throughput_gbps",
-    ]
-    numeric_cols = [c for c in cols if c != "h2d_mode"]
-    return _to_dataframe(rows, cols, numeric_cols)
+def load_gbench_d2h_latency_csv(path):
+    return _load_gbench_latency(path, "BM_D2HSocketLatency")
 
 
-def load_h2d_latency_csv(path):
-    """Load H2D latency benchmark CSV (h2d_socket_data_ping output)."""
-    _, rows = _read_split_rows(path)
-    cols = [
-        "page_size",
-        "socket_fifo_size",
-        "h2d_mode",
-        "num_iterations",
-        "avg_us",
-        "min_us",
-        "max_us",
-        "p50_us",
-        "p99_us",
-        "avg_cycles",
-        "min_cycles",
-        "max_cycles",
-    ]
-    numeric_cols = [c for c in cols if c != "h2d_mode"]
-    return _to_dataframe(rows, cols, numeric_cols)
+def load_gbench_d2h_ping_csv(path):
+    return _load_gbench_latency(path, "BM_D2HSocketPing")
 
 
-def load_multichip_csv(path):
-    """Load multi-chip benchmark output (works for both H2D and D2H).
+def _map_h2d_mode(df):
+    if "mode_index" in df.columns:
+        df["h2d_mode"] = df["mode_index"].map(_H2D_MODE_MAP).fillna("UNKNOWN")
+    elif "h2d_mode" not in df.columns:
+        df["h2d_mode"] = "UNKNOWN"
+    return df
 
-    The file may contain comment/blank lines mixed in with CSV rows.
-    Columns: tray_id, asic_location, mesh_coord, socket_fifo_size, total_data,
-             data_size, pages_per_iter, num_iterations, total_pages,
-             avg_per_page_us, avg_per_page_cycles, throughput_gbps
-    mesh_coord may contain commas (e.g. "(0,3)"), so extra tokens are collapsed.
-    """
-    cols = [
+
+def load_gbench_h2d_latency_csv(path):
+    return _map_h2d_mode(_load_gbench_latency(path, "BM_H2DSocketLatency"))
+
+
+def load_gbench_h2d_ping_csv(path):
+    return _map_h2d_mode(_load_gbench_latency(path, "BM_H2DSocketPing"))
+
+
+def load_gbench_multichip_csv(path, name_prefix):
+    df = load_gbench_csv(path)
+    df = df[df["name"].str.startswith(name_prefix)].copy()
+    if df.empty:
+        raise ValueError(f"No {name_prefix} rows found in {path}")
+
+    arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
+    df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
+
+    for col in (
         "tray_id",
         "asic_location",
-        "mesh_coord",
-        "socket_fifo_size",
-        "total_data",
-        "data_size",
-        "pages_per_iter",
-        "num_iterations",
-        "total_pages",
-        "avg_per_page_us",
-        "avg_per_page_cycles",
+        "per_page_us",
+        "per_page_cycles",
         "throughput_gbps",
-    ]
-    numeric_cols = [c for c in cols if c != "mesh_coord"]
+        "data_size",
+        "total_data",
+        "num_iterations",
+    ):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col])
 
-    rows = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("tray_id"):
-                continue
-            parts = line.split(",")
-            try:
-                int(parts[0])
-            except (ValueError, IndexError):
-                continue
-            if len(parts) < len(cols):
-                continue
-            if len(parts) > len(cols):
-                extra = len(parts) - len(cols)
-                coord_str = ",".join(parts[2 : 3 + extra])
-                parts = parts[:2] + [coord_str] + parts[3 + extra :]
-            rows.append(parts[: len(cols)])
+    if "label" in df.columns:
+        df["mesh_coord"] = df["label"]
 
-    df = pd.DataFrame(rows, columns=cols)
-    for c in numeric_cols:
-        df[c] = pd.to_numeric(df[c])
-    df["chip_label"] = df.apply(lambda r: f"Tray{int(r.tray_id)}/ASIC{int(r.asic_location)} {r.mesh_coord}", axis=1)
+    df["chip_label"] = df.apply(
+        lambda r: f"Tray{int(r.tray_id)}/ASIC{int(r.asic_location)} {r.get('mesh_coord', '')}",
+        axis=1,
+    )
+
     return df
+
+
+def load_gbench_d2h_multichip_csv(path):
+    return load_gbench_multichip_csv(path, "BM_D2HSocketMultiChipThroughput")
+
+
+def load_gbench_h2d_multichip_csv(path):
+    return load_gbench_multichip_csv(path, "BM_H2DSocketMultiChipThroughput")
+
+
+# benchmark prefix → (loader, runner)
+_GBENCH_DISPATCH = {
+    "BM_D2HSocketThroughput": ("load_gbench_d2h_throughput_csv", "run_d2h_throughput"),
+    "BM_H2DSocketThroughput": ("load_gbench_h2d_throughput_csv", "run_h2d_throughput"),
+    "BM_D2HSocketLatency": ("load_gbench_d2h_latency_csv", "run_d2h_latency"),
+    "BM_D2HSocketPing": ("load_gbench_d2h_ping_csv", "run_d2h_latency"),
+    "BM_H2DSocketLatency": ("load_gbench_h2d_latency_csv", "run_h2d_latency"),
+    "BM_H2DSocketPing": ("load_gbench_h2d_ping_csv", "run_h2d_latency"),
+    "BM_D2HSocketMultiChipThroughput": ("load_gbench_d2h_multichip_csv", "run_d2h_multichip"),
+    "BM_H2DSocketMultiChipThroughput": ("load_gbench_h2d_multichip_csv", "run_h2d_multichip"),
+}
+
+
+def run_gbench(path, prefix=""):
+    """Auto-detect benchmark type from CSV and dispatch to the right analysis."""
+    df_raw = load_gbench_csv(path)
+    if df_raw.empty or "name" not in df_raw.columns:
+        raise ValueError(f"{path} does not look like a Google Benchmark CSV")
+
+    prefix_counts = df_raw["name"].apply(_gbench_name_prefix).value_counts()
+    detected = prefix_counts.index[0]
+
+    print(f"  Detected benchmark: {detected}")
+
+    if detected == "BM_D2HSocketThroughput":
+        df = load_gbench_d2h_throughput_csv(path)
+        d2h_tp_print_report(df)
+        d2h_tp_plot(df, out=f"{prefix}d2h_throughput.png")
+        d2h_tp_plot_vs_fifo(df, out=f"{prefix}d2h_tp_vs_fifo.png")
+        d2h_tp_plot_heatmap_grid(df, out=f"{prefix}d2h_tp_heatmap_grid.png")
+        d2h_tp_export_csv(df, out=f"{prefix}d2h_throughput_summary.csv")
+    elif detected in ("BM_D2HSocketLatency", "BM_D2HSocketPing"):
+        loader = load_gbench_d2h_latency_csv if detected == "BM_D2HSocketLatency" else load_gbench_d2h_ping_csv
+        df = loader(path)
+        d2h_lat_print_report(df)
+        d2h_lat_plot(df, out=f"{prefix}d2h_latency.png")
+        d2h_lat_plot_breakdown(df, out=f"{prefix}d2h_latency_breakdown.png")
+        _export_latency_csv(df, out=f"{prefix}d2h_latency_summary.csv")
+    elif detected == "BM_H2DSocketThroughput":
+        df = load_gbench_h2d_throughput_csv(path)
+        h2d_tp_print_report(df)
+        h2d_tp_plot(df, out=f"{prefix}h2d_throughput.png")
+        h2d_tp_plot_vs_fifo(df, out=f"{prefix}h2d_tp_vs_fifo.png")
+        h2d_tp_plot_at_max_fifo(df, out=f"{prefix}h2d_tp_at_max_fifo.png")
+        h2d_tp_export_csv(df, out=f"{prefix}h2d_throughput_summary.csv")
+    elif detected in ("BM_H2DSocketLatency", "BM_H2DSocketPing"):
+        loader = load_gbench_h2d_latency_csv if detected == "BM_H2DSocketLatency" else load_gbench_h2d_ping_csv
+        df = loader(path)
+        h2d_lat_print_report(df)
+        h2d_lat_plot(df, out=f"{prefix}h2d_latency.png")
+        h2d_lat_plot_breakdown(df, out=f"{prefix}h2d_latency_breakdown.png")
+        _export_latency_csv(df, out=f"{prefix}h2d_latency_summary.csv", mode_col="h2d_mode")
+    elif detected == "BM_D2HSocketMultiChipThroughput":
+        df = load_gbench_d2h_multichip_csv(path)
+        mc_print_report(df, direction="D2H")
+        mc_plot_throughput_vs_fifo(df, out=f"{prefix}d2h_mc_throughput_vs_fifo.png", direction="D2H")
+        mc_plot_bar_comparison(df, out=f"{prefix}d2h_mc_throughput_bar.png", direction="D2H")
+        mc_plot_heatmap(df, out=f"{prefix}d2h_mc_throughput_heatmap.png", direction="D2H")
+        mc_export_csv(df, out=f"{prefix}d2h_mc_throughput_summary.csv")
+    elif detected == "BM_H2DSocketMultiChipThroughput":
+        df = load_gbench_h2d_multichip_csv(path)
+        mc_print_report(df, direction="H2D")
+        mc_plot_throughput_vs_fifo(df, out=f"{prefix}h2d_mc_throughput_vs_fifo.png", direction="H2D")
+        mc_plot_bar_comparison(df, out=f"{prefix}h2d_mc_throughput_bar.png", direction="H2D")
+        mc_plot_heatmap(df, out=f"{prefix}h2d_mc_throughput_heatmap.png", direction="H2D")
+        mc_export_csv(df, out=f"{prefix}h2d_mc_throughput_summary.csv")
+    else:
+        raise ValueError(
+            f"No analysis registered for benchmark '{detected}'. " f"Known: {list(_GBENCH_DISPATCH.keys())}"
+        )
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
 
 
 def _median_over_fifo(df, extra_groups=()):
-    """Aggregate throughput by page_size × total_data (+ any extra_groups), median over FIFO sizes."""
+    """Median throughput across FIFO sizes, grouped by page_size × total_data."""
     group_keys = list(extra_groups) + ["page_size", "total_data"]
     return (
         df.groupby(group_keys)
         .agg(
             throughput_gbps=("throughput_gbps", "median"),
-            avg_per_page_us=("avg_per_page_us", "median"),
+            per_page_us=("per_page_us", "median"),
         )
         .reset_index()
     )
 
 
 def _set_size_ticks(ax, values, rotation=45, fontsize=9):
-    """Set human-readable byte-size tick labels on an axis and disable minor ticks."""
     ax.set_xticks(values)
     ax.set_xticklabels([human_bytes(x) for x in values], rotation=rotation, fontsize=fontsize)
     ax.minorticks_off()
 
 
 def _save_fig(fig, out, **tight_kw):
-    """Apply tight_layout, save at 150 dpi, and print the filename."""
     fig.tight_layout(**tight_kw)
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"  Saved {out}")
 
 
 def _write_csv_tables(tables, out, float_format="%.6f"):
-    """Write a list of DataFrames to one CSV file, separated by blank lines."""
     with open(out, "w") as f:
         for i, t in enumerate(tables):
             if i > 0:
@@ -282,7 +348,6 @@ def _annotate_heatmap(ax, data, vmax, fontsize=5):
 
 
 def _export_latency_csv(df, out, mode_col=None):
-    """Write latency summary CSV.  Pass mode_col (e.g. 'h2d_mode') to split by mode."""
     fifos = sorted(df.socket_fifo_size.unique())
     metric_cols = ["p50_us", "min_us", "max_us", "p99_us", "avg_us"]
     modes = sorted(df[mode_col].unique()) if mode_col else [None]
@@ -355,8 +420,8 @@ def d2h_tp_print_report(df):
     print(f"  {'page':>6} {'us/page':>10} {'cycles':>10} {'GB/s':>8}\n  {'-'*38}")
     for _, r in agg2.sort_values("page_size").iterrows():
         print(
-            f"  {human_bytes(r.page_size):>6} {r.avg_per_page_us:>10.3f} "
-            f"{r.avg_per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
+            f"  {human_bytes(r.page_size):>6} {r.per_page_us:>10.3f} "
+            f"{r.per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
         )
 
 
@@ -462,7 +527,7 @@ def d2h_tp_export_csv(df, out="d2h_throughput_summary.csv"):
 
 
 def run_d2h_throughput(path, prefix=""):
-    df = load_d2h_throughput_csv(path)
+    df = load_gbench_d2h_throughput_csv(path)
     d2h_tp_print_report(df)
     d2h_tp_plot(df, out=f"{prefix}d2h_throughput.png")
     d2h_tp_plot_vs_fifo(df, out=f"{prefix}d2h_tp_vs_fifo.png")
@@ -505,7 +570,6 @@ def d2h_lat_print_report(df):
 
 
 def d2h_lat_plot(df, out="d2h_latency.png"):
-    """Latency vs page_size, one line per FIFO size. Dashed min/max bands."""
     fig, ax = plt.subplots(figsize=(10, 6))
     for fs in sorted(df.socket_fifo_size.unique()):
         g = df[df.socket_fifo_size == fs].sort_values("page_size")
@@ -526,7 +590,6 @@ def d2h_lat_plot(df, out="d2h_latency.png"):
 
 
 def d2h_lat_plot_breakdown(df, out="d2h_latency_breakdown.png"):
-    """Bar chart: p50 and max latency, grouped by page size."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fifos = sorted(df.socket_fifo_size.unique())
     pages = sorted(df.page_size.unique())
@@ -553,7 +616,7 @@ def d2h_lat_plot_breakdown(df, out="d2h_latency_breakdown.png"):
 
 
 def run_d2h_latency(path, prefix=""):
-    df = load_d2h_latency_csv(path)
+    df = load_gbench_d2h_latency_csv(path)
     d2h_lat_print_report(df)
     d2h_lat_plot(df, out=f"{prefix}d2h_latency.png")
     d2h_lat_plot_breakdown(df, out=f"{prefix}d2h_latency_breakdown.png")
@@ -623,8 +686,8 @@ def h2d_tp_print_report(df):
                 continue
             r = r.iloc[0]
             print(
-                f"  {human_bytes(r.page_size):>6} {mode:>14} {r.avg_per_page_us:>10.3f} "
-                f"{r.avg_per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
+                f"  {human_bytes(r.page_size):>6} {mode:>14} {r.per_page_us:>10.3f} "
+                f"{r.per_page_us * CYCLES_PER_US:>10.0f} {r.throughput_gbps:>8.3f}"
             )
 
 
@@ -653,7 +716,6 @@ def h2d_tp_plot(df, out="h2d_throughput.png"):
 
 
 def h2d_tp_plot_vs_fifo(df, out="h2d_tp_vs_fifo.png"):
-    """Throughput vs FIFO size — representative page sizes, one subplot per mode."""
     td = df.total_data.max()
     sub = df[df.total_data == td]
     modes = sorted(sub.h2d_mode.unique())
@@ -690,7 +752,6 @@ def h2d_tp_plot_vs_fifo(df, out="h2d_tp_vs_fifo.png"):
 
 
 def h2d_tp_plot_at_max_fifo(df, out="h2d_tp_at_max_fifo.png"):
-    """GB/s vs page size at the maximum FIFO size, HOST_PUSH and DEVICE_PULL side by side."""
     fs_max = df.socket_fifo_size.max()
     sub = df[df.socket_fifo_size == fs_max]
     modes = sorted(sub.h2d_mode.unique())
@@ -750,7 +811,7 @@ def h2d_tp_export_csv(df, out="h2d_throughput_summary.csv"):
 
 
 def run_h2d_throughput(path, prefix=""):
-    df = load_h2d_throughput_csv(path)
+    df = load_gbench_h2d_throughput_csv(path)
     h2d_tp_print_report(df)
     h2d_tp_plot(df, out=f"{prefix}h2d_throughput.png")
     h2d_tp_plot_vs_fifo(df, out=f"{prefix}h2d_tp_vs_fifo.png")
@@ -807,7 +868,6 @@ def h2d_lat_print_report(df):
 
 
 def h2d_lat_plot(df, out="h2d_latency.png"):
-    """HOST_PUSH vs DEVICE_PULL comparison at largest FIFO (p50 + min/max bands)."""
     fs_max = df.socket_fifo_size.max()
     sub = df[df.socket_fifo_size == fs_max]
     modes = sorted(sub.h2d_mode.unique())
@@ -832,7 +892,6 @@ def h2d_lat_plot(df, out="h2d_latency.png"):
 
 
 def h2d_lat_plot_breakdown(df, out="h2d_latency_breakdown.png"):
-    """Detailed per-mode view across all FIFO sizes."""
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     modes = sorted(df.h2d_mode.unique())
 
@@ -858,7 +917,6 @@ def h2d_lat_plot_breakdown(df, out="h2d_latency_breakdown.png"):
 
 
 def h2d_lat_plot_fifo_impact(df, out="h2d_latency_vs_fifo.png"):
-    """Latency vs FIFO size for representative page sizes, one subplot per mode."""
     modes = sorted(df.h2d_mode.unique())
     page_sizes = [p for p in [64, 256, 1024, 4096, 16384] if p in df.page_size.values]
 
@@ -885,7 +943,7 @@ def h2d_lat_plot_fifo_impact(df, out="h2d_latency_vs_fifo.png"):
 
 
 def run_h2d_latency(path, prefix=""):
-    df = load_h2d_latency_csv(path)
+    df = load_gbench_h2d_latency_csv(path)
     h2d_lat_print_report(df)
     h2d_lat_plot(df, out=f"{prefix}h2d_latency.png")
     h2d_lat_plot_breakdown(df, out=f"{prefix}h2d_latency_breakdown.png")
@@ -1039,11 +1097,10 @@ def mc_print_report(df, direction="D2H"):
         if r.empty:
             continue
         r = r.iloc[0]
-        print(f"  {chip:<36} {r.avg_per_page_us:>10.3f} " f"{r.avg_per_page_cycles:>10.0f} {r.throughput_gbps:>8.3f}")
+        print(f"  {chip:<36} {r.per_page_us:>10.3f} " f"{r.per_page_cycles:>10.0f} {r.throughput_gbps:>8.3f}")
 
 
 def mc_plot_throughput_vs_fifo(df, out="mc_throughput_vs_fifo.png", direction="D2H"):
-    """Line chart: throughput vs FIFO size, one line per chip."""
     fig, ax = plt.subplots(figsize=(11, 6))
     for chip in sorted(df.chip_label.unique()):
         g = df[df.chip_label == chip].sort_values("socket_fifo_size")
@@ -1064,7 +1121,6 @@ def mc_plot_throughput_vs_fifo(df, out="mc_throughput_vs_fifo.png", direction="D
 
 
 def mc_plot_bar_comparison(df, out="mc_throughput_bar.png", direction="D2H"):
-    """Grouped bar chart: one group per FIFO size, bars = chips."""
     chips = sorted(df.chip_label.unique())
     fifos = sorted(df.socket_fifo_size.unique())
     x = np.arange(len(fifos))
@@ -1090,7 +1146,6 @@ def mc_plot_bar_comparison(df, out="mc_throughput_bar.png", direction="D2H"):
 
 
 def mc_plot_heatmap(df, out="mc_throughput_heatmap.png", direction="D2H"):
-    """Heatmap: rows = chip, cols = FIFO size, values = GB/s."""
     chips = sorted(df.chip_label.unique())
     fifos = sorted(df.socket_fifo_size.unique())
 
@@ -1123,11 +1178,10 @@ def mc_plot_heatmap(df, out="mc_throughput_heatmap.png", direction="D2H"):
 
 
 def mc_export_csv(df, out="mc_throughput_summary.csv"):
-    """Pivot: rows = chip, cols = FIFO size, values = throughput GB/s + us/page."""
     pv = df.pivot_table(index="chip_label", columns="socket_fifo_size", values="throughput_gbps")
     pv.columns = [f"FIFO={human_bytes(c)} GB/s" for c in pv.columns]
     pv.index.name = "chip (tray/asic/coord)"
-    us_pv = df.pivot_table(index="chip_label", columns="socket_fifo_size", values="avg_per_page_us")
+    us_pv = df.pivot_table(index="chip_label", columns="socket_fifo_size", values="per_page_us")
     us_pv.columns = [f"FIFO={human_bytes(c)} us/page" for c in us_pv.columns]
     us_pv.index.name = "chip (tray/asic/coord)"
     pv.join(us_pv).to_csv(out, float_format="%.6f")
@@ -1135,7 +1189,7 @@ def mc_export_csv(df, out="mc_throughput_summary.csv"):
 
 
 def run_d2h_multichip(path, prefix="d2h_mc_"):
-    df = load_multichip_csv(path)
+    df = load_gbench_d2h_multichip_csv(path)
     mc_print_report(df, direction="D2H")
     mc_plot_throughput_vs_fifo(df, out=f"{prefix}throughput_vs_fifo.png", direction="D2H")
     mc_plot_bar_comparison(df, out=f"{prefix}throughput_bar.png", direction="D2H")
@@ -1144,7 +1198,7 @@ def run_d2h_multichip(path, prefix="d2h_mc_"):
 
 
 def run_h2d_multichip(path, prefix="h2d_mc_"):
-    df = load_multichip_csv(path)
+    df = load_gbench_h2d_multichip_csv(path)
     mc_print_report(df, direction="H2D")
     mc_plot_throughput_vs_fifo(df, out=f"{prefix}throughput_vs_fifo.png", direction="H2D")
     mc_plot_bar_comparison(df, out=f"{prefix}throughput_bar.png", direction="H2D")
@@ -1157,14 +1211,19 @@ def run_h2d_multichip(path, prefix="h2d_mc_"):
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Analyze H2D/D2H socket benchmark results")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--d2h-throughput", action="store_true", help="D2H throughput CSV")
-    mode.add_argument("--d2h-latency", action="store_true", help="D2H latency CSV")
+    mode.add_argument("--d2h-throughput", action="store_true", help="D2H throughput (gbench CSV)")
+    mode.add_argument("--d2h-latency", action="store_true", help="D2H latency (gbench CSV)")
     mode.add_argument("--d2h-ping", action="store_true", help="D2H pure ping CSV / directory")
-    mode.add_argument("--d2h-multichip", action="store_true", help="D2H multi-chip throughput log")
-    mode.add_argument("--h2d-throughput", action="store_true", help="H2D throughput CSV")
-    mode.add_argument("--h2d-latency", action="store_true", help="H2D latency CSV")
+    mode.add_argument("--d2h-multichip", action="store_true", help="D2H multi-chip throughput (gbench CSV)")
+    mode.add_argument("--h2d-throughput", action="store_true", help="H2D throughput (gbench CSV)")
+    mode.add_argument("--h2d-latency", action="store_true", help="H2D latency (gbench CSV)")
     mode.add_argument("--h2d-ping", action="store_true", help="H2D pure ping CSV / directory")
-    mode.add_argument("--h2d-multichip", action="store_true", help="H2D multi-chip throughput log")
+    mode.add_argument("--h2d-multichip", action="store_true", help="H2D multi-chip throughput (gbench CSV)")
+    mode.add_argument(
+        "--gbench",
+        action="store_true",
+        help="Google Benchmark CSV — auto-routes to correct analysis by benchmark name prefix",
+    )
     p.add_argument("csv", help="Path to benchmark CSV / log (or directory for ping modes)")
     p.add_argument(
         "--out-prefix",
@@ -1175,7 +1234,9 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     pfx = args.out_prefix
-    if args.d2h_throughput:
+    if args.gbench:
+        run_gbench(args.csv, prefix=pfx)
+    elif args.d2h_throughput:
         run_d2h_throughput(args.csv, prefix=pfx)
     elif args.d2h_latency:
         run_d2h_latency(args.csv, prefix=pfx)

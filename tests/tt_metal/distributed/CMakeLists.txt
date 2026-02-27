@@ -15,7 +15,6 @@ target_sources(
         test_mesh_workload.cpp
         test_mesh_socket.cpp
         test_hd_sockets.cpp
-        benchmark_hd_sockets.cpp
         test_mesh_sub_device.cpp
         test_mesh_allocator.cpp
         test_mesh_events.cpp
@@ -52,7 +51,7 @@ target_sources(
     PRIVATE
         benchmark_thread_pool.cpp
         benchmark_distributed_host_buffer.cpp
-        benchmark_d2h_socket_gbench.cpp
+        benchmark_hd_sockets.cpp
 )
 
 target_link_libraries(
