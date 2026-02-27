@@ -799,3 +799,84 @@ def test_multihost_sanity(mesh_device):
     torch_loop_back_tensor = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 
     assert_with_pcc(torch_gelu, torch_loop_back_tensor, pcc=0.9999)
+
+
+def test_dump_load_partial_replicate_roundtrip(mesh_device):
+    """Dump/load a [R, S(-1)] tensor — transparent topology-portable caching.
+    No special mapper or fingerprint needed; to_flatbuffer collapses replicate axes automatically."""
+    num_cols = mesh_device.shape[1]
+    shard_size = 32
+    torch_tensor = torch.rand((1, 1, 32, shard_size * num_cols), dtype=torch.bfloat16)
+
+    config = ttnn.MeshMapperConfig(
+        placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
+    )
+    mapper = ttnn.create_mesh_mapper(mesh_device, config)
+    host_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mapper,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = f"{tmpdir}/test_cache.tensorbin"
+        ttnn.dump_tensor(cache_path, host_tensor)
+
+        loaded = ttnn.load_tensor(cache_path, device=mesh_device)
+
+        # Verify each shard matches expected slice
+        shards = ttnn.get_device_tensors(loaded)
+        assert len(shards) == mesh_device.get_num_devices()
+
+        for col in range(num_cols):
+            shard_torch = ttnn.to_torch(shards[col])
+            expected = torch_tensor[..., col * shard_size : (col + 1) * shard_size]
+            assert_with_pcc(shard_torch, expected, pcc=0.9999)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((2, 2), id="2x2_grid"), pytest.param((2, 4), id="2x4_grid")],
+    indirect=True,
+)
+def test_topology_portable_cross_mesh_roundtrip(mesh_device):
+    """Verify a [R, S(-1)] tensor dumped on NxM loads correctly on a 1xM submesh.
+
+    Demonstrates topology portability: the replicate axis changes from N to 1
+    while the shard axis (M) stays the same. The serialized file stores only
+    the M unique shard entries (replicate axis collapsed), so it is loadable
+    on any mesh whose column count matches.
+    """
+    num_rows = mesh_device.shape[0]
+    num_cols = mesh_device.shape[1]
+    shard_size = 32
+    torch_tensor = torch.rand((1, 1, 32, shard_size * num_cols), dtype=torch.bfloat16)
+
+    # Distribute as [R, S(-1)] on the full mesh (replicate axis = num_rows).
+    config = ttnn.MeshMapperConfig(
+        placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
+    )
+    mapper = ttnn.create_mesh_mapper(mesh_device, config)
+    host_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mapper,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = f"{tmpdir}/cross_mesh.tensorbin"
+        ttnn.dump_tensor(cache_path, host_tensor)
+
+        # Load on a 1xM submesh — replicate axis shrinks from N to 1.
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(1, num_cols))
+        loaded = ttnn.load_tensor(cache_path, device=submesh)
+
+        shards = ttnn.get_device_tensors(loaded)
+        assert len(shards) == num_cols
+
+        for col in range(num_cols):
+            shard_torch = ttnn.to_torch(shards[col])
+            expected = torch_tensor[..., col * shard_size : (col + 1) * shard_size]
+            assert_with_pcc(shard_torch, expected, pcc=0.9999)

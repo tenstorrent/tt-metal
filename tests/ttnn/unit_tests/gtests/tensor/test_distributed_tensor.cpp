@@ -490,4 +490,49 @@ TEST_F(TensorDistribution2x4Test, NdMapperShard3D) {
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 
+TEST_F(TensorDistribution2x4Test, PartialReplicationExpansion) {
+    // Create a reduced [1,4] tensor with [R, S(-1)], then expand to [2,4] mesh.
+    constexpr int kNumCols = 4;
+    std::vector<float> test_data;
+    for (int i = 0; i < kNumCols; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, kNumCols, 3}, DataType::FLOAT32));
+
+    // Create a reduced mapper with [R, S(-1)] and mesh_shape_override = [1,4]
+    // (replicate axis collapsed to 1)
+    const auto reduced_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{2}},
+        .mesh_shape_override = MeshShape(1, kNumCols),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, reduced_config);
+    Tensor reduced_tensor = distribute_tensor(input_tensor, *mapper);
+
+    // Verify reduced tensor has [1,4] distribution shape
+    EXPECT_EQ(reduced_tensor.tensor_topology().distribution_shape(), MeshShape(1, kNumCols));
+
+    // Send to device — this should trigger partial expansion from [1,4] to [2,4]
+    Tensor device_tensor = reduced_tensor.to_device(mesh_device_.get());
+
+    // Verify the expanded tensor has the full mesh topology
+    const auto& expanded_topology = device_tensor.tensor_topology();
+    EXPECT_EQ(expanded_topology.distribution_shape(), mesh_device_->shape());
+
+    // Verify we have 8 device tensors (2x4 mesh)
+    std::vector<Tensor> device_tensors = get_device_tensors(device_tensor);
+    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+
+    // Verify data: each column should have the same data in both rows (replicated)
+    for (int col = 0; col < kNumCols; col++) {
+        auto row0_data = device_tensors[col].to_vector<float>();             // row 0, col `col`
+        auto row1_data = device_tensors[kNumCols + col].to_vector<float>();  // row 1, col `col`
+        EXPECT_THAT(row0_data, Pointwise(FloatEq(), row1_data))
+            << "Row 0 and Row 1 should have identical data at column " << col;
+        // Also verify the data matches the original shard
+        std::vector<float> expected = {col * 1.F, col * 2.F, col * 3.F};
+        EXPECT_THAT(row0_data, Pointwise(FloatEq(), expected));
+    }
+}
+
 }  // namespace ttnn::distributed::test

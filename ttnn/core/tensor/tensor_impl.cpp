@@ -624,6 +624,51 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
             replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
             TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
     }
+
+    // Partial expansion: e.g. [1,2] host → [2,2] mesh for [R, S(-1)] config.
+    // Can we expand host_storage_shape to mesh_device_shape by replicating size-1 axes?
+    auto can_expand_to_mesh = [&]() {
+        if (host_storage_shape == mesh_device_shape ||
+            host_storage_shape.dims() != mesh_device_shape.dims() ||
+            host_storage_shape.dims() != tensor_topology.placements().size()) {
+            return false;
+        }
+        const auto& placements = tensor_topology.placements();
+        for (size_t i = 0; i < host_storage_shape.dims(); ++i) {
+            if (host_storage_shape[i] == mesh_device_shape[i]) {
+                continue;
+            }
+            if (host_storage_shape[i] == 1 &&
+                std::holds_alternative<distributed::MeshMapperConfig::Replicate>(placements[i])) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    };
+
+    if (can_expand_to_mesh()) {
+        // Build expanded DistributedHostBuffer by replicating along Replicate axes.
+        auto expanded_buffer = DistributedHostBuffer::create(mesh_device_shape);
+        std::vector<distributed::MeshCoordinate> coords;
+        for (const auto& device_coord : distributed::MeshCoordinateRange(mesh_device_shape)) {
+            // Map device coord to source coord: collapse replicate axes to 0
+            std::vector<uint32_t> source_coords;
+            for (size_t i = 0; i < device_coord.dims(); ++i) {
+                source_coords.push_back(host_storage_shape[i] == 1 ? 0 : device_coord[i]);
+            }
+            distributed::MeshCoordinate source_coord(source_coords);
+            auto source_shard = host_storage.buffer().get_shard(source_coord);
+            if (source_shard.has_value()) {
+                expanded_buffer.emplace_shard(device_coord, [&source_shard]() { return *source_shard; });
+            }
+            coords.push_back(device_coord);
+        }
+
+        auto expanded_topology = TensorTopology(mesh_device_shape, tensor_topology.placements(), coords);
+        return {write_to_mesh_buffer(expanded_buffer, mesh_buffer, cq_id), expanded_topology};
+    }
+
     TT_FATAL(
         host_storage_shape == mesh_device_shape,
         "Distributed host buffer has different shape {} than the mesh device {}",
