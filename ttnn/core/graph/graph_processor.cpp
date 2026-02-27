@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <cxxabi.h>
+#include <boost/algorithm/string/replace.hpp>
 #include <memory>
 #include <string>
 #include <tt-metalium/program.hpp>
@@ -17,6 +16,7 @@
 using namespace tt::tt_metal;
 
 namespace {
+
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
@@ -25,11 +25,6 @@ std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
         case TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
         default: return "UNKNOWN";  // Handle unexpected values
     }
-}
-
-template <class Variant>
-const std::type_info& get_type_in_var(const Variant& v) {
-    return std::visit([](auto&& x) -> decltype(auto) { return typeid(x); }, v);
 }
 
 nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
@@ -179,7 +174,8 @@ consteval std::pair<const std::type_info&, void (*)(GraphProcessor&, const std::
     return {typeid(std::reference_wrapper<T>), &process<T, Process>};
 }
 
-void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
+void GraphProcessor::track_function_start(
+    std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) {
     static constexpr std::array begin_function_any_map = {
         make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
@@ -204,7 +200,12 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     };
 
     std::vector<std::string> serialized_arguments;
-    serialized_arguments = GraphArgumentSerializer::instance().to_list(input_parameters);
+    serialized_arguments.reserve(input_parameters.size());
+    for (const auto& arg : input_parameters) {
+        auto str = arg.to_string_fn(arg.value);
+        boost::algorithm::replace_all(str, "__1::", "");
+        serialized_arguments.push_back(std::move(str));
+    }
 
     node_id counter = graph.size();
     // Track stacking level: current stack depth (before pushing this operation)
@@ -226,14 +227,16 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         current_op_id.push(counter);
     }
 
-    for (auto& any : input_parameters) {
-        const auto* const it = std::ranges::find(
-            begin_function_any_map, any.type(), [](const auto& pair) -> const auto& { return pair.first; });
+    for (auto& tracked_arg : input_parameters) {
+        const auto* const it =
+            std::ranges::find(begin_function_any_map, tracked_arg.value.type(), [](const auto& pair) -> const auto& {
+                return pair.first;
+            });
 
         if (it != begin_function_any_map.end()) {
-            it->second(*this, any);
+            it->second(*this, tracked_arg.value);
         } else {
-            log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
+            log_debug(tt::LogAlways, "input any type name ignored: {}", tracked_arg.value.type().name());
         }
     }
 
@@ -285,7 +288,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     if (it != end_function_any_map.end()) {
         it->second(*this, output_tensors);
     } else {
-        log_debug(tt::LogAlways, "output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
+        log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
     TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
