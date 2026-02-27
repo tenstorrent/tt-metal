@@ -32,7 +32,6 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t dim = get_compile_time_arg_val(13);
 constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(14);
-<<<<<<< HEAD
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(15);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(16);
 constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(17);
@@ -42,18 +41,6 @@ constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
 // [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
-=======
-constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(15);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(18);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
-// [24+] sharding args
->>>>>>> b56ae1d9f9 (handle any M continue -- requires cleanup)
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -69,12 +56,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-<<<<<<< HEAD
     constexpr uint32_t ct_idx = 24;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
                                      // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht
-=======
-    constexpr uint32_t ct_idx = 24;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=slice_Ht, [24+]=sharding args
->>>>>>> b56ae1d9f9 (handle any M continue -- requires cleanup)
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -264,7 +247,6 @@ void kernel_main() {
                                     chunk_idx,
                                     mm_N_full_block_wt,
                                     tiles_ht_per_core,
-<<<<<<< HEAD
                                     mm_block_ht,
                                     chunk_width_in_tiles);
 
@@ -300,26 +282,6 @@ void kernel_main() {
                                 }
                                 // Always advance: CB position i corresponds to iteration tile i,
                                 // so the writer can find valid tile data at the correct packet slot.
-=======
-                                    mm_block_ht,  // full stride between blocks for absolute row calculation
-                                    chunk_width_in_tiles);
-                                const uint32_t slice_tile_idx =
-                                    slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
-                                    slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                const uint32_t input_tile_id = global_tile_idx + batch_offset;
-
-                                if (slice_row < slice_Ht) {
-                                    const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                                    if (do_reduce) {
-                                        const uint64_t intermediate_noc_read_addr =
-                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
-                                        noc_async_read(
-                                            intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
-                                    }
-                                }
->>>>>>> b56ae1d9f9 (handle any M continue -- requires cleanup)
                                 l1_write_addr += page_size;
                                 if (do_reduce) {
                                     intermediate_l1_write_addr += page_size;

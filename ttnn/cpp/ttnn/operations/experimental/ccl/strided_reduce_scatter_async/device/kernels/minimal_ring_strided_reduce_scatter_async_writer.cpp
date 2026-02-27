@@ -286,7 +286,6 @@ void kernel_main() {
                                             ? std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet)
                                             : 1;
                                     tiles_remaining_in_step -= tiles_to_put_in_current_packet;
-                                    const bool can_use_two_tiles_in_packet = tiles_to_put_in_current_packet == 2;
 
                                     // Gather phase: compute tile indices for every slot in this packet.
                                     // The reader always advances l1_write_addr regardless of validity,
