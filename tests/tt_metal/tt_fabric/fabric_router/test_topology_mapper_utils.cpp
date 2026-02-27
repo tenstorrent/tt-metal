@@ -2972,4 +2972,434 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Blitz2
         }
     }
 }
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_BHGalaxy4x4Z) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses bh_galaxy_4x4_z_mesh_graph_descriptor with 2 meshes of 4x4 (16 nodes each)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using bh_galaxy_4x4_z_mesh_graph_descriptor which has 2 meshes of 4x4 (16 nodes each)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_z_mesh_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 2 meshes
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 24u);
+
+    // Each of the mesh level graphs should have connections to other nodes
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    // Check that each graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graphs
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 16 nodes in the graph (4x4)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 16u);
+
+        // Check that each node should have neighbors
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Dual8x2) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses dual_8x2_mesh_graph_descriptor with 2 meshes of 8x2 (16 nodes each)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using dual_8x2_mesh_graph_descriptor which has 2 meshes of 8x2 (16 nodes each)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 2 meshes
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 24u);
+
+    // Each of the mesh level graphs should have connections to other nodes
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    // Check that each graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graphs
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 16 nodes in the graph (8x2)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 16u);
+
+        // Check that each node should have neighbors
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Galaxy1x32) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses galaxy_1x32_mesh_graph_descriptor with 1 mesh of 1x32 (32 nodes)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using galaxy_1x32_mesh_graph_descriptor which has 1 mesh of 1x32 (32 nodes)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 12 meshes
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 12u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 32 nodes in the graph (1x32)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 32u);
+
+        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 4 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 4 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleGalaxy1x16Torus) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses single_galaxy_1x16_torus_graph_descriptor with 1 mesh of 1x16 (16 nodes)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using single_galaxy_1x16_torus_graph_descriptor which has 1 mesh of 1x16 (16 nodes)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 1 mesh
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 24u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 16 nodes in the graph (1x16)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 16u);
+
+        // Check that each node should have neighbors (torus topology, so 2 neighbors)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 4 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 4 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_N300) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses n300_mesh_graph_descriptor with 1 mesh of 1x2 (2 nodes)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using n300_mesh_graph_descriptor which has 1 mesh of 1x2 (2 nodes)
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 1 mesh
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 2 nodes in the graph (1x2)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 2u);
+
+        // Check that each node should have neighbors (1D topology with 2 nodes, so 1 neighbor)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 1u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 1u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Custom2x32) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses custom_2x32_mesh_graph_descriptor with 1 mesh of 2x32 (64 nodes)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using custom_2x32_mesh_graph_descriptor which has 1 mesh of 2x32 (64 nodes)
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 32 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 4 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 1 mesh
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 64 nodes in the graph (2x32)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 64u);
+
+        // Check that each node should have neighbors (2D topology)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 4u);  // num directions * 4 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 4u);  // num directions * 4 channels per direction
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Custom1x17) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Uses custom_1x17_mesh_graph_descriptor with 1 mesh of 1x17 (17 nodes)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Load MGD - using custom_1x17_mesh_graph_descriptor which has 1 mesh of 1x17 (17 nodes)
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 1, 17 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 4 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 1 mesh
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 17 nodes in the graph (1x17)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 17u);
+
+        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 1u * 4u);  // num directions * 4 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 4u);  // num directions * 4 channels per direction
+        }
+    }
+}
 }  // namespace tt::tt_metal::experimental::tt_fabric
