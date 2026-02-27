@@ -312,22 +312,23 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             True,  # run_in_ci
         ),
-        # (
-        #     "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
-        #     1,  # data_parallel
-        #     1,  # batch_size
-        #     1,  # repeat_batches
-        #     128 * 1024,  # max_seq_len
-        #     200,  # max_generated_tokens
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
-        #     True,  # enable_decode_trace
-        #     False,  # enable_prefill_trace
-        #     False,  # warmup_prefill
-        #     False,  # users_row_sharded
-        #     False,  # long_context_mode
-        #     False,  # stop_at_eos
-        # ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            False,  # stop_at_eos
+            True,  # run_in_ci
+        ),
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             1,  # data_parallel
@@ -390,7 +391,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_16k",
         "prefill_32k",
         "prefill_64k",
-        # "prefill_128k", # OOM
+        "prefill_128k",
         "batch128",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
@@ -426,7 +427,6 @@ def test_gpt_oss_demo(
         )
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
-
     if os.environ.get("CI", None) and not run_in_ci:
         pytest.skip(f"This test configuration is skipped in CI.")
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -513,7 +513,12 @@ def test_gpt_oss_demo(
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
-
+    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 1:
+        if max([len(p) for p in real_prompts]) > 32 * 1024:
+            pytest.skip("120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error #38729")
+    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 8:
+        if max([len(p) for p in real_prompts]) > 64 * 1024:
+            pytest.skip("120b model with mesh_shape (1, 8) and prefill > 64k is not supported. OOM error #38729")
     if long_context_mode:
         # Expand to full batch: 1 real user + (users_per_row - 1) padding users per row
         # Padding users get minimal prompts (single token)
