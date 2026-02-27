@@ -13,8 +13,8 @@
 enum class ExpectedResult { OK, ERROR };
 
 struct MatmulInput {
-    ttnn::SmallVector<uint32_t> shape_a;
-    ttnn::SmallVector<uint32_t> shape_b;
+    ttsl::SmallVector<uint32_t> shape_a;
+    ttsl::SmallVector<uint32_t> shape_b;
     bool transpose_a{false};
     bool transpose_b{false};
 };

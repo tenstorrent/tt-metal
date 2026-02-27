@@ -61,7 +61,7 @@ inline void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
             << " Actual: " << bytes.size() << ", type: " << typeid(ttnn::Shape).name();
         throw std::invalid_argument(oss.str());
     }
-    ttnn::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
+    ttsl::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
     std::memcpy(data.data(), bytes.data(), bytes.size());
     value = ttnn::Shape(std::move(data));
 }

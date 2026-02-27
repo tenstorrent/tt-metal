@@ -17,7 +17,7 @@ autograd::TensorPtr reshape(const autograd::TensorPtr& tensor, std::span<uint32_
 
     // Convert span to SmallVector for ttnn::Shape construction
     // ttnn::Shape expects SmallVector<uint32_t> (which is the Container type)
-    ttnn::SmallVector<uint32_t> shape_vec(shape.begin(), shape.end());
+    ttsl::SmallVector<uint32_t> shape_vec(shape.begin(), shape.end());
 
     // Construct ttnn::Shape from SmallVector
     ttnn::Shape ttnn_shape(shape_vec);
