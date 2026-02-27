@@ -35,7 +35,7 @@ void bind_conv3d(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): Input tensor.
             weight_tensor (ttnn.Tensor): Weight tensor.
-            config (ttnn.Conv3dConfig): Configuration for the Conv3D operation.
+            config (ttnn.Conv3dConfig, optional): Configuration for the Conv3D operation. If not provided, conservative default blocking is used.
 
         Keyword Args:
             bias_tensor (ttnn.Tensor, optional): Bias tensor.
@@ -50,7 +50,7 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("weight_tensor"),
         nb::arg("bias_tensor") = nb::none(),
-        nb::arg("config"),
+        nb::arg("config") = nb::none(),
         nb::arg("dtype"),
         nb::arg("output_channels"),
         nb::arg("kernel_size"),
