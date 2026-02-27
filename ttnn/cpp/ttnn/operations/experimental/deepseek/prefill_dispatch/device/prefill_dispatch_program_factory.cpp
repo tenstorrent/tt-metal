@@ -426,7 +426,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_1,
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -457,7 +457,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
