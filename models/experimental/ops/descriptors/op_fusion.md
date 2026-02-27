@@ -199,6 +199,61 @@ slot but disagree on the mode, one phase gets the wrong unpack behavior. The
 allocator avoids this by making the mode part of the compatibility key.
 
 
+### Phantom CBs
+
+C++ op factories sometimes create named compile-time args for CB indices
+(e.g., `("cb_bias", 18)`) even when no `CBDescriptor` exists for that index.
+This happens when the op's configuration doesn't use a particular code path
+(e.g., bias is absent), but the factory still emits the named arg. These are
+called **phantom CBs** — they exist in the kernel's compile-time arg table but
+have no corresponding hardware CB configuration.
+
+**The risk**: Without knowledge of phantom index 18, the allocator might
+assign a real CB to slot 18. The kernel code would then have two CBs at the
+same hardware slot — one real (allocated by the pool) and one phantom
+(referenced in a dead code path). If the dead code path isn't perfectly dead
+(e.g., a branch that reads the CB index but doesn't access it), the collision
+could cause incorrect behavior.
+
+**Detection**: The fusion system identifies CB indices by scanning named
+compile-time args for entries whose name starts with `cb_` (e.g., `cb_bias`,
+`cb_out`, `cb_intermed0`) and whose value is a non-negative integer. Any such
+entry whose value doesn't appear in the phase's `cb_info` is a phantom. This
+convention is brittle — it relies on op factories consistently using the `cb_`
+prefix, and there is no mechanism to enforce it. A named compile-time arg
+carrying a CB index but using a non-`cb_` name (or an unnamed positional arg)
+would be invisible to the detector. The root issue is that compile-time args
+are untyped: they are `(name, int)` pairs with no semantic tag distinguishing
+"this is a CB index" from "this is a tile count." A proper fix would be typed
+compile-time args in the descriptor (e.g., a `CBIndex` type), but that
+requires changes to the C++ descriptor infrastructure.
+
+Before allocating a phase, `_get_phantom_cb_indices` scans all kernel named
+compile-time args:
+
+```python
+def _get_phantom_cb_indices(phase):
+    real_cb_indices = set(phase.cb_info.keys())
+    phantom = set()
+    for kernel_desc in phase.op_descriptor.descriptor.kernels:
+        for name, value in kernel_desc.named_compile_time_args:
+            if _is_cb_named_arg(name, value) and value not in real_cb_indices:
+                phantom.add(value)
+    return phantom
+```
+
+**Impact on allocation**: Phantom indices get identity-mapped reservations
+(`remap[18] = 18`) and are added to `_allocated_indices`, preventing the pool
+from assigning that slot to a new real CB. However, they are NOT added to
+`slots_used_this_phase` — so an existing slot at that index can still be
+reused by a real CB in the same phase. This is safe because the phantom's code
+path is dead at runtime.
+
+Phantom CBs are also NOT added to `_slots`, which means they are excluded from
+per-phase CB reset arrays, `build_merged_cb_descriptors`, and the
+`unpack_to_dest_mode` vector. No hardware configuration is emitted for them.
+
+
 ### Allocation Algorithm
 
 #### Phase-by-Phase Processing
@@ -287,7 +342,7 @@ the CB at its original hardware index):
 
 ```python
 def _allocate_new_slot(self, key, info, orig_idx, phase_idx):
-    if orig_idx not in self._allocated_indices and orig_idx < self.max_slots:
+    if orig_idx not in self._allocated_indices:
         slot_idx = orig_idx      # Prefer: CB 5 → slot 5
     else:
         slot_idx = self._alloc_index()  # Fallback: next free slot
@@ -355,47 +410,6 @@ def _match_alias_members(self, members, group_slots, cb_info):
 (2! = 2, 3! = 6).
 
 
-### Phantom CBs
-
-C++ op factories sometimes create named compile-time args for CB indices
-(e.g., `("cb_bias", 18)`) even when no `CBDescriptor` exists for that index.
-This happens when the op's configuration doesn't use a particular code path
-(e.g., bias is absent), but the factory still emits the named arg.
-
-**The risk**: Without knowledge of phantom index 18, the allocator might
-assign a real CB to slot 18. The kernel code would then have two CBs at the
-same hardware slot — one real (allocated by the pool) and one phantom
-(referenced in a dead code path). If the dead code path isn't perfectly dead
-(e.g., a branch that reads the CB index but doesn't access it), the collision
-could cause incorrect behavior.
-
-**The fix**: Before allocating a phase, `_get_phantom_cb_indices` scans all
-kernel named compile-time args for `cb_`-prefixed entries whose values don't
-appear in the phase's `cb_info`. These phantom indices get identity-mapped
-reservations (`remap[18] = 18`).
-
-```python
-def _get_phantom_cb_indices(phase):
-    real_cb_indices = set(phase.cb_info.keys())
-    phantom = set()
-    for kernel_desc in phase.op_descriptor.descriptor.kernels:
-        for name, value in kernel_desc.named_compile_time_args:
-            if _is_cb_named_arg(name, value) and value not in real_cb_indices:
-                phantom.add(value)
-    return phantom
-```
-
-**Phantom CBs do NOT block slot reuse**: They are added to
-`_allocated_indices` (preventing the pool from assigning that index to a
-*new* slot) but NOT to `slots_used_this_phase` (allowing an existing slot at
-that index to be reused by a real CB in the same phase). This is safe because
-the phantom's code path is dead at runtime.
-
-**Phantom CBs are NOT added to `_slots`**: This means they are excluded from
-per-phase CB reset arrays, `build_merged_cb_descriptors`, and the
-`unpack_to_dest_mode` vector. No hardware configuration is emitted for them.
-
-
 ### GlobalCB Remote Indices
 
 `GlobalCircularBuffer`-backed CBs have a dual-index model: a local
@@ -422,58 +436,215 @@ for phase in phases:
 ```
 
 
-### Forced Remaps (Cross-Group Consistency)
+### Global Pool + Projection (Cross-Group Consistency)
 
-In branching trees, an op may appear in multiple groups (e.g., block-sharded
-LN where the mcast sender is in group 0 and the receiver is in group 1). Each
-group builds its own `CBPoolAllocator` independently. If the LN's CBs get
-different slot assignments in each group, multicast writes from one group's
-cores would hit the wrong L1 address on the other group's cores.
+In branching trees, a stem op may appear in multiple groups (e.g.,
+block-sharded LN where the mcast sender is in group 0 and the receiver is in
+group 1). If the stem's CBs get different slot assignments or different L1
+layouts in each group, multicast writes from one group's cores would hit the
+wrong L1 address on the other group's cores.
 
-**Solution**: Before building any group, `_compute_shared_cb_remaps()` in
-`graph.py` identifies ops that appear in multiple groups (by Python object
-identity). It builds a single **reference pool** from all shared ops and
-records the resulting remap for each:
+Two things must match across groups for multicast correctness:
+
+1. **CB slot indices**: The same original CB must land at the same hardware
+   slot in every group.
+2. **L1 addresses**: Even with matching slot indices, slots are laid out
+   sequentially in L1 by index. If group A has a non-shared slot between two
+   shared slots but group B doesn't, the higher shared slot's L1 address
+   differs between groups.
+
+**Solution: allocate globally, then project per-group.** A single
+`CBPoolAllocator` sees *all* unique ops in the tree, producing consistent slot
+assignments by construction. Each group receives a **projection** of the
+global pool — a subset of its slots plus padding — rather than building its
+own pool from scratch.
+
+#### Step 1: Build the Global Pool
+
+`_build_global_cb_pool()` in `graph.py` creates one `CBPoolAllocator` and
+calls `allocate_phase()` for every unique op in the tree (deduped by `id()`
+during the tree walk, assigned sequential indices). The allocator itself
+imposes no slot limit — it is purely an allocation engine.
 
 ```python
-# Build reference pool from all shared ops (first occurrence order)
-ref_pool = CBPoolAllocator(max_slots=32)
-for phase_idx, pi in enumerate(ref_phase_infos):
-    phantom_indices = _get_phantom_cb_indices(pi)
-    ref_pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices)
-
-# Record: op identity → reference remap
-ref_remaps = {}
-for ref_idx, op in enumerate(shared_ops_ordered):
-    ref_remaps[id(op)] = ref_pool.get_remap(ref_idx)
+def _build_global_cb_pool(unique_ops):
+    pool = CBPoolAllocator()
+    phase_infos = [_create_phase_info(op, i) for i, op in enumerate(unique_ops)]
+    for pi in phase_infos:
+        for remote_idx in _extract_remote_cb_indices(pi.op_descriptor.descriptor):
+            pool.reserve_index(remote_idx)
+    for phase_idx, pi in enumerate(phase_infos):
+        phantom_indices = _get_phantom_cb_indices(pi)
+        pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices)
+    return pool
 ```
 
-Each group then receives a `forced_phase_remaps` dict. When the group's
-allocator encounters a forced phase, it calls `force_phase_remap()` instead
-of `allocate_phase()`:
+Because the same allocator processes all ops in one pass, shared ops (ops
+that appear in multiple groups) naturally get the same slot assignments
+everywhere. No forced remaps are needed.
+
+#### Step 2: Compute Padding
+
+`_project_pools_for_groups()` identifies **shared slots** (slots referenced
+by two or more groups) and computes `M = max(shared slot indices)`. The
+**padding set** is every global pool slot with index ≤ M. Including these in
+every group ensures that all groups have identical CB entries for indices
+0..M, which produces identical sequential L1 layout up through index M.
 
 ```python
-def force_phase_remap(self, phase_idx, cb_info, forced_remap):
-    for orig_idx, slot_idx in forced_remap.items():
-        self._allocated_indices.add(slot_idx)
-        info = cb_info.get(orig_idx)
-        if info is None:
-            continue  # Phantom — just reserve
-        # Register slot as if freshly allocated
-        ...
-    self.phase_remaps.append(dict(forced_remap))
+# Identify shared slots
+slot_group_count = defaultdict(int)
+for group_slots in per_group_slots:
+    for s in group_slots:
+        slot_group_count[s] += 1
+shared_slots = {s for s, count in slot_group_count.items() if count > 1}
+
+# Padding = all global slots with index ≤ max(shared)
+M = max(shared_slots)
+padding_slots = {s for s in global_pool.get_all_slot_indices() if s <= M}
 ```
 
-This replays the reference allocation, ensuring all groups assign the same
-slots to shared ops. Subsequent non-shared phases allocate normally, aware of
-the forced slots.
+#### Step 3: Project Per-Group
 
-**L1 address equalization**: Even with matching slot indices, non-shared
-phases can cause different `total_size` values for the same slot across groups
-(the max-across-phases differs per group). Since CB L1 addresses are allocated
-sequentially by slot index, a size difference at any slot shifts all
-subsequent addresses. `_equalize_cb_sizes()` runs after all groups are built,
-padding each slot's `total_size` to the cross-group maximum.
+`project_to_group(group_global_indices, padding_slots)` creates a new
+`CBPoolAllocator` containing:
+
+- `phase_remaps` re-indexed to local 0..K from the global pool's remaps
+  (using the group's `phase_op_indices` to look up the right global phases)
+- `_slots` containing the union of the group's referenced slots and the
+  padding slots (with max `total_size` from the global pool)
+- All internal bookkeeping (`_config_to_slots`, `_slot_to_orig_index`,
+  alias groups) filtered to included slots
+
+The projected pool validates the 32-slot hardware limit. The builder calls
+`build_merged_cb_descriptors`, `build_unpack_to_dest_mode`, `get_remap`, and
+`phase_remaps` on this projected pool — all work unchanged because the
+projection has the same structure as a normally-built pool.
+
+#### Walk-Through: Branching LN → RMS_A / RMS_B
+
+Consider a tree with a shared stem and two branches:
+
+```
+Stem: LN (cores 0-3)      CBs: {0, 1, 2, 3, 4, 5}
+  Branch A: RMS (cores 0-1)  CBs: {0, 1, 2, 3}
+  Branch B: RMS (cores 2-3)  CBs: {0, 1, 2, 3, 7}
+```
+
+**Global pool** allocates all three ops as phases 0, 1, 2:
+
+| Global Phase | Op    | Remap (orig → slot)            |
+|-------------|-------|-------------------------------|
+| 0           | LN    | `{0:0, 1:1, 2:2, 3:3, 4:4, 5:5}` |
+| 1           | RMS_A | `{0:0, 1:1, 2:2, 3:3}`       |
+| 2           | RMS_B | `{0:0, 1:1, 2:2, 3:3, 7:7}`  |
+
+Global pool has 7 slots: {0, 1, 2, 3, 4, 5, 7}.
+
+**Groups and shared slots**:
+
+- Group A (cores 0-1): phases [0, 1] → referenced slots {0,1,2,3,4,5}
+- Group B (cores 2-3): phases [0, 2] → referenced slots {0,1,2,3,4,5,7}
+- Shared slots: {0,1,2,3,4,5} (from LN stem). `M = 5`.
+- Padding: all global slots with index ≤ 5 = {0,1,2,3,4,5}.
+
+**Projected pools**:
+
+- Group A: slots {0,1,2,3,4,5} (referenced ∪ padding). 6 slots ≤ 32.
+- Group B: slots {0,1,2,3,4,5,7} (referenced ∪ padding). 7 slots ≤ 32.
+
+Both groups have slots 0-5 with the same `total_size` (from the global pool's
+max across all phases). L1 layout is identical for indices 0..5. Slot 7
+only exists in Group B and sits *above* M, so it doesn't affect shared-slot
+L1 addresses.
+
+#### Walk-Through: Why Padding Matters
+
+Imagine a variant where RMS_B uses a CB with a unique format that lands at
+slot 6 in the global pool:
+
+```
+Global pool slots: {0, 1, 2, 3, 4, 5, 6}
+Group A refs: {0,1,2,3,4,5}     (from LN + RMS_A)
+Group B refs: {0,1,2,3,4,5,6}   (from LN + RMS_B)
+Shared: {0,1,2,3,4,5}, M = 5
+```
+
+Without padding, Group A's merged CBDescriptor list has 6 entries (slots
+0-5), and Group B's has 7 entries (slots 0-6). If slot 6 had been index 4
+instead (a non-shared slot between shared slots), Group A wouldn't have it
+and the L1 addresses for slot 5 would differ between groups.
+
+Padding prevents this: every slot ≤ M is included in every group, even if
+the group doesn't reference it. The padding slot gets a CBDescriptor with
+the global pool's `total_size`, ensuring the L1 layout through index M is
+identical across all groups.
+
+#### Gotcha: CB State Save/Restore Scope
+
+`build_merged_cb_descriptors()` mutates `source_fmt.buffer_index` on
+original C++ `CBFormatDescriptor` objects (see Mutation Contract in Merged CB
+Descriptors). Padding slots carry `source_fmt` references from whichever op
+first allocated that slot in the global pool — which may be an op that
+*isn't* in the current group's phases.
+
+If save/restore only covers the group's own phases, mutations on padding
+slots' `source_fmt` persist and corrupt later groups. The fix:
+`_build_internal()` saves ALL unique ops' descriptors once before any group
+builds, and restores them before each subsequent group build. This ensures
+every group starts from pristine descriptor state.
+
+```python
+# Save ALL unique ops (not just per-group) — padding slot mutations
+# on other ops' source_fmt would otherwise corrupt later groups.
+all_prog_descs = [op.descriptor for op in unique_ops]
+saved = _save_cb_state(all_prog_descs)
+
+for g_idx, group in enumerate(groups):
+    if g_idx > 0:
+        _restore_cb_state(saved)  # pristine state for each group
+    result = self._build_group(..., cb_pool=per_group_pools[g_idx])
+    results.append(result)
+
+_restore_cb_state(saved)  # final restore
+```
+
+#### Walk-Through: Alias Groups Through Projection
+
+Alias groups (see Alias Groups above) are preserved through projection. Consider
+a matmul whose output uses an aliased CBDescriptor with two format descriptors
+at original indices 4 (`c_out`) and 5 (`c_intermed0`):
+
+```
+Global pool after allocating matmul (phase 0) + eltwise (phase 1):
+
+Slot 0: key=(BF16, 2048, True, 0)    ← matmul in0
+Slot 1: key=(BF16, 2048, True, 0)    ← matmul in1
+Slot 4: key=(BF16, 2048, False, 0)   ← matmul out (alias group [4,5])
+Slot 5: key=(FP32, 4096, False, 1)   ← matmul intermed (alias group [4,5])
+Slot 2: key=(BF16, 2048, False, 0)   ← eltwise out (reuses nothing — different purpose)
+
+Alias groups: {(4, 5)}
+Phase 0 remap: {0:0, 1:1, 4:4, 5:5}
+Phase 1 remap: {0:0, 2:2}  (eltwise reuses slot 0 for its input)
+```
+
+When projecting to a group that includes both phases, `project_to_group` copies
+the alias group `{(4, 5)}` into the projected pool because both slots 4 and 5
+are in the included set. `build_merged_cb_descriptors()` then emits slot 4 and
+slot 5 as a single `CBDescriptor` with two `format_descriptors` — preserving
+the shared L1 allocation.
+
+If a different group only uses phase 1 (eltwise), slots 4 and 5 might still be
+included as padding (if they fall ≤ M). In that case the alias group is still
+copied, and the padding `CBDescriptor` carries both format descriptors. This is
+harmless — the eltwise kernel never references indices 4 or 5, but their
+presence in L1 ensures address alignment for any shared slots above them.
+
+**Key invariant**: `project_to_group` filters `_slot_alias_groups` to only
+include groups where ALL members are in the included slot set. Since padding
+includes every slot ≤ M, alias groups whose members all fall ≤ M are always
+fully included (never partially split).
 
 
 ### Merged CB Descriptors
@@ -558,49 +729,69 @@ see the first group's mutated `buffer_index` values.
 
 ## Circular Buffer Management
 
-### Output-to-Input Chaining
-
-Phase N's output CB becomes Phase N+1's input CB. The output data stays in L1;
-no DRAM round-trip is needed.
-
 ### CB State Reset Between Phases
-
 After each phase, all CB state must be reset to empty before the next phase can
 use them. This is complex because four RISC processors independently track CB
 state:
 
 | RISC | Tracks | Reset Action |
 |------|--------|-------------|
-| BRISC | `tiles_acked`, `tiles_received` (via stream registers), `fifo_rd_ptr`, `fifo_wr_ptr` | Equalize stream registers (per-tile increment loop), reset pointers to CB start |
+| BRISC | `tiles_acked`, `tiles_received` (via stream registers), `fifo_rd_ptr`, `fifo_wr_ptr` | Direct-assign `acked = received` (guarded by `if received != acked`), reset pointers to CB start |
 | TRISC0 (unpack) | `tiles_acked` (local copy), `fifo_rd_ptr` | Sync from stream register via `reg_read`, reset pointer |
 | TRISC2 (pack) | `tiles_received` (local copy), `fifo_wr_ptr`, `fifo_wr_tile_ptr` | Sync from stream register via `reg_read`, reset pointer and tile pointer |
-| NCRISC | `fifo_rd_ptr`, `fifo_wr_ptr` | Reset pointers to CB start (reads stream registers directly) |
+| NCRISC | `fifo_rd_ptr`, `fifo_wr_ptr` | Reset pointers to CB start |
 
-**Ordering**: BRISC reset runs first (it owns the stream registers). Then the
-cross-core barrier fires. After the barrier, compute and writer resync their
-local copies from the (now-equalized) stream registers.
+**Ordering**: BRISC reset runs first (equalizes stream registers and resets
+FIFO pointers). Then the cross-core barrier fires. After the barrier, compute
+and writer resync their local copies from the (now-equalized) stream registers.
 
-**Per-tile increment**: The stream controller requires per-tile increments when
-equalizing `tiles_acked` to match `tiles_received`. Bulk increments
-(`acked += N` where N > 1) hang the hardware. The code uses a `for` loop that
-increments by 1 each iteration.
-
-### CB State Save/Restore
-
-`_build_fused_descriptor()` mutates `buffer_index`, `total_size`, and
-`core_ranges` in-place on original `CBDescriptor` C++ objects (Python's
-`deepcopy` cannot pickle them). To prevent corruption when building multiple
-paths that share ops (e.g., root ops), `_save_cb_state()` /
-`_restore_cb_state()` snapshot and restore these fields around each path build.
-
-### Phantom CB Handling
-
-C++ op factories may create named compile-time args for CB indices (e.g.,
-`cb_ex=18`) even when no corresponding `CBDescriptor` exists. These "phantom
-CBs" get identity mappings during pool allocation to prevent collisions.
-
+**Stream register writes**: BRISC equalizes by directly assigning `*acked_ptr =
+received`. The write is guarded by `if (received != acked)` — writing the same
+value back to a stream register (a no-op write) causes hardware side-effects
+that hang the device. Only `acked` is written toward `received` (not the
+reverse), because after a completed phase the consumer has acked all tiles the
+producer pushed.
 
 ## Synchronization Protocol
+
+A fused kernel executes multiple ops (phases) sequentially within a single
+kernel launch. Between phases, all cores must synchronize so that no core
+begins phase N+1 while another is still finishing phase N. The barrier
+infrastructure manages this.
+
+### Key Concepts
+
+A **phase** is one op's execution within the fused kernel. A 3-op linear chain
+has phases 0, 1, 2.
+
+A **segment** is a group of consecutive phases that share the same set of
+participating cores. The barrier scope of a segment is the set of cores that
+must synchronize at each phase transition within it. In a linear chain (all
+ops on the same core range), there is a single segment covering all
+transitions. In a branching tree, different parts of the tree may run on
+different core subsets, creating multiple segments.
+
+Example — a tree with a stem op on a 4×4 grid that branches into two leaf ops
+on disjoint 4×2 halves:
+
+```
+        stem (4×4)
+       /          \
+  leaf_a (4×2)   leaf_b (4×2)
+```
+
+This produces three segments:
+- **segment 0** (16 cores): the transition after the stem, before branching.
+  All 16 cores must synchronize here.
+- **segment 1** (8 cores): transitions within the left branch. Only the left
+  8 cores participate.
+- **segment 2** (8 cores): transitions within the right branch. Only the right
+  8 cores participate.
+
+Each segment has its own `arrive`/`release` GlobalSemaphore pair. A
+`MultiBarrierSpec` maps each phase transition to its segment. Paths that share
+a segment reuse the same semaphore L1 addresses (ensured by a `segment_cache`
+keyed on `frozenset(core_ranges)`).
 
 ### Two-Level Barrier
 
@@ -611,17 +802,78 @@ Phase synchronization uses a two-level protocol:
 2. **Cross-core NOC barrier** (across cores, GlobalSemaphore): All cores in the
    barrier scope must complete before any core proceeds to the next phase.
 
-Both levels use monotonically increasing counters -- never reset during kernel
+Both levels use monotonically increasing counters — never reset during kernel
 execution.
 
-### Local RISC Synchronization
+**BRISC (reader/coordinator)** — owns `done`, waits on `compute_done` and
+`writer_done`, then resets CBs and runs the cross-core barrier:
 
-Each core has two L1 flags allocated via `GlobalSemaphore`:
+```c++
+// barrier::phase — BRISC side
+namespace phase {
+    uint32_t done;                                  // local counter, incremented each phase
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore)
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore)
 
-- `compute_done`: Compute writes `phase_idx + 1` after completing a phase.
-- `writer_done`: Writer writes `phase_idx + 1` after completing a phase.
+    void wait() {
+        done++;
+        noc_async_full_barrier();                   // drain all outstanding NOC writes
+        noc_semaphore_wait_min(compute_done, done); // spin until compute signals
+        noc_semaphore_wait_min(writer_done, done);  // spin until writer signals
+    }
 
-The reader waits for both before proceeding with CB reset.
+    void reset() {
+        // Per-transition: reset CBs, rebind sharded addresses, cross-core sync
+        reset_cbs(phase_K_cbs);                     // equalize stream registers + FIFO ptrs
+        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+        segment_N::sync();                          // cross-core NOC barrier
+    }
+}
+```
+
+**Compute** — signals `compute_done` after each phase, then waits on the
+cross-core barrier before resyncing local CB state:
+
+```c++
+// barrier::phase — compute side
+namespace phase {
+    uint32_t done;                                  // local counter
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (same address BRISC reads)
+
+    void wait() {
+        done++;
+        *compute_done = done;                       // signal BRISC
+    }
+
+    void reset() {
+        segment_N::sync();                          // wait for cross-core barrier
+        resync_cbs(phase_K_cbs);                    // TRISC0: sync tiles_acked via reg_read
+                                                    // TRISC2: sync tiles_received via reg_read
+    }
+}
+```
+
+**Writer (NCRISC)** — same pattern as compute but signals `writer_done` and
+drains NOC writes before signaling:
+
+```c++
+// barrier::phase — writer side
+namespace phase {
+    uint32_t done;                                  // local counter
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (same address BRISC reads)
+
+    void wait() {
+        done++;
+        noc_async_write_barrier();                  // drain outstanding writes first
+        *writer_done = done;                        // signal BRISC
+    }
+
+    void reset() {
+        segment_N::sync();                          // wait for cross-core barrier
+        resync_cbs(phase_K_cbs);                    // reset FIFO pointers to CB start
+    }
+}
+```
 
 ### Cross-Core NOC Barrier
 
@@ -631,15 +883,30 @@ are `GlobalSemaphore` L1 words. `arrive` accumulates on core 0 via NOC atomic
 increments. `release` is multicast from core 0 to all cores in the bounding
 box. Both are monotonic.
 
-### Multi-Segment Barriers
+```c++
+// barrier::segment_N — BRISC side (coordinator)
+namespace segment_N {
+    uint32_t call_count;
+    volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
+    volatile tt_l1_ptr uint32_t* release;   // L1, multicast to all cores
 
-When a path transitions between tree segments (e.g., wider scope to narrower),
-the barrier scope changes. Each segment has its own `arrive`/`release`
-`GlobalSemaphore` pair.
+    void sync() {
+        noc_semaphore_inc(core0_arrive_noc_addr, 1);        // all cores increment arrive
+        if (is_core_0) {
+            noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
+            *release = call_count + 1;
+            noc_semaphore_set_multicast_loopback_src(release, mcast_addr, num_cores);
+            noc_async_write_barrier();
+        } else {
+            noc_semaphore_wait_min(release, call_count + 1); // spin until released
+        }
+        call_count++;
+    }
+}
+```
 
-A `MultiBarrierSpec` maps each phase transition to a barrier segment. Paths
-that share a tree segment MUST use identical `arrive`/`release` L1 addresses.
-A `segment_cache` keyed by `frozenset(core_ranges)` ensures this.
+Writer and compute RISCs see only the `release` semaphore — they spin on it
+in `segment_N::sync()` without participating in the arrive/multicast protocol.
 
 
 ## Code Generation
@@ -1381,63 +1648,20 @@ backward compatibility but are not part of the primary interface.
   `BCAST_LLKOP`, `BCAST_DIM` must have identical values across all fused
   phases.
 
-### Multicast Ops as Stem in Branching Trees
-
-Ops that perform inter-core communication (NOC multicast, semaphore-based
-reductions) require special handling as stem phases in branching trees. This
-specifically affects sharded LayerNorm, which multicasts partial statistics
-(mean, variance) across cores to compute global normalization parameters.
-Linear chains are unaffected (single binary, single CB pool).
-
-#### The Challenge
-
-In a branching tree, each root-to-leaf path produces a separate fused kernel
-binary. The stem phase appears in every binary, but each binary only runs on
-its leaf's core subset:
-
-```
-Stem: sharded LN (cores 0-3)
-  Branch A: RMS (cores 0-1)  → Binary A runs on cores 0-1
-  Branch B: RMS (cores 2-3)  → Binary B runs on cores 2-3
-```
-
-Each binary has its own `CBPoolAllocator` instance. Without coordination, two
-problems arise:
-
-1. **CB index divergence**: Different phantom CBs or reserved indices across
-   binaries can cause the same original CB to land at different hardware
-   slots. A multicast targeting a CB address on a remote core would hit the
-   wrong slot.
-
-2. **CB L1 address divergence**: Even with matching slot indices, different
-   `total_size` values (from different branch ops' max-across-phases) shift
-   L1 addresses for subsequent slots. A multicast to a fixed L1 offset would
-   land at the wrong address.
-
-#### Solution: Forced Remaps + Size Equalization
-
-Both problems are addressed by two mechanisms (see CB Pool Allocator section):
-
-- **`_compute_shared_cb_remaps()`** builds a single reference
-  `CBPoolAllocator` from all shared ops and forces each group to replay the
-  reference allocation via `force_phase_remap()`. This guarantees identical
-  CB slot assignments across all binaries for shared phases.
-
-- **`_equalize_cb_sizes()`** pads each slot's `total_size` to the cross-group
-  maximum after all groups are built. This guarantees identical L1 layouts
-  across all binaries.
-
-Together, these ensure that every core — regardless of which binary it
-runs — sees the same CB hardware indices and the same L1 buffer addresses for
-shared (stem) phases. Multicast writes land at the correct location.
-
 
 ## File Map
 
 | File | Purpose |
 |------|---------|
-| `models/experimental/ops/descriptors/sequential.py` | All fusion logic: `OpGraphBuilder`, `OpNode`, CB pool allocation, kernel code generation, barrier protocol |
-| `models/experimental/ops/descriptors/cpp_parser.py` | Tree-sitter based C++ source parsing |
+| `models/experimental/ops/descriptors/fusion/common.py` | Shared data classes + geometry utilities (leaf module) |
+| `models/experimental/ops/descriptors/fusion/cb_allocator.py` | CB pool allocation + analysis + phantom/rebind helpers |
+| `models/experimental/ops/descriptors/fusion/fusion.py` | `Sequential`, `Parallel`, `FusedOp` (high-level API) |
+| `models/experimental/ops/descriptors/fusion/graph.py` | `OpNode`, `OpGraphBuilder`, `build_op_graph`, global pool + projection |
+| `models/experimental/ops/descriptors/fusion/codegen/cpp_parser.py` | C++ lexer, body extraction, include inlining |
+| `models/experimental/ops/descriptors/fusion/codegen/barrier.py` | C++ templates + unified barrier generator |
+| `models/experimental/ops/descriptors/fusion/codegen/source_gen.py` | Source utils, transforms, phase NS, fused source gen |
+| `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
+| `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor` namedtuple |
 | `models/experimental/ops/descriptors/composite.py` | `launch()`: merges and dispatches multiple OpDescriptors |
 | `tests/ttnn/unit_tests/operations/fused/test_sequential.py` | Device tests (require hardware) |
