@@ -23,6 +23,8 @@ constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
 
+constexpr uint16_t TENSIX_RISC_OFFSET = 0x100;
+
 using PackedTileCounter = uint8_t;  // bits 5-6: tensix_id (2 bits), bits 0-4: counter_id (5 bits)
 
 // PackedTileCounter bit layout constants
