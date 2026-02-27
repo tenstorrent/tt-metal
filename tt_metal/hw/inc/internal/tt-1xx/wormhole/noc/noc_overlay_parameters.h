@@ -244,7 +244,7 @@
 
 // Pointer to the stream auto-config data. Initialized to the start of
 // the auto-config structure at workload start, automatically updated
-// subsequenty.
+// subsequently.
 // Specified as byte address, needs to be multiple of 4B.
 #define STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX 12
 
@@ -481,7 +481,7 @@
 // Returns 1 if the message info register can accept new message push (read-only).
 // Equivalent to checking the condition:
 //   (STREAM_MSG_INFO_FULL_REG_INDEX == 0) && (STREAM_MSG_INFO_PTR_REG_INDEX == STREAM_MSG_INFO_WR_PTR_REG_INDEX)
-// (I.e. ther is free space in the msg info register, and we dont have any message info headers in the
+// (I.e. there is free space in the msg info register, and we dont have any message info headers in the
 //  memory buffer about to be fetched.)
 #define STREAM_MSG_INFO_CAN_PUSH_NEW_MSG_REG_INDEX 41
 

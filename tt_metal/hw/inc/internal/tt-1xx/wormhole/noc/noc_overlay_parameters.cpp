@@ -195,7 +195,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      {},
      "// Pointer to the stream auto-config data. Initialized to the start of\n// the auto-config structure at workload "
-     "start, automatically updated\n// subsequenty. \n// Specified as byte address, needs to be multiple of 4B.\n"},
+     "start, automatically updated\n// subsequently. \n// Specified as byte address, needs to be multiple of 4B.\n"},
     {"STREAM_MCAST_DEST",
      13,
      {{"STREAM_MCAST_END_X", 0},
@@ -485,7 +485,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      "// Returns 1 if the message info register can accept new message push (read-only). \n// Equivalent to checking "
      "the condition:\n//   (STREAM_MSG_INFO_FULL_REG_INDEX == 0) && (STREAM_MSG_INFO_PTR_REG_INDEX == "
-     "STREAM_MSG_INFO_WR_PTR_REG_INDEX)\n// (I.e. ther is free space in the msg info register, and we dont have any "
+     "STREAM_MSG_INFO_WR_PTR_REG_INDEX)\n// (I.e. there is free space in the msg info register, and we dont have any "
      "message info headers in the\n//  memory buffer about to be fetched.)\n"},
     {"STREAM_MSG_GROUP_COMPRESS",
      42,

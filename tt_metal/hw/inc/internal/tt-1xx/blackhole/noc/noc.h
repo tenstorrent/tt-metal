@@ -340,7 +340,7 @@ void noc_multicast_write_dw_inline(
       incr = 0x80 (increase by 0x80),
       current value = 0x21C0,
 
-  then the aligned valud is 0x2100, and the new value is:
+  then the aligned value is 0x2100, and the new value is:
       0x2100 + ((0x1C0 + 0x80) % 0x100) = 0x2140.
 
   <noc_coordinate> => NOC ID portion of addr (unicast)
