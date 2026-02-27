@@ -1675,8 +1675,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
-void validate_fabric_2d_dynamic_config(Topology topology) {
-    TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+void validate_fabric_2d_dynamic_config() {
     auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
     TT_FATAL(
         physical_mesh_shapes.size() == 1,
@@ -1719,7 +1718,6 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 }
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
-    Topology topology,
     const MeshCoordinate& /*src_device_coord*/,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1728,8 +1726,8 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
@@ -1777,7 +1775,6 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 }
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology,
     const MeshCoordinate& src_device_coord,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1790,8 +1787,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,

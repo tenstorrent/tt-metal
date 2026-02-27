@@ -312,7 +312,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+        sender_device_coord, forward_coord, backward_coord, mesh_device);
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, std::nullopt, core_grid_offset);
