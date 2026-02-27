@@ -37,7 +37,16 @@ UNET_LOOP_SEED = {
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_inference_steps, debug_mode):
+def run_unet_inference(
+    ttnn_device,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    image_resolution,
+    prompts,
+    num_inference_steps,
+    debug_mode,
+):
     # Get seed from configuration
     height, width = image_resolution
     resolution_key = f"{height}x{width}"
@@ -49,12 +58,16 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 
     guidance_scale = 5.0
 
-    # 1. Load components
+    # 1. Load components - use CIv2 LFC when available
+    model_name = "stabilityai/stable-diffusion-xl-base-1.0"
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     pipeline = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        model_name if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env or is_ci_v2_env,
     )
 
     # 2. Load tt_unet and tt_scheduler
@@ -334,9 +347,13 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 def test_unet_loop(
     device,
     is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)
+    return run_unet_inference(
+        device, is_ci_env, is_ci_v2_env, model_location_generator, image_resolution, prompt, loop_iter_num, debug_mode
+    )
