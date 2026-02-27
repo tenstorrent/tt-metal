@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+// #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
