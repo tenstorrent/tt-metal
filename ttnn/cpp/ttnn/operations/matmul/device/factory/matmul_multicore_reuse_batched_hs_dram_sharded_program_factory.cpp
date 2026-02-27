@@ -144,6 +144,37 @@ create_program_batch_sharded(
         num_workers,
         num_workers);
 
+    // Verify that storage cores match worker cores in the same order.
+    // The factory maps worker[i] -> input_storage[i] -> output_storage[i].
+    // If the orderings don't match, data gets misrouted to the wrong cores/batches
+    for (uint32_t i = 0; i < num_workers; ++i) {
+        TT_FATAL(
+            input_storage_cores_ordered[i] == all_worker_cores_ordered[i],
+            "Input storage core ordering mismatch at index {}! "
+            "Storage core ({}, {}) != Worker core ({}, {}). "
+            "The L1 shard grid must use the same core ordering as "
+            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
+            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
+            i,
+            input_storage_cores_ordered[i].x,
+            input_storage_cores_ordered[i].y,
+            all_worker_cores_ordered[i].x,
+            all_worker_cores_ordered[i].y);
+
+        TT_FATAL(
+            output_storage_cores_ordered[i] == all_worker_cores_ordered[i],
+            "Output storage core ordering mismatch at index {}! "
+            "Storage core ({}, {}) != Worker core ({}, {}). "
+            "The L1 shard grid must use the same core ordering as "
+            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
+            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
+            i,
+            output_storage_cores_ordered[i].x,
+            output_storage_cores_ordered[i].y,
+            all_worker_cores_ordered[i].x,
+            all_worker_cores_ordered[i].y);
+    }
+
     // Build NOC coordinate vectors for input and output storage cores
     std::vector<uint32_t> input_storage_noc_x, input_storage_noc_y;
     std::vector<uint32_t> output_storage_noc_x, output_storage_noc_y;
@@ -461,7 +492,10 @@ create_program_batch_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_reader_compile_args,
-            .defines = reader_defines});
+            .defines = reader_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+            }});
 
     auto mm_kernel_in1_writer_id = tt_metal::CreateKernel(
         program,
@@ -472,7 +506,12 @@ create_program_batch_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_writer_compile_args,
-            .defines = writer_defines});
+            .defines = writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+            }});
 
     auto mm_kernel_compute_id = tt_metal::CreateKernel(
         program,
@@ -483,7 +522,17 @@ create_program_batch_sharded(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
     // Following the pattern from the mcast DRAM sharded factory

@@ -3,16 +3,10 @@ name: "[internal] ttnn unit tests impl"
 on:
   workflow_call:
     inputs:
-      arch:
+      enabled-skus:
         required: true
         type: string
-      runner-label:
-        required: true
-        type: string
-      timeout:
-        required: false
-        type: number
-        default: 40
+        description: "Comma-separated SKUs (e.g. wh_n300_civ2). Maps to runs_on via .github/sku_config.yaml."
       docker-image:
         required: true
         type: string
@@ -37,101 +31,82 @@ on:
         required: false
         type: boolean
         default: false
-
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
-      timeout:
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+      timeout-minutes-override:
         required: false
         type: number
-        default: 40
-      docker-image:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
-      merge-gate-call:
-        required: false
-        type: boolean
-        default: false
+        default: 0
+        description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
 
 jobs:
-  define-ttnn-tests:
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
-    strategy:
-      matrix:
-        default-ttnn-tests:
-          [[
-            { name: "ttnn example tests", cmd: "./tests/scripts/run_ttnn_examples.sh", merge_gate: true },
-            { name: "ttnn eltwise group 1", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 2", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 3", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 4", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 5", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn conv group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn pool group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn matmul group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn fused group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn transformers group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn reduce and misc ops group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "core ttnn unit test group", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            # { name: "ttnn fast runtime off", cmd: 'pytest --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off', merge_gate: false, fast_runtime_mode_off: true },
-          ]]
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
     steps:
-      - name: Compute tests
-        shell: bash
-        id: compute-tests
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
         run: |
-          set -euo pipefail
-          echo "[info] Outputing default values"
-          default_ttnn_tests='${{ toJSON(matrix.default-ttnn-tests) }}'
-          echo $default_ttnn_tests
-          echo $default_ttnn_tests | jq
-          requested_ttnn_tests=$default_ttnn_tests
+          pip3 install PyYAML
 
-          requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
-          echo "[info] after filtering for requested workflow tests: $requested_ttnn_tests"
+      - name: Verify test timeouts against budget
+        if: ${{ inputs.timeout-minutes-override == 0 }}
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "sanity"
 
-          # Check that we have a valid test list that's not empty
-          echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
-          echo "ttnn-tests=$(echo $requested_ttnn_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
-          echo "[info] Showing GITHUB_OUTPUT"
-          cat "$GITHUB_OUTPUT"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+      - name: Filter matrix by merge_gate
+        id: filter-matrix
+        run: |
+          merge_gate="${{ inputs.merge-gate-call }}"
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
+          len=$(echo "$filtered" | jq 'length')
+          if [ "$len" -eq 0 ]; then
+            echo "::error::No tests left after filtering for merge_gate=$merge_gate"
+            exit 1
+          fi
+          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$filtered" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
   ttnn:
-    needs: define-ttnn-tests
+    needs: load-test-matrix
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04"]
-        test-group: ${{ fromJSON(needs.define-ttnn-tests.outputs.ttnn-tests) }}
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
@@ -146,6 +121,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -156,6 +132,10 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-kernel-ccache: true
+          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
+          # This allows different retention policies for runtime JIT vs. C++ build artifacts
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: Set ttnn fast runtime if exists in config
@@ -164,15 +144,22 @@ jobs:
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
 
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06CXU895AP # Michael Chiou
+          owner: ${{ matrix.test-group.owner_id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

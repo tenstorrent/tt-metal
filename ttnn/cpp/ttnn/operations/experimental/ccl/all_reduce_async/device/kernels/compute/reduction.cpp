@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 
 void kernel_main() {
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);

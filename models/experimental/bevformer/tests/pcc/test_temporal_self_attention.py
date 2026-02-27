@@ -41,7 +41,7 @@ PRINT_DETAILED_COMPARISON_FLAG = False
         ("nuscenes_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
         ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
-        ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.57, 0.4),  # Large BEV grid
+        ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)

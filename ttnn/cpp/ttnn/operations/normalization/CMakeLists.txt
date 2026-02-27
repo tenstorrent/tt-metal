@@ -68,6 +68,7 @@ target_sources(
         layernorm/device/layernorm_common.cpp
         layernorm/device/layernorm_op_multi_core.cpp
         layernorm/device/layernorm_op_multi_core_sharded.cpp
+        layernorm/device/sharded_layernorm_factory_helpers.cpp
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp

@@ -40,21 +40,12 @@ void py_module_types(nb::module_& mod) {
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc");
 
-    // variant of (Grayskull|Wormhole)ComputeKernelConfig
+    // Unified ComputeKernelConfig - all architecture-specific names are now aliases
     nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
 
-    nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
-        .def(
-            nb::init<MathFidelity, bool, bool>(),
-            nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
-            nb::arg("math_approx_mode") = true,
-            nb::arg("dst_full_sync_en") = false)
-        .def_rw("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode)
-        .def_rw("dst_full_sync_en", &GrayskullComputeKernelConfig::dst_full_sync_en);
-
-    nb::class_<WormholeComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
+    // Primary config class (ComputeKernelConfig is the canonical name, but we expose as WormholeComputeKernelConfig
+    // for backward compatibility)
+    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
         .def(
             nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
@@ -64,12 +55,12 @@ void py_module_types(nb::module_& mod) {
             nb::arg("packer_l1_acc") = false,
             nb::arg("dst_full_sync_en") = false,
             nb::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .def_rw("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
-        .def_rw("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_rw("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc)
-        .def_rw("dst_full_sync_en", &WormholeComputeKernelConfig::dst_full_sync_en)
-        .def_rw("throttle_level", &WormholeComputeKernelConfig::throttle_level);
+        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity)
+        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode)
+        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en)
+        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc)
+        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en)
+        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level);
 }
 
 void py_module(nb::module_& mod) {
@@ -281,7 +272,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, const std::optional<QueueId>& cq_id) {
-            tt::tt_metal::tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
+            copy_to_device(host_tensor, device_tensor, cq_id);
         },
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),
@@ -321,7 +312,7 @@ void py_module(nb::module_& mod) {
            ttnn::Tensor& host_tensor,
            bool blocking = true,
            std::optional<ttnn::QueueId> cq_id = std::nullopt) {
-            tt::tt_metal::tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+            copy_to_host(device_tensor, host_tensor, blocking, cq_id);
         },
         nb::arg("device_tensor"),
         nb::arg("host_tensor"),

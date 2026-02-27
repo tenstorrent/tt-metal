@@ -4,8 +4,6 @@
 
 #include <functional>
 
-#include <tt-metalium/host_api.hpp>
-
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -25,10 +23,6 @@ struct UpperRepeatDims {
     static constexpr uint32_t repeat = 1;
     static constexpr uint32_t collapsed_lower = 2;
     static constexpr uint32_t page_size = 3;
-};
-struct LastRepeatDims {
-    static constexpr uint32_t collapsed_upper = 0;
-    static constexpr uint32_t repeat = 1;
 };
 
 ttnn::Tensor repeat_upper_dims_rm(

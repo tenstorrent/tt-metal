@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/reconfig_data_format.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {
@@ -58,9 +58,6 @@ void kernel_main() {
 
         // -------------------- Addition with acc -----------------------------
 
-        // Init like CB_0 is in A and CB_1 is in B
-        add_tiles_init(cb_in0, cb_in1, true);
-
         // Reconfigure UNPACK for correct source formats, tests reconfig calls
 #if (EXPLICIT_RECONFIG == 1)
 #if (SPLIT_SRC_RECONFIG == 1)
@@ -81,6 +78,9 @@ void kernel_main() {
         reconfig_data_format(cb_in1, cb_in0);
 #endif  // SPLIT_SRC_RECONFIG
 #endif  // EXPLICIT_RECONFIG
+
+        // Init like CB_0 is in A and CB_1 is in B
+        add_tiles_init(cb_in1, cb_in0, true);
 
         for (uint32_t i = 0; i < ublock_size_tiles; ++i) {
             add_tiles(cb_in1, cb_in0, i, i, i);

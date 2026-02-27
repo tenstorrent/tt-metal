@@ -30,9 +30,9 @@ struct fmt::formatter<ttnn::operations::unary::UnaryWithParam> {
     auto format(const ttnn::operations::unary::UnaryWithParam& param, FormatContext& ctx) const {
         if (param.params.empty()) {
             return fmt::format_to(ctx.out(), "UnaryWithParam(op_type={})", param.op_type);
-        }             return fmt::format_to(
-                ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
-
+        }
+        return fmt::format_to(
+            ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
     }
 };
 
@@ -525,10 +525,11 @@ void py_module(nb::module_& mod) {
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
-            const char* fused_activation_repr =
-                config.fused_activation.has_value() ? "set" : "None";
+            std::string fused_activation_repr =
+                config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
-                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, fused_activation={})",
+                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
+                "fused_activation={})",
                 config.in0_block_w,
                 config.per_core_M,
                 config.per_core_N,
@@ -649,6 +650,12 @@ void py_module(nb::module_& mod) {
         - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
           - if they are default then they should be set based on optional output tensor
           - if the are not default then they should be compared and if there is a difference an error is reported
+        - Note: Due to a hardware bug on Wormhole (fixed on Blackhole), when fp32_acc_to_dest is enabled in the
+          compute_kernel_config, output values can rarely be off by a negative power of two (e.g. -128).
+          This bug happens most frequently at HiFi4, and in decreasing frequency as math fidelity is reduced (e.g. HiFi3, HiFi2, LoFi).
+          This bug can happen when the original mantissa contains all 1.
+          If affected, consider either disabling fp32_acc_to_dest, if that does not impact numerical stability
+          in your use case, or decreasing fidelity.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -708,10 +715,10 @@ void py_module(nb::module_& mod) {
                   - Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
-                  - Interleaved (L1/DRAM)
+                  - Interleaved (L1/DRAM), Width Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1/DRAM), Height Sharded (DRAM batched matmuls where each bank holds B/num_banks complete [K,N] matrices)
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
                   - Interleaved (L1/DRAM), Width Sharded (L1)

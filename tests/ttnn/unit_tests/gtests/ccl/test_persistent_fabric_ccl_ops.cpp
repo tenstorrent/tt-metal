@@ -16,9 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -39,14 +37,9 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const size_t dim = 3;
     constexpr auto layout = Layout::TILE;
     // DEVICES setup
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);

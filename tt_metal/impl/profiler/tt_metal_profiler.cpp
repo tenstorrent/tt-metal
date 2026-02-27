@@ -51,6 +51,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
@@ -731,6 +732,8 @@ void InitDeviceProfiler(IDevice* device) {
         } else {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
         }
+    } else {
+        profiler_state_manager->device_profiler_map.at(device_id).clearStateForDeviceReinit();
     }
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);

@@ -7,12 +7,11 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/reflection.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -57,7 +56,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -293,22 +292,19 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
-    const auto& storage = t.storage();
-    tt::tt_metal::Buffer* buffer = std::visit(
-        [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-                    // It has an ID different from the "backing" buffer that was used to perform the allocation.
-                    // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-                    // buffer.
-                    return storage.mesh_buffer->get_backing_buffer();
-                }
-                return t.buffer();
-            }
-            return nullptr;
-        },
-        storage);
+    tt::tt_metal::Buffer* buffer = nullptr;
+    if (is_device_tensor(t)) {
+        const auto& storage = t.device_storage();
+        if (storage.mesh_buffer) {
+            // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+            // It has an ID different from the "backing" buffer that was used to perform the allocation.
+            // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+            // buffer.
+            buffer = storage.mesh_buffer->get_backing_buffer();
+        } else {
+            buffer = t.buffer();
+        }
+    }
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
     std::uint64_t tensor_id = t.tensor_id;
@@ -341,10 +337,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffer == nullptr) {
-        log_debug(
-            tt::LogAlways,
-            "Tensor doesn't have buffer, but storage is {}",
-            graph_demangle(get_type_in_var(t.storage()).name()));
+        log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
     } else {
         node_id buffer_node_id = add_buffer(buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);

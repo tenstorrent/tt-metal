@@ -39,6 +39,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/kernels/kernel.hpp"
 
 #include <array>
 #include <bit>
@@ -745,14 +746,9 @@ int main(int argc, char** argv) {
     }
 
     // Check hardware prerequisites
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_error(tt::LogTest, "Need at least 2 devices to run this test");
-        return -1;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_error(tt::LogTest, "Test must be run on WH");
         return -1;
     }
 
