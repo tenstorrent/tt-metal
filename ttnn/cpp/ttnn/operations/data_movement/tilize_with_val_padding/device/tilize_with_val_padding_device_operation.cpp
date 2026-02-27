@@ -14,24 +14,33 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
+namespace {
+bool can_use_sharded_optimized_factory(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+
+    if (operation_attributes.output_mem_config.memory_layout() != input_tensor.memory_config().memory_layout()) {
+        return false;
+    }
+
+    const auto& padded_shape = input_tensor.padded_shape();
+
+    for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+        if (i != padded_shape.rank() - 2 && (padded_shape[i] != operation_attributes.output_padded_shape[i])) {
+            return false;
+        }
+    }
+    return !operation_attributes.sub_core_grids.has_value();
+}
+
+}  // namespace
+
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        bool use_optimized_sharding_program =
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-        use_optimized_sharding_program &=
-            operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout();
-        const auto& padded_shape = input_tensor.padded_shape();
-
-        for (uint32_t i = 0; i < padded_shape.rank(); i++) {
-            if (i != padded_shape.rank() - 2) {
-                use_optimized_sharding_program &= padded_shape[i] == operation_attributes.output_padded_shape[i];
-            }
-        }
-        if (use_optimized_sharding_program) {
-            TT_FATAL(
-                !operation_attributes.sub_core_grids.has_value(),
-                "Sharded tilize does not support sub core grid specification");
+        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -140,12 +149,13 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-        // if (input_tensor.memory_config().is_sharded() && input_tensor.shard_spec().has_value() &&
-        operation_attributes.output_mem_config.shard_spec().has_value()) {
-        // This case only applies when we expect that the input is width sharded and output is legacy 2D sharded (i.e.,
-        // we expect to use the optimized sharded program factory). This bit forces the output tensor to be
-        // width-sharded.
+    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
+        // tensor to be width-sharded.
+        log_warning(
+            tt::LogOp,
+            "ttnn::tilize_with_val_padding: Making the output tensor width-sharded because the optimized sharded "
+            "program factory is being used");
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
