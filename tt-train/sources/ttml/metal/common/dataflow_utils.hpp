@@ -6,18 +6,23 @@
 
 #include <cstdint>
 #include <cstring>
+#include <tt-metalium/constants.hpp>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
-constexpr uint32_t TILE_WIDTH = 32U;
-constexpr uint32_t TILE_HEIGHT = 32U;
-constexpr uint32_t FACE_WIDTH = 16U;
-constexpr uint32_t FACE_HEIGHT = 16U;
 constexpr uint32_t onetile = 1U;
 
+// IEEE 754 bit representations for compile-time template parameters
+constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
+constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
+constexpr uint16_t BF16_ONE_BITS = 0x3F80;        // 1.0 in bfloat16
+constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
+constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
+
 inline uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+    using namespace tt::constants;
     // Get local coordinates within the tile
     uint32_t local_row = h % TILE_HEIGHT;
     uint32_t local_col = w % TILE_WIDTH;
@@ -93,6 +98,21 @@ void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
     cb_push_back(cb_id, onetile);
 }
 
+// Zero-fills already-reserved tile slots in a CB (e.g. tail padding so compute always sees block_size tiles).
+inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, uint32_t num_slots, uint32_t tile_size) {
+    if (num_slots == 0) {
+        return;
+    }
+    uint32_t l1_base = get_write_ptr(cb_id) + start_slot * tile_size;
+    const uint32_t num_u32_per_tile = tile_size / sizeof(uint32_t);
+    for (uint32_t s = 0; s < num_slots; ++s) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + s * tile_size);
+        for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
+            ptr[i] = 0;
+        }
+    }
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
@@ -127,10 +147,6 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 
     cb_reserve_back(cb_id, onetile);
 
-    // IEEE 754 bit representations for compile-time template parameters
-    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;  // 1.0f
-    constexpr uint16_t BF16_ONE_BITS = 0x3F80;      // 1.0 in bfloat16
-
     switch (data_format) {
         case DataFormat::Float32: fill_matmul_row_reduce_tile<uint32_t, FP32_ONE_BITS>(cb_id); break;
         case DataFormat::Int32:
@@ -150,6 +166,7 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 // This creates a triangular pattern within the 32x32 tile for causal attention.
 template <typename T, T one_value, T zero_value>
 inline void fill_causal_mask_tile(uint32_t cb_id) {
+    using namespace tt::constants;
     T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
@@ -173,12 +190,6 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
     const DataFormat data_format = get_dataformat(cb_id);
 
     cb_reserve_back(cb_id, onetile);
-
-    // IEEE 754 bit representations for compile-time template parameters
-    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;   // 1.0f
-    constexpr uint32_t FP32_ZERO_BITS = 0x00000000;  // 0.0f
-    constexpr uint16_t BF16_ONE_BITS = 0x3F80;       // 1.0 in bfloat16
-    constexpr uint16_t BF16_ZERO_BITS = 0x0000;      // 0.0 in bfloat16
 
     switch (data_format) {
         case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ONE_BITS, FP32_ZERO_BITS>(cb_id); break;
