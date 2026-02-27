@@ -41,6 +41,7 @@ constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
 constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
 // [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -56,8 +57,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx =
-        24;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+    constexpr uint32_t ct_idx = 25;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [24]=slice_Ht
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -195,7 +196,7 @@ void kernel_main() {
                             }
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
-                                const auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
+                                const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
                                     tile_row_in_mm_M_unit_block,
                                     chunk_col_in_tiles,
                                     mm_core_idx,
@@ -204,21 +205,23 @@ void kernel_main() {
                                     chunk_idx,
                                     mm_N_full_block_wt,
                                     tiles_ht_per_core,
-                                    mm_block_ht,  // full stride between blocks for absolute row calculation
-                                    chunk_width_in_tiles,
-                                    actual_slice_idx,
-                                    slice_Wt,
-                                    input_tensor_Wt);
-                                const uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    mm_block_ht,
+                                    chunk_width_in_tiles);
 
-                                const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                                noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                                l1_write_addr += page_size;
-                                if (do_reduce) {
-                                    const uint64_t intermediate_noc_read_addr =
-                                        get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
-                                    noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
-                                    intermediate_l1_write_addr += page_size;
+                                if (slice_row < slice_Ht) {
+                                    const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                    const uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    noc_async_read(
+                                        get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
+                                    l1_write_addr += page_size;
+                                    if (do_reduce) {
+                                        noc_async_read(
+                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen),
+                                            intermediate_l1_write_addr,
+                                            page_size);
+                                        intermediate_l1_write_addr += page_size;
+                                    }
                                 }
 
                                 get_next_tile_coordinates(

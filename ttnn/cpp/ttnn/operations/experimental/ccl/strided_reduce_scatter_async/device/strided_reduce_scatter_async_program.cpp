@@ -219,34 +219,36 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t mm_block_wt,
     const uint32_t slice_Ht_per_core,
-    const bool fuse_mm_op) {
+    const bool fuse_mm_op,
+    const uint32_t slice_Ht) {
     // Strided reader compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     return {
-        ring_index,                  // [0]  my_chip_id
-        ring_size,                   // [1]  ring_size
-        input_cb_index,              // [2]  cb_input_id
-        intermediate_cb_index,       // [3]  cb_intermediate_id
-        reader_output_cb_index,      // [4]  cb_reader_output_id
-        tile_granularity,            // [5]  tile_granularity
-        page_size,                   // [6]  page_size
-        input_batch_num_pages,       // [7]  input_batch_num_pages
-        input_channel_num_pages,     // [8]  input_channel_num_pages
-        input_tensor_B,              // [9]  input_tensor_B
-        input_tensor_Wt,             // [10] input_tensor_Wt
-        slice_C,                     // [11] slice_C
-        slice_Wt,                    // [12] slice_Wt
-        normalized_dim,              // [13] dim normalized to 4D
-        mm_M_unit_blocks_per_core,   // [14] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,  // [15] mm_N_full_blocks_per_slice
-        mm_block_ht,                 // [16] mm_block_ht
-        mm_cores_y,                  // [17] mm_cores_y
-        N_full_block_wt,             // [18] N_full_block_wt
-        chunk_width_in_tiles,        // [19] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,  // [20] chunks_per_mm_N_full_block
-        mm_block_wt,                 // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
-        slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
+        ring_index,                         // [0]  my_chip_id
+        ring_size,                          // [1]  ring_size
+        input_cb_index,                     // [2]  cb_input_id
+        intermediate_cb_index,              // [3]  cb_intermediate_id
+        reader_output_cb_index,             // [4]  cb_reader_output_id
+        tile_granularity,                   // [5]  tile_granularity
+        page_size,                          // [6]  page_size
+        input_batch_num_pages,              // [7]  input_batch_num_pages
+        input_channel_num_pages,            // [8]  input_channel_num_pages
+        input_tensor_B,                     // [9]  input_tensor_B
+        input_tensor_Wt,                    // [10] input_tensor_Wt
+        slice_C,                            // [11] slice_C
+        slice_Wt,                           // [12] slice_Wt
+        normalized_dim,                     // [13] dim normalized to 4D
+        mm_M_unit_blocks_per_core,          // [14] mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,         // [15] mm_N_full_blocks_per_slice
+        mm_block_ht,                        // [16] mm_block_ht
+        mm_cores_y,                         // [17] mm_cores_y
+        N_full_block_wt,                    // [18] N_full_block_wt
+        chunk_width_in_tiles,               // [19] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,         // [20] chunks_per_mm_N_full_block
+        mm_block_wt,                        // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        slice_Ht_per_core,                  // [22] slice_Ht_per_core
         static_cast<uint32_t>(fuse_mm_op),  // [23] fuse_mm_op: 1 if fused with matmul, 0 otherwise
+        slice_Ht,                           // [24] slice_Ht (unpadded; used for ghost-tile bounds checks)
     };
 }
 
@@ -273,7 +275,8 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_full_block,
-    const uint32_t slice_Ht_per_core) {
+    const uint32_t slice_Ht_per_core,
+    const uint32_t slice_Ht) {
     // Strided writer compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
@@ -300,8 +303,9 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         N_full_block_wt,                // [19] N_full_block_wt
         chunk_width_in_tiles,           // [20] chunk_width_in_tiles
         chunks_per_mm_N_full_block,     // [21] chunks_per_mm_N_full_block
-        slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        // [23+] fabric_mux CT args appended after (num_ct_args = 28 in writer kernel)
+        slice_Ht_per_core,              // [22] slice_Ht_per_core
+        slice_Ht,                       // [23] slice_Ht (unpadded; used for ghost-tile bounds checks)
+        // [24+] fabric_mux CT args appended after (num_ct_args = 29 in writer kernel)
     };
 }
 
@@ -320,7 +324,8 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t slice_Wt,
     const uint32_t N_full_block_wt,
-    const uint32_t slice_Ht_per_core) {
+    const uint32_t slice_Ht_per_core,
+    const uint32_t slice_Ht) {
     // Strided reduction compile args - include MM blocking parameters
     return {
         input_cb_index,              // [0]  input_cb_id
@@ -337,7 +342,8 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         chunks_per_mm_N_full_block,  // [11] chunks_per_mm_N_full_block
         slice_Wt,                    // [12] slice_Wt
         N_full_block_wt,             // [13] mm_N_full_block_wt
-        slice_Ht_per_core,  // [14] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
+        slice_Ht_per_core,           // [14] slice_Ht_per_core
+        slice_Ht,                    // [15] slice_Ht (unpadded; used for ghost-tile bounds checks)
     };
 }
 
@@ -537,13 +543,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
     const uint32_t chunks_per_mm_N_full_block_val = tt::div_up(mm_N_full_block_wt_val, chunk_width_in_tiles_val);
 
-    // Introduce checks for current assumptions
-    TT_FATAL(
-        slice_Ht % mm_cores_y_val == 0,
-        "slice_Ht ({}) must be divisible by mm_cores_y_val ({})",
-        slice_Ht,
-        mm_cores_y_val);
-    uint32_t slice_Ht_per_core = slice_Ht / mm_cores_y_val;
+    // Pad slice_Ht to the next multiple of mm_cores_y_val so every core gets an equal number of
+    // tile rows. The last core may receive ghost tiles (slice_row >= slice_Ht) which are skipped
+    // by the reader/writer kernels via bounds checks.
+    const uint32_t padded_slice_Ht = tt::round_up(slice_Ht, mm_cores_y_val);
+    uint32_t slice_Ht_per_core = padded_slice_Ht / mm_cores_y_val;
     uint32_t mm_M_unit_blocks_per_core = tt::div_up(slice_Ht_per_core, mm_block_ht_val);
     TT_FATAL(
         slice_Wt % mm_N_full_block_wt_val == 0,
@@ -673,7 +677,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunks_per_mm_N_full_block_val,
             mm_block_wt_val,
             slice_Ht_per_core,
-            fuse_mm_op);
+            fuse_mm_op,
+            slice_Ht);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -721,7 +726,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_full_block_val,
-            slice_Ht_per_core);
+            slice_Ht_per_core,
+            slice_Ht);
 
     append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -777,7 +783,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunks_per_mm_N_full_block_val,
             slice_Wt,
             mm_N_full_block_wt_val,
-            slice_Ht_per_core);
+            slice_Ht_per_core,
+            slice_Ht);
 
     std::string sender_reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
