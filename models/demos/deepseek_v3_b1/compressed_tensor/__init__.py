@@ -4,6 +4,7 @@
 from .assigner import CompressedTensorAssigner, CompressedTensorResult
 from .compressed_tensor import CompressedTensor
 from .tile_utils import (
+    DEFAULT_TILE_HW,
     COMPRESSED_FORMATS,
     COMPRESSED_BYTES_PER_ELEM,
     BFP_MANT_BITS,
@@ -20,4 +21,5 @@ __all__ = [
     "BFP_MANT_BITS",
     "ttnn_quantize_fn",
     "bfp_tile_packed_size",
+    "DEFAULT_TILE_HW",
 ]
