@@ -7,7 +7,6 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
-import math
 
 
 def test_base_case(device):
