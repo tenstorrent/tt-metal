@@ -151,13 +151,13 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
 
         tensor_size_datums = tensor_size_bytes // 4
         for i in range(num_iterations):
-            torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
-                1, tensor_size_datums
-            )
+            torch_input = torch.arange(
+                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
+            ).reshape(1, tensor_size_datums)
 
-            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
-            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
+            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
             h2d_socket.write_tensor(input_tensor)
             d2h_socket.read_tensor(output_tensor)
