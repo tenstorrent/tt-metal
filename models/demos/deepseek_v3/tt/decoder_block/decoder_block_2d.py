@@ -11,7 +11,6 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.utils.run_config import (
-    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -66,98 +65,9 @@ class DecoderBlock2D(DecoderBlock2DBase):
         return {}
 
     @classmethod
-    def _forward_mlp_common(
-        cls,
-        x: ttnn.Tensor,
-        cfg: RunPrefillConfig | RunDecodeConfig,
-        forward_fn,
-        hidden_size: int,
-        tp_size: int,
-        reduce_scatter_key: str,
-        mode_name: str,
-    ) -> ttnn.Tensor:
-        """
-        Common implementation for forward_mlp_prefill and forward_mlp_decode.
-
-        Args:
-            x: Input tensor
-            cfg: Configuration
-            forward_fn: The forward function to call (NonExpert.forward_prefill or NonExpert.forward_decode)
-            hidden_size: The full hidden size
-            tp_size: Tensor parallel size
-            reduce_scatter_key: Config key for reduce_scatter ("reduce_scatter_async" or "reduce_scatter")
-            mode_name: Name of the mode for logging ("prefill" or "decode")
-        """
-        x_dim = x.shape[-1]
-        ccl = cfg.get("ccl")
-
-        # Check if input is TP-sharded
-        if x_dim == hidden_size // tp_size:
-            # Input is TP-sharded, need to gather
-            x_gathered = ttnn.experimental.all_gather_async(
-                x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
-            )
-
-            # Run NonExpert with gathered input
-            output = forward_fn(x_gathered, cfg)
-
-            # Perform reduce_scatter
-            output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                output, **ccl.populate_reduce_scatter_runtime_args(cfg[reduce_scatter_key])
-            )
-
-            # Cleanup
-            ttnn.deallocate(output)
-            if x_gathered is not x:
-                ttnn.deallocate(x_gathered)
-
-            return output_scattered
-        else:
-            # Unexpected dimension
-            assert False, (
-                f"DecoderBlock2D forward_mlp_{mode_name}: Unexpected input dimension {x_dim}. "
-                f"Expected either {hidden_size} (full) or {hidden_size // tp_size} (TP-sharded)."
-            )
-
-    @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        # Get dimensions for tensor parallel check
-        mesh_device = cfg.get(MESH_DEVICE_STATE_DICT_KEY)
-
-        tp_size = mesh_device.shape[1]  # Width of mesh is TP size
-
-        # Calculate expected dimensions
-        # NonExpert/MLP expects full hidden_size, not the sharded size
-        # We can infer from the linear_pc_gen configuration
-        hidden_size = cfg["linear_pc_gen"].dim
-
-        return cls._forward_mlp_common(
-            x,
-            cfg,
-            NonExpert.forward_prefill,
-            hidden_size,
-            tp_size,
-            "reduce_scatter_async",
-            "prefill",
-        )
+        return NonExpert.forward_prefill(x, cfg)
 
     @classmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # Get dimensions for tensor parallel check
-        mesh_device = cfg.get(MESH_DEVICE_STATE_DICT_KEY)
-
-        tp_size = mesh_device.shape[1]  # Width of mesh is TP size
-
-        # For decode, we need to check the actual hidden size
-        # The w1 weight shape tells us the input dimension
-        hidden_size = cfg["w1"]["weight"].shape[-2] * tp_size  # Input features to w1
-
-        return cls._forward_mlp_common(
-            x,
-            cfg,
-            NonExpert.forward_decode,
-            hidden_size,
-            tp_size,
-            "reduce_scatter_async",
-            "decode",
-        )
+        return NonExpert.forward_decode(x, cfg)
