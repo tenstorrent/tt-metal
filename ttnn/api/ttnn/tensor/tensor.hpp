@@ -244,9 +244,9 @@ public:
 
     // Returns underlying MeshTensor.
     // Throws if the tensor is not on device.
-    const MeshTensor& device_tensor() const&;
-    const MeshTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
-    MeshTensor& device_tensor() &;
+    const MeshTensor& mesh_tensor() const&;
+    const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    MeshTensor& mesh_tensor() &;
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

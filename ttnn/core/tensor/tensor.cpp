@@ -393,7 +393,7 @@ bool Tensor::is_allocated() const {
     if (storage_type() == StorageType::HOST) {
         return true;
     }
-    return device_tensor().is_allocated();
+    return mesh_tensor().is_allocated();
 }
 
 StorageType Tensor::storage_type() const {
@@ -515,7 +515,7 @@ const TensorSpec& Tensor::tensor_spec() const {
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
-const DeviceStorage& Tensor::device_storage() const& { return device_tensor().get_legacy_device_storage(); }
+const DeviceStorage& Tensor::device_storage() const& { return mesh_tensor().get_legacy_device_storage(); }
 
 const HostStorage& Tensor::host_storage() const& { return host_tensor().get_legacy_host_storage(); }
 
@@ -531,13 +531,13 @@ HostTensor& Tensor::host_tensor() & {
     return *host_tensor;
 }
 
-const MeshTensor& Tensor::device_tensor() const& {
+const MeshTensor& Tensor::mesh_tensor() const& {
     const auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
     return *device_tensor;
 }
 
-MeshTensor& Tensor::device_tensor() & {
+MeshTensor& Tensor::mesh_tensor() & {
     auto* device_tensor = std::get_if<MeshTensor>(tensor_attributes.get());
     TT_FATAL(device_tensor != nullptr, "Expected Tensor with MeshTensor, got HostTensor");
     return *device_tensor;
