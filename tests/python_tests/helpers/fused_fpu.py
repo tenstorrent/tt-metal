@@ -19,8 +19,10 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .fused_math import ComputeNode
+    from .block_data import BlockData
 
 from .chip_architecture import ChipArchitecture
+from .fused_loop import FusedLoop, LoopBlock, LoopTileByTile
 from .llk_params import (
     BroadcastType,
     EltwiseBinaryReuseDestType,
@@ -32,11 +34,14 @@ from .tilize_untilize import tilize_block, untilize_block
 
 
 class Fpu:
+    loop: FusedLoop = FusedLoop()
+
     def init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -45,7 +50,7 @@ class Fpu:
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -54,6 +59,7 @@ class Fpu:
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -76,6 +82,8 @@ class Fpu:
 
 
 class MatmulFpu(Fpu):
+    loop: FusedLoop = LoopBlock()
+
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
@@ -112,17 +120,13 @@ class MatmulFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
-        batch_size = operation.batch_size
         math_fidelity = operation.math_fidelity.cpp_enum_value
-        ct_dim = operation.ct_dim
-        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
-
-        if batch_size == ct_dim:
-            rt_dim = 1
-        else:
-            rt_dim = operation.rt_dim
+        transpose = "true" if compute_unit.unpack_transpose_faces.value else "false"
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
 
         return (
             f"// Operation {stage}: Matmul FPU\n"
@@ -136,27 +140,24 @@ class MatmulFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
-        batch_size = operation.batch_size
-        ct_dim = operation.ct_dim
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
         kt_dim = operation.kt_dim
         math_fidelity = operation.math_fidelity.cpp_enum_value
-
-        if batch_size == ct_dim:
-            rt_dim = 1
-        else:
-            rt_dim = operation.rt_dim
 
         return (
             f"for (std::uint32_t kt = 0; kt < {kt_dim}; kt++)\n"
             f"{{\n"
-            f"    _llk_math_matmul_<{math_fidelity}>(0, {ct_dim}, {rt_dim});\n"
+            f"    _llk_math_matmul_<{math_fidelity}>({block.tile_id_block}, {ct_dim}, {rt_dim});\n"
             f"}}\n"
         )
 
 
 class EltwiseFpu(Fpu):
+    loop: FusedLoop = LoopTileByTile()
+
     def __init__(self, operation: MathOperation):
         if not operation in MathOperation.get_fpu_binary_operations():
             raise ValueError(
@@ -208,6 +209,7 @@ class EltwiseFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         # LLK contract: eltwise add/sub only support LoFi fidelity.
@@ -236,7 +238,7 @@ class EltwiseFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         # Keep runtime math call fidelity consistent with init-time clamping.
@@ -253,7 +255,7 @@ class EltwiseFpu(Fpu):
         return (
             f"    _llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
             f"        {dest_acc}, {math_fidelity}, {reuse_dest}>"
-            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {tile_idx}, false\n"
+            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, false\n"
             f"    );\n"
         )
 
@@ -262,6 +264,8 @@ class EltwiseFpu(Fpu):
 
 
 class ReduceFpu(Fpu):
+    loop: FusedLoop = LoopTileByTile()
+
     def __init__(self, operation: MathOperation, pool: ReducePool = ReducePool.Max):
         if operation not in MathOperation.get_reduce_operations():
             raise ValueError(f"Operation {operation} is not a valid REDUCE operation.")
@@ -354,6 +358,7 @@ class ReduceFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         math_fidelity = operation.math_fidelity.cpp_enum_value
@@ -371,7 +376,7 @@ class ReduceFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
         math_fidelity = operation.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
@@ -381,7 +386,7 @@ class ReduceFpu(Fpu):
 
         return (
             f"    _llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false, false>(\n"
-            f"        {tile_idx}, false, {num_faces}\n"
+            f"        {block.tile_id_block}, false, {num_faces}\n"
             f"    );\n"
         )
 
@@ -390,6 +395,7 @@ class ReduceFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         unp_a_src_format = f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{operation.src_a.data_format})"
 
@@ -403,6 +409,8 @@ class ReduceFpu(Fpu):
 
 
 class DatacopyFpu(Fpu):
+    loop: FusedLoop = LoopTileByTile()
+
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
@@ -439,6 +447,7 @@ class DatacopyFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
@@ -471,7 +480,7 @@ class DatacopyFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
@@ -483,13 +492,13 @@ class DatacopyFpu(Fpu):
         if config.architecture == ChipArchitecture.BLACKHOLE:
             code = (
                 f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-                f"        {tile_idx}, math_format{stage}, math_format{stage}, {num_faces}\n"
+                f"        {block.tile_id_block}, math_format{stage}, math_format{stage}, {num_faces}\n"
                 f"    );\n"
             )
         elif config.architecture == ChipArchitecture.WORMHOLE:
             code = (
                 f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-                f"        {tile_idx}, math_format{stage}, math_format{stage}\n"
+                f"        {block.tile_id_block}, math_format{stage}, math_format{stage}\n"
                 f"    );\n"
             )
         else:
@@ -502,19 +511,23 @@ class DatacopyFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, false>();\n"
 
 
 class ReduceBlockMaxFpu(Fpu):
+    loop: FusedLoop = LoopTileByTile()
+
     def init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
-        ct_dim = operation.ct_dim
+        ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
         return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
 
@@ -523,19 +536,25 @@ class ReduceBlockMaxFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
-        tile_idx: int,
+        block: "BlockData",
     ) -> str:
-        ct_dim = operation.ct_dim
+        ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        if tile_idx % ct_dim != 0:
-            return ""
-        return f"_llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({tile_idx});\n"
+        tile_x_in_block = f"(({block.tile_id_block}) % {block.block_tiles_x})"
+        tile_y_in_block = f"(({block.tile_id_block}) / {block.block_tiles_x})"
+        dest_expr = f"(({tile_y_in_block}) * {block.block_tiles_x})"
+        return (
+            f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
+            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({dest_expr});\n"
+            f"}}\n"
+        )
 
     def uninit(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return "_llk_math_reduce_block_max_row_uninit_();\n"
 
@@ -548,23 +567,77 @@ class ReduceBlockMaxFpu(Fpu):
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        ct_dim = operation.ct_dim
         output_format = operation.output.data_format
-        dimensions = operation.max_output_dimensions
+
+        golden_tensor = torch.zeros_like(tensor_dst)
+        src_a_reduced_tensor = torch.zeros_like(tensor_a)
+        dest_golden_tensor = torch.zeros_like(tensor_dst)
+
+        tile_count_x = operation.output.tile_count_x
+        tile_count_y = operation.output.tile_count_y
+        block_tiles_x = operation.block_tiles_x
+        block_tiles_y = operation.block_tiles_y
+
+        full_blocks_x = tile_count_x // block_tiles_x
+        full_blocks_y = tile_count_y // block_tiles_y
+        remaining_tiles_x = tile_count_x % block_tiles_x
+        remaining_tiles_y = tile_count_y % block_tiles_y
+
+        full_x_limit = full_blocks_x * block_tiles_x
+        full_y_limit = full_blocks_y * block_tiles_y
 
         generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
-        src_a_reduced_tensor = generate_golden(
-            tensor_a, ct_dim, output_format, dimensions
-        ).flatten()
 
-        dest_golden_tensor = generate_golden(
-            tensor_dst, ct_dim, output_format, dimensions
-        ).flatten()
+        def process_block(block_x, block_y, block_tiles_x_eff, block_tiles_y_eff):
+            src_start_row = block_y * 32
+            src_end_row = (block_y + block_tiles_y_eff) * 32
+            start_col = block_x * 32
+            end_col = (block_x + block_tiles_x_eff) * 32
+            dst_start_row = block_y * 32
+            dst_end_row = (block_y + block_tiles_y_eff) * 32
+            block_dims = [block_tiles_y_eff * 32, block_tiles_x_eff * 32]
 
-        numel = min(src_a_reduced_tensor.numel(), dest_golden_tensor.numel())
-        golden_tensor = torch.zeros(numel)
+            src_a_reduced_tensor[dst_start_row:dst_end_row, start_col:end_col] = (
+                generate_golden(
+                    tensor_a[src_start_row:src_end_row, start_col:end_col].clone(),
+                    block_tiles_x_eff,
+                    output_format,
+                    block_dims,
+                )
+            )
 
-        for i in range(numel):
+            dest_golden_tensor[dst_start_row:dst_end_row, start_col:end_col] = (
+                generate_golden(
+                    tensor_dst[src_start_row:src_end_row, start_col:end_col].clone(),
+                    block_tiles_x_eff,
+                    output_format,
+                    block_dims,
+                )
+            )
+
+        if full_blocks_x > 0 and full_blocks_y > 0:
+            for block_x in range(0, full_x_limit, block_tiles_x):
+                for block_y in range(0, full_y_limit, block_tiles_y):
+                    process_block(block_x, block_y, block_tiles_x, block_tiles_y)
+
+        if remaining_tiles_y > 0 and full_blocks_x > 0:
+            for block_x in range(0, full_x_limit, block_tiles_x):
+                process_block(block_x, full_y_limit, block_tiles_x, remaining_tiles_y)
+
+        if remaining_tiles_x > 0 and full_blocks_y > 0:
+            for block_y in range(0, full_y_limit, block_tiles_y):
+                process_block(full_x_limit, block_y, remaining_tiles_x, block_tiles_y)
+
+        if remaining_tiles_x > 0 and remaining_tiles_y > 0:
+            process_block(
+                full_x_limit, full_y_limit, remaining_tiles_x, remaining_tiles_y
+            )
+
+        golden_tensor = golden_tensor.flatten()
+        src_a_reduced_tensor = src_a_reduced_tensor.flatten()
+        dest_golden_tensor = dest_golden_tensor.flatten()
+
+        for i in range(golden_tensor.numel()):
             golden_tensor[i] = max(src_a_reduced_tensor[i], dest_golden_tensor[i])
 
         return (tensor_a, tensor_b, golden_tensor)

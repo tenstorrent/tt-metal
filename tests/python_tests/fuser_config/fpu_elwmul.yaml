@@ -1,0 +1,16 @@
+operations:
+  - src_a: "input_A"
+    src_b: "input_B"
+    output: "elwmul_out"
+    src_a_dims: [256, 256]
+    src_b_dims: [256, 256]
+    output_dims: [256, 256]
+    input_format: "Float16_b"
+    output_format: "Float16_b"
+    math:
+      - type: "Fpu"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+    packer: "Packer"
+    math_fidelity: "HiFi2"
+    block_size: [64, 128]

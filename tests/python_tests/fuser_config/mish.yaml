@@ -32,4 +32,4 @@ operations:
         reuse_dest: "DEST_TO_SRCB"
     packer: "Packer"
     math_fidelity: "LoFi"
-    batch_size: 1
+    block_size: [32, 32]

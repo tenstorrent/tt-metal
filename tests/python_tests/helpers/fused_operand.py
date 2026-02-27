@@ -14,8 +14,8 @@ from helpers.tilize_untilize import tilize_block
 @dataclass
 class Operand:
     name: str
-    dimensions: Optional[Tuple[int, int]] = None
-    data_format: Optional[DataFormat] = None
+    dimensions: Tuple[int, int]
+    data_format: DataFormat
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
@@ -24,12 +24,17 @@ class Operand:
     _master_golden: Optional[torch.Tensor] = None
     l1_golden: Optional[torch.Tensor] = None
     _tile_count: Optional[int] = None
+    tile_count_x: Optional[int] = None
+    tile_count_y: Optional[int] = None
 
     def __post_init__(self):
         if not self.is_output and (self.dimensions is None or self.data_format is None):
             raise ValueError(
                 f"Input operand '{self.name}' must have dimensions and data_format"
             )
+        self.tile_count_x = self.dimensions[1] // 32
+        self.tile_count_y = self.dimensions[0] // 32
+        self.tile_count = self.tile_count_x * self.tile_count_y
 
     def is_input(self) -> bool:
         return not self.is_output
@@ -113,17 +118,6 @@ class Operand:
         if self.is_input():
             return self.raw_data
         return self._master_golden
-
-    @property
-    def tile_count(self) -> Optional[int]:
-        if self._tile_count is None:
-            if self.dimensions is not None:
-                self._tile_count = (self.dimensions[0] // 32) * (
-                    self.dimensions[1] // 32
-                )
-            elif self.is_input():
-                self.generate_data()
-        return self._tile_count
 
     def __str__(self) -> str:
         return f"{self.name}, {self.dimensions}, {self.data_format}, L1 Addr: {hex(self.l1_address)}"

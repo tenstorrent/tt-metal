@@ -32,8 +32,7 @@ Each configuration file contains global settings followed by an `operations` lis
 
 ```yaml
 # Global Settings (apply to all operations)
-dest_acc: "Yes"              # 16-bit or 32-bit dest mode
-profiler_enabled: true       # Enable performance profiling
+dest_acc: true               # 16-bit or 32-bit dest mode
 loop_factor: 16              # Loop factor for performance tests
 
 operations:
@@ -43,26 +42,31 @@ operations:
     output: "result"           # Output operand name
     src_a_dims: [64, 64]       # Dimensions of src_a
     src_b_dims: [64, 64]       # Dimensions of src_b
+    output_dims: [64, 64]      # Dimensions of output
     input_format: "Float16_b"  # Input data format
     output_format: "Float16_b" # Output data format
 
     # Operation Configuration
-    unpacker: "UnpackerAB"     # Which unpacker to use
-    math:                      # Math operations
-      fpu: "Elwadd"            # FPU operation
-      sfpu:                    # Optional SFPU chain
-        - type: "UnarySfpu"
-          operation: "Gelu"
-          approximation_mode: "No"
-          iterations: 128
+    math:                      # Ordered list of ops in one L1->L1 run
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        unpack_transpose_within_face: true
+        unpack_transpose_faces: true
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 64
+      - type: "Fpu"
+        operation: "Elwadd"
+        unpacker: "UnpackerA"
+        reuse_dest: "DEST_TO_SRCB"
     packer: "Packer"          # Which packer to use
 
     # Hardware Settings
-    batch_size: 4             # Number of tiles per batch
+    block_size: [64, 64]      # Block size in elements (multiple of 32)
     math_fidelity: "HiFi3"
-    dest_sync: "Full"
-    unpack_transpose_within_face: "Yes"
-    unpack_transpose_faces: "Yes"
+    dest_sync: "SyncHalf"
 ```
 
 ---
@@ -71,33 +75,30 @@ operations:
 
 Global settings are specified at the top level of the YAML file. These settings apply to all operations in the pipeline.
 
-### `dest_acc` (string, required)
-Controls whether dest operates in 32-bit accumulation mode for all operations in the pipeline. When set to `"Yes"`, dest operates in 32-bit format. When set to `"No"`, dest operates in 16-bit format.
+### `dest_acc` (boolean, optional)
+Controls whether dest operates in 32-bit accumulation mode for all operations in the pipeline. When set to `true`, dest operates in 32-bit format. When set to `false`, dest operates in 16-bit format.
 
 **Important:** The `dest_acc` setting cannot be changed in the middle of kernel execution. All operations in a fused pipeline must use the same `dest_acc` setting.
 
-**When to use `dest_acc: "Yes"`:**
+**When to use `dest_acc: true`:**
 
 1. **Any 32‑bit formats (Float32)**
-   If any operation in the fused pipeline uses a 32‑bit data format (`Float32`) as `input_format` or `output_format`, `dest_acc` should be set to `"Yes"` for all operations so that dest can store 32‑bit values.
+  If any operation in the fused pipeline uses a 32‑bit data format (`Float32`) as `input_format` or `output_format`, `dest_acc` should be set to `true` for all operations so that dest can store 32‑bit values.
 
 2. **8‑bit exponent → Float16 conversions (`Float16_b` / `Bfp8_b` → `Float16`)**
-   When the input format has an 8‑bit exponent (`Float16_b`, `Bfp8_b`) and the `output_format` is `Float16` (5‑bit exponent), a 32‑bit intermediate in dest is required. In this case `dest_acc` must be set to `"Yes"`.
+  When the input format has an 8‑bit exponent (`Float16_b`, `Bfp8_b`) and the `output_format` is `Float16` (5‑bit exponent), a 32‑bit intermediate in dest is required. In this case `dest_acc` must be set to `true`.
 
 3. **Improved numerical precision (optional)**
-   For all other supported format combinations where both `dest_acc: "No"` and `"Yes"` are allowed, you can enable `dest_acc: "Yes"` to accumulate in 32‑bit for better numerical accuracy, at the cost of reduced dest tile capacity.
+  For all other supported format combinations where both `dest_acc: false` and `true` are allowed, you can enable `dest_acc: true` to accumulate in 32‑bit for better numerical accuracy, at the cost of reduced dest tile capacity.
 
 **Dest Tile Capacity:**
 
 The available dest tile capacity depends on both `dest_acc` and the per-operation `dest_sync` setting:
 
-| Dest Capacity                 | `dest_acc: "No"` (16-bit) | `dest_acc: "Yes"` (32-bit) |
+| Dest Capacity                 | `dest_acc: false` (16-bit) | `dest_acc: true` (32-bit) |
 |-------------------------------|-----------------------------|----------------------------|
 | `dest_sync: "Half"` (default) | 8 tiles                     | 4 tiles                    |
 | `dest_sync: "Full"`           | 16 tiles                    | 8 tiles                    |
-
-### `profiler_enabled` (boolean, optional)
-Enables performance profiling for the fused kernel. When set to `true`, the test framework measures and reports execution time and throughput metrics. When set to `false` or omitted (default), performance profiling is disabled and the test only validates correctness.
 
 ### `loop_factor` (integer, optional)
 Specifies the number of times to repeat the operation sequence when performance profiling is enabled. This allows measuring sustained performance over multiple iterations. The value must be a positive integer. This setting is only used when `profiler_enabled` is `true`.
@@ -131,7 +132,7 @@ Dimensions of the src_a operand in format `[height, width]`. Values must be mult
 #### `src_b_dims` (array of 2 integers, required)
 Dimensions of the src_b operand in format `[height, width]`. Same rules as `src_a_dims`.
 
-#### `output_pack_dims` (array of 2 integers, optional)
+#### `output_dims` (array of 2 integers, optional)
 Override dimensions of the output operand in format `[height, width]`. Same rules as `src_a_dims`.
 
 ---
@@ -173,23 +174,41 @@ Specifies which unpacker to use. Options:
 
 - **`"MatmulUnpacker"`** - Specialized unpacker for matrix multiplication that unpacks both operands with matmul specific layout. This is required for the `Matmul` FPU operation and is not compatible with `Datacopy` or element-wise FPU operations.
 
+- **`"ReduceUnpacker"`** - Specialized unpacker for Reduce operations. Use this for `ReduceScalar`, `ReduceRow`, and `ReduceColumn` operations.
+
 **Compatibility Matrix:**
 
 | Unpacker        | Datacopy | Elwadd/Elwmul/Elwsub | Matmul | Reduce(Scalar/Row/Column) | SFPU |
 |-----------------|----------|----------------------|--------|---------------------------|------|
 | UnpackerA       | ✓        | ✗ (needs 2 inputs)   | ✗      | ✗                         | ✓    |
-| UnpackerAB      | ✓        | ✓                    | ✗      | ✓                         | ✓    |
+| UnpackerAB      | ✓        | ✓                    | ✗      | ✗                         | ✓    |
 | UnpackerTilizeA | ✓        | ✗ (needs 2 inputs)   | ✗      | ✗                         | ✓    |
 | MatmulUnpacker  | ✗        | ✗                    | ✓      | ✗                         | ✓    |
+| ReduceUnpacker  | ✗        | ✗                    | ✗      | ✓                         | ✓    |
 
 ---
 
 ### Math Configuration
 
-#### `math` (object, required)
-Defines the mathematical operations to perform. Contains:
+#### `math` (array, required)
+Defines an ordered list of operations executed within a single L1-to-L1 run. The list can contain multiple FPU and SFPU entries. Each entry runs in order, and SFPU entries operate on the dest data produced by the most recent FPU/SFPU step.
 
-##### `fpu` (string, required)
+##### FPU entry (`type: "Fpu"`)
+Fields:
+- `operation` (string, required): FPU operation to execute.
+- `unpacker` (string, required): unpacker used for this FPU step.
+- `reduce_pool` (string, required for Reduce operations): reduction mode.
+- `broadcast_type` (string, optional): broadcast mode for element-wise ops.
+- `reuse_dest` (string, optional): reuse dest as a source for binary ops (see below).
+- `unpack_transpose_within_face` / `unpack_transpose_faces` (boolean, optional): unpack transpose controls.
+
+##### `reuse_dest` (string, optional)
+Reuses the current dest as one of the inputs for the FPU binary operation. This is useful when an SFPU chain has already written into dest and you want to combine that result with a new input without an extra copy.
+
+Allowed values:
+- `"DEST_TO_SRCA"`
+- `"DEST_TO_SRCB"`
+
 Available FPU operations:
 
 - **`"Datacopy"`** - Simple data copy without transformation that copies data from input to output. This is useful for testing unpacker/packer combinations.
@@ -209,10 +228,10 @@ Available FPU operations:
 - **`"ReduceColumn"`** - Performs a column-wise reduction of src_a within each tile, producing one reduced value per column. Each result is written to the first row of the corresponding column in that tile, while all other output elements are set to zero by the packer.
 
 #### `reduce_pool` (string, required for Reduce operations)
-Specifies the reduction method to use for the Reduce operation. Available options are: `"Sum"`, `"Average"` and `"Max"`
+Specifies the reduction method to use for the Reduce operation. Available options are: `"SUM"`, `"AVG"` and `"MAX"`.
 
-##### `sfpu` (array of objects, optional)
-A list of Special Function Unit operations to execute after the FPU operation. SFPU operations execute **in the order specified** in the array.
+##### SFPU entries (`type: "UnarySfpu"` / `type: "BinarySfpu"`)
+SFPU operations execute **in the order specified** in the `math` array.
 
 **SFPU Chain Execution Model:**
 1. FPU operation completes and writes to dest
@@ -223,10 +242,9 @@ A list of Special Function Unit operations to execute after the FPU operation. S
 
 **UnarySfpu Configuration:**
 ```yaml
-sfpu:
   - type: "UnarySfpu"
     operation: "Exp"              # Operation name (see below)
-    approximation_mode: "No"      # "Yes" or "No"
+    approximation_mode: false     # true or false
     iterations: 128               # Number of iterations (see below)
 ```
 
@@ -242,7 +260,7 @@ The `operation` field specifies which unary SFPU operation to perform. Available
   - **Power/Root**: `"Sqrt"`, `"Rsqrt"`, `"Square"`, `"Reciprocal"`
   - **Other**: `"Abs"`, `"Neg"`, `"Fill"`, `"Threshold"`
 
-The `approximation_mode` controls the precision/speed tradeoff. Set it to `"Yes"` to use faster approximations with lower accuracy, or `"No"` for full precision calculations. Approximation mode is particularly useful for complex functions like `Gelu` or `Exp` where hardware approximations can significantly affect the precision of the results.
+The `approximation_mode` controls the precision/speed tradeoff. Set it to `true` to use faster approximations with lower accuracy, or `false` for full precision calculations. Approximation mode is particularly useful for complex functions like `Gelu` or `Exp` where hardware approximations can significantly affect the precision of the results.
 
 The `iterations` field determines how many datums to process. Each iteration processes 32 datums (one row of a face), meaning 32 iterations process one full tile (1024 elements). The number of iterations must be calculated based on your input dimensions. For example, a 64×64 matrix contains 4 tiles (4096 elements), requiring 128 iterations to process all data. The value must be at least 1 and cannot exceed the total number of elements divided by 32, where total elements equals `src_a_dims[0] * src_a_dims[1]`.
 
@@ -252,10 +270,9 @@ The `fill_const_value` sets the constant value that each element will be set to 
 
 **BinarySfpu Configuration:**
 ```yaml
-sfpu:
   - type: "BinarySfpu"
     operation: "SfpuElwadd"           # Operation name
-    approximation_mode: "No"          # "Yes" or "No"
+    approximation_mode: false         # true or false
     iterations: 128                   # Number of iterations
     src1_dest_tile_index: 0           # First source tile index in destination
     src2_dest_tile_index: 1           # Second source tile index in destination
@@ -289,25 +306,24 @@ BinarySfpu supports in-place operations where the result overwrites one of the s
 **SFPU Chain Example:**
 ```yaml
 math:
-  fpu: "Datacopy"
-  sfpu:
-    - type: "UnarySfpu"
-      operation: "Exp"        # First: apply exp(x)
-      approximation_mode: "No"
-      dest_idx: 0
-      iterations: 128
-    - type: "UnarySfpu"
-      operation: "Neg"        # Second: apply -x (so result is -exp(x))
-      approximation_mode: "No"
-      iterations: 128
-      dest_idx: 0
-    - type: "BinarySfpu"
-      operation: "SfpuElwadd" # Third: add two tiles together
-      approximation_mode: "No"
-      iterations: 32
-      src1_dest_tile_index: 0
-      src2_dest_tile_index: 1
-      dst_dest_tile_index: 1
+  - type: "Fpu"
+    operation: "Datacopy"
+    unpacker: "UnpackerA"
+  - type: "UnarySfpu"
+    operation: "Exp"        # First: apply exp(x)
+    approximation_mode: false
+    iterations: 128
+  - type: "UnarySfpu"
+    operation: "Neg"        # Second: apply -x (so result is -exp(x))
+    approximation_mode: false
+    iterations: 128
+  - type: "BinarySfpu"
+    operation: "SfpuElwadd" # Third: add two tiles together
+    approximation_mode: false
+    iterations: 32
+    src1_dest_tile_index: 0
+    src2_dest_tile_index: 1
+    dst_dest_tile_index: 1
 ```
 
 **Important:** When using SFPU operations after a Reduce operation, ensure iteration counts do not access elements outside the reduced region, as they may contain residual values before the packer zeroes them.
@@ -325,39 +341,34 @@ Specifies which packer to use. Options:
 
 ### Hardware Configuration
 
-#### `batch_size` (integer, optional)
-Controls how many output tiles are processed together in a single batch. The system automatically determines the optimal batch size based on dest capacity, but you can manually override it when needed.
-See the dest tile capacity table in the [Global Settings](#global-settings) section.
+#### `block_size` (array of 2 integers, optional)
+Controls the block size processed per L1-to-L1 run, in `[height, width]` elements (multiples of 32). The runtime iterates over the full output by blocks; if the output dimensions are not an exact multiple of the block, the remaining tiles are processed as smaller tail blocks.
 
-**Automatic Batch Size Determination:** When `batch_size` is not specified or set to a value that exceeds dest capacity, the system automatically adjusts it based on dest capacity.
-
-**Special Case for Matmul:** When using `Matmul` FPU and the output exceeds dest capacity, `batch_size` is automatically set to 1, meaning one output tile is computed at a time.
-
-**Manual Override:** You can manually specify `batch_size` in the YAML configuration. This is useful for performance tuning or when you want explicit control over batching behavior. However, the system will still enforce that `batch_size` does not exceed dest capacity or total output tile count.
+**Important:** SFPU operations must fit within a single block. Make sure `iterations` and tile indices do not exceed the elements covered by the chosen block size.
 
 #### `dest_sync` (string, optional)
-Controls the synchronization mode between the math unit and packer. When set to `"Half"` (the default), dest operates in half synchronization mode (double buffering), where the math unit and packer can work on different halves of dest simultaneously. When set to `"Full"`, dest operates in full synchronization mode (single buffering), where the math unit and packer share the full dest space without overlap.
+Controls the synchronization mode between the math unit and packer. When set to `"SyncHalf"` (the default), dest operates in half synchronization mode (double buffering), where the math unit and packer can work on different halves of dest simultaneously. When set to `"SyncFull"`, dest operates in full synchronization mode (single buffering), where the math unit and packer share the full dest space without overlap.
 
 **Important:** Due to the synchronization between unpacker and packer (the unpacker waits for the packer from the previous operation to finish), `dest_sync` does not impact overall pipeline performance. It only affects dest capacity. See the dest tile capacity table in the [Global Settings](#global-settings) section for how `dest_sync` and `dest_acc` interact.
 
 #### `math_fidelity` (string, required)
 Controls the precision/speed tradeoff for math operations. Available settings are `"LoFi"`, `"HiFi2"`, `"HiFi3"`, and `"HiFi4"`. Higher fidelity settings provide greater precision at the cost of slower execution. The actual impact depends on the specific operation.
 
-#### `unpack_transpose_within_face` (string, optional)
-Controls whether to transpose data within each 16x16 face during unpacking. Set to `"Yes"` to enable transpose within faces, or `"No"` to disable (default).
+#### `unpack_transpose_within_face` (boolean, optional)
+Controls whether to transpose data within each 16x16 face during unpacking. Set to `true` to enable transpose within faces, or `false` to disable (default).
 
 **Understanding the operation:** Each 32x32 tile is composed of four 16x16 faces arranged as [Top-Left, Top-Right, Bottom-Left, Bottom-Right]. When this option is enabled, the hardware transposes rows and columns within each face independently, leaving the arrangement of faces unchanged. This means element `[i, j]` within a face becomes `[j, i]` within that same face.
 
-#### `unpack_transpose_faces` (string, optional)
-Controls whether to transpose the layout of faces within tiles during unpacking. Set to `"Yes"` to enable face transposition, or `"No"` to disable (default).
+#### `unpack_transpose_faces` (boolean, optional)
+Controls whether to transpose the layout of faces within tiles during unpacking. Set to `true` to enable face transposition, or `false` to disable (default).
 
 **Understanding the operation:** This rearranges the four 16x16 faces within each 32x32 tile. The standard layout [Top-Left, Top-Right, Bottom-Left, Bottom-Right] becomes [Top-Left, Bottom-Left, Top-Right, Bottom-Right] after transposition. This effectively swaps the positions of the top-right and bottom-left faces.
 
-**Combining transpose operations:** These two transpose options can be used together. When both are set to `"Yes"`, the hardware first transposes the face layout, then transposes data within each face. This combination produces a complete matrix transpose:
+**Combining transpose operations:** These two transpose options can be used together. When both are set to `true`, the hardware first transposes the face layout, then transposes data within each face. This combination produces a complete matrix transpose:
 
 ```yaml
-unpack_transpose_faces: "Yes"        # Step 1: Transpose face layout
-unpack_transpose_within_face: "Yes"  # Step 2: Transpose within each face
+unpack_transpose_faces: true         # Step 1: Transpose face layout
+unpack_transpose_within_face: true   # Step 2: Transpose within each face
 ```
 
 **Unpacker compatibility:** `UnpackerA` supports independent values for these two transpose options. `UnpackerAB` and `MatmulUnpacker` require both transpose options to have the same value. `UnpackerTilizeA` does not support transpose operations.
@@ -420,14 +431,14 @@ operations:
   - src_a: "input_A"
     src_b: "input_A"  # Dummy, not used
     output: "exp_result"
-    unpacker: "UnpackerA"
     math:
-      fpu: "Datacopy"
-      sfpu:
-        - type: "UnarySfpu"
-          operation: "Exp"
-          approximation_mode: "No"
-          iterations: 128
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 128
     packer: "Packer"
     # ...
 
@@ -435,9 +446,10 @@ operations:
   - src_a: "exp_result"
     src_b: "input_B"
     output: "scaled_result"
-    unpacker: "UnpackerAB"
     math:
-      fpu: "Elwmul"
+      - type: "Fpu"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
     packer: "Packer"
     # ...
 
@@ -445,9 +457,10 @@ operations:
   - src_a: "scaled_result"
     src_b: "input_C"
     output: "final_output"
-    unpacker: "MatmulUnpacker"
     math:
-      fpu: "Matmul"
+      - type: "Fpu"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
     packer: "Packer"
     # ...
 ```
@@ -461,7 +474,7 @@ operations:
 To run all tests, execute the following command from the `tests/python_tests/` directory:
 
 ```bash
-pytest fused_test.py
+pytest test_fused.py
 ```
 
 This command runs all YAML configuration files from the `tests/python_tests/fuser_config/` directory. For each test, it generates corresponding C++ code in `tests/sources/fused_tests/`.
@@ -471,7 +484,7 @@ This command runs all YAML configuration files from the `tests/python_tests/fuse
 To run a specific test, use the test name (YAML filename without extension) as a parameter:
 
 ```bash
-pytest fused_test.py::test_fused[example]
+pytest test_fused.py::test_fuser[example]
 ```
 
 This command runs only `example.yaml` from the `tests/python_tests/fuser_config/` directory and generates `tests/sources/fused_tests/example.cpp`.
@@ -481,10 +494,20 @@ This command runs only `example.yaml` from the `tests/python_tests/fuser_config/
 By default, pytest regenerates C++ code for each test run. To skip code generation and manually edit the generated C++ file, use the `--skip-codegen` flag:
 
 ```bash
-pytest fused_test.py::test_fused[example] --skip-codegen
+pytest test_fused.py::test_fuser[example] --skip-codegen
 ```
 
 This is useful when debugging specific C++ code issues or testing manual optimizations without modifying the YAML configuration.
+
+### Running Performance Tests
+
+Performance runs are started via a separate test entry point:
+
+```bash
+pytest perf_fused.py
+```
+
+Other options (such as `--skip-codegen`) are the same as for functional runs.
 
 ---
 

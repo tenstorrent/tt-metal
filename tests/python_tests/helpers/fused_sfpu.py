@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .fused_math import ComputeNode
+    from .block_data import BlockData
 
 from .llk_params import (
     ApproximationMode,
@@ -29,6 +30,7 @@ class Sfpu:
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -37,6 +39,7 @@ class Sfpu:
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -45,6 +48,7 @@ class Sfpu:
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         return ""
 
@@ -127,6 +131,7 @@ class UnarySfpu(Sfpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
 
@@ -140,6 +145,7 @@ class UnarySfpu(Sfpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
@@ -218,6 +224,7 @@ class BinarySfpu(Sfpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
 
@@ -231,6 +238,7 @@ class BinarySfpu(Sfpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
+        block: "BlockData",
     ) -> str:
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"

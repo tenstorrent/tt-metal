@@ -16,14 +16,12 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import wait_for_tensix_operations_finished
-from .format_config import DataFormat, FormatConfig
-from .fused_fpu import MatmulFpu
 from .fused_operation import FusedOperation
 from .llk_params import DestAccumulation, DestSync, PerfRunType
 from .logger import logger
 from .perf import PerfReport
 from .profiler import Profiler, ProfilerData
-from .test_config import BootMode, ProfilerBuild, TestConfig, TestMode
+from .test_config import ProfilerBuild, TestConfig, TestMode
 
 
 @dataclass
@@ -87,19 +85,9 @@ class FuserConfig:
                     8 if self.global_config.dest_acc == DestAccumulation.Yes else 16
                 )
 
-            if operation.math.has_fpu(MatmulFpu):
-                if operation.ct_dim > dest_capacity:
-                    raise ValueError(
-                        f"Matmul ct_dim ({operation.ct_dim}) exceeds dest capacity ({dest_capacity}). "
-                    )
-                if operation.batch_size != operation.ct_dim:
-                    raise ValueError(
-                        f"Batch size ({operation.batch_size}) for matmul must be same as ct_dim ({operation.ct_dim})"
-                    )
-
-            if operation.batch_size > dest_capacity:
+            if operation.block_tiles_x * operation.block_tiles_y > dest_capacity:
                 raise ValueError(
-                    f"Batch size ({operation.batch_size}) cannot fit inside dest ({dest_capacity})"
+                    f"Block size ({operation.block_size}) is bigger than dest capacity ({dest_capacity})"
                 )
 
             if (
@@ -113,17 +101,6 @@ class FuserConfig:
     def create_test_config(self, cpp_path, profiler_enabled: bool) -> TestConfig:
         return TestConfig(
             test_name=cpp_path,
-            formats=FormatConfig(
-                unpack_A_src=DataFormat.Float16,
-                unpack_A_dst=DataFormat.Float16,
-                pack_src=DataFormat.Float16,
-                pack_dst=DataFormat.Float16,
-                math=DataFormat.Float16,
-            ),
-            templates=set(),
-            runtimes=set(),
-            variant_stimuli=None,
-            boot_mode=BootMode.DEFAULT,
             profiler_build=ProfilerBuild.Yes if profiler_enabled else ProfilerBuild.No,
             skip_build_header=True,
         )
@@ -171,6 +148,7 @@ class FuserConfig:
             if TestConfig.MODE == TestMode.PRODUCE:
                 continue
 
+            logger.info("Running perf test for run type: {}", run_type.name)
             for run_index in range(run_count):
                 elfs = test_config.run_elf_files(location)
                 wait_for_tensix_operations_finished(elfs, location)

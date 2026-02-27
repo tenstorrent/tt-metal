@@ -97,8 +97,7 @@ class PackKernelGenerator:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
-            packer_instance = op.packer()
-            all_headers.update(packer_instance.get_headers())
+            all_headers.update(op.math.packer().get_headers())
 
         # Generate include statements
         includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
