@@ -205,12 +205,11 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      timeout: ${{ (inputs.enable-watcher && 120) || 40 }}
+      enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
   ops-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
