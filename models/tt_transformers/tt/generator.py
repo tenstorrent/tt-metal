@@ -271,7 +271,7 @@ class Generator(WarmupForwardMixin):
 
         sampling_on_device_requested = sampling_params is not None
 
-        # we need this here becuase of tt-metal tests
+        # we need this here because of tt-metal tests
         if warmup_prefill:
             sampling_on_device_enabled = (
                 getattr(self.model[0], "_supports_on_device_sampling", False)
@@ -564,7 +564,7 @@ class Generator(WarmupForwardMixin):
                 )
 
                 # Select tokens for the current chunk.
-                # Cached tokens were allready excluded (not part of the input),
+                # Cached tokens were already excluded (not part of the input),
                 # so using relative indexes.
                 chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
 

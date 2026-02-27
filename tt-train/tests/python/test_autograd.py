@@ -94,7 +94,7 @@ def do_test_numpy_autograd_conversion(
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
-    # sanity check: the occurence of an exception implies we were expecting it
+    # sanity check: the occurrence of an exception implies we were expecting it
     assert (not type_error) or (type_error and expect_type_exception)
     assert (not runtime_error) or (runtime_error and expect_runtime_exception)
 
