@@ -9,6 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 #include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
 
@@ -44,5 +45,9 @@ uint32_t CreateDataflowBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DataflowBufferConfig& config);
+
+// Need to know which riscs the producer and consumer kernel run on to do tile counter and remapper allocation before a program is launched
+// This information may not be available to user at time of DFB creation so binding can be done explicitly after kernels are created
+void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_id, KernelHandle producer_kernel_handle, KernelHandle consumer_kernel_handle);
 
 }  // namespace tt::tt_metal::experimental::dfb

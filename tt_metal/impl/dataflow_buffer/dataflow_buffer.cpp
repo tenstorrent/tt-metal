@@ -10,6 +10,7 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental::dfb {
 
@@ -26,6 +27,44 @@ uint32_t CreateDataflowBuffer(
         core_spec);
 
     return program.impl().add_dataflow_buffer(core_range_set, config);
+}
+
+void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_id, KernelHandle producer_kernel_handle, KernelHandle consumer_kernel_handle) {
+    auto dfb = program.impl().get_dataflow_buffer(dfb_id);
+
+    TT_FATAL(!dfb->configs_finalized, "Cannot bind kernels to DFB {} after configuration has been finalized", dfb_id);
+
+    // Not great but temporary until we have the updated host APIs
+    std::shared_ptr<Kernel> producer_kernel = program.impl().get_kernel(producer_kernel_handle);
+    std::shared_ptr<Kernel> consumer_kernel = program.impl().get_kernel(consumer_kernel_handle);
+
+    TT_FATAL(producer_kernel != nullptr, "Producer kernel not found");
+    TT_FATAL(consumer_kernel != nullptr, "Consumer kernel not found");
+
+    if (auto compute_producer = std::dynamic_pointer_cast<ComputeKernel>(producer_kernel)) {
+        TT_FATAL(dfb->config.num_producers == 1, "Only one Tensix is supported for now");
+        dfb->config.producer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+    } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
+        const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
+        for (DataMovementProcessor dm : producer_dm_riscvs) {
+            dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+        }
+    } else {
+        TT_FATAL(false, "Unsupported kernel type");
+    }
+
+    if (auto compute_consumer = std::dynamic_pointer_cast<ComputeKernel>(consumer_kernel)) {
+        TT_FATAL(dfb->config.num_consumers == 1, "Only one Tensix is supported for now");
+        dfb->config.consumer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+    } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
+        const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
+        for (DataMovementProcessor dm : consumer_dm_riscvs) {
+            dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+        }
+    } else {
+        TT_FATAL(false, "Unsupported kernel type");
+    }
+
 }
 
 namespace detail {
@@ -324,23 +363,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     TT_FATAL(config.entry_size > 0, "Entry size must be > 0");
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
-    TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must have at least one bit set");
-    TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must have at least one bit set");
-    TT_FATAL(
-        (config.producer_risc_mask & config.consumer_risc_mask) == 0,
-        "producer_risc_mask and consumer_risc_mask must not overlap");
 
-    bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
-    bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
-    bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
-    bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
-    TT_FATAL(
-        !(producer_is_tensix_only && consumer_is_tensix_only),
-        "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
-        "counters");
-    TT_FATAL(
-        !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
-        "Tensix producer with BLOCKED consumer pattern is not supported");
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
     TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
@@ -358,8 +381,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
-
-    dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
     dfb->entry_size = config.entry_size;
 
@@ -469,6 +490,27 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
 void ProgramImpl::finalize_single_dfb_config(
     std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool use_remapper) {
     const auto& config = dfb->config;
+
+    TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
+    TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
+
+    TT_FATAL(
+        (config.producer_risc_mask & config.consumer_risc_mask) == 0,
+        "producer_risc_mask and consumer_risc_mask must not overlap");
+
+    bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
+    bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
+    bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
+    bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
+    TT_FATAL(
+        !(producer_is_tensix_only && consumer_is_tensix_only),
+        "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
+        "counters");
+    TT_FATAL(
+        !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
+        "Tensix producer with BLOCKED consumer pattern is not supported");
+
+    dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
@@ -873,6 +915,13 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
 
 const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& ProgramImpl::dataflow_buffers() const {
     return dataflow_buffers_;
+}
+
+std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> ProgramImpl::get_dataflow_buffer(uint32_t dfb_id) const {
+    if (!this->dataflow_buffer_by_id_.contains(dfb_id)) {
+        TT_THROW("No dataflow buffer with id {} exists in Program {}", dfb_id, this->id);
+    }
+    return dataflow_buffer_by_id_.at(dfb_id);
 }
 
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>

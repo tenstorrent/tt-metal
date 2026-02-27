@@ -4,7 +4,6 @@
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -282,6 +281,20 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        # Validate input dimensions
+        hidden_size = cfg["hidden_size"]
+        mesh_device = cfg.get("mesh_device")
+        tp_size = mesh_device.shape[1] if mesh_device else 1
+
+        x_dim = x.shape[-1]
+        expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
+
+        if x_dim not in expected_dims:
+            raise ValueError(
+                f"MoE: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
+                f"(hidden_size={hidden_size}, tp_size={tp_size})"
+            )
+
         # breakpoint()
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
@@ -290,25 +303,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
-        # All Gather (only if input is TP-sharded)
-        hidden_size = cfg["hidden_size"]
-        tp_size = cfg["mesh_device"].shape[1]
-        x_dim = x.shape[-1]
-
-        if x_dim == hidden_size:
-            # Already full hidden size; skip all_gather
-            pass
-        elif x_dim == hidden_size // tp_size:
-            x = cls._fwd_all_gather(x, cfg)
-        else:
-            logger.warning(
-                f"MoE forward: unexpected input hidden dim {x_dim} (hidden_size={hidden_size}, tp_size={tp_size}); "
-                "running all_gather as fallback."
-            )
-            x = cls._fwd_all_gather(x, cfg)
+        # Note: all_gather is handled by the caller (decoder block or test)
 
         # MoE Gate
-
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # Repeat + Permute Expert weights
@@ -327,9 +324,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Reduce Scatter
-
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        # Note: reduce_scatter is handled by the caller (decoder block or test)
 
         return post_combine_output_tensor
 
@@ -478,9 +473,35 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_prefill(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
+    ) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output

@@ -486,6 +486,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
 ##################################################
