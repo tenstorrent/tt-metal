@@ -56,11 +56,13 @@ class CompressedTensorAssigner:
         metric: str = "pcc",
         threshold: float = 0.999,
         formats: list[str] | None = None,
+        bfp0_mae_threshold: float = 0.01,
     ) -> None:
         if metric not in {"pcc", "mae", "atol"}:
             raise ValueError(f"Unsupported metric: {metric}")
         self.metric = metric
         self.threshold = threshold
+        self.bfp0_mae_threshold = bfp0_mae_threshold
         self.formats = formats or ["bfp8", "bfp4"]
         for fmt in self.formats:
             if fmt not in COMPRESSED_FORMATS:
@@ -127,7 +129,9 @@ class CompressedTensorAssigner:
                 padded_q.reshape(tiles_h, tile_hw, tiles_w, tile_hw).transpose(0, 2, 1, 3).reshape(-1, tile_hw, tile_hw)
             )
             tiles_by_fmt[fmt] = tiles_q
-            scores_by_fmt[fmt] = tile_metrics(tiles_ref, tiles_q, self.metric)
+            # bfp0 always uses MAE (PCC is undefined for all-zeros vs signal)
+            fmt_metric = "mae" if fmt == "bfp0" else self.metric
+            scores_by_fmt[fmt] = tile_metrics(tiles_ref, tiles_q, fmt_metric)
 
         # Sort formats cheapest first; fallback is the most expensive
         fmt_to_idx = {fmt: idx for idx, fmt in enumerate(COMPRESSED_FORMATS)}
@@ -140,7 +144,12 @@ class CompressedTensorAssigner:
         for tile_idx in range(num_tiles):
             for fmt in formats_by_cost:
                 score = scores_by_fmt[fmt][tile_idx]
-                if metric_is_good(score, self.metric, self.threshold):
+                # bfp0 uses its own MAE threshold
+                if fmt == "bfp0":
+                    if metric_is_good(score, "mae", self.bfp0_mae_threshold):
+                        assignments[tile_idx] = fmt_to_idx[fmt]
+                        break
+                elif metric_is_good(score, self.metric, self.threshold):
                     assignments[tile_idx] = fmt_to_idx[fmt]
                     break
 
