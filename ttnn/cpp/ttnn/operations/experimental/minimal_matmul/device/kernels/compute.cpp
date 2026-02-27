@@ -162,7 +162,7 @@ void add_bias_and_addcmul_block(
             unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
 
             // ternary_b_cb is [1, N], broadcast across M rows
-            unary_bcast<BroadcastType::ROW>(ternary_b_cb, tile_id, TERNARY_B_DST_ID);
+            unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
             copy_tile_to_dst_init_short(intermediate_cb);
             copy_tile(intermediate_cb, tile_id, DST_ID);
