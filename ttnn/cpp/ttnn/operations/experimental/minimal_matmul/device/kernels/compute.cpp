@@ -158,17 +158,17 @@ void add_bias_and_addcmul_block(
             // ternary_b_cb is [1, N], broadcast across M rows
             mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
-            constexpr uint32_t TERNARY_B_CB_ID = 1;
+            constexpr uint32_t TERNARY_B_DST_ID = 1;
             unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
 
             // ternary_b_cb is [1, N], broadcast across M rows
-            unary_bcast<BroadcastType::ROW>(ternary_b_cb, tile_id, TERNARY_B_CB_ID);
+            unary_bcast<BroadcastType::ROW>(ternary_b_cb, tile_id, TERNARY_B_DST_ID);
 
             copy_tile_to_dst_init_short(intermediate_cb);
             copy_tile(intermediate_cb, tile_id, DST_ID);
 
             mul_binary_tile_init();
-            mul_binary_tile(DST_ID, TERNARY_B_CB_ID, DST_ID);
+            mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
             mul_unary_tile(DST_ID, scalar_value);
