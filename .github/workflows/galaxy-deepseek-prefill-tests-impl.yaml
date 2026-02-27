@@ -24,6 +24,7 @@ on:
         required: false
         type: string
         default: "all"
+  workflow_dispatch:
 
 jobs:
   generate-matrix:
