@@ -191,6 +191,10 @@ def run_max_pool2d(
 
     ttnn_output = ttnn.to_torch(ttnn_output)
 
+    # DRAM slicing returns (N, H, W, C) while golden returns (1, 1, NHW, C) - normalize shape
+    if ttnn_output.shape != torch_output.shape:
+        ttnn_output = ttnn_output.reshape(1, 1, -1, in_c)
+
     # test for equivalance
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
