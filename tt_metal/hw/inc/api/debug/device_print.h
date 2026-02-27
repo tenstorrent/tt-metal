@@ -558,7 +558,7 @@ template <typename T>
 struct device_print_type {
     static constexpr device_print_type_info value = {'#', 0};  // Unknown type default
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
-        static_assert(true, "No serialization defined for this type");
+        static_assert(!std::is_same_v<T, T>, "No serialization defined for this type");
     }
 };
 
