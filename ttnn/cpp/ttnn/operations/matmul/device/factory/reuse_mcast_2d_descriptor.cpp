@@ -173,8 +173,15 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    CoreCoord sub_device_start_core = {0, 0};
+    if (operation_attributes.sub_device_id.has_value()) {
+        auto sub_device_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+    uint32_t start_core_x = sub_device_start_core.x;
+    uint32_t start_core_y = sub_device_start_core.y;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
