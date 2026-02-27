@@ -182,9 +182,10 @@ jobs:
           fi
           echo "Determined that the current tag is " $LATEST_TAG
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
-          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
-          docker pull $TAG_NAME
-          echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
-          docker tag $TAG_NAME $REPO_IMAGE_NAME:$LATEST_TAG
-          echo "Pushing image with tag " $REPO_IMAGE_NAME:$LATEST_TAG
-          docker push $REPO_IMAGE_NAME:$LATEST_TAG
+          # Pull by digest to ensure we tag the exact image we built and tested
+          IMAGE_DIGEST="${{ needs.create-docker-release-image.outputs.image_digest }}"
+          docker pull "$IMAGE_DIGEST"
+          echo "Tagging image $IMAGE_DIGEST as $REPO_IMAGE_NAME:$LATEST_TAG"
+          docker tag "$IMAGE_DIGEST" "$REPO_IMAGE_NAME:$LATEST_TAG"
+          echo "Pushing image with tag $REPO_IMAGE_NAME:$LATEST_TAG"
+          docker push "$REPO_IMAGE_NAME:$LATEST_TAG"
