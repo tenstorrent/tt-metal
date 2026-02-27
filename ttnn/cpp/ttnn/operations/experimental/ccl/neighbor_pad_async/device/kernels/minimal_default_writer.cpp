@@ -60,11 +60,13 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
 
     // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
+    // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
+    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
-    uint8_t signal_noc_x[2];
-    uint8_t signal_noc_y[2];
-    uint32_t signal_sem_addr[2];
-    for (uint32_t st = 0; st < 2; st++) {
+    uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
+    uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];
+    uint32_t signal_sem_addr[MAX_PHASE2_SIGNAL_TARGETS];
+    for (uint32_t st = 0; st < MAX_PHASE2_SIGNAL_TARGETS; st++) {
         signal_noc_x[st] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[st] = get_arg_val<uint32_t>(arg_idx++);
         signal_sem_addr[st] = get_arg_val<uint32_t>(arg_idx++);

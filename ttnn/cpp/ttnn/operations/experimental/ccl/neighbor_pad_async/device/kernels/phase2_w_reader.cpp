@@ -45,6 +45,7 @@ inline void zeroPad(uint32_t cb_id) {
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
@@ -64,7 +65,7 @@ void kernel_main() {
 
     // Main loop: read boundary sticks from output DRAM → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
-        uint32_t row_base = outer_dim * output_row_width;
+        uint32_t row_base = (outer_dim_start + outer_dim) * output_row_width;
 
         if (is_first_chip) {
             if (!is_padding_zeros) {

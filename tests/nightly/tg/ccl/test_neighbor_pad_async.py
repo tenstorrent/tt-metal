@@ -5,11 +5,9 @@
 
 import pytest
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_1d_impl
+from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_1d_impl, run_neighbor_pad_2d_impl
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.timeout(200)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -90,7 +88,7 @@ from tests.nightly.t3000.ccl.test_neighbor_pad_async import run_neighbor_pad_1d_
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
-def test_neighbor_pad_async_nightly(
+def test_neighbor_pad_async_1d(
     mesh_device,
     input_shape,
     halo_shard_dim,
@@ -131,4 +129,80 @@ def test_neighbor_pad_async_nightly(
         enable_trace=enable_trace,
         neighbor_pad_topology=neighbor_pad_topology,
         num_iters=num_iters,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2D tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        [(4, 8), 1],
+        [(4, 8), 4],
+        [(4, 8), 1],
+        [(4, 8), 2],
+    ],
+    ids=[
+        "wh_4x8_1link",
+        "wh_4x8_4link",
+        "bh_4x8_1link",
+        "bh_4x8_2link",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW",
+    [
+        # 5D: [B, T, H, W, C] — H along axis 0, W along axis 1
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 1, 1),
+        ([1, 3, 12, 16, 32], 2, 3, 0, 1, 1, 1),
+        # VAE conv_0 shape (full H=90, W=160)
+        ([1, 3, 92, 160, 32], 2, 3, 0, 1, 1, 1),
+        # Flipped axes: H along axis 1, W along axis 0
+        ([1, 2, 16, 8, 32], 2, 3, 1, 0, 1, 1),
+        # 4D tensor [B, H, W, C]
+        ([2, 8, 16, 32], 1, 2, 0, 1, 1, 1),
+    ],
+    ids=[
+        "small_5d_h0w1",
+        "medium_5d_h0w1",
+        "vae_conv0_h0w1",
+        "small_5d_h1w0",
+        "small_4d_h0w1",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_neighbor_pad_async_2d(
+    mesh_device,
+    input_shape,
+    h_dim,
+    w_dim,
+    h_axis,
+    w_axis,
+    pH,
+    pW,
+    num_links,
+    device_params,
+):
+    run_neighbor_pad_2d_impl(
+        mesh_device,
+        input_shape=list(input_shape),
+        h_dim=h_dim,
+        w_dim=w_dim,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        pH=pH,
+        pW=pW,
+        padding_mode="zeros",
+        num_links=num_links,
+        input_dtype=ttnn.bfloat16,
+        topology=ttnn.Topology.Linear,
     )

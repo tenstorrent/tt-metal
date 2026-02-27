@@ -265,6 +265,7 @@ def run_neighbor_pad_2d_impl(
     pH,
     pW,
     padding_mode,
+    num_links,
     input_dtype,
     topology,
 ):
@@ -322,7 +323,7 @@ def run_neighbor_pad_2d_impl(
         [h_axis, w_axis],
         [h_neighbor_sem, w_neighbor_sem],
         [barrier_sem],
-        num_links=[1, 1],
+        num_links=[num_links, num_links],
         memory_config=mem_config,
         topology=topology,
     )
@@ -432,7 +433,7 @@ def test_neighbor_pad_async_1d(
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], ids=["2x4", "4x8"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW",
     [
@@ -480,6 +481,7 @@ def test_neighbor_pad_async_2d(
         pH=pH,
         pW=pW,
         padding_mode="zeros",
+        num_links=[1, 1],
         input_dtype=ttnn.bfloat16,
         topology=ttnn.Topology.Linear,
     )

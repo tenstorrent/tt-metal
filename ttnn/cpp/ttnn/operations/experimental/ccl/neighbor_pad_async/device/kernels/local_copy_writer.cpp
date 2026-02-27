@@ -28,11 +28,13 @@ void kernel_main() {
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
+    // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
+    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
-    uint8_t signal_noc_x[2];
-    uint8_t signal_noc_y[2];
-    uint32_t barrier_sem_addr[2];
-    for (uint32_t t = 0; t < 2; t++) {
+    uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
+    uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];
+    uint32_t barrier_sem_addr[MAX_PHASE2_SIGNAL_TARGETS];
+    for (uint32_t t = 0; t < MAX_PHASE2_SIGNAL_TARGETS; t++) {
         signal_noc_x[t] = get_arg_val<uint32_t>(arg_idx++);
         signal_noc_y[t] = get_arg_val<uint32_t>(arg_idx++);
         barrier_sem_addr[t] = get_arg_val<uint32_t>(arg_idx++);
