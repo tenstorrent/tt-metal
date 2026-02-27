@@ -59,8 +59,6 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_2D_TORUS_X", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X)
         .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
         .value("FABRIC_2D_TORUS_XY", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
-        .value("FABRIC_2D_TORUS_X", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X)
-        .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
