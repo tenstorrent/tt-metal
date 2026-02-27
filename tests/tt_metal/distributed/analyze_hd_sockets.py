@@ -42,18 +42,17 @@ def human_bytes(n):
 
 # ── CSV loading ───────────────────────────────────────────────────────────────
 
-# Positional arg names parsed from the gbench 'name' column
-# (e.g. "BM_D2HSocketThroughput/32768/134217728/536870912").
+# Arg names parsed from the gbench 'name' column.
 # Keep in sync with ArgNames(...) in benchmark_hd_sockets.cpp.
 _GBENCH_BENCH_ARGS = {
-    "BM_D2HSocketThroughput": ["page_size", "socket_fifo_size", "total_data"],
-    "BM_H2DSocketThroughput": ["page_size", "socket_fifo_size", "total_data", "mode_index"],
-    "BM_D2HSocketLatency": ["page_size", "socket_fifo_size"],
-    "BM_H2DSocketLatency": ["page_size", "socket_fifo_size", "mode_index"],
-    "BM_D2HSocketPing": ["page_size", "socket_fifo_size"],
-    "BM_H2DSocketPing": ["mode_index"],
-    "BM_D2HSocketMultiChipThroughput": ["chip_index", "socket_fifo_size"],
-    "BM_H2DSocketMultiChipThroughput": ["chip_index", "socket_fifo_size"],
+    "BM_D2HSocketThroughput": ["tray_id", "asic_location", "page_size", "fifo_size", "total_data"],
+    "BM_H2DSocketThroughput": ["tray_id", "asic_location", "page_size", "fifo_size", "total_data", "mode_index"],
+    "BM_D2HSocketLatency": ["tray_id", "asic_location", "page_size", "fifo_size"],
+    "BM_H2DSocketLatency": ["tray_id", "asic_location", "page_size", "fifo_size", "mode_index"],
+    "BM_D2HSocketPing": ["tray_id", "asic_location", "page_size", "fifo_size"],
+    "BM_H2DSocketPing": ["tray_id", "asic_location", "page_size", "fifo_size", "mode_index"],
+    "BM_D2HSocketMultiChipThroughput": ["chip_index", "fifo_size", "page_size", "total_data"],
+    "BM_H2DSocketMultiChipThroughput": ["chip_index", "fifo_size", "page_size", "total_data"],
 }
 
 # Latency counters expected in the CSV.
@@ -71,7 +70,11 @@ _GBENCH_LATENCY_COUNTERS = [
 
 
 def load_gbench_csv(path):
-    return pd.read_csv(path)
+    df = pd.read_csv(path)
+    # Drop skipped/errored benchmarks (no timing data).
+    if "error_message" in df.columns:
+        df = df[df["error_message"].isna() | (df["error_message"] == "")].copy()
+    return df
 
 
 def _gbench_name_prefix(name: str) -> str:
@@ -79,13 +82,45 @@ def _gbench_name_prefix(name: str) -> str:
 
 
 def _gbench_extract_args(df: pd.DataFrame, arg_names: list) -> pd.DataFrame:
-    """Split '/'-delimited args from the 'name' column into named columns."""
+    """Extract benchmark arguments from the 'name' column.
+
+    Handles both named (key:value) and positional formats, then
+    renames 'fifo_size' -> 'socket_fifo_size' for script-wide compat.
+    """
 
     def _parse(name):
-        parts = name.split("/")
-        return {k: int(parts[i + 1]) for i, k in enumerate(arg_names) if i + 1 < len(parts)}
+        parts = name.split("/")[1:]  # skip benchmark name prefix
+        if parts and ":" in parts[0]:
+            # Named format: tray_id:1/asic_location:6/page_size:32768/...
+            result = {}
+            for part in parts:
+                if ":" in part:
+                    key, val = part.split(":", 1)
+                    if key in arg_names:
+                        try:
+                            result[key] = int(val)
+                        except ValueError:
+                            pass
+            return result
+        else:
+            # Positional format (legacy): 32768/134217728/536870912
+            return {k: int(parts[i]) for i, k in enumerate(arg_names) if i < len(parts)}
 
-    return df["name"].apply(_parse).apply(pd.Series)
+    result = df["name"].apply(_parse).apply(pd.Series).reset_index(drop=True)
+    result.rename(columns={"fifo_size": "socket_fifo_size"}, inplace=True)
+    return result
+
+
+def _derive_throughput(df):
+    """Compute per_page_us and throughput_gbps from real_time when counters are absent."""
+    if "per_page_us" not in df.columns and "real_time" in df.columns:
+        num_pages = df["total_data"] / df["page_size"]
+        df["per_page_us"] = df["real_time"] * 1e6 / num_pages
+    if "throughput_gbps" not in df.columns and "per_page_us" in df.columns:
+        df["throughput_gbps"] = df["page_size"] / (df["per_page_us"] * 1e3)
+    for col in ("per_page_us", "per_page_cycles", "throughput_gbps", "data_size", "num_iterations"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
 
 def load_gbench_d2h_throughput_csv(path):
@@ -100,8 +135,7 @@ def load_gbench_d2h_throughput_csv(path):
     if "label" in df.columns:
         df["device_coord"] = df["label"]
 
-    if "throughput_gbps" not in df.columns and "per_page_us" in df.columns:
-        df["throughput_gbps"] = df["page_size"] / (df["per_page_us"] * 1e3)
+    _derive_throughput(df)
 
     required = ["page_size", "socket_fifo_size", "total_data", "per_page_us", "throughput_gbps"]
     missing = [c for c in required if c not in df.columns]
@@ -131,8 +165,7 @@ def load_gbench_h2d_throughput_csv(path):
     elif "h2d_mode" not in df.columns:
         df["h2d_mode"] = "UNKNOWN"
 
-    if "throughput_gbps" not in df.columns and "per_page_us" in df.columns:
-        df["throughput_gbps"] = df["page_size"] / (df["per_page_us"] * 1e3)
+    _derive_throughput(df)
 
     return df
 
@@ -190,18 +223,11 @@ def load_gbench_multichip_csv(path, name_prefix):
     arg_cols = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
     df = pd.concat([df.reset_index(drop=True), arg_cols], axis=1)
 
-    for col in (
-        "tray_id",
-        "asic_location",
-        "per_page_us",
-        "per_page_cycles",
-        "throughput_gbps",
-        "data_size",
-        "total_data",
-        "num_iterations",
-    ):
+    _derive_throughput(df)
+
+    for col in ("tray_id", "asic_location"):
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col])
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "label" in df.columns:
         df["mesh_coord"] = df["label"]
@@ -237,7 +263,7 @@ _GBENCH_DISPATCH = {
 
 def run_gbench(path, prefix=""):
     """Auto-detect benchmark type from CSV and dispatch to the right analysis."""
-    df_raw = load_gbench_csv(path)
+    df_raw = pd.read_csv(path)  # raw, unfiltered for detection
     if df_raw.empty or "name" not in df_raw.columns:
         raise ValueError(f"{path} does not look like a Google Benchmark CSV")
 

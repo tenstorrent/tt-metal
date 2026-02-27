@@ -11,7 +11,7 @@ void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     // arg 1 (local_l1_buffer_addr) reserved for ABI compatibility
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    // arg 3 (measurement_buffer_addr) reserved for ABI compatibility; latency measured on host
+    constexpr uint32_t measurement_buffer_addr = get_compile_time_arg_val(3);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
@@ -22,7 +22,7 @@ void kernel_main() {
                               (static_cast<uint64_t>(receiver_socket.h2d.data_addr_lo));
     uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
 
-    for (uint32_t i = 0; i < WARMUP_ITERS + num_iterations; i++) {
+    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         socket_wait_for_pages(receiver_socket, 1);
         noc_read_page_chunked(
             pcie_xy_enc,
@@ -32,6 +32,21 @@ void kernel_main() {
         socket_pop_pages(receiver_socket, 1);
         noc_async_read_barrier();
         socket_notify_sender(receiver_socket);
+    }
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        uint64_t start_timestamp = get_timestamp();
+        socket_wait_for_pages(receiver_socket, 1);
+        noc_read_page_chunked(
+            pcie_xy_enc,
+            pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
+            receiver_socket.read_ptr,
+            page_size);
+        socket_pop_pages(receiver_socket, 1);
+        noc_async_read_barrier();
+        socket_notify_sender(receiver_socket);
+        uint64_t end_timestamp = get_timestamp();
+        *reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr + i * sizeof(uint64_t)) =
+            end_timestamp - start_timestamp;
     }
 
     update_socket_config(receiver_socket);
