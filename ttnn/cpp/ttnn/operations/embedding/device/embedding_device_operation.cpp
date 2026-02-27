@@ -53,8 +53,8 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             weights.padded_shape()[-1],
             TILE_WIDTH);
 
-        // ttnn.embedding uses ttnn::to_layout to convert output tensor to requested layout,
-        // which currently does not support ND-sharded tensors
+        // TODO: remove this check when ttnn::to_layout supports ND-sharded tensors
+        // https://github.com/tenstorrent/tt-metal/issues/38273
         TT_FATAL(
             !operation_attributes.output_mem_config.nd_shard_spec().has_value(),
             "NDSharded output tensor must have ROW_MAJOR_LAYOUT");
