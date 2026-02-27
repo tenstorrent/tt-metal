@@ -216,7 +216,6 @@ class PreSDPA:
 
         Returns:
             Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
-            - io_tensors: List of mesh tensors for generic_op
             - full_device_grid: CoreRangeSet covering the full device compute grid
             - per_device_contexts: List of dicts, one per device, each containing:
                 ncrisc_compile_time_args, brisc_compile_time_args,
