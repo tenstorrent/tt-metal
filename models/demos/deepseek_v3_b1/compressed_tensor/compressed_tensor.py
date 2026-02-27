@@ -47,6 +47,7 @@ class CompressedTensor:
         self,
         tensor: torch.Tensor,
         assignment: np.ndarray,
+        device=None,
         tile_hw: int = 32,
     ) -> None:
         """Pack a float32 tensor into compressed format.
@@ -54,6 +55,7 @@ class CompressedTensor:
         Args:
             tensor: Float32 torch tensor, last two dims must be tile-aligned.
             assignment: (tiles_h, tiles_w) int8 array of format indices into COMPRESSED_FORMATS.
+            device: Optional ttnn device. If provided, tensors are placed on device.
             tile_hw: Tile dimension (default 32).
         """
         self.shape = tensor.shape
@@ -70,26 +72,33 @@ class CompressedTensor:
         data_bytes, self._tile_mant_bits = self._pack(tensor, assignment)
 
         # Store as ttnn uint8 row-major tensors
-        self.data = ttnn.from_torch(data_bytes.unsqueeze(0), dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.data = ttnn.from_torch(
+            data_bytes.unsqueeze(0), dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
 
-        # Assignment: flatten to 1D uint8
         assign_flat = torch.from_numpy(assignment.astype(np.uint8).ravel())
-        self.assignment = ttnn.from_torch(assign_flat.unsqueeze(0), dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.assignment = ttnn.from_torch(
+            assign_flat.unsqueeze(0), dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
 
     @classmethod
     def from_tensor(
         cls,
         tensor: torch.Tensor,
         assigner: CompressedTensorAssigner,
+        device=None,
         quantize_fn=ttnn_quantize_fn,
     ) -> CompressedTensor:
         """Convenience: run assignment then pack in one step."""
         result = assigner.assign(tensor, quantize_fn)
-        return cls(tensor, result.assignment)
+        return cls(tensor, result.assignment, device=device)
 
     def unpack(self) -> torch.Tensor:
         """Unpack back to float32 torch tensor."""
-        flat_np = ttnn.to_torch(self.data).squeeze().numpy().astype(np.uint8)
+        data_tensor = self.data
+        if ttnn.is_tensor_storage_on_device(data_tensor):
+            data_tensor = ttnn.from_device(data_tensor)
+        flat_np = ttnn.to_torch(data_tensor).squeeze().numpy().astype(np.uint8)
 
         out = np.zeros((self.tiles_h * self.tile_hw, self.tiles_w * self.tile_hw), dtype=np.float32)
         offset = 0
@@ -107,7 +116,10 @@ class CompressedTensor:
 
     def get_assignment_numpy(self) -> np.ndarray:
         """Get assignment as (tiles_h, tiles_w) numpy array."""
-        return ttnn.to_torch(self.assignment).squeeze().numpy().astype(np.int8).reshape(self.tiles_h, self.tiles_w)
+        assign_tensor = self.assignment
+        if ttnn.is_tensor_storage_on_device(assign_tensor):
+            assign_tensor = ttnn.from_device(assign_tensor)
+        return ttnn.to_torch(assign_tensor).squeeze().numpy().astype(np.int8).reshape(self.tiles_h, self.tiles_w)
 
     @property
     def data_bytes(self) -> int:
