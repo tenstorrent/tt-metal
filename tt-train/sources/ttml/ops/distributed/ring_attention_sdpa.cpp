@@ -8,6 +8,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -90,14 +91,14 @@ autograd::TensorPtr ring_attention_sdpa(
     // - Column 32: +inf (recip_sum_exp, so sum_exp = 1/inf = 0)
     ttnn::Tensor col0_neg_inf = ttnn::full(
         ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        std::bit_cast<float>(0xF8000000U),  // -inf in bfloat16
+        -tt::tt_metal::hal::get_inf(),  // -inf in bfloat16
         ttnn::DataType::BFLOAT16,
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
     ttnn::Tensor col32_pos_inf = ttnn::full(
         ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        std::bit_cast<float>(0x7F800000U),  // +inf
+        tt::tt_metal::hal::get_inf(),  // +inf
         ttnn::DataType::BFLOAT16,
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
