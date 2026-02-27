@@ -105,9 +105,6 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_met
     rank_binding_configs = {
         "rank_bindings": rank_bindings,
         "mesh_graph_desc_path": pipeline_config["mesh_graph_desc_path"],
-        "global_env": {
-            "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0",
-        },
     }
 
     # When workers have tt-metal at a different path than the runner, override
