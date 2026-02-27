@@ -75,21 +75,26 @@ def matmul(
     tensor_args = ttnn.MatmulInputs()
     tensor_args.input_tensors = [input_a, input_b]
 
-    # Create output tensors
-    output_tensors = ttnn.MatmulDeviceOperation.create_output_tensors(operation_params, tensor_args)
+    # Get the output spec from the factory (shape, dtype, tile, shard shape, etc.).
+    # When the output is sharded, compute_output_specs() computes the correct shard
+    # shape/orientation but places it on a (0,0)-based grid. Replace the grid with
+    # core_range_set, which is the single source of truth for where this op lives.
+    output_spec = ttnn.MatmulDeviceOperation.compute_output_specs(operation_params, tensor_args)[0]
 
-    # Fix: compute_output_specs() always generates (0,0)-based output shard cores
-    # via num_cores_to_corerangeset(), overwriting the user's shard spec.
-    # When the output is sharded on a non-(0,0) core range, the output buffer ends up
-    # allocated on the wrong cores. Recreate with the correct shard spec.
     if output_mem_config is not None and output_mem_config.is_sharded():
-        wrong_output = output_tensors[0]
-        output_tensors = [
-            ttnn.allocate_tensor_on_device(
-                wrong_output.shape, wrong_output.dtype, ttnn.TILE_LAYOUT, device, output_mem_config
-            )
-        ]
-        ttnn.deallocate(wrong_output)
+        factory_shard = output_spec.memory_config.shard_spec
+        corrected_shard = ttnn.ShardSpec(core_range_set, factory_shard.shape, factory_shard.orientation)
+        output_spec = ttnn.TensorSpec(
+            output_spec.shape,
+            output_spec.dtype,
+            output_spec.layout,
+            output_mem_config.memory_layout,
+            corrected_shard,
+            output_mem_config.buffer_type,
+            output_spec.tile,
+        )
+
+    output_tensors = [ttnn.allocate_tensor_on_device(output_spec, device)]
 
     # Create descriptor via the factory.
     # Only MatmulMultiCoreReuseOptimizedProgramFactory is supported for now.
