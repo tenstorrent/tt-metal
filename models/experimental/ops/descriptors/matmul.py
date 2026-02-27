@@ -88,7 +88,7 @@ def matmul(
     inputs = [input_a, input_b]
     outputs = list(output_tensors)
 
-    return OpDescriptor(program_descriptor, inputs, outputs, "matmul")
+    return OpDescriptor(program_descriptor, inputs, outputs, "matmul", allowed_core_range=core_range_set)
 
 
 def _default_program_config(

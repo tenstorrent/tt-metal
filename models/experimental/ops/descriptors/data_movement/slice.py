@@ -58,6 +58,7 @@ def slice_op(
         input_tensors=[input_tensor],
         output_tensors=[output_tensor],
         name="slice",
+        allowed_core_range=core_range_set,
     )
 
 
