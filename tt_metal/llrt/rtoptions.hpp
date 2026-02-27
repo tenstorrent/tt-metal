@@ -217,8 +217,6 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
-    bool skip_deleting_built_cache = false;
-
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -585,8 +583,6 @@ public:
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
-
-    bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
