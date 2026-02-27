@@ -24,13 +24,27 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, image_resolution, input_shape, temb_shape, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(
+    device,
+    image_resolution,
+    input_shape,
+    temb_shape,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="unet" if not is_ci_v2_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()

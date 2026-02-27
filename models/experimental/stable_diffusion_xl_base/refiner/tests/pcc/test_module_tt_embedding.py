@@ -16,13 +16,26 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize("image_resolution", [(1024, 1024), (512, 512)])
 @pytest.mark.parametrize("input_shape, module_path", [((1, 384), "time_embedding"), ((1, 2560), "add_embedding")])
 @pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
-def test_embedding(device, image_resolution, input_shape, module_path, is_ci_env, reset_seeds, linear_weights_dtype):
+def test_embedding(
+    device,
+    image_resolution,
+    input_shape,
+    module_path,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    linear_weights_dtype,
+):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="unet" if not is_ci_v2_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()

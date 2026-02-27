@@ -35,14 +35,28 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_upsample2d(
-    device, image_resolution, input_shape, up_block_id, stride, padding, dilation, debug_mode, is_ci_env, reset_seeds
+    device,
+    image_resolution,
+    input_shape,
+    up_block_id,
+    stride,
+    padding,
+    dilation,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
 ):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="vae",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="vae" if not is_ci_v2_env else None,
     )
     vae.eval()
     state_dict = vae.state_dict()
