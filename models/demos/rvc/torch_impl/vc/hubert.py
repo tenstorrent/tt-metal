@@ -124,11 +124,6 @@ def relu_squared(x: torch.Tensor):
     return F.relu(x).pow(2)
 
 
-def index_put(tensor, indices, value):
-    tensor[indices] = value
-    return tensor
-
-
 def gelu_approximate(x):
     return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
@@ -254,38 +249,6 @@ class HubertConfig:
         metadata={"help": "multiply feature extractor var grads by this"},
     )
 
-    # masking
-    mask_length: int = field(default=10, metadata={"help": "mask length"})
-    no_mask_overlap: bool = field(default=False, metadata={"help": "whether to allow masks to overlap"})
-    mask_min_space: int = field(
-        default=1,
-        metadata={"help": "min space between spans (if no overlap is enabled)"},
-    )
-
-    # channel masking
-    mask_channel_length: int = field(
-        default=10,
-        metadata={"help": "length of the mask for features (channels)"},
-    )
-    mask_channel_prob: float = field(
-        default=0.0,
-        metadata={"help": "probability of replacing a feature with 0"},
-    )
-    mask_channel_other: float = field(
-        default=0,
-        metadata={
-            "help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"
-        },
-    )
-    no_mask_channel_overlap: bool = field(
-        default=False,
-        metadata={"help": "whether to allow channel masks to overlap"},
-    )
-    mask_channel_min_space: int = field(
-        default=1,
-        metadata={"help": "min space between spans (if no overlap is enabled)"},
-    )
-
     # positional embeddings
     conv_pos: int = field(
         default=128,
@@ -304,17 +267,6 @@ class HubertConfig:
         default=(2, 0.5, 0.999995),
         metadata={"help": "legacy (to be removed)"},
     )
-
-    # loss computation
-    skip_masked: bool = field(
-        default=False,
-        metadata={"help": "skip computing losses over masked frames"},
-    )
-    skip_nomask: bool = field(
-        default=False,
-        metadata={"help": "skip computing losses over unmasked frames"},
-    )
-
     # FP16 optimization
     required_seq_len_multiple: int = field(
         default=2,
@@ -337,14 +289,13 @@ class HubertConfig:
 
 
 class RotaryPositionalEmbedding(nn.Module):
-    def __init__(self, dim, base=10000, precision=torch.half):
+    def __init__(self, dim, base=10000):
         """Rotary positional embedding
         Reference : https://blog.eleuther.ai/rotary-embeddings/
         Paper: https://arxiv.org/pdf/2104.09864.pdf
         Args:
             dim: Dimension of embedding
             base: Base value for exponential
-            precision: precision to use for numerical values
         """
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
@@ -408,38 +359,29 @@ class ESPNETMultiHeadedAttention(nn.Module):
         v = v.transpose(1, 2)  # (batch, head, time2, d_k)
         return q, k, v
 
-    def forward_attention(self, value, scores, mask):
+    def forward_attention(self, value, scores):
         """Compute attention context vector.
         Args:
             value: Transformed value B X n_head X T2 X d_k.
             scores: Attention score  B X n_head X T1 X T2
-            mask: Mask  T2 X B
         Returns:
             torch.Tensor: Transformed value  B X T1 X d_model
                 weighted by the attention score  B X T1 X T2
         """
         n_batch = value.size(0)
-        if mask is not None:
-            scores = scores.masked_fill(
-                mask.unsqueeze(1).unsqueeze(2).to(bool),
-                float("-inf"),  # (batch, head, time1, time2)
-            )
-            p_attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
 
-        else:
-            p_attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
+        p_attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
         x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
         x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)  # (batch, time1, d_model)
 
         return self.linear_out(x)  # (batch, time1, d_model)
 
-    def forward(self, query, key, value, key_padding_mask=None, **kwargs):
+    def forward(self, query, key, value, **kwargs):
         """Compute scaled dot product attention.
         Args:
             query (torch.Tensor): Query tensor T X B X C
             key (torch.Tensor): Key tensor T X B X C
             value (torch.Tensor): Value tensor T X B X C
-            mask (torch.Tensor): Mask tensor T X B
         Returns:
             torch.Tensor: Output tensor T X B X D.
         """
@@ -449,9 +391,9 @@ class ESPNETMultiHeadedAttention(nn.Module):
 
         q, k, v = self.forward_qkv(query, key, value)
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        scores = self.forward_attention(v, scores, key_padding_mask)
+        scores = self.forward_attention(v, scores)
         scores = scores.transpose(0, 1)
-        return scores, None
+        return scores
 
 
 class RelPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
@@ -495,14 +437,13 @@ class RelPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
 
         return x
 
-    def forward(self, query, key, value, pos_emb, key_padding_mask=None, **kwargs):
+    def forward(self, query, key, value, pos_emb, **kwargs):
         """Compute scaled dot product attention.
         Args:
             query: Query tensor T X B X C
             key: Key tensor T X B X C
             value: Value tensor T X B X C
             pos_emb: Positional embedding tensor B X 2T-1 X C
-            key_padding_mask: Mask tensor T X B
         Returns:
             torch.Tensor: Output tensor T X B X C.
         """
@@ -534,9 +475,9 @@ class RelPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
 
         scores = (matrix_ac + matrix_bd) / math.sqrt(self.d_k)  # (batch, head, time1, time2)
 
-        scores = self.forward_attention(v, scores, key_padding_mask)
+        scores = self.forward_attention(v, scores)
         scores = scores.transpose(0, 1)
-        return scores, None
+        return scores
 
 
 class RotaryPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
@@ -544,25 +485,20 @@ class RotaryPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
         self,
         n_feat,
         n_head,
-        precision,
     ):
         """Construct an RotaryPositionMultiHeadedAttention object."""
         super().__init__(n_feat, n_head)
         rotary_emd_base = 10000
-        precision = torch.float
         self.rotary_ndims = self.d_k  # also try self.d_k//2
-        if precision == "fp16":
-            precision = torch.half
 
-        self.rotary_emb = RotaryPositionalEmbedding(self.rotary_ndims, base=rotary_emd_base, precision=precision)
+        self.rotary_emb = RotaryPositionalEmbedding(self.rotary_ndims, base=rotary_emd_base)
 
-    def forward(self, query, key, value, key_padding_mask=None, **kwargs):
+    def forward(self, query, key, value, **kwargs):
         """Compute rotary position attention.
         Args:
             query: Query tensor T X B X C
             key: Key tensor T X B X C
             value: Value tensor T X B X C
-            key_padding_mask: Mask tensor T X B
         Returns:
             torch.Tensor: Output tensor T X B X D.
         Notes:
@@ -587,9 +523,9 @@ class RotaryPositionMultiHeadedAttention(ESPNETMultiHeadedAttention):
 
         q, k, v = self.forward_qkv(query, key, value)
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        scores = self.forward_attention(v, scores, key_padding_mask)
+        scores = self.forward_attention(v, scores)
         scores = scores.transpose(0, 1)
-        return scores, None
+        return scores
 
 
 class TransformerSentenceEncoderLayer(nn.Module):
@@ -631,7 +567,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        self_attn_padding_mask: torch.Tensor | None = None,
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
@@ -641,11 +576,10 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
-            x, attn = self.self_attn(
+            x = self.self_attn(
                 query=x,
                 key=x,
                 value=x,
-                key_padding_mask=self_attn_padding_mask,
             )
             x = residual + x
 
@@ -660,7 +594,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 query=x,
                 key=x,
                 value=x,
-                key_padding_mask=self_attn_padding_mask,
             )
 
             x = residual + x
@@ -873,7 +806,6 @@ class ConformerWav2Vec2EncoderLayer(nn.Module):
         embed_dim,
         ffn_embed_dim,
         attention_heads,
-        use_fp16,
         depthwise_conv_kernel_size=31,
         activation_fn="swish",
         attn_type=None,
@@ -905,7 +837,7 @@ class ConformerWav2Vec2EncoderLayer(nn.Module):
                     attention_heads,
                 )
             elif self.pos_enc_type == "rope":
-                self.self_attn = RotaryPositionMultiHeadedAttention(embed_dim, attention_heads, precision=use_fp16)
+                self.self_attn = RotaryPositionMultiHeadedAttention(embed_dim, attention_heads)
             elif self.pos_enc_type == "abs":
                 self.self_attn = ESPNETMultiHeadedAttention(
                     embed_dim,
@@ -937,13 +869,11 @@ class ConformerWav2Vec2EncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        self_attn_padding_mask: torch.Tensor | None = None,
         position_emb=None,
     ):
         """
         Args:
             x: Tensor of shape T X B X C
-            encoder_padding_mask: Optional mask tensor
             positions:
         Returns:
             Tensor of shape T X B X C
@@ -958,7 +888,6 @@ class ConformerWav2Vec2EncoderLayer(nn.Module):
                 query=x,
                 key=x,
                 value=x,
-                key_padding_mask=self_attn_padding_mask,
                 pos_emb=position_emb,
             )
         else:
@@ -966,7 +895,6 @@ class ConformerWav2Vec2EncoderLayer(nn.Module):
                 query=x,
                 key=x,
                 value=x,
-                key_padding_mask=self_attn_padding_mask,
             )
         x = x + residual
 
@@ -1019,35 +947,13 @@ class MultiheadAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
-    def _pad_masks(
-        self,
-        key_padding_mask: Tensor | None,
-    ) -> Tensor | None:
-        if key_padding_mask is not None:
-            shape = key_padding_mask.size()[:-1] + torch.Size([1])
-            key_padding_mask = torch.cat(
-                [
-                    key_padding_mask,
-                    key_padding_mask.new_zeros(shape),
-                ],
-                dim=-1,
-            )
-        return key_padding_mask
-
     def forward(
         self,
         query: Tensor,
         key: Tensor | None,
         value: Tensor | None,
-        key_padding_mask: Tensor | None = None,
     ) -> Tensor:
-        """Input shape: Time x Batch x Channel
-
-        Args:
-            key_padding_mask (ByteTensor, optional): mask to exclude
-                keys that are pads, of shape `(batch, src_len)`, where
-                padding elements are indicated by 1s.
-        """
+        """Input shape: Time x Batch x Channel"""
         tgt_len, bsz, embed_dim = query.size()
         src_len = tgt_len
         assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
@@ -1081,7 +987,7 @@ class MultiheadAttention(nn.Module):
                 self.out_proj.weight,
                 self.out_proj.bias,
                 False,
-                key_padding_mask.bool() if key_padding_mask is not None else None,
+                None,
                 False,
                 None,
                 use_separate_proj_weight=True,
@@ -1112,28 +1018,9 @@ class MultiheadAttention(nn.Module):
         assert k is not None
         assert k.size(1) == src_len
 
-        # This is part of a workaround to get around fork/join parallelism
-        # not supporting Optional types.
-        if key_padding_mask is not None and key_padding_mask.dim() == 0:
-            key_padding_mask = None
-
-        if key_padding_mask is not None:
-            assert key_padding_mask.size(0) == kv_bsz
-            assert key_padding_mask.size(1) == src_len
-
         attn_weights = torch.bmm(q, k.transpose(1, 2))
 
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
-
-        if key_padding_mask is not None:
-            # don't attend to padding symbols
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.view(kv_bsz, -1, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(torch.bool),
-                float("-inf"),
-            )
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         attn_weights_float = F.softmax(attn_weights, dim=-1)
         attn_weights = attn_weights_float.type_as(attn_weights)
@@ -1187,7 +1074,6 @@ class TransformerEncoder(nn.Module):
                 depthwise_conv_kernel_size=args["depthwise_conv_kernel_size"],
                 activation_fn="swish",
                 attn_type=args["attn_type"],
-                use_fp16=args["fp16"],
                 pos_enc_type="abs",
             )
         return layer
@@ -1245,11 +1131,8 @@ class TransformerEncoder(nn.Module):
     def forward(
         self,
         x,
-        padding_mask,
         tgt_layer,
     ):
-        x = index_put(x, padding_mask, 0)
-
         x_conv = self.pos_conv(x.transpose(1, 2))
         x_conv = x_conv.transpose(1, 2)
         x = x + x_conv
@@ -1260,13 +1143,11 @@ class TransformerEncoder(nn.Module):
         # pad to the sequence length dimension
         x, pad_length = pad_to_multiple(x, self.required_seq_len_multiple, dim=-2, value=0)
 
-        padding_mask, _ = pad_to_multiple(padding_mask, self.required_seq_len_multiple, dim=-1, value=True)
-
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
         for i, layer in enumerate(self.layers):
-            x = layer(x, self_attn_padding_mask=padding_mask)
+            x = layer(x)
             if i == tgt_layer:
                 break
 
@@ -1330,22 +1211,9 @@ class HubertModel(nn.Module):
         logits = logits.transpose(0, 1)  # (num_x, num_cls+1)
         return logits
 
-    def forward_padding_mask(
-        self,
-        features: torch.Tensor,
-        padding_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        extra = padding_mask.size(1) % features.size(1)
-        if extra > 0:
-            padding_mask = padding_mask[:, :-extra]
-        padding_mask = padding_mask.view(padding_mask.size(0), features.size(1), -1)
-        padding_mask = padding_mask.all(-1)
-        return padding_mask
-
     def forward(
         self,
         source: torch.Tensor,
-        padding_mask: torch.Tensor,
         output_layer: int,
     ) -> dict[str, torch.Tensor]:
         """output layer is 1-based"""
@@ -1354,9 +1222,6 @@ class HubertModel(nn.Module):
         features = features.transpose(1, 2)
         features = self.layer_norm(features)
 
-        if padding_mask is not None:
-            padding_mask = self.forward_padding_mask(features, padding_mask)
-
         if self.post_extract_proj is not None:
             features = self.post_extract_proj(features)
 
@@ -1364,29 +1229,7 @@ class HubertModel(nn.Module):
 
         x = self.encoder(
             x,
-            padding_mask=padding_mask,
             tgt_layer=output_layer - 1,
         )
 
-        return {"x": x, "features": features}
-
-    def extract_features(
-        self,
-        source: torch.Tensor,
-        padding_mask: torch.Tensor,
-        output_layer: int,
-    ) -> torch.Tensor:
-        res = self.forward(
-            source,
-            padding_mask=padding_mask,
-            output_layer=output_layer,
-        )
-        return res["x"]
-
-    def get_logits(self, net_output, is_masked=True):
-        if is_masked:
-            logits_list = net_output["logit_m_list"]
-        else:
-            logits_list = net_output["logit_u_list"]
-        logits_list = [x.float() for x in logits_list if x is not None]
-        return logits_list
+        return x

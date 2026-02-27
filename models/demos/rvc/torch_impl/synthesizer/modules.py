@@ -72,9 +72,9 @@ class WN(nn.Module):
             res_skip_layer = torch.nn.utils.parametrizations.weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
-    def forward(self, x: torch.Tensor, x_mask: torch.Tensor, g: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor, g: torch.Tensor | None = None):
         output = torch.zeros_like(x)
-        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+        # n_channels_tensor = torch.IntTensor([self.hidden_channels])
         if g is not None:
             g = self.cond_layer(g)
 
@@ -86,16 +86,16 @@ class WN(nn.Module):
             else:
                 g_l = torch.zeros_like(x_in)
 
-            acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
+            acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, self.hidden_channels)
 
             res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
                 res_acts = res_skip_acts[:, : self.hidden_channels, :]
-                x = (x + res_acts) * x_mask
+                x = x + res_acts
                 output = output + res_skip_acts[:, self.hidden_channels :, :]
             else:
                 output = output + res_skip_acts
-        return output * x_mask
+        return output
 
 
 class ResBlock1(nn.Module):
@@ -199,13 +199,12 @@ class ResidualCouplingLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        x_mask: torch.Tensor,
         g: torch.Tensor | None = None,
     ):
         x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
-        h = self.pre(x0) * x_mask
-        h = self.enc(h, x_mask, g=g)
-        stats = self.post(h) * x_mask
-        x1 = (x1 - stats) * x_mask
+        h = self.pre(x0)
+        h = self.enc(h, g=g)
+        stats = self.post(h)
+        x1 = x1 - stats
         x = torch.cat([x0, x1], 1)
         return x
