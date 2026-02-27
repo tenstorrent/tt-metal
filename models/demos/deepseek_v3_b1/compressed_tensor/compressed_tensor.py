@@ -278,15 +278,9 @@ class CompressedTensor:
         shard_spec = memory_config.shard_spec
         num_cores = shard_spec.num_cores()
 
-        if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-            assert len(shard_spec.grid.ranges()) == 1, "Block sharding requires a single contiguous rectangular grid"
-
-        grid_size = shard_spec.grid.bounding_box().grid_size()
-        grid_h, grid_w = grid_size.y, grid_size.x
-
-        # Determine which tiles go to each shard
-        orientation = shard_spec.orientation
-        shard_tile_coords = self._compute_shard_tile_mapping(layout, num_cores, grid_h, grid_w, orientation)
+        # Use TensorSpec sharding helpers to get the canonical shard shape (in elements),
+        # then derive tile-to-core mapping from that. This guarantees we match ttnn's distribution.
+        shard_tile_coords = self._compute_shard_tile_mapping(memory_config)
 
         # Pack each shard's tiles and find max shard size
         shard_chunks = []
@@ -320,6 +314,8 @@ class CompressedTensor:
 
         flat_np = np.concatenate(all_bytes)
 
+        grid_size = shard_spec.grid.bounding_box().grid_size()
+        grid_h, grid_w = grid_size.y, grid_size.x
         tensor_shape, shard_shape = self._sharded_tensor_shape(
             layout, num_cores, max_shard_bytes, grid_h, grid_w, shard_spec.orientation
         )
@@ -398,72 +394,69 @@ class CompressedTensor:
         else:
             raise ValueError(f"Unsupported sharded layout: {layout}")
 
-    def _compute_shard_tile_mapping(
-        self, layout, num_cores: int, grid_h: int, grid_w: int, orientation
-    ) -> list[list[tuple[int, int]]]:
-        """Compute which tiles go to each shard.
+    def _compute_shard_tile_mapping(self, memory_config) -> list[list[tuple[int, int]]]:
+        """Compute which tiles go to each shard from the memory config's shard shape.
 
-        Distributes tiles using ceiling division (matching ttnn's div_up behavior):
-        first `remainder` shards get one extra tile row/col, rest get the base count.
-        Cores with no tiles get empty lists.
-
-        For block sharding, orientation determines which grid axis maps to height:
-          ROW_MAJOR: grid_y → tile rows, grid_x → tile cols
-          COL_MAJOR: grid_x → tile rows, grid_y → tile cols
+        Uses the shard shape from the user's memory config directly (converted to tiles).
+        The user is responsible for providing a valid shard spec (e.g., from TensorSpec
+        sharding helpers). This guarantees our tile distribution matches ttnn exactly.
 
         Returns list of num_cores lists, each containing (tr, tc) tile coordinates.
-        Shard order is row-major across the core grid.
         """
+        layout = memory_config.memory_layout
+        shard_spec = memory_config.shard_spec
+        grid = shard_spec.grid
+        orientation = shard_spec.orientation
+        tile_hw = self.tile_hw
+        num_cores = grid.num_cores()
+
+        # Convert shard shape from elements to tiles
+        shard_h_tiles = shard_spec.shape[0] // tile_hw
+        shard_w_tiles = shard_spec.shape[1] // tile_hw
+
         if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            # Split tile rows across cores, all columns per shard
-            rows_per_shard = self.tiles_h // num_cores
-            remainder = self.tiles_h % num_cores
             shards = []
             row = 0
-            for i in range(num_cores):
-                n = rows_per_shard + (1 if i < remainder else 0)
-                coords = [(tr, tc) for tr in range(row, row + n) for tc in range(self.tiles_w)]
+            for _ in range(num_cores):
+                row_count = min(shard_h_tiles, self.tiles_h - row)
+                row_count = max(row_count, 0)
+                coords = [(tr, tc) for tr in range(row, row + row_count) for tc in range(self.tiles_w)]
                 shards.append(coords)
-                row += n
+                row += row_count
             return shards
 
         elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-            # Split tile columns across cores, all rows per shard
-            cols_per_shard = self.tiles_w // num_cores
-            remainder = self.tiles_w % num_cores
             shards = []
             col = 0
-            for i in range(num_cores):
-                n = cols_per_shard + (1 if i < remainder else 0)
-                coords = [(tr, tc) for tr in range(self.tiles_h) for tc in range(col, col + n)]
+            for _ in range(num_cores):
+                col_count = min(shard_w_tiles, self.tiles_w - col)
+                col_count = max(col_count, 0)
+                coords = [(tr, tc) for tr in range(self.tiles_h) for tc in range(col, col + col_count)]
                 shards.append(coords)
-                col += n
+                col += col_count
             return shards
 
         elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-            # Orientation determines which grid axis maps to tile rows vs cols
-            # Matches ttnn: ROW_MAJOR → grid_y=height, grid_x=width
-            #               COL_MAJOR → grid_x=height, grid_y=width
+            assert len(grid.ranges()) == 1, "Block sharding requires a single contiguous rectangular grid"
+            grid_size = grid.bounding_box().grid_size()
+            grid_h, grid_w = grid_size.y, grid_size.x
             is_row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
             h_shards = grid_h if is_row_major else grid_w
             w_shards = grid_w if is_row_major else grid_h
 
-            rows_per_shard = self.tiles_h // h_shards
-            row_remainder = self.tiles_h % h_shards
-            cols_per_shard = self.tiles_w // w_shards
-            col_remainder = self.tiles_w % w_shards
-
             shards = []
             row = 0
-            for gr in range(h_shards):
-                nr = rows_per_shard + (1 if gr < row_remainder else 0)
+            for _ in range(h_shards):
+                row_count = min(shard_h_tiles, self.tiles_h - row)
+                row_count = max(row_count, 0)
                 col = 0
-                for gc in range(w_shards):
-                    nc = cols_per_shard + (1 if gc < col_remainder else 0)
-                    coords = [(tr, tc) for tr in range(row, row + nr) for tc in range(col, col + nc)]
+                for _ in range(w_shards):
+                    col_count = min(shard_w_tiles, self.tiles_w - col)
+                    col_count = max(col_count, 0)
+                    coords = [(tr, tc) for tr in range(row, row + row_count) for tc in range(col, col + col_count)]
                     shards.append(coords)
-                    col += nc
-                row += nr
+                    col += col_count
+                row += row_count
             return shards
 
         else:
