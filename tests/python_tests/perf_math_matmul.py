@@ -129,12 +129,15 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+        ],
+        runtimes=[
+            DEST_INDEX(matmul_config.dst_index),
+            UNPACK_TRANS_FACES(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
             TILE_COUNT(variant_tile_count),
             NUM_FACES(
                 num_faces, num_faces_in0, num_faces_in1
             ),  # In0 -> Input A, In1 -> Input B
-            UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
             PARTIAL_FACE(  # In0 -> Input A, In1 -> Input B
                 partial_a=matmul_config.face_layout_config.partial_face_in0,
                 partial_face_pack=matmul_config.face_layout_config.partial_face_pack,
@@ -152,7 +155,6 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            DEST_INDEX(matmul_config.dst_index),
             LOOP_FACTOR(1024),
         ],
         variant_stimuli=StimuliConfig(

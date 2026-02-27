@@ -263,6 +263,114 @@ class FormatConfig:
         return self.unpack_B_src
 
 
+FORMATS_CONFIG_STRUCT_RUNTIME = [
+    "// Formats struct",
+    "struct FormatConfig",
+    "{",
+    "    const std::uint32_t unpack_A_src;",
+    "    const std::uint32_t unpack_B_src;",
+    "    const std::uint32_t unpack_A_dst;",
+    "    const std::uint32_t unpack_B_dst;",
+    "    const std::uint32_t math;",
+    "    const std::uint32_t pack_src;",
+    "    const std::uint32_t pack_dst;",
+    "",
+    "    FormatConfig(",
+    "        std::uint32_t unpack_A_src_,",
+    "        std::uint32_t unpack_B_src_,",
+    "        std::uint32_t unpack_A_dst_,",
+    "        std::uint32_t unpack_B_dst_,",
+    "        std::uint32_t math_,",
+    "        std::uint32_t pack_src_,",
+    "        std::uint32_t pack_dst_) :",
+    "        unpack_A_src(unpack_A_src_),",
+    "        unpack_B_src(unpack_B_src_),",
+    "        unpack_A_dst(unpack_A_dst_),",
+    "        unpack_B_dst(unpack_B_dst_),",
+    "        math(math_),",
+    "        pack_src(pack_src_),",
+    "        pack_dst(pack_dst_)",
+    "    {",
+    "    }",
+    "};",
+    "",
+]
+
+FORMATS_CONFIG_STRUCT_COMPILETIME = [
+    "// Formats struct",
+    "struct FormatConfig",
+    "{",
+    "    const std::uint32_t unpack_A_src;",
+    "    const std::uint32_t unpack_B_src;",
+    "    const std::uint32_t unpack_A_dst;",
+    "    const std::uint32_t unpack_B_dst;",
+    "    const std::uint32_t math;",
+    "    const std::uint32_t pack_src;",
+    "    const std::uint32_t pack_dst;",
+    "",
+    "    constexpr FormatConfig(",
+    "        std::uint32_t unpack_A_src_,",
+    "        std::uint32_t unpack_B_src_,",
+    "        std::uint32_t unpack_A_dst_,",
+    "        std::uint32_t unpack_B_dst_,",
+    "        std::uint32_t math_,",
+    "        std::uint32_t pack_src_,",
+    "        std::uint32_t pack_dst_) :",
+    "        unpack_A_src(unpack_A_src_),",
+    "        unpack_B_src(unpack_B_src_),",
+    "        unpack_A_dst(unpack_A_dst_),",
+    "        unpack_B_dst(unpack_B_dst_),",
+    "        math(math_),",
+    "        pack_src(pack_src_),",
+    "        pack_dst(pack_dst_)",
+    "    {",
+    "    }",
+    "};",
+    "",
+]
+
+WORMHOLE_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Float16: 1,
+    DataFormat.Bfp8: 2,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16_b: 5,
+    DataFormat.Bfp8_b: 6,
+    DataFormat.Int32: 8,
+    DataFormat.UInt16: 9,
+    DataFormat.Int8: 14,
+    DataFormat.UInt32: 24,
+    DataFormat.UInt8: 30,
+}
+
+BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Float16: 1,
+    DataFormat.Bfp8: 2,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16_b: 5,
+    DataFormat.Bfp8_b: 6,
+    DataFormat.Int32: 8,
+    DataFormat.UInt16: 9,
+    DataFormat.Int8: 14,
+    DataFormat.UInt32: 24,
+    DataFormat.UInt8: 30,
+}
+
+QUASAR_DATA_FORMAT_ENUM_VALUES = {
+    DataFormat.Float32: 0,
+    DataFormat.Tf32: 4,
+    DataFormat.Float16: 1,
+    DataFormat.Float16_b: 5,
+    DataFormat.MxFp8R: 18,
+    DataFormat.MxFp8P: 20,
+    DataFormat.Int32: 8,
+    DataFormat.Int8: 14,
+    DataFormat.UInt8: 17,
+    DataFormat.UInt16: 130,
+}
+
+
 @dataclass
 class InputOutputFormat:
     """

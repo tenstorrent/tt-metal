@@ -23,6 +23,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -75,6 +78,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -131,6 +137,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);

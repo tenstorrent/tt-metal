@@ -22,8 +22,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     if constexpr (!tilize_en)
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -86,8 +89,11 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, tilize_en, is_int_fpu_en>(
@@ -119,8 +125,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, tilize_en>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, params->num_faces);
 

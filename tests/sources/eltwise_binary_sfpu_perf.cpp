@@ -30,6 +30,9 @@ static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType:
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
     {
@@ -94,6 +97,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
     {
@@ -241,6 +247,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
 

@@ -15,8 +15,11 @@
 #include "llk_unpack_reduce.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
     const std::uint32_t buf_desc_id_a = 0;
@@ -71,8 +74,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -98,8 +104,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     std::uint32_t const buf_desc_id = 8;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});

@@ -22,7 +22,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
@@ -49,7 +49,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
@@ -117,7 +117,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);

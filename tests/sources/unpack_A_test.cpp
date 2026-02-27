@@ -23,8 +23,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -66,8 +69,11 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
 
@@ -99,8 +105,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
 #ifdef ARCH_BLACKHOLE

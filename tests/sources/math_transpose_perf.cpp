@@ -8,7 +8,6 @@
 #include "build.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "data_format_inference.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -31,6 +30,9 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
 
@@ -73,6 +75,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
 
@@ -129,6 +134,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);

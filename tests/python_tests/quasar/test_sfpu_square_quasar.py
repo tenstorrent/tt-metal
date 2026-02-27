@@ -30,7 +30,6 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
-    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -244,7 +243,6 @@ def test_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         "sources/quasar/sfpu_square_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=MathOperation.Square),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),

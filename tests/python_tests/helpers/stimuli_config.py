@@ -114,48 +114,25 @@ class StimuliConfig:
                 self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
             )
 
-    def generate_runtime_operands_values(self, formats) -> list:
-        # Use actual tile sizes based on tile_dimensions
-        # input_format represents both src formats if src_B is not provided explicitly.
-        # Otherwise it's srcA format.
-        input_format = DataFormat.Float16_b if formats is None else formats.input_format
-        # If src_B format is not provided, default to src_A format for backward compatibility.
-        input_format_B = (
-            input_format
-            if formats is None or formats.input_format_B is None
-            else formats.input_format_B
-        )
-        output_format = (
-            DataFormat.Float16_b if formats is None else formats.output_format
-        )
-
-        buf_a_tile_size = calculate_tile_size_bytes(
-            input_format, self.tile_dimensions, format_tile_sizes
-        )
-        buf_b_tile_size = calculate_tile_size_bytes(
-            input_format_B, self.tile_dimensions, format_tile_sizes
-        )
-        buf_res_tile_size = calculate_tile_size_bytes(
-            output_format, self.tile_dimensions, format_tile_sizes
-        )
         if self.operand_res_tile_size is not None:
-            buf_res_tile_size = self.operand_res_tile_size
+            self.buf_res_tile_size = self.operand_res_tile_size
+        else:
+            self.buf_res_tile_size = calculate_tile_size_bytes(
+                stimuli_res_format, self.tile_dimensions, format_tile_sizes
+            )
 
+    def generate_runtime_operands_values(self) -> list:
         values = [
             self.buf_a_addr,
-            buf_a_tile_size,
+            self.tile_size_A_bytes,
             self.buf_b_addr,
-            buf_b_tile_size,
+            self.tile_size_B_bytes,
             self.buf_res_addr,
-            buf_res_tile_size,
+            self.buf_res_tile_size,
         ]
 
         if self.buffer_C is not None:
-            buf_c_tile_size = calculate_tile_size_bytes(
-                input_format, self.tile_dimensions, format_tile_sizes
-            )
-
-            values.extend([self.buf_c_addr, buf_c_tile_size])
+            values.extend([self.buf_c_addr, self.tile_size_C_bytes])
 
         return values
 

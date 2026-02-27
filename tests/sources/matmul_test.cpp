@@ -21,8 +21,12 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
+
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -32,8 +36,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
         FACE_R_DIM,
         params->num_faces_A,
         params->num_faces_B,
-        TILE_SIZE_UNPACK_A,
-        TILE_SIZE_UNPACK_B);
+        params->TILE_SIZE_UNPACK_A,
+        params->TILE_SIZE_UNPACK_B);
     _llk_unpack_AB_matmul_init_<>(0, params->CT_DIM, params->RT_DIM, params->KT_DIM, FACE_R_DIM, FACE_R_DIM, 4, 4, false, false);
     for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
@@ -42,8 +46,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
             L1_ADDRESS(params->buffer_B[0]),
             j,
             j * params->CT_DIM,
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B,
+            params->TILE_SIZE_UNPACK_A,
+            params->TILE_SIZE_UNPACK_B,
             false,
             false,
             params->CT_DIM,
@@ -60,8 +64,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
+
     _llk_math_matmul_init_<MATH_FIDELITY>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, params->CT_DIM, params->RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -87,14 +95,17 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, params->TILE_SIZE_PACK);
     _llk_pack_init_<false, false, false>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, params->TILE_SIZE_PACK);
     _llk_pack_init_<false, false>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
 #endif

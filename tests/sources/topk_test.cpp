@@ -114,8 +114,11 @@ const int NUM_TILES_PER_STAGE = 2;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
     const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
 
@@ -235,8 +238,11 @@ using namespace ckernel;
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
     const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
 
@@ -403,8 +409,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
     const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
 

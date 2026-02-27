@@ -151,6 +151,22 @@ def pytest_configure(config):
             # context.dma_write_threshold = 2000000
 
 
+def pytest_collection_modifyitems(config, items):
+    test_order_file = config.getoption("--test-order-file")
+
+    if not test_order_file:
+        return
+
+    if not os.path.exists(test_order_file):
+        raise FileNotFoundError(f"Test order file not found: {test_order_file}")
+
+    with open(test_order_file, "r") as f:
+        ordered_tests = [line.strip() for line in f if line.strip()]
+
+    items_dict = {item.nodeid: item for item in items}
+    items[:] = [items_dict[nodeid] for nodeid in ordered_tests if nodeid in items_dict]
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Suppress the short test summary info section."""
 
@@ -368,6 +384,13 @@ def pytest_addoption(parser):
         default=None,
         help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "
         "Overrides LOGURU_LEVEL env var. Default: INFO",
+    )
+
+    parser.addoption(
+        "--test-order-file",
+        action="store",
+        default=None,
+        help="Path to file containing ordered list of tests to run",
     )
 
 

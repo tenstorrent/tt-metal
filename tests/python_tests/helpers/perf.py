@@ -281,6 +281,8 @@ class PerfConfig(TestConfig):
         disable_format_inference=False,
         dest_acc=DestAccumulation.No,
         l1_acc=L1Accumulation.No,
+        skip_build_header: bool = False,
+        compile_time_formats: bool = False,
     ):
         super().__init__(
             test_name,
@@ -295,6 +297,8 @@ class PerfConfig(TestConfig):
             disable_format_inference,
             dest_acc,
             l1_acc,
+            skip_build_header,
+            compile_time_formats,
         )
 
         self.passed_templates = templates
@@ -317,13 +321,15 @@ class PerfConfig(TestConfig):
             "variant_stimuli",
             "run_configs",
             "variant_id",
-            "runtime_params_struct",
+            "runtime_arguments_struct",
             "runtime_format",
             "runtimes",
+            "formats_config" if not self.compile_time_formats else "",
             "passed_templates",
             "passed_runtimes",
             "current_run_type",
         ]
+
         temp_str = [
             str(value)
             for field_name, value in self.__dict__.items()
@@ -387,10 +393,18 @@ class PerfConfig(TestConfig):
         )
 
         # Setting header fields that are always there
-        names = ["formats.input", "formats.output"] if self.formats else []
+        names = (
+            ["formats.input_A", "formats.input_B", "formats.output"]
+            if self.formats_config
+            else []
+        )
         values = (
-            [self.formats.input_format, self.formats.output_format]
-            if self.formats
+            [
+                self.formats_config[0].unpack_A_src,
+                self.formats_config[0].unpack_B_src,
+                self.formats_config[0].output_format,
+            ]
+            if self.formats_config[0]
             else []
         )
 

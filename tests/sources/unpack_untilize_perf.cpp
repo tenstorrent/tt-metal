@@ -36,6 +36,9 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     constexpr std::uint32_t TILE_SIZE = 2048 / 16; // size of tile in 16B words
 
     {
@@ -78,6 +81,9 @@ using namespace ckernel;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
 
@@ -125,6 +131,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     constexpr bool UNTILIZE = false;
 
     {

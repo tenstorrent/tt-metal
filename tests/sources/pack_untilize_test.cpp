@@ -41,6 +41,9 @@ constexpr static std::uint32_t format_size_in_bytes(std::uint32_t data_format)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params->num_faces, params->num_faces);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -73,6 +76,9 @@ using namespace ckernel;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const bool is_int_fpu_en = false;
 
 // copy srca to dest
@@ -119,6 +125,9 @@ constexpr std::uint32_t L1_ACCESS_ADDRESS_GRANULARITY = 16; // in bytes
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const bool UNTILIZE                    = true;
     const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * params->num_faces;
     const std::uint32_t row_stride_16B     = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;

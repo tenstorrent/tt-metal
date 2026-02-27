@@ -26,10 +26,19 @@ constexpr std::uint32_t buffer_B_tilized = 0x1f000;
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
-    const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
-    int run                          = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig* formats_array = params->formats;
+#endif
+
+#ifdef ARCH_BLACKHOLE
+    const std::uint32_t block_ct_dim = 0;
+#else
+    const std::uint32_t block_ct_dim = BLOCK_CT_DIM;
+#endif
+
+    int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_B_src,
@@ -79,8 +88,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig* formats_array = params->formats;
+#endif
     const bool is_int_fpu_en                = false;
     const std::uint32_t operand_A_dst_index = 1;
     const std::uint32_t operand_B_dst_index = 2;
@@ -128,8 +140,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig* formats_array = params->formats;
+#endif
     const std::uint32_t operand_A_dst_index = 1;
     const std::uint32_t operand_B_dst_index = 2;
     const std::uint32_t res_dst_index       = 0;

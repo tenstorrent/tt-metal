@@ -20,8 +20,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -31,8 +34,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
         params->in0_tile_r_dim < FACE_R_DIM ? params->in0_tile_r_dim : FACE_R_DIM,
         params->num_faces_B, // in1
         params->num_faces_A, // in0
-        TILE_SIZE_UNPACK_A,
-        TILE_SIZE_UNPACK_B);
+        params->TILE_SIZE_UNPACK_A,
+        params->TILE_SIZE_UNPACK_B);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
     _llk_unpack_AB_matmul_init_<>(
         params->UNPACK_TRANSPOSE_FACES,
@@ -52,8 +55,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
             L1_ADDRESS(params->buffer_B[0]),
             j,
             j * params->CT_DIM,
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B,
+            params->TILE_SIZE_UNPACK_A,
+            params->TILE_SIZE_UNPACK_B,
             params->PARTIAL_FACE_B, // in1
             params->PARTIAL_FACE_A, // in0
             params->CT_DIM,
@@ -70,8 +73,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
         params->in0_tile_r_dim,
         params->in0_tile_c_dim,
@@ -100,13 +106,16 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
         formats.pack_src,
         formats.pack_dst,
-        TILE_SIZE_PACK,
+        params->TILE_SIZE_PACK,
         params->in0_tile_r_dim < FACE_R_DIM ? params->in0_tile_r_dim : FACE_R_DIM,
         TILE_C_DIM,
         params->num_faces,
@@ -122,7 +131,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(
         formats.pack_src,
         formats.pack_dst,
-        TILE_SIZE_PACK,
+        params->TILE_SIZE_PACK,
         params->in0_tile_r_dim < FACE_R_DIM ? params->in0_tile_r_dim : FACE_R_DIM,
         params->num_faces,
         params->PARTIAL_FACE_PACK);

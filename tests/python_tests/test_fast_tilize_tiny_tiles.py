@@ -78,15 +78,18 @@ def test_fast_tilize_tiny_tiles(
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
         formats,
-        templates=[
+        templates=[],
+        runtimes=[
             INPUT_DIMENSIONS(
                 full_rt_dim=input_height,
                 full_ct_dim=input_width,
                 block_ct_dim=input_width,
                 block_rt_dim=input_height,
-            )
+            ),
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(1),
+            NUM_FACES(num_faces),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A), LOOP_FACTOR(1), NUM_FACES(num_faces)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -103,6 +106,7 @@ def test_fast_tilize_tiny_tiles(
             operand_res_tile_size=format_tile_sizes[formats.output_format],
         ),
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates).result

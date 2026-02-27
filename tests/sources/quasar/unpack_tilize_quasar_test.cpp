@@ -17,6 +17,9 @@
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id = 0;
 
@@ -89,8 +92,11 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams*)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -114,6 +120,9 @@ void run_kernel(const volatile struct RuntimeParams*)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
 

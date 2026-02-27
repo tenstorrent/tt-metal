@@ -83,8 +83,13 @@ def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
-        runtimes=[TILE_COUNT(tile_cnt_A), LOOP_FACTOR(1), NUM_FACES(4)],
+        templates=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(1),
+            NUM_FACES(4),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -96,6 +101,7 @@ def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates).result

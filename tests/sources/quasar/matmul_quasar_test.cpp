@@ -25,8 +25,11 @@ constexpr std::uint32_t buf_desc_id_dst   = 31; // Destination matrix output buf
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Setup sync for unpack
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
@@ -74,8 +77,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
@@ -98,8 +104,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     tdma_descriptor_t tdma_desc_dst;

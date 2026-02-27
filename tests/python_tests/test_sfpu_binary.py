@@ -142,6 +142,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
         dest_acc=dest_acc,
         unpack_to_dest=formats.input_format.is_32_bit(),
         disable_format_inference=True,
+        compile_time_formats=True,
     )
     res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
@@ -212,6 +213,7 @@ def sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates):
         ),
         dest_acc=dest_acc,
         unpack_to_dest=formats.input_format.is_32_bit(),
+        compile_time_formats=True,
     )
     res_from_L1 = configuration.run(workers_tensix_coordinates).result
 

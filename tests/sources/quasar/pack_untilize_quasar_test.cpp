@@ -15,8 +15,11 @@
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -52,8 +55,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 #ifdef FORMAT_INT32
     const bool is_int_fpu_en = true;
 #else
@@ -84,8 +90,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_untilize.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 

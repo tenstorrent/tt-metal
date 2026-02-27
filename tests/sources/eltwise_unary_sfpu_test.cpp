@@ -23,8 +23,11 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const int MAX_TILES_DEST =
         is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
 
@@ -56,8 +59,11 @@ using namespace ckernel::sfpu;
 
 const int iterations = 32;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const int MAX_TILES_DEST =
         is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
 
@@ -105,8 +111,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const int MAX_TILES_DEST =
         is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
 

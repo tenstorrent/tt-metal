@@ -75,8 +75,11 @@ def unpack_tilize(
     configuration = TestConfig(
         "sources/unpack_tilize_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        templates=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

@@ -74,8 +74,13 @@ def test_fast_tilize_perf(
         "sources/fast_tilize_test.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(1024), NUM_FACES(4)],
+        templates=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(1024),
+            NUM_FACES(4),
+        ],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,
@@ -87,6 +92,7 @@ def test_fast_tilize_perf(
             tile_count_res=tile_count,
         ),
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report, run_count=2, location=workers_tensix_coordinates)

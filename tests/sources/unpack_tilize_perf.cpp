@@ -33,6 +33,9 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     LLK_ASSERT(params->FULL_RT_DIM * params->FULL_CT_DIM == params->TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to params->TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
@@ -85,6 +88,9 @@ using namespace ckernel;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const bool is_int_fpu_en = false;
 
     {
@@ -177,6 +183,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     constexpr std::uint32_t dst = 0x70000;
     const bool UNTILIZE         = false;
 

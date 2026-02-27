@@ -22,8 +22,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -48,8 +51,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_math_reduce.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const bool is_int_fpu_en             = false;
     const bool enforce_fp32_accumulation = false;
 
@@ -92,8 +98,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const std::uint8_t num_faces_c_dim =
         (params->num_faces == ckernel::MAX_NUM_FACES_C_DIM || params->num_faces == ckernel::MAX_NUM_FACES) ? ckernel::MAX_NUM_FACES_C_DIM : 1;
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params->num_faces / num_faces_c_dim);

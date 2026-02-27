@@ -100,6 +100,7 @@ def test_ttnn_where(formats, dest_acc, mathop, test_case, workers_tensix_coordin
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates).result
@@ -190,6 +191,7 @@ def test_ttnn_where_mcw(
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates).result

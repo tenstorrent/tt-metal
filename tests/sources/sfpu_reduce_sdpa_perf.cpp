@@ -28,6 +28,9 @@ static constexpr int MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         // Configure unpacker for Float16_b format
@@ -84,6 +87,9 @@ using namespace ckernel::sfpu;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const std::uint32_t block_height = BLOCK_RT_DIM;
 
     {
@@ -185,6 +191,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         // Configure packer hardware

@@ -33,7 +33,6 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
-    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -127,7 +126,6 @@ def test_reduce_quasar(
         "sources/quasar/reduce_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),

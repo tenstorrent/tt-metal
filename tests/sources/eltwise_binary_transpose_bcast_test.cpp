@@ -21,8 +21,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Configure hardware for unpacking:
     // - srcA with transpose enabled
     // - srcB with column broadcast
@@ -53,8 +56,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     // Initialize math for element-wise subtraction
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -81,8 +87,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #else

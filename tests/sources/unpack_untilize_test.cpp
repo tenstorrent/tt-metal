@@ -22,8 +22,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_untilize.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     constexpr std::uint32_t tile_size = 128;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -46,8 +49,11 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
@@ -75,8 +81,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     const bool UNTILIZE = false;
 
 #ifdef ARCH_BLACKHOLE

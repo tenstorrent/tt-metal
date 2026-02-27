@@ -32,6 +32,9 @@ static constexpr bool IS_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -76,6 +79,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     constexpr MathFidelity MATH_FIDELITY = MathFidelity::HiFi4;
 
     // todo: INT32 reduce is not supported yet
@@ -143,6 +149,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);

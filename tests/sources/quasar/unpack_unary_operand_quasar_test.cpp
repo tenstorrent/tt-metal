@@ -16,8 +16,11 @@
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = params->TILE_CNT;
@@ -95,8 +98,11 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     if (!unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -122,8 +128,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams* params)
 {
+#ifdef RUNTIME_FORMATS
+    const volatile FormatConfig& formats = params->formats;
+#endif
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = params->TILE_CNT;
 

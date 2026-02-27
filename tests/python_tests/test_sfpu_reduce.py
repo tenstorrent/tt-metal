@@ -149,6 +149,7 @@ def test_sfpu_reduce(
         dest_acc=dest_acc,
         unpack_to_dest=True,
         disable_format_inference=True,
+        compile_time_formats=True,
     )
     res_from_L1 = configuration.run(workers_tensix_coordinates).result
 

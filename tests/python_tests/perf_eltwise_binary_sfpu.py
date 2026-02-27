@@ -25,7 +25,6 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
-    generate_input_dim,
 )
 
 
@@ -183,7 +182,6 @@ def test_perf_eltwise_binary_sfpu_int(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
@@ -281,7 +279,6 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
