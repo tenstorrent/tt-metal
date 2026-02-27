@@ -803,7 +803,10 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
-        worker_l1_size));
+        worker_l1_size,
+        {},
+        {},
+        rtoptions_.get_mock_cluster_desc_path()));
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
