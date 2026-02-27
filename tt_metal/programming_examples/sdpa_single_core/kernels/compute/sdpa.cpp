@@ -614,36 +614,47 @@ void reduce_c_row_group(
     const uint32_t cumulative_input_tiles = (in0_rgi + 1) * GROUP_SIZE * cols;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    {
+        // DeviceZoneScopedN("wait_front_reduce_c_row_group");
+        // cb_wait_front(scale_cb, 1);
+        // cb_wait_front(in0_cb, cumulative_input_tiles);
+    }
 
     tile_regs_acquire();
-
     if (do_eltwise_max) {
-        cb_wait_front(prev_cb, cumulative_prev_tiles);
-        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-            copy_tile_custom(prev_cb, row_start + i, i);
+        {
+            // DeviceZoneScopedN("wait_front_copy_tile");
+            cb_wait_front(prev_cb, cumulative_prev_tiles);
+        }
+        {
+            // DeviceZoneScopedN("copy_tile_custom");
+            // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+            for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+                copy_tile_custom(prev_cb, row_start + i, i);
+                // copy_tile(prev_cb, row_start + i, i);
+            }
         }
     }
+    {
+        // DeviceZoneScopedN("reduce_block_max_row");
+        if (use_init) {
+            reduce_block_max_row_init<cols>();
+        } else {
+            reduce_block_max_row_reinit_short<cols>();
+        }
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            const uint32_t input_tile_start = (in0_row_start + i) * cols;
+            reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
+        }
+        reduce_block_max_row_uninit(in0_cb);
 
-    if (use_init) {
-        reduce_block_max_row_init<cols>();
-    } else {
-        reduce_block_max_row_reinit_short<cols>();
+        tile_regs_commit();
+        tile_regs_wait();
+
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            pack_tile<false>(i, out_cb);
+        }
     }
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (in0_row_start + i) * cols;
-        reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
-    }
-    reduce_block_max_row_uninit(in0_cb);
-
-    tile_regs_commit();
-    tile_regs_wait();
-
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        pack_tile<false>(i, out_cb);
-    }
-
     tile_regs_release();
 }
 
@@ -668,7 +679,8 @@ template <
     uint32_t INNER_DIM,
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
-    bool blocked_pack = false>
+    bool blocked_pack = false,
+    bool PROFILING_ENABLED = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -682,17 +694,20 @@ void blocked_matmul_and_pack(
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
-    for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+    {
+        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "matmul_block");
+        for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
 #ifdef ARCH_BLACKHOLE
-        matmul_block_no_mop(
-            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+            matmul_block_no_mop(
+                in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
 #else
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+            matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
 #endif
-        in0_index++;
-        in1_index += IN1_STRIDE;
+            in0_index++;
+            in1_index += IN1_STRIDE;
+        }
+        tile_regs_commit();
     }
-    tile_regs_commit();
 
     // --- Pack phase ---
     uint32_t dst_idx = 0;
@@ -956,7 +971,8 @@ void sdpa_inner_loop_step(
                 in0_block_w,
                 Sk_chunk_t,
                 Sk_chunk_t,
-                true /*blocked_pack*/>(
+                true /*blocked_pack*/,
+                false /*PROFILING_ENABLED*/>(
                 cb_q_in,
                 cb_kt_in,
                 cb_qkt_im,
@@ -977,8 +993,11 @@ void sdpa_inner_loop_step(
             }
         }
 
-        // Push row (makes it visible for UNPACK reads) but keep wr_ptr stable
-        cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+        {
+            // DeviceZoneScopedN("push_back_hold_wr_ptr");
+            // Push row (makes it visible for UNPACK reads) but keep wr_ptr stable
+            cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+        }
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
