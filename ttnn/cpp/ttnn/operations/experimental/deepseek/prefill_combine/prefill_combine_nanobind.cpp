@@ -13,6 +13,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "prefill_combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek::prefill_combine::detail {
 
@@ -26,9 +27,9 @@ void bind_prefill_combine(nb::module_& mod) {
         Accumulates contributions from multiple experts per token.
 
         Args:
-            dispatched_tensor (ttnn.Tensor): Expert outputs of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-            metadata_tensor (ttnn.Tensor): Metadata tensor containing token routing information
-            experts_counter_tensor (ttnn.Tensor): Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
+            dispatched_buffer (ttnn.Tensor): Expert outputs of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+            dispatched_metadata (ttnn.Tensor): Metadata tensor containing token routing information
+            experts_tok_counter (ttnn.Tensor): Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
 
         Keyword Args:
             num_chips (int): Number of chips in the system
@@ -37,15 +38,18 @@ void bind_prefill_combine(nb::module_& mod) {
             seq_len_per_chip (int): Sequence length per chip
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
+            cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
+            num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
+            topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
 
         Returns:
             ttnn.Tensor: Combined output tensor of shape (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
 
         Example:
             >>> output = ttnn.experimental.deepseek.prefill_combine(
-                    dispatched_tensor,
-                    metadata_tensor,
-                    experts_counter_tensor,
+                    dispatched_buffer,
+                    dispatched_metadata,
+                    experts_tok_counter,
                     num_chips=2,
                     experts_per_chip=8,
                     num_experts_per_tok=4,
@@ -59,36 +63,45 @@ void bind_prefill_combine(nb::module_& mod) {
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& dispatched_tensor,
-               const ttnn::Tensor& metadata_tensor,
-               const ttnn::Tensor& experts_counter_tensor,
+               const ttnn::Tensor& dispatched_buffer,
+               const ttnn::Tensor& dispatched_metadata,
+               const ttnn::Tensor& experts_tok_counter,
                uint32_t num_chips,
                uint32_t experts_per_chip,
                uint32_t num_experts_per_tok,
                uint32_t seq_len_per_chip,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               std::optional<uint32_t> cluster_axis,
+               std::optional<uint32_t> num_links,
+               std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
-                    dispatched_tensor,
-                    metadata_tensor,
-                    experts_counter_tensor,
+                    dispatched_buffer,
+                    dispatched_metadata,
+                    experts_tok_counter,
                     num_chips,
                     experts_per_chip,
                     num_experts_per_tok,
                     seq_len_per_chip,
                     memory_config,
-                    subdevice_id);
+                    subdevice_id,
+                    cluster_axis,
+                    num_links,
+                    topology);
             },
-            nb::arg("dispatched_tensor").noconvert(),
-            nb::arg("metadata_tensor").noconvert(),
-            nb::arg("experts_counter_tensor").noconvert(),
+            nb::arg("dispatched_buffer").noconvert(),
+            nb::arg("dispatched_metadata").noconvert(),
+            nb::arg("experts_tok_counter").noconvert(),
             nb::kw_only(),
             nb::arg("num_chips"),
             nb::arg("experts_per_chip"),
             nb::arg("num_experts_per_tok"),
             nb::arg("seq_len_per_chip"),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none()});
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::prefill_combine::detail

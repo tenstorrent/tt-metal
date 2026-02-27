@@ -14,6 +14,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <ttnn/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::deepseek::prefill_combine {
 
@@ -23,6 +25,9 @@ struct PrefillCombineDeviceOperation {
         const uint32_t experts_per_chip;
         const uint32_t num_experts_per_tok;
         const uint32_t seq_len_per_chip;
+        const std::optional<uint32_t> axis;
+        const uint32_t num_links;
+        const tt::tt_fabric::Topology topology;
         const MemoryConfig output_mem_config;
         const CoreRangeSet worker_core_range_set;
 
@@ -31,6 +36,9 @@ struct PrefillCombineDeviceOperation {
             "experts_per_chip",
             "num_experts_per_tok",
             "seq_len_per_chip",
+            "axis",
+            "num_links",
+            "topology",
             "output_mem_config",
             "worker_core_range_set");
 
@@ -40,15 +48,18 @@ struct PrefillCombineDeviceOperation {
                 experts_per_chip,
                 num_experts_per_tok,
                 seq_len_per_chip,
+                axis,
+                num_links,
+                topology,
                 output_mem_config,
                 worker_core_range_set);
         };
     };
 
     struct tensor_args_t {
-        const ttnn::Tensor dispatched_tensor;
-        const ttnn::Tensor metadata_tensor;
-        const ttnn::Tensor experts_counter_tensor;
+        const ttnn::Tensor dispatched_buffer;
+        const ttnn::Tensor dispatched_metadata;
+        const ttnn::Tensor experts_tok_counter;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -56,18 +67,34 @@ struct PrefillCombineDeviceOperation {
 
     struct PrefillCombineProgramFactory {
         struct shared_variables_t {
-            // Placeholder for shared variables between create and override_runtime_arguments
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
+            CoreCoord worker_core;
+            const GlobalSemaphore init_semaphore;
+            const GlobalSemaphore cross_device_semaphore;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        // Stub declarations
-        static cached_program_t create(
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
+            const MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
+        static ttnn::device_operation::CachedProgram<
+            PrefillCombineDeviceOperation::PrefillCombineProgramFactory::shared_variables_t>
+        create_at(
+            const operation_attributes_t& operation_attributes,
+            const MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const MeshCoordinateRangeSet& tensor_coords,
+            const GlobalSemaphore& init_semaphore,
+            const GlobalSemaphore& cross_device_semaphore);
+
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -86,13 +113,16 @@ struct PrefillCombineDeviceOperation {
 
 namespace ttnn::prim {
 ttnn::Tensor prefill_combine(
-    const ttnn::Tensor& dispatched_tensor,
-    const ttnn::Tensor& metadata_tensor,
-    const ttnn::Tensor& experts_counter_tensor,
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& dispatched_metadata,
+    const ttnn::Tensor& experts_tok_counter,
     uint32_t num_chips,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
+    std::optional<uint32_t> axis,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set);
 }  // namespace ttnn::prim
