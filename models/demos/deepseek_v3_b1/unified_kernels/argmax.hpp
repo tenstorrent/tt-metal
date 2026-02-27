@@ -284,8 +284,6 @@ struct Sampling {
         }
 
         FORCE_INLINE void send_persistent_next_iter_inc_via_fabric_brisc(const WriterArgs& args, size_t& arg_idx) {
-            constexpr uint32_t pr = get_named_compile_time_arg_val("mesh_row");
-            constexpr uint32_t pc = get_named_compile_time_arg_val("mesh_col");
             if (args.persistent_enable == 0) {
                 return;
             }
@@ -340,8 +338,6 @@ struct Sampling {
 
         FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
             const uint32_t socket_config_addr = args.socket_config_addr;
-            constexpr uint32_t mr = get_named_compile_time_arg_val("mesh_row");
-            constexpr uint32_t mc = get_named_compile_time_arg_val("mesh_col");
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
 
@@ -416,8 +412,6 @@ struct Sampling {
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
-                        constexpr uint32_t my_row = get_named_compile_time_arg_val("mesh_row");
-                        constexpr uint32_t my_col = get_named_compile_time_arg_val("mesh_col");
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
                         uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage1_best_index = 0xFFFFFFFF;
