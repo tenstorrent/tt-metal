@@ -641,7 +641,7 @@ run_t3000_tt_dit_tests() {
   pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "t3k" ; fail+=$?
 
   #T5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
 
   #UMT5 Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
