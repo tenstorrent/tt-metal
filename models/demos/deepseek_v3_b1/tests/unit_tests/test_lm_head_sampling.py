@@ -1415,7 +1415,8 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         d2d2_mesh_core,
         upstream_core_coord=final_mesh_core,
         downstream_socket=host_io.get_upstream_socket(),
-        mesh_device=submesh,
+        sender_mesh=MeshWrapper(submesh),
+        receiver_mesh=MeshWrapper(submesh),
     )
 
     logger.info("Running HostInterface")
