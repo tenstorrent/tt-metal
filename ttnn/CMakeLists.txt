@@ -149,6 +149,7 @@ target_sources(
         core/tensor/host_buffer/functions.cpp
         core/tensor/serialization.cpp
         core/tensor/tensor.cpp
+        core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
         core/tensor/tensor_utils.cpp
