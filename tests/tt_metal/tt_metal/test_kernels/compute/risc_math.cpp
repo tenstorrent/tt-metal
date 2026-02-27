@@ -17,8 +17,8 @@ void kernel_main() {
     int32_t B = 2;
 
     DPRINT << "TEST packer" << ENDL();
-    const uint32_t value = A + B;
-    DPRINT << A + B << ENDL();
+    const uint32_t value = A + B + thread_idx;
+    DPRINT << value << ENDL();
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
@@ -27,8 +27,8 @@ void kernel_main() {
     int32_t B = 2;
 
     DPRINT << "TEST unpacker" << ENDL();
-    const uint32_t value = A + B;
-    DPRINT << A + B << ENDL();
+    const uint32_t value = A + B + thread_idx;
+    DPRINT << value << ENDL();
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 
@@ -37,8 +37,8 @@ void kernel_main() {
     int32_t B = 2;
 
     DPRINT << "TEST math" << ENDL();
-    const uint32_t value = A + B;
-    DPRINT << A + B << ENDL();
+    const uint32_t value = A + B + thread_idx;
+    DPRINT << value << ENDL();
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
 }
