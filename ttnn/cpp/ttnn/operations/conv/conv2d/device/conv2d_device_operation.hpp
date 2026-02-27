@@ -12,8 +12,8 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
-#include "ttnn/operations/conv/conv2d/device/factory/sharded_descriptor.hpp"
-#include "ttnn/operations/conv/conv2d/device/factory/width_sharded_descriptor.hpp"
+#include "ttnn/operations/conv/conv2d/device/factory/conv2d_sharded_descriptor.hpp"
+#include "ttnn/operations/conv/conv2d/device/factory/conv2d_width_sharded_descriptor.hpp"
 
 #include <string>
 #include <utility>
