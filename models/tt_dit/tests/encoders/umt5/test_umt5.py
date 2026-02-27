@@ -16,9 +16,9 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....encoders.t5.model_t5 import RelativePositionEmbeddings as TT_UMT5RelativePositionEmbeddings
-from ....encoders.t5.model_t5 import TokenEmbeddings as TT_UMT5TokenEmbeddings
 from ....encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config
 from ....encoders.umt5.model_umt5 import UMT5Encoder as TT_UMT5Encoder
+from ....layers.embeddings import Embedding
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
@@ -41,7 +41,7 @@ def umt5_device_config(func):
     )(func)
     func = pytest.mark.parametrize(
         "device_params",
-        [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
         indirect=True,
     )(func)
     return func
@@ -138,7 +138,7 @@ def test_umt5_embeddings(
 
     state_dict = hf_model.state_dict()
 
-    tt_token_embed = TT_UMT5TokenEmbeddings(config, mesh_device)
+    tt_token_embed = Embedding(config.vocab_size, config.embed_dim, device=mesh_device)
     tt_token_embed.load_torch_state_dict({"weight": state_dict["encoder.embed_tokens.weight"]})
     tt_relative_position_embed = TT_UMT5RelativePositionEmbeddings(config, mesh_device, ccl_manager, parallel_config)
     tt_relative_position_embed.load_torch_state_dict(
