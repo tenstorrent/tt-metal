@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -132,7 +133,12 @@ void add_bias_and_addcmul_block(
     cb_wait_front(intermediate_cb, out_block_num_tiles);
     cb_wait_front(ternary_b_cb, N_block_tiles);
 
+#ifndef TERNARY_B_IS_FLOAT32
     mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
+#else
+    unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+#endif  // TERNARY_B_IS_FLOAT32
+
     binop_with_scalar_tile_init();
     reconfig_data_format(intermediate_cb, ternary_b_cb);
     pack_reconfig_data_format(intermediate_cb);
@@ -142,8 +148,28 @@ void add_bias_and_addcmul_block(
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
 
+#ifndef TERNARY_B_IS_FLOAT32
+            // LLK BUG: unary_bcast gives bad values if mixing fp32_acc_to_dest=True and bfloat16 circular buffer
+            // (https://github.com/tenstorrent/tt-llk/issues/1338)
+            // To avoid the bug, we use:
+            // - unary_bcast/mul_binary_tile for fp32 (more accurate)
+            // - mul_tiles_bcast for bfloat16 (LLK bug workaround).
+
             // ternary_b_cb is [1, N], broadcast across M rows
             mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+#else
+            constexpr uint32_t TERNARY_B_DST_ID = 1;
+            unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+
+            // ternary_b_cb is [1, N], broadcast across M rows
+            unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
+
+            copy_tile_to_dst_init_short(intermediate_cb);
+            copy_tile(intermediate_cb, tile_id, DST_ID);
+
+            mul_binary_tile_init();
+            mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
+#endif  // TERNARY_B_IS_FLOAT32
 
             mul_unary_tile(DST_ID, scalar_value);
 
