@@ -42,12 +42,13 @@ class MeshDevice;
  * - No equality/inequality operator. (If we did add this, equality would mean the same underlying allocation – no value
  *   semantics)
  *
- * Invariants of Device Tensor:
- * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
- *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
- *   HostTensor.
+ * Invariants of MeshTensor:
+ * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
+ *   move construction will be UB. This exists to allow for default constructed MeshTensor. Incompatible member function
+ *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors HostTensor.
  * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
- *   pointers to the device and underlying storage (MeshBuffer).
+ *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
+ *   currently, see: #38375
  * - Deallocated: The device memory is deallocated and the MeshTensor is in a default constructed state, pointer to
  *   Device and MeshBuffer will be null.
  */
@@ -64,7 +65,8 @@ public:
      */
     MeshTensor() = default;
 
-    // TODO: This should be a private constructor, external user should not be able to construct a MeshTensor
+    // TODO(#38376), TODO(#38689):
+    // This should be a private constructor, external user should not be able to construct a MeshTensor
     // directly. As this will lead to leaks of the MeshBuffer unique ownership.
     explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
@@ -133,19 +135,23 @@ public:
      * pre-condition: The device tensor must not be in a default constructed state.
      */
     ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const {
-        if (auto ptr = mesh_buffer_ptr()) {
+        if (auto ptr = mesh_buffer_invariant_breaking()) {
             return (*ptr);
         }
         return std::nullopt;
     }
 
     /**
-     * Current-day compatiable version of mesh_buffer().
-     * This should go away as this breaks unique ownership semantics easily.
-     * See: TODO(River): create an issue for `let's-not-pass-MeshBuffer-as-shared-ptr-everywhere`.
+     * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
+     *
+     * Note: Prefer mesh_buffer() wherever possible, as it breaks unique ownership semantics easily.
+     * A core invariant of MeshTensor is that it is the sole owner of the underlying MeshBuffer,
+     * one can get the underlying shared_ptr of the MeshBuffer and break the invariant.
+     *
+     * See: #38691, #38375
      */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_ptr() const {
-        if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const {
+        if (const auto& mesh_buffer = get_legacy_device_storage().mesh_buffer; mesh_buffer != nullptr) {
             return mesh_buffer;
         }
         return nullptr;
@@ -185,7 +191,7 @@ public:
 
     // DeviceStorage is meant to bridge ttnn::Tensor and MeshTensor,
     // this should go away as part of refactoring, see: #38376
-    const DeviceStorage& get_storage() const {
+    const DeviceStorage& get_legacy_device_storage() const {
         // Pre-condition
         TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
         return impl->storage_;
@@ -204,10 +210,8 @@ public:
     const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
     bool is_sharded() const { return memory_config().is_sharded(); }
 
-    // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
+    const std::optional<ShardSpec>& legacy_shard_spec() const { return memory_config().shard_spec(); }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 
     // Utils:
@@ -235,10 +239,11 @@ public:
 
     // Questionables:
 
-    // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
-    // storage, find a better way to do this.
+    // TODO(#38693):
+    // This is a hack right now, because this allows multiple MeshTensor holding on to the same MeshBuffer,
+    // we need to find an alternative way to do this.
     MeshTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        return MeshTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
+        return MeshTensor(get_legacy_device_storage(), tensor_spec(), std::move(tensor_topology));
     }
 
 private:

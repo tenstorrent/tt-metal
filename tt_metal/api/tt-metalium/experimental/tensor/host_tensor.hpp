@@ -16,7 +16,6 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
-// TODO: Candidate for moving to details folder after refactoring.
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
@@ -28,15 +27,18 @@ namespace tt::tt_metal {
 
 /**
  * HostTensor represents a Tensor in host memory.
- * Different from MeshTensor, HostTensor can be copied.
- * It has limited transformation operations supported (via tensor_apis.hpp).
- * It is intended to be used with MeshTensor for host <-> device communication.
+ * Unlike from MeshTensor, copying a HostTensor will perform a value-copy semantics of the underlying config and
+ * HostBuffer. Note that this usually doesn't mean a deep copy of the underlying data, as the HostBuffer is usually
+ * a view into a contiguous memory region.
+ *
+ * HostTensor has limited transformation operations supported (via tensor_apis.hpp), and is intended to be used with
+ * MeshTensor for host <-> device communication.
  *
  * Invariants of HostTensor:
- * - Default constructed: Acts like a nullptr, any access to any member function outside of assignment and move
- *   construction will be UB, this is checked by TT_ASSERT (enabled at debug build) in accessors. This is similar to
- *   MeshTensor.
- * - Engaged: The HostTensor has shared ownership of the underlying host side storage.
+ * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
+ *   move construction will be UB. This exists to allow for default constructed HostTensor. Incompatible member function
+ *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors MeshTensor.
+ * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
     /*
@@ -61,15 +63,14 @@ public:
      */
     HostTensor() = default;
 
-    // TODO:
-    // These constructors should be hidden or go away as part of #38376
+    // TODO(#38376), TODO(#38689):
+    // These constructors should be hidden or go away.
     // External user should not be able to construct a HostTensor directly and opt to use the from_xxx static methods
     // instead, as the constructor does not perform invariant checks.
     explicit HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
     }
 
-    // Candidate for the "trust me bro, bypass everything" constructor?
     explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
         impl(std::make_unique<attribute_type>(HostStorage(std::move(buffer)), std::move(spec), std::move(topology))) {}
 
@@ -136,11 +137,7 @@ public:
     static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
-     * From original Tensor:
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
-     *
-     * Edit from original Tensor:
-     * - Remove tile parameter as it doesn't make sense for ROW_MAJOR layout.
      */
     template <typename T>
     static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
@@ -192,7 +189,7 @@ public:
 
     // DeviceStorage is meant to bridge ttnn::Tensor and HostTensor,
     // this should go away as part of refactoring, see: #38376
-    const HostStorage& get_storage() const {
+    const HostStorage& get_legacy_host_storage() const {
         // Pre-condition
         TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
         return impl->storage_;
@@ -206,7 +203,7 @@ public:
      *
      * pre-condition: The HostTensor must be engaged.
      */
-    const DistributedHostBuffer& get_distributed_host_buffer() const { return get_storage().buffer(); }
+    const DistributedHostBuffer& get_distributed_host_buffer() const { return get_legacy_host_storage().buffer(); }
 
     // Derivables:
 
@@ -219,15 +216,10 @@ public:
     volumn_type physical_volume() const { return padded_shape().volume(); }
 
     const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
-    bool is_sharded() const {
-        // TODO: this is technically divergent from ttnn::Tensor
-        return tensor_spec().memory_config().is_sharded();
-    }
+    bool is_sharded() const { return tensor_spec().memory_config().is_sharded(); }
 
-    // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
+    const std::optional<ShardSpec>& legacy_shard_spec() const { return memory_config().shard_spec(); }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 
     // Utils:
@@ -253,9 +245,8 @@ public:
 
     // Questionables:
 
-    // TODO: Does this make sense for HostTensor?
     HostTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        return HostTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
+        return HostTensor(get_legacy_host_storage(), tensor_spec(), std::move(tensor_topology));
     }
 
 private:

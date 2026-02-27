@@ -126,7 +126,8 @@ Tensor accumulation_invoke(
         // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
         // or pass in optional_out as a reference.
         using namespace tt::tt_metal::do_not_use;
-        do_not_use_update_mesh_tensor_storage(optional_out->device_tensor(), wip_tensor.device_tensor().get_storage());
+        do_not_use_update_mesh_tensor_storage(
+            optional_out->mesh_tensor(), wip_tensor.mesh_tensor().get_legacy_device_storage());
     }
     return wip_tensor;
 }
