@@ -33,8 +33,7 @@ from models.common.modules.attention.attention_1d import Attention1D, Attention1
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
-from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_good
-from models.common.tensor_utils import zeros_like_kv_cache, zeros_like_paged_cache
+from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
 from models.common.tests.utils import stable_model_seed
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
@@ -170,7 +169,7 @@ class RotarySetupHelper:
         self.cos_matrix, self.sin_matrix = get_rot_mats_from_hf(rotary_emb, max_seq_len, head_dim, device, datatype)
 
         # Create transformation matrices
-        trans_mat = get_rot_transformation_mat_good().repeat(1, 1, self.doubled_batch_size, 1)
+        trans_mat = get_rot_transformation_mat().repeat(1, 1, self.doubled_batch_size, 1)
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
             core_grid=self.batch_grid,
@@ -196,10 +195,10 @@ class RotarySetupHelper:
         )
 
         # Prefill transformation matrix
-        prefill_trans_mat = get_rot_transformation_mat_good()
+        prefill_trans_mat = get_rot_transformation_mat()
         if head_dim != ttnn.TILE_SIZE:
             prefill_trans_mat = torch.zeros(1, 1, head_dim, head_dim)
-            base_mat = get_rot_transformation_mat_good()
+            base_mat = get_rot_transformation_mat()
             prefill_trans_mat[:, :, : ttnn.TILE_SIZE, : ttnn.TILE_SIZE] = base_mat
 
         self.transformation_mat_prefill = ttnn.from_torch(
