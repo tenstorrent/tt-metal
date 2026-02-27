@@ -202,14 +202,13 @@ void MetalContext::initialize(
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
+    bool is_galaxy_cluster = cluster_->is_galaxy_cluster();
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
-    // Need DispatchMemMap for both dispatch core types
-    tt_metal::DispatchSettings::initialize(*cluster_);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
+        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
     // Initialize debug servers. Attaching individual devices done below
     rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {

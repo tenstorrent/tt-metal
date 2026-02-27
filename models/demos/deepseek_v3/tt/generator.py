@@ -464,7 +464,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             MLA2D.create_page_table(
                 paged_config=self.paged_config,
                 mesh_device=self.mesh_device,
-                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
+                batch_size=self.batch_size_per_row,
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
@@ -1158,7 +1158,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             paged_config=self.paged_config,
             mesh_device=self.mesh_device,
             page_table=full_page_table,
-            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+            batch_size=self.batch_size_per_row,
         )
 
         num_layers = self.hf_config.num_hidden_layers

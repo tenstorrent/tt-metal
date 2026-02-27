@@ -397,6 +397,44 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         std::move(pack_dst_formats_all_cbs)};
 }
 
+// Decomposes tile dimensions into (num_faces_r_dim, num_faces_c_dim) per CB.
+// Derived directly from tile_r_dim / face_r_dim and tile_c_dim / face_c_dim.
+// Runs on host at JIT time so division is fine.
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dims(
+    const std::vector<uint32_t>& tile_r_dim_arr,
+    const std::vector<uint32_t>& tile_c_dim_arr,
+    const std::vector<uint32_t>& face_r_dim_arr) {
+    TT_FATAL(
+        tile_r_dim_arr.size() == tile_c_dim_arr.size(),
+        "tile_r_dim_arr size ({}) must match tile_c_dim_arr size ({})",
+        tile_r_dim_arr.size(),
+        tile_c_dim_arr.size());
+    TT_FATAL(
+        tile_r_dim_arr.size() == face_r_dim_arr.size(),
+        "tile_r_dim_arr size ({}) must match face_r_dim_arr size ({})",
+        tile_r_dim_arr.size(),
+        face_r_dim_arr.size());
+    const size_t n = tile_r_dim_arr.size();
+    std::vector<uint32_t> r_dims(n);
+    std::vector<uint32_t> c_dims(n);
+    for (size_t i = 0; i < n; ++i) {
+        TT_FATAL(face_r_dim_arr[i] > 0, "face_r_dim must be > 0 at index {}", i);
+        TT_FATAL(
+            tile_r_dim_arr[i] % face_r_dim_arr[i] == 0,
+            "tile_r_dim ({}) must be a multiple of face_r_dim ({})",
+            tile_r_dim_arr[i],
+            face_r_dim_arr[i]);
+        TT_FATAL(
+            tile_c_dim_arr[i] % constants::FACE_WIDTH == 0,
+            "tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
+            tile_c_dim_arr[i],
+            constants::FACE_WIDTH);
+        r_dims[i] = tile_r_dim_arr[i] / face_r_dim_arr[i];
+        c_dims[i] = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+    }
+    return {r_dims, c_dims};
+}
+
 void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
@@ -405,6 +443,11 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
+
+    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
 
 void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
@@ -415,6 +458,11 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
+
+    auto [r_dims, c_dims] = compute_num_faces_rc_dims(
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
 
 void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
