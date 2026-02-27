@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -143,6 +145,10 @@ def run_decode_reduce_scatter_deepseek_impl(
 
 
 @pytest.mark.requires_device(["TG"])
+@pytest.mark.skipif(
+    (os.getenv("USE_TORUS_MODE") is None),
+    reason=f"Requires ring fabric",
+)
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("num_devices, cluster_axis", [(8, 1)])
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
