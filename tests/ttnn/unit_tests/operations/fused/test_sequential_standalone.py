@@ -959,7 +959,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: CB index 0, format "F16", page_size=1024
         cb_info_0 = {
@@ -984,7 +984,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: CB 0, page_size=1024
         cb_info_0 = {
@@ -1008,7 +1008,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
         pool.allocate_phase(0, cb_info_0, set())
@@ -1023,7 +1023,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
         pool.allocate_phase(0, cb_info_0, set())
@@ -1034,28 +1034,31 @@ class TestCBPoolAllocator:
         assert pool.get_remap(0)[0] != pool.get_remap(1)[0]
 
     def test_overflow_raises_error(self):
-        """Exceeding max_slots raises ValueError."""
+        """Exceeding MAX_SLOTS in project_to_group raises ValueError."""
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=3)
+        pool = CBPoolAllocator()
 
-        # Allocate 3 different configs
-        for i in range(3):
+        # Allocate 33 phases with different configs → 33 unique slots
+        for i in range(33):
             cb_info = {0: CBInfo(0, 1024, f"F{i}", 1024, None, "Default")}
             pool.allocate_phase(i, cb_info, set())
 
-        # 4th different config should overflow
+        # Global pool with 33 slots is fine (no limit on the allocator itself)
+        assert len(pool._slots) == 33
+
+        # But projecting a group that uses all 33 should overflow
+        all_indices = list(range(33))
         with pytest.raises(ValueError, match="CB pool overflow"):
-            cb_info = {0: CBInfo(0, 1024, "F99", 1024, None, "Default")}
-            pool.allocate_phase(3, cb_info, set())
+            pool.project_to_group(all_indices, set())
 
     def test_phantom_cb_reservation(self):
         """Phantom CBs get identity-mapped and don't collide with real allocations."""
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: real CB at index 0, phantom at index 18
         cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
@@ -1079,7 +1082,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0 has 3 CBs (CB 0 and CB 16 have same config)
         cb_info_0 = {
@@ -1103,7 +1106,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: CB 0
         cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
@@ -1121,7 +1124,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: CB 5 with config_a
         cb_info_0 = {5: CBInfo(5, 2048, "F16", 1024, None, "Default")}
@@ -1139,7 +1142,7 @@ class TestCBPoolAllocator:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         cb_info_0 = {
             0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
@@ -1150,6 +1153,130 @@ class TestCBPoolAllocator:
         indices = pool.get_all_slot_indices()
         assert len(indices) == 2
         assert all(idx >= 0 for idx in indices)
+
+    def test_project_to_group_basic(self):
+        """project_to_group returns a pool with correct phase remaps for a subset."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator()
+
+        # 3 phases with different configs
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        cb_info_1 = {0: CBInfo(0, 2048, "F32", 2048, None, "Default")}
+        cb_info_2 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}  # same as phase 0
+        pool.allocate_phase(0, cb_info_0, set())
+        pool.allocate_phase(1, cb_info_1, set())
+        pool.allocate_phase(2, cb_info_2, set())
+
+        # Project a group using phases [0, 2] (skipping phase 1)
+        proj = pool.project_to_group([0, 2], set())
+
+        # Projected pool should have 2 local phases
+        assert len(proj.phase_remaps) == 2
+        # Phase 0 and phase 2 both map CB 0 to the same slot (same config)
+        assert proj.phase_remaps[0][0] == proj.phase_remaps[1][0]
+        # The projected pool should only have slots used by phases 0 and 2
+        assert len(proj._slots) >= 1
+
+    def test_project_to_group_shared_ops(self):
+        """Shared ops get identical remaps when projected to different groups."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator()
+
+        # Phase 0: shared stem (CB 0 → F16)
+        # Phase 1: branch A (CB 0 → F32)
+        # Phase 2: branch B (CB 0 → F8)
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        cb_info_1 = {0: CBInfo(0, 2048, "F32", 2048, None, "Default")}
+        cb_info_2 = {0: CBInfo(0, 2048, "F8", 512, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+        pool.allocate_phase(1, cb_info_1, set())
+        pool.allocate_phase(2, cb_info_2, set())
+
+        # Group A uses phases [0, 1], Group B uses phases [0, 2]
+        proj_a = pool.project_to_group([0, 1], set())
+        proj_b = pool.project_to_group([0, 2], set())
+
+        # Both groups' phase 0 (the shared stem) must have identical remaps
+        assert proj_a.phase_remaps[0] == proj_b.phase_remaps[0]
+
+    def test_project_padding_fills_gaps(self):
+        """Padding ensures all groups have slots up to max shared slot index."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator()
+
+        # Phase 0: shared, CBs at index 0 and 5 (different configs)
+        # Phase 1: group A only, CB at index 3 (unique config)
+        # Phase 2: group B only, CB at index 7 (unique config)
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            5: CBInfo(5, 4096, "F32", 2048, None, "Default"),
+        }
+        cb_info_1 = {3: CBInfo(3, 1024, "F8", 512, None, "Default")}
+        cb_info_2 = {7: CBInfo(7, 1024, "F64", 4096, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+        pool.allocate_phase(1, cb_info_1, set())
+        pool.allocate_phase(2, cb_info_2, set())
+
+        # Shared slot = slot for CB 0 (index 0) and slot for CB 5 (index 5).
+        # Both groups reference phase 0, so slots 0 and 5 are shared.
+        # Max shared slot index = 5.
+        # Padding includes all global slots with index <= 5.
+        # Phase 1's CB 3 → slot 3 (identity), which is <= 5 → padding slot.
+
+        # Compute padding manually to verify
+        remap_0 = pool.get_remap(0)  # {0: 0, 5: 5}
+        remap_1 = pool.get_remap(1)  # {3: 3}
+        remap_2 = pool.get_remap(2)  # {7: 7}
+
+        # Group A: phases [0, 1], Group B: phases [0, 2]
+        group_a_slots = set(remap_0.values()) | set(remap_1.values())  # {0, 5, 3}
+        group_b_slots = set(remap_0.values()) | set(remap_2.values())  # {0, 5, 7}
+
+        # Shared slots: intersection
+        shared = group_a_slots & group_b_slots  # {0, 5}
+        max_shared = max(shared)  # 5
+        padding = {s for s in pool.get_all_slot_indices() if s <= max_shared}
+
+        proj_a = pool.project_to_group([0, 1], padding)
+        proj_b = pool.project_to_group([0, 2], padding)
+
+        # Both groups must have slot 3 (even though only group A uses phase 1)
+        # because slot 3 <= max_shared (5)
+        assert 3 in proj_a._slots
+        assert 3 in proj_b._slots
+
+        # Both groups have identical slot sets for indices 0..5
+        a_low = {s for s in proj_a._slots if s <= max_shared}
+        b_low = {s for s in proj_b._slots if s <= max_shared}
+        assert a_low == b_low
+
+    def test_global_pool_unlimited_slots(self):
+        """Global pool can have >32 slots; overflow only on projection."""
+        CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        pool = CBPoolAllocator()
+
+        # Allocate 35 phases with unique configs (>32 slots)
+        for i in range(35):
+            cb_info = {0: CBInfo(0, 1024, f"F{i}", 1024, None, "Default")}
+            pool.allocate_phase(i, cb_info, set())
+
+        assert len(pool._slots) == 35  # No overflow at allocator level
+
+        # Projecting a group with only 5 phases succeeds (5 slots << 32)
+        proj = pool.project_to_group([0, 1, 2, 3, 4], set())
+        assert len(proj._slots) <= 32
+
+        # Projecting all 35 phases overflows
+        with pytest.raises(ValueError, match="CB pool overflow"):
+            pool.project_to_group(list(range(35)), set())
 
     def test_named_arg_cb_remapping(self):
         """CB-reference named args (cb_*) should get remapped values."""
@@ -2522,7 +2649,7 @@ class TestGlobalCircularBufferPassThrough:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Reserve slot 31 (GlobalCB remote index)
         pool.reserve_index(31)
@@ -2540,7 +2667,7 @@ class TestGlobalCircularBufferPassThrough:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         pool.reserve_index(31)
 
         # Phase 0: regular CBs only
@@ -2561,7 +2688,7 @@ class TestGlobalCircularBufferPassThrough:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         pool.reserve_index(31)
 
         cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
@@ -2583,7 +2710,7 @@ class TestGlobalCircularBufferPassThrough:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         pool.reserve_index(31)  # Reserve remote index
 
         # Phase 0: GlobalCB local index 1 + regular CB index 0
@@ -2611,7 +2738,7 @@ class TestGlobalCircularBufferPassThrough:
         PhaseInfo = _mock_cb_allocator.PhaseInfo
         OpDescriptor = _mock_cb_allocator.OpDescriptor
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         pool.reserve_index(31)
 
         # Phase with a regular CB and a remote-only GlobalCB
@@ -2645,7 +2772,7 @@ class TestGlobalCircularBufferPassThrough:
         CBInfo = _mock_cb_allocator.CBInfo
         PhaseInfo = _mock_cb_allocator.PhaseInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         pool.reserve_index(31)
 
         # GlobalCB with local index 1 and remote index 31
@@ -2728,7 +2855,7 @@ class TestAliasGroupPermutedOrder:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         # Phase 0: alias group with [F16, F32] at orig indices 4,5
         fmt_a = MagicMock()
@@ -2775,7 +2902,7 @@ class TestAliasGroupPermutedOrder:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         fmt_a = MagicMock()
         fmt_a.buffer_index = 4
@@ -2817,7 +2944,7 @@ class TestUniqueAliasGroupsCache:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
         assert len(pool._unique_alias_groups) == 0
 
         # Phase 0: one alias group with 2 members
@@ -2842,7 +2969,7 @@ class TestUniqueAliasGroupsCache:
         CBPoolAllocator = _mock_cb_allocator.CBPoolAllocator
         CBInfo = _mock_cb_allocator.CBInfo
 
-        pool = CBPoolAllocator(max_slots=32)
+        pool = CBPoolAllocator()
 
         fmt_a = MagicMock()
         fmt_a.buffer_index = 0
