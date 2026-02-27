@@ -11,6 +11,7 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
+    SDXL_L1_SMALL_SIZE_BH,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     MAX_SEQUENCE_LENGTH,
@@ -20,7 +21,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     prepare_device,
 )
 import os
-from models.common.utility_functions import profiler
+from models.common.utility_functions import profiler, is_wormhole_b0
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
@@ -241,7 +242,7 @@ def run_demo_inference(
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -249,7 +250,7 @@ def run_demo_inference(
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "l1_small_size": SDXL_L1_SMALL_SIZE if is_wormhole_b0() else SDXL_L1_SMALL_SIZE_BH,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
