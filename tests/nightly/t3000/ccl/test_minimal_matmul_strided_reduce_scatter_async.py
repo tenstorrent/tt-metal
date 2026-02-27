@@ -8,9 +8,17 @@ from dataclasses import dataclass
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 from tracy import signpost
+
+
+# TODO import this from the correct file after PR is merged
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
 
 
 @dataclass
@@ -86,6 +94,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 
     TILE_SIZE = 32
 
+    mesh_shape = tuple(mesh_device.shape)
+
     # Default RS core grid offset: place RS cores below MM cores
     if rs_core_grid_offset is None:
         rs_core_grid_offset = ttnn.CoreCoord(0, mm_core_grid.y)
@@ -149,13 +159,14 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         # Weight: dim 0 sharded across devices so each device gets unique [1, 1, K, N] weights
+        shard_dims = (None, 0) if cluster_axis == 1 else (0, None)
         weight_tensor_mesh = ttnn.from_torch(
             torch_weight_global,
             device=mesh_device,
             layout=layout,
             dtype=input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[None, 0], mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -272,68 +283,59 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 
     if enable_trace:
         # Compile
+        logger.info("Compiling op")
         run_op(0)
         ttnn.synchronize_device(mesh_device)
-        logger.info("Done compiling op")
 
         # Capture trace
+        logger.info("Capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_mm_out, tt_rs_out = run_op(0)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Done capturing trace")
-
-        # Execute trace
-        signpost("start")
         for i in range(num_iters):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            tt_mm_out_tensor_list.append(tt_mm_out)
-            tt_rs_out_tensor_list.append(tt_rs_out)
-        signpost("stop")
-        logger.info("Done executing trace")
-    else:
-        for i in range(num_iters):
-            ttnn.synchronize_device(mesh_device)
             tt_mm_out, tt_rs_out = run_op(i)
             tt_mm_out_tensor_list.append(tt_mm_out)
             tt_rs_out_tensor_list.append(tt_rs_out)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
 
-            logger.info(f"Waiting for op")
+        # Execute trace
+        logger.info("Executing trace")
+        signpost("start")
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
+        signpost("stop")
+    else:
+        for i in range(num_iters):
+            tt_mm_out, tt_rs_out = run_op(i)
+            tt_mm_out_tensor_list.append(tt_mm_out)
+            tt_rs_out_tensor_list.append(tt_rs_out)
+            logger.info(f"Waiting for op iter {i}")
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"Done iteration {i}")
 
     ##### Verify results #####
     for i in range(num_iters):
         golden_idx = i if not enable_trace else 0
 
-        # Check MM output (each device has different output since weights differ)
-        tt_mm_out = ttnn.from_device(tt_mm_out_tensor_list[i])
-        tt_mm_out_torch = ttnn.to_torch(
-            tt_mm_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        )
+        # Check output
+        errors = []
+        d = 0
+        tt_mm_outs = ttnn.get_device_tensors(tt_mm_out_tensor_list[i])
+        tt_rs_outs = ttnn.get_device_tensors(tt_rs_out_tensor_list[i])
         mm_goldens = torch_mm_output_per_device_list[golden_idx]
-
-        for device_id in range(num_devices):
-            tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
-            eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
-            logger.info(f"MM output device {device_id}, iter {i}: {output}")
-            assert eq, f"iter {i} device {device_id} MM FAILED: {output}"
-
-        # Check RS output
-        tt_rs_out = ttnn.from_device(tt_rs_out_tensor_list[i])
-        tt_rs_out_torch = ttnn.to_torch(
-            tt_rs_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim),
-        )
-        torch_rs_golden = torch_rs_output_list[golden_idx]
-
-        tt_rs_chunks = torch.chunk(tt_rs_out_torch, num_devices, dim=dim)
-        for device_id in range(num_devices):
-            eq, output = comp_pcc(tt_rs_chunks[device_id], torch_rs_golden[device_id], allowed_pcc)
-            logger.info(f"RS output device {device_id}, iter {i}: {output}")
-            assert eq, f"iter {i} device {device_id} RS FAILED: {output}"
+        rs_goldens = torch_rs_output_list[golden_idx]
+        for i in range(mesh_shape[0]):
+            for j in range(mesh_shape[1]):
+                repl_dim, shard_dim = (i, j) if cluster_axis == 1 else (j, i)
+                # Check MM output
+                eq, msg = comp_pcc(mm_goldens[shard_dim], ttnn.to_torch(tt_mm_outs[d]))
+                if not eq:
+                    errors.append(f"MM failed on device {d}: {msg}")
+                # Check RS output
+                eq, msg = comp_pcc(rs_goldens[shard_dim], ttnn.to_torch(tt_rs_outs[d]))
+                if not eq:
+                    errors.append(f"RS failed on device {d}: {msg}")
+                d += 1
+        assert not errors, f"iter {i}: PCC check failed:\n" + "\n".join(errors)
 
     logger.info("All checks passed!")
 
@@ -607,6 +609,114 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         mem_config_rs,
         topology=topology,
         enable_trace=enable_trace,
+        num_iters=num_iters,
+        num_workers_per_link=cfg.num_workers_per_link,
+        mm_block_m=cfg.mm_block_m,
+        mm_block_k=cfg.mm_block_k,
+        mm_block_n=cfg.mm_block_n,
+        subblock_h=cfg.subblock_h,
+        subblock_w=cfg.subblock_w,
+        mm_core_grid=cfg.mm_core_grid,
+        chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
+        rs_mode=rs_mode,
+    )
+
+
+@skip_for_wormhole_b0("Requires Blackhole Galaxy to run")
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "test_config",
+    [
+        # Full grid utilization: 56 MM cores (8x7) + 8 RS cores (num_workers_per_link=3) = 64.
+        # M=3584 chosen so M_blocks=14 divides evenly by y=7.
+        # RS cores = 2 + 2*num_workers_per_link (mux + workers, 1 link).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=32,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 8),  # (M // mm_block_m) // core_grid[1]
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,  # 8 RS cores, 64 total (full grid)
+            ),
+            id="matmul_rs",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_mm, mem_config_rs",
+    [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize("rs_mode", ["separate", "separate_strided", "fused"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(size),
+                "trace_region_size": 1531456,
+            },
+            ttnn.Topology.Ring,
+        )
+        for size in [2048]
+    ],
+    indirect=["device_params"],
+    ids=[f"fabric_ring_{size}B" for size in [2048]],
+)
+def test_minimal_matmul_strided_reduce_scatter_async_wan(
+    mesh_device,
+    test_config,
+    num_links,
+    mem_config_input,
+    mem_config_mm,
+    mem_config_rs,
+    enable_trace,
+    topology,
+    num_iters,
+    rs_mode,
+):
+    cfg = test_config
+    TILE_SIZE = 32
+    Nt = cfg.N // TILE_SIZE
+    Nt_per_core = Nt // cfg.mm_core_grid.x
+    assert Nt_per_core >= (
+        cfg.mm_block_n // TILE_SIZE
+    ), f"block_n size is {cfg.mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
+
+    cluster_axis = 0
+    num_devices = mesh_device.get_num_devices()
+    if cluster_axis is not None:
+        num_devices = tuple(mesh_device.shape)[cluster_axis]
+
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        num_devices,
+        cfg.M,
+        cfg.K,
+        cfg.N,
+        cfg.dim,
+        num_links,
+        cfg.input_dtype,
+        cfg.layout,
+        mem_config_input,
+        mem_config_mm,
+        mem_config_rs,
+        topology=topology,
+        enable_trace=enable_trace,
+        cluster_axis=cluster_axis,
         num_iters=num_iters,
         num_workers_per_link=cfg.num_workers_per_link,
         mm_block_m=cfg.mm_block_m,
