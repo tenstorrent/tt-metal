@@ -6,7 +6,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
@@ -14,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-bool is_valid_for_sharded_optimized_typecast(const TypecastParams& args, const TypecastInputs& tensor_args) {
+bool can_use_sharded_optimized_factory(const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input = tensor_args.input;
     if (!input.shard_spec().has_value()) {
         return false;
@@ -48,14 +47,16 @@ bool is_valid_for_sharded_optimized_typecast(const TypecastParams& args, const T
             return false;
         }
     }
-    return true;
+
+    return !args.sub_core_grids
+                .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
 }
 }  // namespace
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.input.is_sharded()) {
-        if (is_valid_for_sharded_optimized_typecast(args, tensor_args)) {
+        if (can_use_sharded_optimized_factory(args, tensor_args)) {
             log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
             return TypecastShardedProgramFactory{};
         }
@@ -121,11 +122,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);
-        if (is_valid_for_sharded_optimized_typecast(args, tensor_args)) {
-            TT_FATAL(
-                !args.sub_core_grids.has_value(),
-                "Typecast operation has no sub_core_grids support for 2D sharded input path");
-        }
     }
 
     if (preallocated_output_tensor.has_value()) {
