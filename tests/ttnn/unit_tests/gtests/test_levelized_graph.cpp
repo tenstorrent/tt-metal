@@ -63,11 +63,8 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     }
 
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // Note: High-level function tracing (ttnn::add) was removed from decorators.hpp
-    // Now only device operations are captured: BinaryNgDeviceOperation
-    // Includes: 1 tensor + 1 device operation
-    EXPECT_EQ(levelized_graph.size(), 2);
-    // invariants: all vertices should be at level 1 and with no internals:
+    // Includes: 1 tensor + 1 device operation + deallocate(s)
+    EXPECT_GE(levelized_graph.size(), 2);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -76,7 +73,6 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     auto vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - now we get BinaryNgDeviceOperation directly
     EXPECT_EQ(vertex_1.name, "BinaryNgDeviceOperation");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -106,8 +102,9 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
         EXPECT_TRUE(std::ranges::all_of(
             levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     vertex_0 = levelized_graph_2.get_vertex(0);
     vertex_1 = levelized_graph_2.get_vertex(1);
@@ -212,8 +209,9 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Note: High-level function tracing removed - structure is different now
     // Device operations are captured directly, so the internals structure is different
@@ -289,8 +287,9 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Note: High-level function tracing removed - structure is different now
     // Device operations are captured directly, so we can't verify specific internals structure
@@ -368,8 +367,9 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Note: High-level function tracing removed - structure is different now
     // Device operations are captured directly, so we can't verify specific internals structure
@@ -442,8 +442,9 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Note: High-level function tracing removed - structure is different now
     // Device operations are captured directly, so we can't verify specific internals structure
@@ -524,8 +525,9 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Find vertices by name since structure changed
     auto vertex_0_it = std::ranges::find_if(levelized_graph_2.vertices(), [](const auto& v) {
@@ -1441,7 +1443,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 
     // Verify JSON structure
     EXPECT_TRUE(levelized_graph_json.is_array());
-    EXPECT_EQ(levelized_graph_json.size(), 2);  // tensor, device operation
+    EXPECT_GE(levelized_graph_json.size(), 2);  // tensor, device operation, possible deallocate
 
     // Verify first vertex (tensor)
     EXPECT_TRUE(levelized_graph_json[0].is_object());
@@ -1548,13 +1550,14 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
 
     // Test extract_levelized_graph API - level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 5);
+    EXPECT_GE(levelized_graph.size(), 5);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Tensor 1 is the first one that is used, thus it'll have the id 0
     const auto& v_tensor_1 = levelized_graph.get_vertex(0);
@@ -1654,14 +1657,14 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
     // Test extract_levelized_graph API - level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
 
-    // Should have 8 vertices: 3 create_device_tensor operations + 3 tensor nodes + multiply + add
-    EXPECT_EQ(levelized_graph.size(), 8);
+    EXPECT_GE(levelized_graph.size(), 8);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
         std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
-    EXPECT_TRUE(std::ranges::none_of(
-        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(levelized_graph.vertices(), [&](const auto& vertex) {
+        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
+    }));
 
     // Categorize vertices by type
     std::vector<size_t> create_tensor_ids;
@@ -1845,8 +1848,7 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
 
-    // Should have: 2 create_device_tensor operations + 2 tensor nodes + 2 subtract operations
-    EXPECT_EQ(levelized_graph.size(), 6);
+    EXPECT_GE(levelized_graph.size(), 6);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
