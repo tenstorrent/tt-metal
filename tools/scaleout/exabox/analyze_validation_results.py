@@ -23,6 +23,7 @@ from analysis_common import (
     apply_common_args,
     build_base_argparser,
     clean_mpi_line,
+    csv_stem_and_suffix,
     print_section_header,
     read_log_file,
     validate_dir_exists,
@@ -476,7 +477,9 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     lines = content.split("\n")
 
     for cat, pattern in PATTERNS.items():
-        matched = [(i + 1, clean_mpi_line(line)[:MAX_LINE_PREVIEW]) for i, line in enumerate(lines) if pattern.search(line)]
+        matched = [
+            (i + 1, clean_mpi_line(line)[:MAX_LINE_PREVIEW]) for i, line in enumerate(lines) if pattern.search(line)
+        ]
         if matched:
             result.categories.append(cat)
             result.matched_lines[cat] = matched
@@ -806,8 +809,7 @@ def _recommend_missing_connections(cats: dict, total: int, analyses: list[LogAna
 
     if is_transient:
         msg_parts.append(
-            "Missing connections are transient (tests fail some of the time) - "
-            "Factory System Descriptor is correct."
+            "Missing connections are transient (tests fail some of the time) - " "Factory System Descriptor is correct."
         )
 
     if has_qsfp:
@@ -1084,7 +1086,7 @@ def output_json(analyses: list[LogAnalysis]):
     print(json.dumps(result, indent=2))
 
 
-def output_csv(analyses: list[LogAnalysis], csv_path: str) -> None:
+def output_csv(analyses: list[LogAnalysis], csv_path: str, csv_prefix: str | None = None) -> None:
     """Write analysis results to CSV files.
 
     Produces up to 4 CSV files:
@@ -1095,9 +1097,7 @@ def output_csv(analyses: list[LogAnalysis], csv_path: str) -> None:
     """
     ts = analysis_timestamp()
 
-    csv_p = Path(csv_path)
-    suffix = csv_p.suffix or ".csv"
-    stem = str(csv_p.with_suffix(""))
+    stem, suffix = csv_stem_and_suffix(csv_path, csv_prefix, DOMAIN_VALIDATION)
 
     info = get_cluster_info(analyses)
     metrics = calculate_metrics(analyses)
@@ -1107,41 +1107,45 @@ def output_csv(analyses: list[LogAnalysis], csv_path: str) -> None:
     for a in analyses:
         primary_cat = get_category_label(a.categories[0]) if a.categories else "Unknown"
         all_labels = "|".join(get_category_label(c) for c in a.categories)
-        summary_rows.append({
-            "timestamp": ts,
-            "iteration": a.metadata.iteration,
-            "log_file": os.path.basename(a.filepath),
-            "domain": DOMAIN_VALIDATION,
-            "hosts": ",".join(a.metadata.hosts),
-            "chips_per_host": a.metadata.chips_found,
-            "category": primary_cat,
-            "all_categories": all_labels,
-            "is_healthy": "healthy" in a.categories,
-        })
+        summary_rows.append(
+            {
+                "timestamp": ts,
+                "iteration": a.metadata.iteration,
+                "log_file": os.path.basename(a.filepath),
+                "domain": DOMAIN_VALIDATION,
+                "hosts": ",".join(a.metadata.hosts),
+                "chips_per_host": a.metadata.chips_found,
+                "category": primary_cat,
+                "all_categories": all_labels,
+                "is_healthy": "healthy" in a.categories,
+            }
+        )
     write_csv(summary_rows, f"{stem}_summary{suffix}", SUMMARY_CSV_FIELDS)
 
     # --- Faulty links rows ---
     link_rows: list[dict] = []
     for a in analyses:
         for link in a.faulty_links:
-            link_rows.append({
-                "timestamp": ts,
-                "iteration": a.metadata.iteration,
-                "log_file": os.path.basename(a.filepath),
-                "domain": DOMAIN_VALIDATION,
-                "error_category": "Unhealthy link",
-                "host": link.host,
-                "tray": link.tray,
-                "asic": link.asic,
-                "channel": link.channel,
-                "port_id": link.port_id,
-                "port_type": link.port_type,
-                "retrains": link.retrains,
-                "crc_errors": link.crc_errors,
-                "uncorrected_cw": link.uncorrected_cw,
-                "mismatch_words": link.mismatch_words,
-                "failure_type": link.failure_type,
-            })
+            link_rows.append(
+                {
+                    "timestamp": ts,
+                    "iteration": a.metadata.iteration,
+                    "log_file": os.path.basename(a.filepath),
+                    "domain": DOMAIN_VALIDATION,
+                    "error_category": "Unhealthy link",
+                    "host": link.host,
+                    "tray": link.tray,
+                    "asic": link.asic,
+                    "channel": link.channel,
+                    "port_id": link.port_id,
+                    "port_type": link.port_type,
+                    "retrains": link.retrains,
+                    "crc_errors": link.crc_errors,
+                    "uncorrected_cw": link.uncorrected_cw,
+                    "mismatch_words": link.mismatch_words,
+                    "failure_type": link.failure_type,
+                }
+            )
     if link_rows:
         write_csv(link_rows, f"{stem}_faulty_links{suffix}", FAULTY_LINKS_CSV_FIELDS)
 
@@ -1160,16 +1164,18 @@ def output_csv(analyses: list[LogAnalysis], csv_path: str) -> None:
                     severity = "info"
             label = get_category_label(cat)
             for line_num, line_content in matches:
-                error_rows.append({
-                    "timestamp": ts,
-                    "iteration": a.metadata.iteration,
-                    "log_file": os.path.basename(a.filepath),
-                    "domain": DOMAIN_VALIDATION,
-                    "error_category": label,
-                    "error_severity": severity,
-                    "error_message": line_content[:500],
-                    "line_number": line_num,
-                })
+                error_rows.append(
+                    {
+                        "timestamp": ts,
+                        "iteration": a.metadata.iteration,
+                        "log_file": os.path.basename(a.filepath),
+                        "domain": DOMAIN_VALIDATION,
+                        "error_category": label,
+                        "error_severity": severity,
+                        "error_message": line_content[:500],
+                        "line_number": line_num,
+                    }
+                )
     if error_rows:
         write_csv(error_rows, f"{stem}_errors{suffix}", ERRORS_CSV_FIELDS)
 
@@ -1528,7 +1534,7 @@ def main():
     metrics = calculate_metrics(analyses)
 
     if args.csv:
-        output_csv(analyses, args.csv)
+        output_csv(analyses, args.csv, csv_prefix=args.csv_prefix)
 
     if args.json:
         output_json(analyses)

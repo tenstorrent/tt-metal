@@ -20,6 +20,7 @@ from analysis_common import (
     analysis_timestamp_display,
     apply_common_args,
     build_base_argparser,
+    csv_stem_and_suffix,
     print_section_header,
     print_separator,
     read_log_file,
@@ -342,7 +343,7 @@ def output_text(analysis: LogAnalysis, input_path: str):
         print(f"{Colors.RED}✗ Fabric tests FAILED{Colors.NC}")
 
 
-def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
+def output_csv(analysis: LogAnalysis, csv_path: str, csv_prefix: str | None = None) -> None:
     """Write analysis results to CSV files."""
     ts = analysis_timestamp()
     log_basename = os.path.basename(analysis.filepath)
@@ -358,9 +359,7 @@ def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
         "status": "PASSED" if analysis.all_passed else "FAILED",
     }
 
-    csv_p = Path(csv_path)
-    suffix = csv_p.suffix
-    stem = str(csv_p.with_suffix(""))
+    stem, suffix = csv_stem_and_suffix(csv_path, csv_prefix, DOMAIN_FABRIC)
 
     write_csv([summary_row], f"{stem}_summary{suffix}", SUMMARY_CSV_FIELDS)
 
@@ -374,16 +373,18 @@ def output_csv(analysis: LogAnalysis, csv_path: str) -> None:
 
     detail_rows: list[dict] = []
     for (cat_key, severity), msgs in error_counts.items():
-        detail_rows.append({
-            "timestamp": ts,
-            "log_file": log_basename,
-            "domain": DOMAIN_FABRIC,
-            "record_type": "error",
-            "error_category": cat_key,
-            "error_severity": severity,
-            "error_message": msgs[0][:500],
-            "error_count": len(msgs),
-        })
+        detail_rows.append(
+            {
+                "timestamp": ts,
+                "log_file": log_basename,
+                "domain": DOMAIN_FABRIC,
+                "record_type": "error",
+                "error_category": cat_key,
+                "error_severity": severity,
+                "error_message": msgs[0][:500],
+                "error_count": len(msgs),
+            }
+        )
 
     if detail_rows:
         write_csv(detail_rows, f"{stem}_details{suffix}", DETAIL_CSV_FIELDS)
@@ -399,7 +400,7 @@ def main():
     analysis = analyze_log_file(str(log_file))
 
     if args.csv:
-        output_csv(analysis, args.csv)
+        output_csv(analysis, args.csv, csv_prefix=args.csv_prefix)
 
     if args.json:
         output_json(analysis, args.path)
