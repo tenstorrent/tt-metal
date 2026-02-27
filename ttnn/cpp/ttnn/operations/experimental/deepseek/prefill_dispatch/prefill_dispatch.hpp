@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
 namespace operations::experimental::deepseek::prefill_dispatch {
@@ -23,7 +24,10 @@ struct ExecutePrefillDispatch {
         uint32_t metadata_len,
         uint32_t max_dispatched_tokens_per_expert,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+        std::optional<uint32_t> cluster_axis = 0,
+        std::optional<uint32_t> num_links = 1,
+        std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear);
 };
 
 }  // namespace operations::experimental::deepseek::prefill_dispatch
