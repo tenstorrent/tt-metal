@@ -2,18 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include <cxxopts.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
+#include "tt_metal/impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 #include <yaml-cpp/yaml.h>
 
 #ifdef OPEN_MPI
@@ -22,112 +32,280 @@
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental::tt_fabric;
+using namespace tt::tt_fabric;
 
 struct RankBindingConfig {
     int rank;
     int mesh_id;
+    std::optional<int> mesh_host_rank;
     std::map<std::string, std::string> env_overrides;
 };
 
 /**
  * @brief Run Physical System Descriptor discovery via MPI
  *
- * This function should:
- * 1. Initialize MPI context
- * 2. Run physical discovery on all ranks
- * 3. Return the PhysicalSystemDescriptor
- *
- * TODO: Implement MPI-based PSD discovery
+ * This function:
+ * 1. Gets the MetalContext instance (which should already be initialized)
+ * 2. Runs physical discovery on all ranks using the distributed context
+ * 3. Returns the PhysicalSystemDescriptor
  */
 PhysicalSystemDescriptor run_psd_discovery() {
-    // TODO: Initialize MPI and run discovery
-    // This should:
-    // - Initialize MetalContext with distributed context
-    // - Run PhysicalSystemDescriptor discovery
-    // - Return the discovered PSD
+    auto& context = tt::tt_metal::MetalContext::instance();
+    auto distributed_context = context.get_distributed_context_ptr();
+    const auto& cluster = context.get_cluster();
+    const auto& hal = context.hal();
+    const auto& rtoptions = context.rtoptions();
+    constexpr bool run_discovery = true;
 
-    throw std::runtime_error("PSD discovery via MPI not yet implemented");
+    return tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+}
+
+/**
+ * @brief Find and load Physical Grouping Descriptor file with fallback logic
+ *
+ * If pgd_path is provided, use that path directly.
+ * Otherwise, if TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH environment variable is set, use that path directly.
+ * Otherwise, search in order:
+ * 1. /data/scaleout_configs/<cluster_name>/<cluster_name>_physical_grouping_descriptor.textproto
+ * 2. TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
+ * 3. Default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
+ *
+ * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
+ */
+PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
+    // Check for explicit PGD path from argument first
+    if (pgd_path.has_value() && !pgd_path->empty()) {
+        std::filesystem::path explicit_path(*pgd_path);
+        if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
+            log_info(
+                tt::LogFabric, "Loading Physical Grouping Descriptor from provided path: {}", explicit_path.string());
+            return PhysicalGroupingDescriptor(explicit_path);
+        } else {
+            throw std::runtime_error(
+                "Physical Grouping Descriptor path provided but file does not exist: " + explicit_path.string());
+        }
+    }
+
+    // Check for explicit PGD path from environment variable
+    const char* pgd_path_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
+    if (pgd_path_env && strlen(pgd_path_env) > 0) {
+        std::filesystem::path explicit_path(pgd_path_env);
+        if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
+            log_info(
+                tt::LogFabric,
+                "Loading Physical Grouping Descriptor from environment variable: {}",
+                explicit_path.string());
+            return PhysicalGroupingDescriptor(explicit_path);
+        } else {
+            throw std::runtime_error(
+                "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: " + explicit_path.string());
+        }
+    }
+
+    // Get cluster name from environment variable
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    std::string cluster_name = cluster_name_env ? cluster_name_env : "";
+
+    // Get TT_METAL_HOME for fallback paths
+    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
+    std::string tt_metal_home = tt_metal_home_env ? tt_metal_home_env : ".";
+
+    std::vector<std::filesystem::path> search_paths;
+
+    // Path 1: /data/scaleout_configs/<cluster_name>/<cluster_name>_physical_grouping_descriptor.textproto
+    if (!cluster_name.empty()) {
+        std::filesystem::path data_path = std::filesystem::path("/data/scaleout_configs") / cluster_name /
+                                          (cluster_name + "_physical_grouping_descriptor.textproto");
+        search_paths.push_back(data_path);
+    }
+
+    // Path 2:
+    // TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
+    if (!cluster_name.empty()) {
+        std::filesystem::path home_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" /
+                                          "physical_groupings" /
+                                          (cluster_name + "_physical_grouping_descriptor.textproto");
+        search_paths.push_back(home_path);
+    }
+
+    // Path 3: Default fallback
+    std::filesystem::path default_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" /
+                                         "physical_groupings" / "default_physical_grouping_descriptor.textproto";
+    search_paths.push_back(default_path);
+
+    // Try each path in order, but require explicit match (don't just take first existing)
+    for (const auto& path : search_paths) {
+        if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
+            log_info(tt::LogFabric, "Loading Physical Grouping Descriptor from: {}", path.string());
+            return PhysicalGroupingDescriptor(path);
+        }
+    }
+
+    // If none found, throw error
+    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
+    for (const auto& path : search_paths) {
+        error_msg += "  - " + path.string() + "\n";
+    }
+    if (!cluster_name.empty()) {
+        error_msg += "Cluster name from TT_CLUSTER_NAME: " + cluster_name + "\n";
+    } else {
+        error_msg += "TT_CLUSTER_NAME not set\n";
+    }
+    throw std::runtime_error(error_msg);
 }
 
 /**
  * @brief Run topology mapper to map logical meshes to physical ASICs
  *
- * This function should:
- * 1. Load mesh graph descriptor
- * 2. Load physical grouping descriptor
- * 3. Build physical multi-mesh graph from PSD
- * 4. Build logical multi-mesh graph from MGD
- * 5. Run map_multi_mesh_to_physical
- * 6. Return the mapping result
- *
- * TODO: Implement topology mapping
+ * This function:
+ * 1. Builds physical multi-mesh graph from PSD, PGD, and MGD
+ * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
+ * 3. Configures topology mapping with strict mode and disabled rank bindings
+ * 4. Runs map_multi_mesh_to_physical
+ * 5. Returns the mapping result
  */
-TopologyMappingResult run_topology_mapping(const PhysicalSystemDescriptor& psd) {
-    // TODO: Load mesh graph descriptor
-    // MeshGraphDescriptor mgd = load_mesh_graph_descriptor(mesh_graph_desc_path);
+TopologyMappingResult run_topology_mapping(
+    const PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
+    const MeshGraphDescriptor& mgd,
+    const std::filesystem::path& mgd_path) {
+    // Build physical multi-mesh graph from PSD, PGD, and MGD
+    log_info(tt::LogFabric, "Building physical multi-mesh adjacency graph...");
+    PhysicalMultiMeshGraph physical_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // TODO: Load physical grouping descriptor
-    // PhysicalGroupingDescriptor pgd = load_physical_grouping_descriptor(physical_grouping_desc_path);
+    // Build logical multi-mesh graph from MGD
+    // Need to create MeshGraph from cluster and MGD path
+    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    MeshGraph mesh_graph(cluster, mgd_path.string());
+    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
-    // TODO: Build physical multi-mesh graph
-    // PhysicalMultiMeshGraph physical_graph = build_physical_multi_mesh_adjacency_graph(
-    //     psd, pgd, mgd);
+    // Configure topology mapping
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = true;  // Do not pass rank bindings at all
 
-    // TODO: Build logical multi-mesh graph from MGD
-    // LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mgd);
+    // Run mapping without rank bindings (empty maps)
+    log_info(tt::LogFabric, "Running topology mapping...");
+    TopologyMappingResult result = map_multi_mesh_to_physical(
+        logical_graph,
+        physical_graph,
+        config,
+        {},  // Empty asic_id_to_mesh_rank - not used when disable_rank_bindings is true
+        {}   // Empty fabric_node_id_to_mesh_rank - not used when disable_rank_bindings is true
+    );
 
-    // TODO: Build rank mappings from PSD
-    // std::map<MeshId, std::map<AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    // std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-
-    // TODO: Configure topology mapping
-    // TopologyMappingConfig config;
-    // config.strict_mode = true;
-    // Populate config.hostname_to_asics from PSD
-
-    // TODO: Run mapping
-    // TopologyMappingResult result = map_multi_mesh_to_physical(
-    //     logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
-
-    throw std::runtime_error("Topology mapping not yet implemented");
+    return result;
 }
 
 /**
  * @brief Extract rank bindings from topology mapping result
  *
- * This function should:
- * 1. Group ASICs by mesh_id and rank
- * 2. Convert ASIC IDs to PCIe device IDs using PSD
- * 3. Generate RankBindingConfig for each rank
- *
- * TODO: Implement rank binding extraction
+ * This function:
+ * 1. Extracts mesh_id from FabricNodeId
+ * 2. Groups ASICs by mesh_id and MPI rank (via hostname)
+ * 3. Gets mesh_host_rank from MeshGraph API based on fabric node ID
+ * 4. Generates RankBindingConfig for each (rank, mesh_id) pair
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
-    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result) {
+    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
     std::vector<RankBindingConfig> rank_bindings;
 
-    // TODO: Group fabric nodes by mesh_id and rank
-    // For each mesh_id:
-    //   - Find all fabric nodes mapped to that mesh
-    //   - Group by the rank that owns those ASICs
-    //   - Collect ASIC IDs for each rank
+    // Get hostname to rank mapping from PSD
+    const auto& host_to_rank_map = psd.get_host_to_rank_map();
 
-    // TODO: Convert ASIC IDs to PCIe device IDs
-    // For each ASIC ID:
-    //   - Get hostname from PSD
-    //   - Get tray_id and asic_location from PSD
-    //   - Use PSD.get_pcie_id_to_asic_location() to find PCIe device ID
-    //   - Collect all PCIe device IDs for the rank
+    // Structure: mesh_id -> hostname -> {ASIC IDs, ChipIds, MeshHostRankId}
+    std::map<
+        int,
+        std::map<std::string, std::tuple<std::vector<AsicID>, std::vector<tt::ChipId>, std::optional<MeshHostRankId>>>>
+        mesh_host_asics;
 
-    // TODO: Build RankBindingConfig entries
-    // For each (rank, mesh_id) pair:
-    //   RankBindingConfig binding;
-    //   binding.rank = rank;
-    //   binding.mesh_id = mesh_id;
-    //   binding.env_overrides["TT_VISIBLE_DEVICES"] = comma_separated_pcie_device_ids;
-    //   rank_bindings.push_back(binding);
+    // Iterate through fabric_node_to_asic mapping
+    for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
+        // Extract mesh_id and chip_id from FabricNodeId
+        MeshId mesh_id = fabric_node_id.mesh_id;
+        tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
 
-    throw std::runtime_error("Rank binding extraction not yet implemented");
+        // Get mesh host rank from MeshGraph API
+        std::optional<MeshHostRankId> mesh_host_rank =
+            mesh_graph.get_host_rank_for_chip(mesh_id, chip_id_from_fabric_node);
+
+        if (!mesh_host_rank.has_value()) {
+            log_error(
+                tt::LogFabric,
+                "No mesh host rank found for mesh_id {} and chip_id {}",
+                *mesh_id,
+                chip_id_from_fabric_node);
+            continue;
+        }
+
+        // Get hostname for this ASIC
+        std::string hostname = psd.get_host_name_for_asic(asic_id);
+
+        // Verify hostname exists in rank map (we'll use it later when building rank bindings)
+        auto rank_it = host_to_rank_map.find(hostname);
+        if (rank_it == host_to_rank_map.end()) {
+            log_error(tt::LogFabric, "No rank found for hostname: {}", hostname);
+            continue;
+        }
+
+        // Get ChipId from ASICDescriptor using umd_unique_id
+        tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
+
+        // Store ASIC ID, ChipId, and mesh host rank for this (mesh_id, hostname) pair
+        int mesh_id_int = static_cast<int>(*mesh_id);
+        std::get<0>(mesh_host_asics[mesh_id_int][hostname]).push_back(asic_id);
+        std::get<1>(mesh_host_asics[mesh_id_int][hostname]).push_back(chip_id);
+        // Store mesh host rank (will be the same for all ASICs from the same hostname in the same mesh)
+        std::get<2>(mesh_host_asics[mesh_id_int][hostname]) = mesh_host_rank;
+    }
+
+    // Build rank bindings: for each (mesh_id, hostname) pair, create a RankBindingConfig
+    // Use mesh_host_rank from MeshGraph API
+    for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
+        for (const auto& [hostname, asic_data] : hostname_map) {
+            auto rank_it = host_to_rank_map.find(hostname);
+            if (rank_it == host_to_rank_map.end()) {
+                continue;  // Already logged error above
+            }
+            int mpi_rank = static_cast<int>(rank_it->second);
+
+            const auto& [asic_ids, chip_ids, mesh_host_rank] = asic_data;
+
+            if (!mesh_host_rank.has_value()) {
+                log_error(tt::LogFabric, "No mesh host rank found for hostname {} in mesh {}", hostname, mesh_id);
+                continue;
+            }
+
+            // Create rank binding config
+            RankBindingConfig binding;
+            binding.rank = mpi_rank;
+            binding.mesh_id = mesh_id;
+            binding.mesh_host_rank = static_cast<int>(*mesh_host_rank.value());
+
+            // Build TT_VISIBLE_DEVICES string from ChipIds
+            std::vector<std::string> chip_id_strings;
+            for (tt::ChipId chip_id : chip_ids) {
+                chip_id_strings.push_back(std::to_string(chip_id));
+            }
+            std::string visible_devices = "";
+            for (size_t i = 0; i < chip_id_strings.size(); ++i) {
+                if (i > 0) {
+                    visible_devices += ",";
+                }
+                visible_devices += chip_id_strings[i];
+            }
+            if (!visible_devices.empty()) {
+                binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
+            }
+
+            rank_bindings.push_back(binding);
+        }
+    }
+
+    return rank_bindings;
 }
 
 /**
@@ -144,6 +322,10 @@ void write_rank_bindings_yaml(
         YAML::Node binding_node;
         binding_node["rank"] = binding.rank;
         binding_node["mesh_id"] = binding.mesh_id;
+
+        if (binding.mesh_host_rank.has_value()) {
+            binding_node["mesh_host_rank"] = binding.mesh_host_rank.value();
+        }
 
         if (!binding.env_overrides.empty()) {
             YAML::Node env_overrides_node;
@@ -168,11 +350,66 @@ void write_rank_bindings_yaml(
     out_file.close();
 }
 
-int main(int argc, char** argv) {
-    // Warn if any arguments are passed
-    if (argc > 1) {
-        log_warning(tt::LogFabric, "This tool does not accept any arguments. Ignoring {} argument(s).", argc - 1);
+struct ProgramArgs {
+    std::string mesh_graph_descriptor_path;
+    std::optional<std::string> physical_grouping_descriptor_path;
+};
+
+/**
+ * @brief Parse command line arguments
+ */
+ProgramArgs parse_arguments(int argc, char** argv) {
+    cxxopts::Options options(
+        "generate_rank_bindings",
+        "Generate rank bindings YAML file from Physical System Descriptor (PSD) discovery and topology mapping.\n"
+        "This tool must be run with an MPI launcher (e.g., mpirun, srun).\n\n"
+        "The Mesh Graph Descriptor (MGD) specifies the logical mesh topology.\n"
+        "The Physical Grouping Descriptor (PGD) is optional and will be searched using fallback logic if not "
+        "provided.");
+
+    options.add_options()(
+        "m,mesh-graph-descriptor",
+        "Path to Mesh Graph Descriptor file (.textproto) - REQUIRED",
+        cxxopts::value<std::string>())(
+        "p,physical-grouping-descriptor",
+        "Path to Physical Grouping Descriptor file (.textproto) - OPTIONAL",
+        cxxopts::value<std::string>())("h,help", "Print usage information");
+
+    try {
+        const auto result = options.parse(argc, argv);
+
+        if (result.count("help") || argc == 1) {
+            std::cout << options.help() << std::endl;
+            exit(0);
+        }
+
+        if (!result.count("mesh-graph-descriptor")) {
+            throw std::invalid_argument("--mesh-graph-descriptor (-m) is required");
+        }
+
+        ProgramArgs args;
+        args.mesh_graph_descriptor_path = result["mesh-graph-descriptor"].as<std::string>();
+
+        if (result.count("physical-grouping-descriptor")) {
+            args.physical_grouping_descriptor_path = result["physical-grouping-descriptor"].as<std::string>();
+        }
+
+        return args;
+
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
+        std::cerr << "Use --help for usage information" << std::endl;
+        exit(1);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Use --help for usage information" << std::endl;
+        exit(1);
     }
+}
+
+int main(int argc, char** argv) {
+    // Parse arguments first (before MPI initialization)
+    ProgramArgs args = parse_arguments(argc, argv);
 
     // Check if MPI is initialized (i.e., running under mpirun/srun/etc.)
     // When mpirun launches the program, MPI is already initialized
@@ -195,35 +432,70 @@ int main(int argc, char** argv) {
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
 
-        // Step 1: Run PSD discovery
-        log_info(tt::LogFabric, "Step 1: Running Physical System Descriptor discovery...");
+        // Stage: Run PSD discovery
+        log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
         PhysicalSystemDescriptor psd = run_psd_discovery();
         log_info(tt::LogFabric, "PSD discovery complete");
 
-        // Step 2: Run topology mapping
-        log_info(tt::LogFabric, "Step 2: Running topology mapping...");
-        TopologyMappingResult mapping_result = run_topology_mapping(psd);
-
-        if (!mapping_result.success) {
-            log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
-            return 1;
+        // Stage: Load Mesh Graph Descriptor
+        std::filesystem::path mgd_path(args.mesh_graph_descriptor_path);
+        log_info(tt::LogFabric, "Stage: Loading Mesh Graph Descriptor from: {}", mgd_path.string());
+        if (!std::filesystem::exists(mgd_path) || !std::filesystem::is_regular_file(mgd_path)) {
+            throw std::runtime_error("Mesh Graph Descriptor file does not exist: " + mgd_path.string());
         }
-        log_info(tt::LogFabric, "Topology mapping complete");
+        MeshGraphDescriptor mgd(mgd_path);
+        log_info(tt::LogFabric, "Mesh Graph Descriptor loaded");
 
-        // Step 3: Extract rank bindings
-        log_info(tt::LogFabric, "Step 3: Extracting rank bindings...");
-        std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, mapping_result);
-        log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
+        // Stage: Load Physical Grouping Descriptor
+        log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
+        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path);
+        log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
 
-        // Step 4: Write YAML file
-        log_info(tt::LogFabric, "Step 4: Writing rank bindings to YAML...");
-        // TODO: Determine mesh_graph_desc_path and output_file from configuration or discovery
-        std::string mesh_graph_desc_path = "";           // TODO: Set from discovery/config
-        std::string output_file = "rank_bindings.yaml";  // TODO: Set from discovery/config
-        write_rank_bindings_yaml(rank_bindings, mesh_graph_desc_path, output_file);
-        log_info(tt::LogFabric, "Successfully wrote: {}", output_file);
+        // Get current rank - only rank 0 performs topology mapping and file generation
+        auto current_rank = *context->rank();
+        if (current_rank == 0) {
+            // Stage: Run topology mapping
+            log_info(tt::LogFabric, "Stage: Running topology mapping...");
+            TopologyMappingResult mapping_result = run_topology_mapping(psd, pgd, mgd, mgd_path);
 
-        log_info(tt::LogFabric, "Rank bindings generation complete!");
+            log_critical(tt::LogFabric, "Mapping result: {}", mapping_result);
+
+            if (!mapping_result.success) {
+                log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
+                return 1;
+            }
+            log_info(tt::LogFabric, "Topology mapping complete");
+
+            // Stage: Extract rank bindings
+            log_info(tt::LogFabric, "Stage: Extracting rank bindings...");
+            // Create MeshGraph for getting host ranks
+            auto& context = tt::tt_metal::MetalContext::instance();
+            const auto& cluster = context.get_cluster();
+            MeshGraph mesh_graph(cluster, mgd_path.string());
+            std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, mapping_result, mesh_graph);
+            log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
+
+            // Stage: Write YAML file
+            log_info(tt::LogFabric, "Stage: Writing rank bindings to YAML...");
+
+            // Create tt-run-generated directory if it doesn't exist
+            std::filesystem::path output_dir = "tt-run-generated";
+            std::filesystem::create_directories(output_dir);
+
+            std::filesystem::path output_file = output_dir / "rank_bindings.yaml";
+            write_rank_bindings_yaml(rank_bindings, args.mesh_graph_descriptor_path, output_file.string());
+            log_info(tt::LogFabric, "Successfully wrote: {}", output_file.string());
+
+            log_info(tt::LogFabric, "Rank bindings generation complete!");
+        } else {
+            log_info(
+                tt::LogFabric,
+                "Rank {}: Skipping topology mapping and file generation (only rank 0 performs these operations)",
+                current_rank);
+        }
+
+        // Synchronize all ranks before exiting
+        context->barrier();
 
     } catch (const std::exception& e) {
         log_error(tt::LogFabric, "Error: {}", e.what());

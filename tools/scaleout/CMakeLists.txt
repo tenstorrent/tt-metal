@@ -279,5 +279,6 @@ target_link_libraries(
         scaleout_tools
         tt_metal
         protobuf::libprotobuf
+        cxxopts::cxxopts
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
 )
