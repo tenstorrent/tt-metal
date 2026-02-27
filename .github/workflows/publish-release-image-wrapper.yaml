@@ -37,6 +37,9 @@ jobs:
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
     uses: ./.github/workflows/publish-release-image.yaml
     permissions:
       packages: write
@@ -50,3 +53,4 @@ jobs:
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       platform: ${{ inputs.platform }}
+      image: ${{ matrix.image }}

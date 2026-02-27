@@ -157,6 +157,9 @@ jobs:
           new-tag: ${{ inputs.tag-version || 'latest' }}
 
   create-docker-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
     needs:
       - build-artifact
       - parse-platform
@@ -169,6 +172,7 @@ jobs:
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
+      image: ${{ matrix.image }}
 
   # Only run docs release once per run on the main platform
   release-docs:
