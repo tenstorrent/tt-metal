@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
