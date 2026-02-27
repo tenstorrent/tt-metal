@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
@@ -31,6 +32,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+
+fabric_config = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
 
 
 class MoE(SharedStateAddOn, AbstractModule):
@@ -172,6 +177,27 @@ class MoE(SharedStateAddOn, AbstractModule):
                 use_height_and_width_as_shard_shape=True,
             )
 
+            NUM_DECODE_RS_SHARD_CORES = 7
+            ring_sum_experts_output_memory_config = ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE // NUM_DECODE_RS_SHARD_CORES]),
+                    ttnn.CoreRangeSet(
+                        [
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                        ]
+                    ),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            )
+
             # Construct the config
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
@@ -192,7 +218,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": input_output_memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "sum_experts_output_memory_config": memory_config,
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                    cluster_axis=1,
+                    dim=3,
+                    memory_config=input_output_memory_config,
+                ),
+                "ring_sum_experts_output_memory_config": ring_sum_experts_output_memory_config,
+                "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
@@ -231,6 +264,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "sum_experts_output_memory_config": memory_config,
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
@@ -331,7 +365,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Note: reduce_scatter is handled by the caller (decoder block or test)
+        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
 
         return post_combine_output_tensor
 
@@ -453,7 +487,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
@@ -466,28 +499,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
-
-    @classmethod
-    def _fwd_reduce_scatter(
-        cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
-    ) -> ttnn.Tensor:
-        # Use standard reduce_scatter (composite fallback) to avoid shard shape constraints
-        # encountered by the minimal async path in some decode configurations.
-        rs_cfg = cfg["final_output_reduce_scatter"]
-        rs_kwargs = {
-            "dim": rs_cfg["dim"],
-            "cluster_axis": rs_cfg.get("cluster_axis"),
-            "subdevice_id": rs_cfg.get("subdevice_id"),
-            "memory_config": rs_cfg.get("memory_config"),
-            "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
-            "num_links": rs_cfg.get("num_links"),
-            "topology": rs_cfg.get("topology"),
-            "chunks_per_sync": rs_cfg.get("chunks_per_sync"),
-            "num_workers_per_link": rs_cfg.get("num_workers_per_link"),
-            "num_buffers_per_channel": rs_cfg.get("num_buffers_per_channel"),
-        }
-        rs_kwargs = {k: v for k, v in rs_kwargs.items() if v is not None}
-        return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -504,10 +515,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                output, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
+            )
 
         return output
 
@@ -520,9 +534,23 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+            tp_size = cfg["mesh_device"].shape[1]
+
+            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+                output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    output,
+                    dim=0,
+                    split_size=output[-1] // tp_size,
+                    output_memory_config=cfg["ring_sum_experts_output_memory_config"],
+                )
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(output, cfg["ring_final_output_reduce_scatter"])
+            else:
+                output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+                output = ttnn.experimental.reduce_scatter_minimal_async(
+                    output, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
+                )
 
         return output
