@@ -142,7 +142,7 @@
 #define NOC_STATUS(cnt) (NOC_REGS_START_ADDR + 0x200 + ((cnt) * 4))
 
 // status/performance counter registers
-// IMPROVE: add offsets for misc. debug status regiters
+// IMPROVE: add offsets for misc. debug status registers
 
 // from noc/rtl/tt_noc_params.svh
 // parameter TOTAL_STATUS_REGS = NIU_STATUS_REGS + MST_IF_INTP_STATUS_REGS + ROUTER_STATUS_REGS + SLV_IF_STATUS_REGS +

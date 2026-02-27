@@ -100,7 +100,7 @@ struct LoopConfig {
      * @def reset_addrgen_0()                                                                                        \
      * @def reset_addrgen_1()                                                                                        \
      *                                                                                                               \
-     * @brief Defines an inline reset functions for reseting address generator state                                 \
+     * @brief Defines an inline reset functions for resetting address generator state                                \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
      */                                                                                                              \

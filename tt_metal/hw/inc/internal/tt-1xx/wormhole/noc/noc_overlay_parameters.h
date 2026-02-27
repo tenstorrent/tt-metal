@@ -295,7 +295,7 @@
 #define MSG_HEADER_WORD_CNT_BITS_WIDTH MEM_WORD_BIT_OFFSET_WIDTH
 
 // Number of received & stored messages (read-only).
-// To get the total number of messages penidng in memory read
+// To get the total number of messages pending in memory read
 // STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX
 #define STREAM_NUM_MSGS_RECEIVED_REG_INDEX 18
 

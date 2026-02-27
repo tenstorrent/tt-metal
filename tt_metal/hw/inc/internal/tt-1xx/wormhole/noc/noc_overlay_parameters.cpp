@@ -261,7 +261,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      {},
      {},
-     "// Number of received & stored messages (read-only). \n// To get the total number of messages penidng in memory "
+     "// Number of received & stored messages (read-only). \n// To get the total number of messages pending in memory "
      "read \n// STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX\n"},
     {"STREAM_NEXT_RECEIVED_MSG_ADDR",
      19,

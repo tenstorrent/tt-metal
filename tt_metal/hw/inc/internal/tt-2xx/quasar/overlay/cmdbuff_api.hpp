@@ -67,7 +67,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def reset_cmdbuf_0()                                                                                           \
      * @def reset_cmdbuf_1()                                                                                           \
      *                                                                                                                 \
-     * @brief Defines an inline reset functions for reseting command buffers state                                     \
+     * @brief Defines an inline reset functions for resetting command buffers state                                    \
      * Should be called before any other command buffer setup functions.                                               \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \

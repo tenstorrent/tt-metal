@@ -65,7 +65,7 @@
 
 #define NOC_STATUS(cnt) (NOC_REGS_START_ADDR + 0x200 + ((cnt) * 4))
 // status/performance counter registers
-// IMPROVE: add offsets for misc. debug status regiters
+// IMPROVE: add offsets for misc. debug status registers
 
 #define NIU_SLV_POSTED_WR_REQ_STARTED 0x3D
 #define NIU_SLV_NONPOSTED_WR_REQ_STARTED 0x3C
