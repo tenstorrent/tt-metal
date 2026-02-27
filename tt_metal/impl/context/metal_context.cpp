@@ -294,7 +294,7 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+    if (has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
         cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
     }
@@ -348,6 +348,11 @@ void MetalContext::teardown() {
         return;
     }
     initialized_ = false;
+
+    // Gate lazy initialization as early as possible. The flag check in get_control_plane() /
+    // get_system_mesh() only fires on the null (lazy-init) path, so existing non-null callers
+    // within teardown() are unaffected.
+    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
 
     auto all_devices = cluster_->all_chip_ids();
     // If simulator is enabled, force a teardown of active ethernet cores for WH
@@ -406,8 +411,11 @@ void MetalContext::teardown() {
     // Deinitialize inspector
     inspector_data_.reset();
 
-    system_mesh_.reset();
-    control_plane_.reset();
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        system_mesh_.reset();
+        control_plane_.reset();
+    }
 
     noc_debug_state_.reset();
 
@@ -762,13 +770,13 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        if (!has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
             continue;
         }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        if (!has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
             continue;
         }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
@@ -780,15 +788,14 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
 
-    // Prevent lazy initialization during teardown to avoid deadlocks and use-after-free
-    if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
-        TT_THROW(
-            "ControlPlane is being destroyed. Cannot access control plane during teardown. "
-            "Ensure all devices are closed before destroying MetalContext.");
-    }
-
     if (!control_plane_) {
-        // Initialize control plane (creates stub for mock devices)
+        // Prevent lazy initialization during teardown to avoid deadlocks and use-after-free.
+        // Only guard the lazy-init path: if control_plane_ is already valid, always return it.
+        if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
+            TT_THROW(
+                "ControlPlane is being destroyed. Cannot access control plane during teardown. "
+                "Ensure all devices are closed before destroying MetalContext.");
+        }
         log_debug(tt::LogDistributed, "Lazy initializing ControlPlane from get_control_plane()");
         this->initialize_control_plane_impl();
     }
@@ -798,6 +805,12 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
 distributed::SystemMesh& MetalContext::get_system_mesh() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!system_mesh_) {
+        // Prevent lazy initialization during teardown (consistent with get_control_plane).
+        if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
+            TT_THROW(
+                "ControlPlane is being destroyed. Cannot access system mesh during teardown. "
+                "Ensure all devices are closed before destroying MetalContext.");
+        }
         if (!control_plane_) {
             this->initialize_control_plane_impl();
         }
@@ -845,17 +858,14 @@ void MetalContext::teardown_fabric_config() {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
 
-    // Set flag to prevent lazy initialization during teardown
-    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
-
     // Only clear if control plane exists; do not call get_control_plane() or
     // we may lazily create one during teardown (e.g. after devices are
     // closed), which can trigger topology mapper failures.
+    // Note: do NOT set control_plane_teardown_in_progress_ here — this function only
+    // clears the fabric context but leaves control_plane_ alive. Setting the flag here
+    // would block legitimate get_control_plane() calls in subsequent test setup.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (control_plane_) {
-        // Signal the control plane that teardown is in progress so lookups
-        // against partially-cleared router maps return safe fallbacks instead of throwing.
-        control_plane_->set_teardown_in_progress(true);
         control_plane_->clear_fabric_context();
     }
 }
@@ -1118,7 +1128,7 @@ void MetalContext::reset_cores(ChipId device_id) {
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+    if (has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         // Active ethernet
         if (hal_->get_eth_fw_is_cooperative()) {
             for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
@@ -1180,8 +1190,7 @@ void MetalContext::reset_cores(ChipId device_id) {
         }
     }
 
-    if (has_flag(
-            tt::tt_metal::MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+    if (has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         // Reset idle ethernet cores
         for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
@@ -1645,7 +1654,7 @@ void MetalContext::initialize_firmware(
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
-            if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            if (!has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
                 break;
             }
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
