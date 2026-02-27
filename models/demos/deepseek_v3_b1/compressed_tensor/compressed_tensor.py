@@ -49,6 +49,30 @@ def _align(n: int, alignment: int) -> int:
     return ((n + alignment - 1) // alignment) * alignment
 
 
+# 2-bit packing: 4 tile format indices per byte, LSB first.
+_BITS_PER_TILE = 2
+_TILES_PER_BYTE = 8 // _BITS_PER_TILE  # 4
+_TILE_MASK = (1 << _BITS_PER_TILE) - 1  # 0x3
+
+
+def _pack_assignment(flat: np.ndarray) -> np.ndarray:
+    """Pack flat uint8 assignment array (1 byte/tile) into 2-bit packed uint8 (4 tiles/byte)."""
+    num_tiles = len(flat)
+    num_bytes = (num_tiles + _TILES_PER_BYTE - 1) // _TILES_PER_BYTE
+    packed = np.zeros(num_bytes, dtype=np.uint8)
+    for i in range(num_tiles):
+        packed[i // _TILES_PER_BYTE] |= (flat[i] & _TILE_MASK) << ((i % _TILES_PER_BYTE) * _BITS_PER_TILE)
+    return packed
+
+
+def _unpack_assignment(packed: np.ndarray, num_tiles: int) -> np.ndarray:
+    """Unpack 2-bit packed uint8 array back to flat uint8 (1 byte/tile)."""
+    result = np.zeros(num_tiles, dtype=np.uint8)
+    for i in range(num_tiles):
+        result[i] = (packed[i // _TILES_PER_BYTE] >> ((i % _TILES_PER_BYTE) * _BITS_PER_TILE)) & _TILE_MASK
+    return result
+
+
 class CompressedTensor:
     """A mixed-precision tensor where each 32×32 tile is independently quantized to bfp8/bfp4/bfp2.
 
@@ -129,7 +153,8 @@ class CompressedTensor:
             data_bytes, self._tile_mant_bits = self._pack(tensor, assignment)
             data_memory_config = memory_config
             self.max_shard_size = 0
-            assign_bytes = torch.from_numpy(assignment.astype(np.uint8).ravel()).unsqueeze(0)
+            packed_assign = _pack_assignment(assignment.astype(np.uint8).ravel())
+            assign_bytes = torch.from_numpy(packed_assign).unsqueeze(0)
             assign_memory_config = assignment_memory_config or memory_config
 
         # Store the original tensor's spec (shape + layout + memory config).
@@ -194,25 +219,28 @@ class CompressedTensor:
         return self._unpack_flat(flat_np)
 
     def get_assignment_numpy(self) -> np.ndarray:
-        """Get assignment as (tiles_h, tiles_w) numpy array."""
+        """Get assignment as (tiles_h, tiles_w) numpy array. Unpacks 2-bit encoding."""
         assign_tensor = self.assignment
         if ttnn.is_tensor_storage_on_device(assign_tensor):
             assign_tensor = ttnn.from_device(assign_tensor)
         raw = ttnn.to_torch(assign_tensor).numpy().astype(np.uint8)
 
         if self.max_shard_size > 0:
-            # Sharded: flatten and split by shard size, skip alignment padding
+            # Sharded: flatten and split by shard byte size, unpack each shard
             flat = raw.ravel()
             num_shards = len(self._shard_tile_coords)
             shard_bytes = len(flat) // num_shards
             result = np.zeros(self.tiles_h * self.tiles_w, dtype=np.int8)
             for shard_idx, tile_coords in enumerate(self._shard_tile_coords):
                 shard_start = shard_idx * shard_bytes
+                shard_packed = flat[shard_start : shard_start + shard_bytes]
+                shard_unpacked = _unpack_assignment(shard_packed, len(tile_coords))
                 for i, (tr, tc) in enumerate(tile_coords):
-                    result[tr * self.tiles_w + tc] = flat[shard_start + i]
+                    result[tr * self.tiles_w + tc] = shard_unpacked[i]
             return result.reshape(self.tiles_h, self.tiles_w)
         else:
-            return raw.ravel().astype(np.int8).reshape(self.tiles_h, self.tiles_w)
+            num_tiles = self.tiles_h * self.tiles_w
+            return _unpack_assignment(raw.ravel(), num_tiles).astype(np.int8).reshape(self.tiles_h, self.tiles_w)
 
     @property
     def data_bytes(self) -> int:
@@ -345,17 +373,19 @@ class CompressedTensor:
             shard_assign = np.array([assignment[tr, tc] for tr, tc in tile_coords], dtype=np.uint8)
             assign_shards.append(shard_assign)
 
-        # Shard spec uses max tiles per shard (aligned to buffer type), ttnn handles partial last shard
+        # Pack each shard's assignments to 2-bit, then pad to alignment
         max_tiles = max(len(s) for s in assign_shards)
+        packed_shard_bytes = (max_tiles + _TILES_PER_BYTE - 1) // _TILES_PER_BYTE
         alignment = _get_alignment(buffer_type)
-        shard_bytes = _align(max_tiles, alignment)
-        # Pad each shard to aligned size
+        shard_bytes = _align(packed_shard_bytes, alignment)
+
         padded_shards = []
         for shard in assign_shards:
-            pad_size = shard_bytes - len(shard)
+            packed = _pack_assignment(shard)
+            pad_size = shard_bytes - len(packed)
             if pad_size > 0:
-                shard = np.concatenate([shard, np.zeros(pad_size, dtype=np.uint8)])
-            padded_shards.append(shard)
+                packed = np.concatenate([packed, np.zeros(pad_size, dtype=np.uint8)])
+            padded_shards.append(packed)
 
         flat_np = np.concatenate(padded_shards)
         layout = memory_config.memory_layout
