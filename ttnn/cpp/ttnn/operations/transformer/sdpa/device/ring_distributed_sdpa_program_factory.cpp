@@ -301,6 +301,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         scale_union.u,
         0,  //(uint32_t)sliding_window_size,
         0,  //(std::uint32_t)use_attention_sink,
+        0,  //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 

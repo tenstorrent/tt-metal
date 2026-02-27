@@ -475,16 +475,18 @@ template <
     uint32_t scale_fp32,
     uint32_t subblock_h,
     bool use_padded_mask,
-    uint32_t cb_q_in,
-    uint32_t cb_kt_in,
-    uint32_t cb_v_in,
-    uint32_t cb_qkt_im,
-    uint32_t cb_identity_scale_in,
-    uint32_t cb_exp_max_diff,
-    uint32_t cb_col_identity,
-    uint32_t cb_recip_scratch,
-    uint32_t cb_normalized_out,
-    uint32_t cb_mask_in>
+    bool ring_mode = false,
+    bool use_ring_mask = false,
+    uint32_t cb_q_in = 0,
+    uint32_t cb_kt_in = 0,
+    uint32_t cb_v_in = 0,
+    uint32_t cb_qkt_im = 0,
+    uint32_t cb_identity_scale_in = 0,
+    uint32_t cb_exp_max_diff = 0,
+    uint32_t cb_col_identity = 0,
+    uint32_t cb_recip_scratch = 0,
+    uint32_t cb_normalized_out = 0,
+    uint32_t cb_mask_in = 0>
 void sdpa_inner_loop_step(
     const uint32_t prev_max,
     const uint32_t cur_max,
@@ -493,7 +495,8 @@ void sdpa_inner_loop_step(
     const uint32_t prev_out,
     const uint32_t cur_out,
     const bool is_last_iter,
-    const bool is_first_iter) {
+    const bool is_first_iter,
+    [[maybe_unused]] const bool apply_mask = false) {
     constexpr uint32_t sbh = subblock_h;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t qkt_subblock_w = 8 / sbh;
@@ -525,6 +528,13 @@ void sdpa_inner_loop_step(
     // Wait for mask tiles if writer generates them (Q or K padding)
     if constexpr (use_padded_mask) {
         if (is_last_iter) {
+            cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
+        }
+    }
+
+    // Wait for ring mask tiles if this K chunk needs masking
+    if constexpr (use_ring_mask) {
+        if (apply_mask) {
             cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
         }
     }
@@ -567,6 +577,35 @@ void sdpa_inner_loop_step(
             }
         }
 
+        // Ring mask: L1-accumulate full mask tiles onto cb_qkt_im for this row group.
+        // Used by ring joint SDPA when K chunk requires masking (sequence boundaries).
+        if constexpr (use_ring_mask) {
+            if (apply_mask) {
+                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "RING_MASK");
+                constexpr uint32_t DST_BATCH = 8;
+                for (uint32_t row = 0; row < sbh; row++) {
+                    uint32_t out_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
+                    uint32_t mask_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
+                    copy_tile_to_dst_init_short(cb_mask_in);
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    for (uint32_t base = 0; base < Sk_chunk_t; base += DST_BATCH) {
+                        uint32_t batch = (Sk_chunk_t - base < DST_BATCH) ? (Sk_chunk_t - base) : DST_BATCH;
+                        tile_regs_acquire();
+                        for (uint32_t i = 0; i < batch; i++) {
+                            copy_tile(cb_mask_in, mask_row_offset + base + i, i);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < batch; i++) {
+                            pack_tile<true>(i, cb_qkt_im, out_row_offset + base + i);
+                        }
+                        tile_regs_release();
+                    }
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                }
+            }
+        }
+
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
         cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
 
@@ -594,6 +633,13 @@ void sdpa_inner_loop_step(
     // Pop mask after all rows processed (must match writer's generate_mask push)
     if constexpr (use_padded_mask) {
         if (is_last_iter) {
+            cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
+        }
+    }
+
+    // Pop ring mask after all row groups processed
+    if constexpr (use_ring_mask) {
+        if (apply_mask) {
             cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
         }
     }
@@ -699,6 +745,7 @@ void sdpa_inner_loop_step(
         };
 
         // SALAD correction + optional normalization lambda
+        // In ring_mode, skip per-row normalization on last iter — caller does bulk finalization.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
@@ -708,7 +755,7 @@ void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, vDHt>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
-            if (last_iter) {
+            if (last_iter && !ring_mode) {
                 normalize_row(w_salad, pushed);
             }
         };
@@ -749,7 +796,7 @@ void sdpa_inner_loop_step(
             // SALAD corrections + optional per-row normalization
             if (!is_first_iter) {
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
-            } else if (is_last_iter) {
+            } else if (is_last_iter && !ring_mode) {
                 normalize_row(w_salad, pushed_rows);
             }
 
@@ -769,13 +816,14 @@ void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, sbh);
 
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
-            } else if (is_last_iter) {
+            } else if (is_last_iter && !ring_mode) {
                 normalize_row(w_salad, pushed_rows);
             }
         }
 
-        // Bulk push — skip on last iteration (rows already consumed by normalization)
-        if (!is_last_iter) {
+        // Bulk push — skip on last iteration when rows are consumed by normalization.
+        // In ring_mode, always bulk push (even on last iter) — caller handles finalization.
+        if (!is_last_iter || ring_mode) {
             cb_push_back(cur_sum, Sq_chunk_t);
             cb_push_back(cur_out, qktv_output_num_tiles);
         }
@@ -836,6 +884,8 @@ void sdpa_standard_v2(
                 scale_fp32,
                 subblock_h,
                 use_padded_mask,
+                false,  // ring_mode
+                false,  // use_ring_mask
                 cb_q_in,
                 cb_kt_in,
                 cb_v_in,
@@ -885,5 +935,207 @@ void sdpa_standard_v2(
             call_step(std::false_type{}, is_last, is_first);
         }
         // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
+    }
+}
+
+/**
+ * Streaming Ring SDPA (v2): Ring-aware variant of sdpa_standard_v2.
+ * Calls sdpa_inner_loop_step with ring_mode=true and use_ring_mask=true.
+ * After K-chunk loop: performs ring finalization (log, LSE, recip, sigmoid blend).
+ *
+ * Per-Q-chunk outer loop with ping-pong buffer management.
+ * Per ring iteration, processes all Q chunks over [global_q_start, global_q_end).
+ */
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t Skt,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t subblock_h,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_mask_in,
+    uint32_t cb_scale_in,
+    uint32_t cb_lse_in,
+    uint32_t cb_lse_out,
+    uint32_t cb_prev_out,
+    uint32_t cb_out>
+void sdpa_ring_v2(
+    const uint32_t global_q_start,
+    const uint32_t global_q_end,
+    const uint32_t num_kv_chunks,
+    const uint32_t ring_iter,
+    const uint32_t ring_id,
+    const uint32_t num_local_k_chunks,
+    const uint32_t local_padded_Nt,
+    const uint32_t logical_nt,
+    const bool ring_iter_needs_global_n_mask,
+    const bool ring_iter_needs_joint_n_mask,
+    const bool local_n_needs_masking,
+    const uint32_t global_n_mask_chunk_id,
+    const uint32_t local_n_mask_chunk_id,
+    const uint32_t joint_n_mask_chunk_id,
+    const uint32_t cb_out_im_A,
+    const uint32_t cb_out_im_B,
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B) {
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+
+    uint32_t KV_chunks_processed_in_iter = 0;
+
+    for (uint32_t q = global_q_start; q < global_q_end; q++) {
+        uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
+        uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
+        uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
+
+        uint32_t KV_chunks_processed = 0;
+
+        for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+            // Skip KV chunks beyond logical sequence length (non-joint only)
+            const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+            const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+            if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
+                continue;
+            }
+
+            KV_chunks_processed++;
+            KV_chunks_processed_in_iter++;
+
+            bool is_first = (KV_chunks_processed == 1);
+
+            // Determine if this K chunk needs masking
+            bool apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
+                              (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
+                              (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
+
+            // Call streaming step with ring_mode=true (skip normalization, always push)
+            // is_last_iter=false: Q pop and finalization handled by this outer loop.
+            sdpa_inner_loop_step<
+                false,  // PROFILING_ENABLED
+                Sq_chunk_t,
+                Sk_chunk_t,
+                Skt,
+                DHt,
+                vDHt,
+                scale_fp32,
+                subblock_h,
+                false,  // use_padded_mask — ring uses ring mask instead
+                true,   // ring_mode
+                true,   // use_ring_mask
+                cb_q_in,
+                cb_kt_in,
+                cb_v_in,
+                cb_qkt_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                0,  // cb_normalized_out — unused in ring_mode (no per-row normalization)
+                cb_mask_in>(
+                alias_prev_max,
+                alias_cur_max,
+                alias_prev_sum,
+                alias_cur_sum,
+                alias_prev_out,
+                alias_cur_out,
+                false,  // is_last_iter
+                is_first,
+                apply_mask);
+
+            // Post-iteration cleanup: pop previous values and swap aliases
+            if (!is_first) {
+                cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
+                cb_pop_front(alias_prev_max, Sq_chunk_t);
+                cb_pop_front(alias_prev_sum, Sq_chunk_t);
+                cb_pop_front(alias_prev_out, Sq_chunk_t * vDHt);
+            }
+
+            std::swap(alias_prev_max, alias_cur_max);
+            std::swap(alias_prev_sum, alias_cur_sum);
+            std::swap(alias_prev_out, alias_cur_out);
+        }
+
+        // Pop Q — not popped inside step since is_last_iter was always false
+        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+
+        // ========== Ring Finalization ==========
+        // After all K chunks: alias_prev_sum = final sum, alias_prev_max = final max,
+        // alias_prev_out = final unnormalized output. alias_cur_* are empty.
+
+        // 1. log(sum) → alias_cur_max (scratch)
+        log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+
+        // 2. LSE = scale * max + log(sum)
+        mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
+        add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
+
+        // 3. Normalize output: out = out / sum
+        recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_prev_out, alias_prev_sum);
+
+        if (ring_iter > 0) {
+            // Sigmoid blend with previous ring iteration's output and LSE
+            //   sig = sigmoid(cur_lse - prev_lse)
+            //   out = prev_out - sig * (prev_out - cur_out)
+            //   lse = prev_lse - logsigmoid(prev_lse - cur_lse)
+            cb_wait_front(cb_lse_in, Sq_chunk_t);
+            cb_wait_front(cb_prev_out, out_chunk_tiles);
+
+            uint32_t alias_cur_lse = alias_prev_max;    // full (contains LSE)
+            uint32_t alias_sig = alias_cur_max;         // empty
+            uint32_t alias_cur_out_r = alias_prev_out;  // full (contains normalized output)
+            uint32_t alias_sub = alias_cur_out;         // empty
+
+            // sig = sigmoid(cur_lse - prev_lse)
+            sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
+
+            // sub = prev_out - cur_out
+            reconfig_data_format(cb_prev_out, alias_cur_out_r);
+            sub_block(cb_prev_out, alias_cur_out_r, alias_sub, out_chunk_tiles);
+            // sub *= sig
+            reconfig_data_format(alias_sub, alias_sig);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+            // out = prev_out - sub
+            reconfig_data_format(cb_prev_out, alias_sub);
+            pack_reconfig_data_format(cb_out);
+            sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
+            cb_pop_front(cb_prev_out, out_chunk_tiles);
+            cb_pop_front(alias_cur_out_r, out_chunk_tiles);
+            cb_pop_front(alias_sub, out_chunk_tiles);
+
+            // lse = prev_lse - logsigmoid(prev_lse - cur_lse)
+            pack_reconfig_data_format(alias_sig);
+            reconfig_data_format(cb_lse_in, alias_cur_lse);
+            logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
+            sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
+            cb_pop_front(alias_sig, Sq_chunk_t);
+            cb_pop_front(alias_cur_lse, Sq_chunk_t);
+            cb_pop_front(cb_lse_in, Sq_chunk_t);
+        } else {
+            // First ring iteration: copy output and LSE directly
+            pack_reconfig_data_format(cb_out);
+            copy_block(alias_prev_out, cb_out, out_chunk_tiles);
+
+            pack_reconfig_data_format(cb_lse_out);
+            copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
+        }
+    }
+
+    // Dummy KV pop for double-buffer alignment (same as sdpa_inner_loop for RING)
+    if (KV_chunks_processed_in_iter % 2 == 0) {
+        cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
+        cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
+        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+        cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
     }
 }
