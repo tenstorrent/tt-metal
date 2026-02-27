@@ -14,10 +14,6 @@ namespace ttnn::prim {
 
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_tensor_arg.nd_shard_spec().has_value() ||
-        operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        return EmbeddingsNDShardedProgramFactory{};
-    }
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
         return EmbeddingsTilizedIndicesProgramFactory{};
     }
