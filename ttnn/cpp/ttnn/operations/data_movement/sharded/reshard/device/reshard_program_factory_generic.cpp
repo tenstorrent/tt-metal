@@ -240,6 +240,7 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
 
     for (const auto& [core, page_strides] : input_map) {
         if (page_strides.empty()) {
+            ret_map.try_emplace(core, std::vector<detail::CompressedStrideBlock>{});
             continue;
         }
         std::vector<detail::CompressedStrideBlock> compressed_blocks;
