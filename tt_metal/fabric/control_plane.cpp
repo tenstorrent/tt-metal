@@ -468,7 +468,7 @@ void ControlPlane::init_control_plane(
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
-        topology_mapping_timeout = std::chrono::duration<float>(60.0f);
+        topology_mapping_timeout = std::chrono::duration<float>(120.0f);
     }
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
