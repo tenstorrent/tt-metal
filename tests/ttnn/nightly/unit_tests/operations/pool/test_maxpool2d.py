@@ -122,27 +122,28 @@ def run_max_pool2d(
         out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     torch.manual_seed(0)
-    torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+    torch_input = randomize_torch_tensor(tensor_map, ttnn_input_shape)
+
     if in_dtype == ttnn.bfloat8_b:
         assert use_reshaped_tensor == True
         ttnn_input = ttnn.from_torch(
-            torch_input_reshaped, in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_memory_config
+            torch_input, in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_memory_config
         )
     else:
         if use_reshaped_tensor:
             ttnn_input = ttnn.from_torch(
-                torch_input_reshaped,
+                torch_input,
                 in_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=in_memory_config,
             )
         else:
+            # For non-reshaped tensor path, reshape to NHWC (N, H, W, C)
+            torch_input_nhwc = torch_input.reshape(in_n, in_h, in_w, in_c)
             ttnn_input = ttnn.from_torch(
-                torch_input_permuted,
+                torch_input_nhwc,
                 in_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
@@ -170,43 +171,25 @@ def run_max_pool2d(
         config_tensor_in_dram=config_tensor_in_dram,
     )
 
-    # apply padding manually to torch tensor since torch doesn't support asymmetric padding
     if padding_is_4d:
         assert (
             not ceil_mode_out_shape_adj
         ), "current test infrastructure does not support ceil mode output shape adjustments with 4D padding"
-        torch_input_padded = torch.nn.functional.pad(
-            torch_input,
-            (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
-            mode="constant",
-            value=float("-inf"),
-        )
-        torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
-    else:
-        torch_input_padded = torch_input
-        torch_padding = padding
 
-    torch_input_formatted = torch_input_padded.permute(0, 2, 3, 1).reshape(
-        1, 1, in_n * torch_input_padded.shape[2] * torch_input_padded.shape[3], in_c
-    )
     torch_output = golden_maxpool2d(
-        input_tensor=torch_input_formatted,
+        input_tensor=torch_input,
         batch_size=in_n,
-        input_h=torch_input_padded.shape[2],
-        input_w=torch_input_padded.shape[3],
+        input_h=in_h,
+        input_w=in_w,
         channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
-        padding=torch_padding,
+        padding=[pad_t, pad_b, pad_l, pad_r],
         dilation=dilation,
         ceil_mode=ceil_mode,
     )
-    torch_output = torch_output.reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
 
-    # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
     # test for equivalance
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)

@@ -42,9 +42,11 @@ def test_upsample_nearest_interleaved(
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
-    # Generate appropriate test data based on dtype
-    input = torch.rand(input_shapes, dtype=dtype_torch)
-    tt_input = input.permute(0, 2, 3, 1)
+    if dtype_torch == torch.float32:
+        torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.float32)
+    else:
+        torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
+    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
     input_tensor = ttnn.from_torch(
         tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
     )
@@ -54,9 +56,8 @@ def test_upsample_nearest_interleaved(
 
     scale_factor = (scale_h, scale_w)
 
-    torch_input_formatted = input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
     torch_result = golden_upsample(
-        input_tensor=torch_input_formatted,
+        input_tensor=torch_input,
         batch_size=batch_size,
         input_h=height,
         input_w=width,
@@ -64,9 +65,7 @@ def test_upsample_nearest_interleaved(
         scale_factor=scale_factor,
         mode="nearest",
     )
-    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
-
-    scale_factor = (scale_h, scale_w)
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
@@ -76,7 +75,6 @@ def test_upsample_nearest_interleaved(
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
     pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, 0.9999)
     logger.info(pcc_message)
 
@@ -115,20 +113,17 @@ def test_bilinear_interleaved_memory(
 
     torch.manual_seed(0)
 
-    input_shape = [batch_size, num_channels, height, width]
-
     mode = "bilinear"
 
-    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
-    tt_input = torch_input.permute(0, 2, 3, 1)
-    input_tensor = ttnn.from_torch(tt_input, device=device)
-    scale_factor = (scale_h, scale_w)
-    # Use golden function
     from ttnn.operations.pool import golden_upsample
 
-    torch_input_formatted = torch_input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
+    torch_input = torch.rand((1, 1, batch_size * height * width, num_channels), dtype=torch.bfloat16)
+    tt_input = torch_input.reshape(batch_size, height, width, num_channels)
+    input_tensor = ttnn.from_torch(tt_input, device=device)
+    scale_factor = (scale_h, scale_w)
+
     torch_result = golden_upsample(
-        input_tensor=torch_input_formatted,
+        input_tensor=torch_input,
         batch_size=batch_size,
         input_h=height,
         input_w=width,
@@ -136,7 +131,7 @@ def test_bilinear_interleaved_memory(
         scale_factor=scale_factor,
         mode=mode,
     )
-    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=math_fidelity,
@@ -154,7 +149,6 @@ def test_bilinear_interleaved_memory(
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
     pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, pcc=0.999)
     logger.info(pcc_message)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
@@ -188,8 +182,6 @@ def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_rang
         core_range=core_range,
         run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -228,8 +220,6 @@ def test_upsample_various(
         core_range=core_range,
         run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -324,8 +314,6 @@ def test_upsample_nearest_float_sharded(device, input_shape, scale_h, scale_w, s
     torch_result, output_tensor = upsample_multicore_common(
         device, input_shape, scale_h, scale_w, shard_strategy, ttnn.ShardOrientation.ROW_MAJOR
     )
-    torch_result = torch_result.permute(0, 2, 3, 1)
-
     passing, pcc_msg = assert_with_pcc(torch_result, output_tensor, pcc=0.9999)
     logger.info(pcc_msg)
     assert passing
