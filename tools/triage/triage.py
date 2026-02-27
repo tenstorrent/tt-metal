@@ -238,6 +238,13 @@ class TriageScript:
             return result
         except TimeoutDeviceRegisterError:
             raise
+        except ValueError as e:
+            if log_error:
+                self.failed = True
+                self.failure_message = f"{e}"
+                return None
+            else:
+                raise
         except Exception as e:
             if log_error:
                 self.failed = True

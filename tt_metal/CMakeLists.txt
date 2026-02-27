@@ -238,6 +238,8 @@ target_sources(
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
             ${TT_LLK_HEADERS}
+            # SFPI Version for kernel caching
+            sfpi-version
 )
 
 include(CheckFunctionExists)
@@ -262,7 +264,6 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
-        Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -278,6 +279,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
+        Reflect::Reflect
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
