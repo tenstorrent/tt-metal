@@ -10,6 +10,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -323,6 +324,8 @@ def test_sampling_argmax_mesh_2x2_axis_x_perf(mesh_device, num_iters, num_warmup
     - double-buffered semaphores,
     - per-iteration persistent output/scratch buffers.
     """
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     seed = 2005
     final_core_idx = 100
     final_mesh_coord = (1, 1)
@@ -675,6 +678,8 @@ def test_sampling_argmax_mesh_4x2_axis_x_perf(mesh_device, num_iters, num_warmup
     - double-buffered semaphores,
     - per-iteration persistent output/scratch buffers.
     """
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     seed = 2005
     final_core_idx = 100
 

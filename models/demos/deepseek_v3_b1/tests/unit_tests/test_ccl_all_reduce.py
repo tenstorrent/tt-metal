@@ -19,6 +19,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -71,6 +72,8 @@ def test_ccl_all_reduce(
     num_warmup_iter,
     num_iter,
 ):
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     # Validate mesh size
     if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")

@@ -617,6 +617,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
 
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
+    device_grid_size = submesh.compute_with_storage_grid_size()
     full_device_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
@@ -992,6 +993,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode):
 
     sdpa_out_interm_shard_height = 40
     sdpa_out_interm_shard_width = 544
+    device_grid_size = submesh.compute_with_storage_grid_size()
     full_device_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )

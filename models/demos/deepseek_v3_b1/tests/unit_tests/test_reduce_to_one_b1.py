@@ -14,7 +14,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import is_slow_dispatch, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -246,6 +246,8 @@ def run_reduce_to_one(mesh_device, num_iterations=1):
 
 def run_reduce_to_one_with_trace(mesh_device):
     """Run reduce_to_one test with trace capture and replay."""
+    if is_slow_dispatch():
+        pytest.skip("Trace not supported for slow dispatch")
     print(f"\n=== Testing reduce_to_one with trace ===")
 
     config = setup_reduce_to_one_test(mesh_device)
