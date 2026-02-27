@@ -3381,7 +3381,7 @@ tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricN
             "Returning 0 as safe fallback.",
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id);
-        return 0;
+        return tt::tt_metal::AsicID{0};
     }
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
 }
