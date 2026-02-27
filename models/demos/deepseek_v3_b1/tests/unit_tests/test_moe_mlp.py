@@ -413,8 +413,10 @@ def extract_routed_expert_output(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused(device, use_hardcoded_expert_index):
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
     M = 1
@@ -470,6 +472,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         tile=ttnn.Tile([8, 32]),
     )
 
+    moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -493,9 +496,12 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed")
+    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # Read back routed expert results
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
@@ -559,8 +565,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -592,6 +600,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -691,6 +700,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     logger.info("Created 4 global semaphores for reduce synchronization")
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
+    moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -714,14 +724,17 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         # ReduceToOne parameters
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed")
+    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Read gate scores/indices from device (needed for per-device golden)
@@ -804,8 +817,10 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
 # ============================================================================
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_mlp(device):
+def test_mlp(device, reconfig_moe_cbs, noc_mode):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
 
     M = 1
@@ -860,6 +875,7 @@ def test_mlp(device):
     )
 
     # ── Run MoeOp with enable_routing=False ──
+    moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = 100
     ttnn_result_final = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -878,9 +894,12 @@ def test_mlp(device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)
@@ -923,8 +942,10 @@ def test_mlp(device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
+@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_mlp_with_reduce(bh_2d_mesh_device):
+def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
@@ -955,6 +976,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
     s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
 
     # ── Create SDPA buffers for CB memory overlap ──
+    device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = 256
     kvpe_dim = 576
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
@@ -1053,6 +1075,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
     logger.info("Created 4 global semaphores for reduce synchronization")
 
     # ── Run MoeOp with enable_routing=False and reduce ──
+    moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = 100
     ttnn_result_reduce = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -1071,13 +1094,16 @@ def test_mlp_with_reduce(bh_2d_mesh_device):
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
+        reconfig_moe_cbs=reconfig_moe_cbs,
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed")
+    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights

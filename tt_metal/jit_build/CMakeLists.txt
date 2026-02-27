@@ -1,6 +1,7 @@
 set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/build_env_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_device_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/depend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/genfiles.cpp
