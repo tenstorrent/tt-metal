@@ -781,7 +781,6 @@ def test_wan_time_text_image_embedding(
     temb, timestep_proj, encoder_hidden_states = tt_model(tt_timestep, tt_encoder_hidden_states)
 
     # prepare data for comparison
-    breakpoint()
     timestep_proj_torch = timestep_proj_torch.unflatten(1, (6, -1))
     timestep_proj = unflatten(timestep_proj, -1, (6, -1))
     temb = ccl_manager.all_gather(temb, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
