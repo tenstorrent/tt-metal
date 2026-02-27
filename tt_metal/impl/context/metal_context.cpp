@@ -157,6 +157,11 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
 
+    // Clear the teardown flag to allow control plane access during initialization.
+    // The flag may have been set by a previous teardown() call; clearing it here
+    // ensures get_control_plane() can proceed with lazy initialization.
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     // Workaround for galaxy, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
@@ -349,10 +354,10 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
-    // Gate lazy initialization as early as possible. The flag check in get_control_plane() /
-    // get_system_mesh() only fires on the null (lazy-init) path, so existing non-null callers
-    // within teardown() are unaffected.
-    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
+    // NOTE: Do NOT set control_plane_teardown_in_progress_ here.
+    // teardown() is called between tests to reset state for reuse - lazy init should
+    // be allowed afterwards. The flag is only set in teardown_base_objects() which is
+    // called during actual destruction (process exit or mock-to-real switch).
 
     auto all_devices = cluster_->all_chip_ids();
     // If simulator is enabled, force a teardown of active ethernet cores for WH
@@ -547,7 +552,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Set flag to prevent lazy initialization during teardown
-    control_plane_teardown_in_progress_.test_and_set(std::memory_order_release);
+    control_plane_teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
 
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     {
@@ -574,6 +579,10 @@ void MetalContext::teardown_dispatch_state() {
 }
 
 void MetalContext::initialize_base_objects() {
+    // Clear teardown flag to allow control plane initialization during reinit flows
+    // (e.g. reinitialize_for_real_hardware calls teardown_base_objects then initialize_base_objects)
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
@@ -791,7 +800,7 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     if (!control_plane_) {
         // Prevent lazy initialization during teardown to avoid deadlocks and use-after-free.
         // Only guard the lazy-init path: if control_plane_ is already valid, always return it.
-        if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
+        if (control_plane_teardown_in_progress_.test(std::memory_order_seq_cst)) {
             TT_THROW(
                 "ControlPlane is being destroyed. Cannot access control plane during teardown. "
                 "Ensure all devices are closed before destroying MetalContext.");
@@ -806,7 +815,7 @@ distributed::SystemMesh& MetalContext::get_system_mesh() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!system_mesh_) {
         // Prevent lazy initialization during teardown (consistent with get_control_plane).
-        if (control_plane_teardown_in_progress_.test(std::memory_order_acquire)) {
+        if (control_plane_teardown_in_progress_.test(std::memory_order_seq_cst)) {
             TT_THROW(
                 "ControlPlane is being destroyed. Cannot access system mesh during teardown. "
                 "Ensure all devices are closed before destroying MetalContext.");
@@ -1086,7 +1095,7 @@ void MetalContext::initialize_control_plane() {
 void MetalContext::initialize_control_plane_impl() {
     // Reset teardown flag to allow control plane initialization
     // This is needed when re-initializing after a previous teardown
-    control_plane_teardown_in_progress_.clear(std::memory_order_release);
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
 
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
