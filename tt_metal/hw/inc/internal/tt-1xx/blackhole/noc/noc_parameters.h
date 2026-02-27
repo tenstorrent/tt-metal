@@ -331,7 +331,7 @@
 #define NOC_MCAST_COORDINATE_END_X(noc_coordinate) \
     (((noc_coordinate) >> (0 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 
-// Addres formats
+// Address formats
 
 #define NOC_XY_ADDR(x, y, addr)                                                                                      \
     ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \
@@ -354,7 +354,7 @@
 // while the coordinates go into hi register
 #define NOC_COORD_REG_OFFSET 0  // offset (from LSB) in register holding x-y coordinate
 
-// Addres formats
+// Address formats
 
 #define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
 

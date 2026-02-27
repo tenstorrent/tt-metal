@@ -41,7 +41,7 @@ void kernel_main() {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:

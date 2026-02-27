@@ -24,7 +24,7 @@ namespace tt::tt_metal {
 
 // A command queue is split into an issue queue and completion queue
 //  Host enqueues commands and data to be sent to device into the issue queue, and device reads from the issue queue.
-//  prefetcher kernels read commands targetting the MMIO or remote device respectively from the issue queue
+//  prefetcher kernels read commands targeting the MMIO or remote device respectively from the issue queue
 //  Device writes data into the completion queue for host to read back
 //  command_queue_consumer and remote_completion_queue_writer (to be added) kernels write into the completion queue for
 //  MMIO or remote device respectively Currently two cores are used to interface with each command queue region, marked

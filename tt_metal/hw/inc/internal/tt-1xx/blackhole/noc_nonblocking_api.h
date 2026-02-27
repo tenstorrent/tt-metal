@@ -425,7 +425,7 @@ inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t
 
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
 
@@ -945,7 +945,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
     ASSERT((dest_addr & 0x3) == 0);
@@ -1091,7 +1091,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
     // be non-posted.
     posted = false;
@@ -1146,7 +1146,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. Also, due to HW bug, using posted with
     // multicast can introduce hangs. To workaround this, we emulate force atomics to be non-posted.
     posted = false;
@@ -1639,7 +1639,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  *
  * The flags parameter uses a bitmask approach to specify which registers to program.
  * Making template functions with a long list of booleans makes understanding what registers
- * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
+ * are being set tedious. This is an attempt to pack that data in a way that's ~easy to visually parse.
  *
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)

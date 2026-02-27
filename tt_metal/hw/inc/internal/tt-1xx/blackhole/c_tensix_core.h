@@ -177,7 +177,7 @@ public:
 
     static std::uint32_t l1_size() { return SIM_L1_SIZE; }
 
-    // MM July 19 2022: In a desperate bid to fix copmiler errors, I just
+    // MM July 19 2022: In a desperate bid to fix compiler errors, I just
     // copy-pasted the version of these NOC functions directly from c_tensix_core.h
     // in blackhole. Fingers crossed...
     /*
@@ -354,7 +354,7 @@ inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint addr) { return fifo_rd
 inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint addr) { return fifo_endptr(l1_cast<uint*>(addr)); }
 
 // NOC API
-// MM July 19 2022: In a desperate bid to fix copmiler errors, I just
+// MM July 19 2022: In a desperate bid to fix compiler errors, I just
 // copy-pasted the version of these NOC functions directly from c_tensix_core.h
 // in blackhole. Fingers crossed...
 /*

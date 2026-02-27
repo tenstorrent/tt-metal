@@ -147,7 +147,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(output_mem_config.is_sharded(), "Sharded input can only output sharded tensors for transpose hc");
             TT_FATAL(
                 output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only height sharding is supported for the ouput of sharded transpose hc");
+                "Only height sharding is supported for the output of sharded transpose hc");
         } else {
             TT_FATAL(!output_mem_config.is_sharded(), "Interleaved inputs cannot output sharded outputs");
         }
