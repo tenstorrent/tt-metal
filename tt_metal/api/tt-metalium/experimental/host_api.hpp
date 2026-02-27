@@ -11,6 +11,7 @@
 
 /**
  * The APIs in this file are for initial support of Quasar, our next-generation architecture.
+ * These are temporary, placeholder APIs that will be replaced soon.
  *
  * Quasar has significant architectural differences from Wormhole and Blackhole. Some key differences are:
  * - There are 8 data movement cores per cluster
