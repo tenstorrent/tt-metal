@@ -45,6 +45,9 @@ Tensor matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+Tensor matmul_full_grid_precise(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a = false, bool transpose_b = false);
+
 std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,
     const std::vector<Tensor>& input_tensors_b,
