@@ -146,7 +146,9 @@ def _infer_platform_device_label(tt) -> Optional[str]:
     return None
 
 
-def _collect_platform_metadata(tt, device: object, *, device_label_arg: str, opened_device_id: int) -> Dict[str, object]:
+def _collect_platform_metadata(
+    tt, device: object, *, device_label_arg: str, opened_device_id: int
+) -> Dict[str, object]:
     meta: Dict[str, object] = {"device_label_arg": device_label_arg, "opened_device_id": int(opened_device_id)}
 
     try:
