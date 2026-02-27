@@ -944,6 +944,11 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
+    if mesh_shape[0] == 1 and batch_size > 1:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+        )
+
     is_decode = mode == "decode"
 
     # Create submesh with specified shape
