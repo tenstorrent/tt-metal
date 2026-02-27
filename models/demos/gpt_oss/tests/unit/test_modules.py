@@ -5,6 +5,7 @@
 import pytest
 import torch
 from loguru import logger
+from transformers import GptOssForCausalLM
 
 import ttnn
 from models.demos.gpt_oss.tt.model_mp import ModelWithMP
@@ -755,6 +756,7 @@ def run_model_forward_test(
     use_model_parallelism=False,
     ccl_manager=None,
     model_args=None,
+    mesh_shape=None,
 ):
     """
     Run a single forward pass test comparing TT model to reference model.
@@ -806,6 +808,7 @@ def run_model_forward_test(
             max_local_batch_size=local_batch_size,
             users_row_sharded=is_row_sharded,
             use_throughput_experts=use_throughput_experts,
+            mesh_shape=mesh_shape,
         )
     else:
         tt_model = Model(
@@ -824,9 +827,9 @@ def run_model_forward_test(
         )
 
     # Create reference model with HF format weights
-    # reference_model = GptOssForCausalLM(config)
-    # reference_model.load_state_dict(state_dict_hf, strict=False)
-    # reference_model.eval()
+    reference_model = GptOssForCausalLM(config)
+    reference_model.load_state_dict(state_dict_hf, strict=False)
+    reference_model.eval()
 
     # # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
@@ -835,14 +838,14 @@ def run_model_forward_test(
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
     # Run reference forward pass
-    # with torch.no_grad():
-    #     reference_output = reference_model(
-    #         input_ids=input_ids,
-    #         position_ids=position_ids,
-    #         attention_mask=None,  # Let the model handle masking
-    #         use_cache=False,
-    #     )
-    #     reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+    with torch.no_grad():
+        reference_output = reference_model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=None,  # Let the model handle masking
+            use_cache=False,
+        )
+        reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
 
     # Prepare inputs for TT model
     if is_decode:
@@ -906,7 +909,7 @@ def run_model_forward_test(
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
 
     # Compare outputs
-    passing, output = compare_tensors(tt_logits_torch, tt_logits_torch, mesh_device, pcc_threshold=pcc_threshold)
+    passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
     return passing, output
 
 
@@ -984,7 +987,9 @@ def test_model(
     # mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False, use_model_parallelism=use_model_parallelism)
+    setup = TestFactory.setup_test(
+        mesh_device, mesh_shape=mesh_shape, use_real_weights=False, use_model_parallelism=use_model_parallelism
+    )
     config = setup["config"]
     logger.info(f"Loaded model config: {config}")
     # Override number of layers
@@ -1019,10 +1024,11 @@ def test_model(
         state_dict_hf = {}
         state_dict_meta = {}
     logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
-    breakpoint()
+
     # Run the forward test
     passing, output = run_model_forward_test(
         mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
         config=config,
         model_args=model_args,
         state_dict_meta=state_dict_meta,

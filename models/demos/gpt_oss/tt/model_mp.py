@@ -102,6 +102,7 @@ class ModelWithMP:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        mesh_shape=None,
     ):
         """
         Initialize GPT-OSS model
@@ -118,6 +119,7 @@ class ModelWithMP:
         """
         print("Loading Model MP")
         self.mesh_device = mesh_device
+        self.mesh_shape = mesh_shape if mesh_shape is not None else mesh_shape
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         # hf_config.num_hidden_layers = 1
@@ -129,8 +131,8 @@ class ModelWithMP:
         self.ccl_manager = ccl_manager
 
         self.mesh_config = MeshConfig(
-            mesh_device.shape,
-            decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
+            self.mesh_shape,
+            decode=ModeConfig(mp=self.mesh_shape[1], ep=self.mesh_shape[0], sp=1, tp=1),
             mp_enabled=True,
         )
         print("Initialized ModelWithMP with mesh_config: ", self.mesh_config)
@@ -140,8 +142,8 @@ class ModelWithMP:
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
 
-        num_layers_per_submesh = hf_config.num_hidden_layers // mesh_device.shape[1]
-        num_layers_per_submesh_rem = hf_config.num_hidden_layers % mesh_device.shape[1]
+        num_layers_per_submesh = hf_config.num_hidden_layers // self.mesh_shape[1]
+        num_layers_per_submesh_rem = hf_config.num_hidden_layers % self.mesh_shape[1]
         print(
             "num_layers_per_submesh = ",
             num_layers_per_submesh,
@@ -179,7 +181,7 @@ class ModelWithMP:
         )
         self.layers = []
         for layer_idx in range(hf_config.num_hidden_layers):
-            submesh_id = worker_for_task(layer_idx, hf_config.num_hidden_layers, mesh_device.shape[1])
+            submesh_id = worker_for_task(layer_idx, hf_config.num_hidden_layers, self.mesh_shape[1])
             print("Assigning layer ", layer_idx, " to submesh ", submesh_id)
             self.layers.append(
                 DecoderLayer(
@@ -212,7 +214,7 @@ class ModelWithMP:
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
         # If we shard at unpadded boundaries and pad after, the offsets are wrong for devices 1+.
         # Pre-sharding padding ensures device shard boundaries match the offset stride.
-        sampling_splits = 1  # mesh_device.shape[1]
+        sampling_splits = 1  # mesh_shape[1]
         per_device_padded = (((self.vocab_size + sampling_splits - 1) // sampling_splits + 31) // 32) * 32
         padded_vocab_size = per_device_padded * sampling_splits
 
@@ -238,7 +240,7 @@ class ModelWithMP:
         self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
-        self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
+        self.sampling_dp = mesh_shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
             self.sampling = SamplingGenerator(
@@ -268,17 +270,17 @@ class ModelWithMP:
 
         args = _SamplingArgs()
         args.vocab_size = hf_config.vocab_size
-        num_tp = mesh_device.shape[1]
+        num_tp = mesh_shape[1]
         # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
         # for TTPenalties scatter operations.
         # The lm_head weight is padded to this size BEFORE column-parallel sharding,
         # so device shard boundaries align with TTSampling device offset strides.
         per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
         args.padded_vocab_size = per_device_vocab * num_tp
-        args.cluster_shape = tuple(mesh_device.shape)
+        args.cluster_shape = tuple(mesh_shape)
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
-        args.is_galaxy = mesh_device.shape[0] > 1
+        args.is_galaxy = mesh_shape[0] > 1
         args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
@@ -315,7 +317,7 @@ class ModelWithMP:
 
         if ccl_manager is None:
             ccl_manager = CCLManager(
-                mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1, use_model_parallelism=use_model_parallelism
+                mesh_device, num_links=4 if mesh_shape[0] > 1 else 1, use_model_parallelism=use_model_parallelism
             )
         else:
             print("Got CCL Manager")
@@ -393,13 +395,12 @@ class ModelWithMP:
         mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
         seq_len = hidden_states.shape[-2]
 
-        num_submeshes = self.mesh_device.shape[1]
+        num_submeshes = self.mesh_shape[1]
         # hidden_states starts on submesh 0 (embedding is on first submesh)
         current_submesh_id = 0
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
-            logger.info("Running layer ", i, " on submesh ", current_submesh_id)
             # Layer i is on submesh given by worker_for_task (same mapping as in __init__)
             next_submesh_id = worker_for_task(i, self.hf_config.num_hidden_layers, num_submeshes)
             if next_submesh_id != current_submesh_id:
@@ -412,6 +413,7 @@ class ModelWithMP:
                 )
                 logger.info(f"Copied hidden_states with device id {hidden_states.device().id()} for layer {i}")
                 current_submesh_id = next_submesh_id
+            logger.info(f"Running layer {i} on submesh {current_submesh_id}")
 
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
             this_rope_mats_setup = rope_mats[current_submesh_id]
@@ -620,7 +622,7 @@ class ModelWithMP:
             pad_size = nearest_32(B) - B
             rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
             mesh_mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_device.shape)
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_shape)
                 if self.users_row_sharded
                 else ttnn.ReplicateTensorToMesh(self.mesh_device)
             )
@@ -655,7 +657,7 @@ class ModelWithMP:
         if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
             tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), "constant", 0)
         if self.users_row_sharded:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_shape)
         else:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
@@ -818,7 +820,7 @@ class ModelWithMP:
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
         if self.users_row_sharded:
-            tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_device.shape[1]]
+            tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_shape[1]]
             return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
         else:
             tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
@@ -847,10 +849,10 @@ class ModelWithMP:
         Returns:
             List of per-user logit tensors (one per user)
         """
-        num_cols = self.mesh_device.shape[1]
+        num_cols = self.mesh_shape[1]
         device_tensors = ttnn.get_device_tensors(tt_out)
         results = []
-        num_rows = self.mesh_device.shape[0]
+        num_rows = self.mesh_shape[0]
         for row in range(num_rows):
             device_idx = row * num_cols  # First device of each row
             torch_output = ttnn.to_torch(device_tensors[device_idx])

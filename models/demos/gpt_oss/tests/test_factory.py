@@ -26,11 +26,14 @@ class TestFactory:
     ]
 
     @staticmethod
-    def setup_test(mesh_device, use_real_weights=True, dtype=ttnn.bfloat8_b, use_model_parallelism=False):
+    def setup_test(
+        mesh_device, mesh_shape=None, use_real_weights=True, dtype=ttnn.bfloat8_b, use_model_parallelism=False
+    ):
         """Universal test setup - replaces all the duplicated setup code"""
 
         # Use mesh_device as-is (already created by conftest.py fixture)
-        mesh_shape = mesh_device.shape
+        if mesh_shape is None:
+            mesh_shape = mesh_device.shape
 
         # Setup ModelArgs (no import-time loading)
         model_args = ModelArgs(
@@ -44,7 +47,10 @@ class TestFactory:
 
         # Setup CCL
         ccl_manager = CCLManager(
-            mesh_device, num_links=4 if mesh_shape[0] > 1 else 1, use_model_parallelism=use_model_parallelism
+            mesh_device,
+            mesh_shape=mesh_shape,
+            num_links=4 if mesh_shape[0] > 1 else 1,
+            use_model_parallelism=use_model_parallelism,
         )
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)

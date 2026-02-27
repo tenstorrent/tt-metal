@@ -5,8 +5,9 @@ import ttnn
 
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring, use_model_parallelism=False):
+    def __init__(self, mesh_device, mesh_shape, num_links=4, topology=ttnn.Topology.Ring, use_model_parallelism=False):
         self.mesh_device = mesh_device
+        self.mesh_shape = mesh_shape
         self.num_links = num_links
         self.topology = topology
         self.use_model_parallelism = use_model_parallelism
@@ -14,7 +15,7 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
-
+        print("Use model parallelism:", self.use_model_parallelism)
         if self.use_model_parallelism:
             self._init_submeshes()
         else:
@@ -42,14 +43,17 @@ class CCLManager:
 
     def _init_submeshes(self):
         self.mp_submeshes = []
-        for i in range(self.mesh_device.shape[1]):
+        for i in range(self.mesh_shape[1]):
             self.mp_submeshes.append(
-                self.mesh_device.create_submesh(ttnn.MeshShape(self.mesh_device.shape[0], 1), ttnn.MeshCoordinate(0, i))
+                self.mesh_device.create_submesh(ttnn.MeshShape(self.mesh_shape[0], 1), ttnn.MeshCoordinate(0, i))
             )
+
+        for x in self.mp_submeshes:
+            print(f"Submesh shape={x.shape}, id={x.id()}")
 
         # Create socket pairs between submeshes for copying hidden_states in _forward_layers_and_head.
         # One pair per (from_id, to_id) with from_id != to_id; reused for all forward passes.
-        num_submeshes = self.mesh_device.shape[1]
+        num_submeshes = self.mesh_shape[1]
         self.submesh_socket_pairs = {}
         socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 16 * 1024)
         for from_id in range(num_submeshes - 1):
