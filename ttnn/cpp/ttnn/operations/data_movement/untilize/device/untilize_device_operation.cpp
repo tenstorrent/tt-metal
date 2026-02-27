@@ -374,7 +374,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeSingleCoreProgramFactory{};
     }
 
-    if (input_tensor_a.is_nd_sharded()) {
+    if (input_tensor_a.memory_layout_type() == MemoryLayoutType::ND_SHARDED) {
         return UntilizeMultiCoreNDShardInputProgramFactory{};
     }
     // default multi core implementation, non ND-sharded input

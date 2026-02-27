@@ -411,10 +411,17 @@ bool Tensor::is_sharded() const {
     return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
 }
 
-bool Tensor::is_nd_sharded() const {
-    return tt::tt_metal::is_device_tensor(*this)
-               ? this->memory_config().nd_shard_spec().has_value() && !this->memory_config().shard_spec().has_value()
-               : false;
+MemoryLayoutType Tensor::memory_layout_type() const {
+    if (not tt::tt_metal::is_device_tensor(*this)) {
+        return MemoryLayoutType::HOST_TENSOR;
+    }
+    if (this->memory_config().is_sharded()) {
+        if (this->memory_config().shard_spec().has_value()) {
+            return MemoryLayoutType::SHARDED;
+        }
+        return MemoryLayoutType::ND_SHARDED;
+    }
+    return MemoryLayoutType::INTERLEAVED;
 }
 
 uint32_t Tensor::element_size() const {

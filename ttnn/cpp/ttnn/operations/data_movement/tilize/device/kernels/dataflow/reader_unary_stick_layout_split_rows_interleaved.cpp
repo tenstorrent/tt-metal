@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_rows = get_arg_val<uint32_t>(1);
@@ -37,12 +38,12 @@ void kernel_main() {
             // Need an inner loop for pages within row. Only relevant for ND-sharded case on multicore
             // (otherwise this loop only has 1 iteration).
             for (uint32_t l = 0; l < num_pages_in_row; l++) {
-                uint64_t src_noc_addr = base_src_noc_addr[k * num_pages_in_row + l];
+                uint64_t src_noc_addr = base_src_noc_addr[k][l];
                 uint32_t width_size =
                     (l == num_pages_in_row - 1) ? size_of_valid_data_in_last_page_in_row : block_width_size;
                 noc_async_read(src_noc_addr, l1_write_addr, width_size);
                 l1_write_addr += width_size;
-                base_src_noc_addr[k * num_pages_in_row + l] += width_size;
+                base_src_noc_addr[k][l] += width_size;
             }
         }
         noc_async_read_barrier();
@@ -55,7 +56,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < tile_height; j++) {
             for (uint32_t k = 0; k < num_pages_in_row; k++) {
                 // For ND-sharded case, we need to read in all pages within the row.
-                base_src_noc_addr[j * num_pages_in_row + k] = s.get_noc_addr(page_id);
+                base_src_noc_addr[j][k] = s.get_noc_addr(page_id);
                 page_id++;
             }
         }

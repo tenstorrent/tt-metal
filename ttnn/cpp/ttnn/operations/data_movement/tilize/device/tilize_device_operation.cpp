@@ -23,7 +23,7 @@ bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    if (input_tensor.is_nd_sharded()) {
+    if (input_tensor.memory_layout_type() == MemoryLayoutType::ND_SHARDED) {
         return false;
     }
 
@@ -101,9 +101,8 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    bool input_is_nd_sharded = tensor_args.input_tensor.is_nd_sharded();
     const auto& input_tensor = tensor_args.input_tensor;
-    if (input_tensor.memory_config().is_sharded() && !input_is_nd_sharded) {
+    if (tensor_args.input_tensor.memory_layout_type() == MemoryLayoutType::SHARDED) {
         auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
             input_tensor.memory_config()
                 .shard_spec());  // If the input is legacy sharded, the output has the same shard spec as the input.
