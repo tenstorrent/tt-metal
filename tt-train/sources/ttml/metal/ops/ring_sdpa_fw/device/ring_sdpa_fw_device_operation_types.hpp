@@ -25,9 +25,9 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const ttnn::Tensor& query;
-    const ttnn::Tensor& key;
-    const ttnn::Tensor& value;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
     std::optional<ttnn::Tensor> preallocated_output;         // Preallocated output buffer
     std::optional<ttnn::Tensor> preallocated_intermediates;  // Preallocated intermediates buffer
 };

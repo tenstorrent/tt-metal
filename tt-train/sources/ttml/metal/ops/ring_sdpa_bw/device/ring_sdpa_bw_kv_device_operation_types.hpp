@@ -25,12 +25,12 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const ttnn::Tensor& grad_output;
-    const ttnn::Tensor& attn_output;
-    const ttnn::Tensor& query;
-    const ttnn::Tensor& key;
-    const ttnn::Tensor& value;
-    const ttnn::Tensor& intermediates;
+    ttnn::Tensor grad_output;
+    ttnn::Tensor attn_output;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
+    ttnn::Tensor intermediates;
     std::optional<ttnn::Tensor> preallocated_grad_key;    // Preallocated output buffer
     std::optional<ttnn::Tensor> preallocated_grad_value;  // Preallocated output buffer
 };
