@@ -238,6 +238,163 @@ def test_trace_workaround(batch_size, head_dim, n_heads, position_idx, mesh_devi
     assert k_passing, f"K tensor PCC {k_pcc_message} is below threshold {pcc_threshold}"
 
 
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size", [1, 4, 8], ids=["batch_1", "batch_4", "batch_8"])
+@pytest.mark.parametrize("head_dim", [64, 128], ids=["head_64", "head_128"])
+@pytest.mark.parametrize("n_heads", [8])
+@pytest.mark.parametrize("position_idx", [0, 100, 500, 1024], ids=["pos_0", "pos_100", "pos_500", "pos_1024"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_hf_rotary_setup_get_rot_mats_ttnn_tensor(
+    batch_size, head_dim, n_heads, position_idx, mesh_device, reset_seeds
+):
+    """Test HfRotarySetup.get_rot_mats with ttnn.Tensor position indices (trace-compatible).
+
+    This test validates that HfRotarySetup.get_rot_mats correctly slices cos/sin matrices
+    when position_idxs is provided as a ttnn.Tensor. This is the trace-compatible path
+    that uses ttnn.embedding for on-device index lookup without any host-device transfer.
+
+    The test:
+    1. Creates HfRotarySetup with a cos/sin cache
+    2. Calls get_rot_mats with position_idxs as a ttnn.Tensor
+    3. Verifies the output matches the expected sliced values
+    4. Applies rotary embedding and compares with reference
+    """
+    from models.tt_transformers.tt.rope import HfRotarySetup
+
+    seq_len = 1  # Decode mode
+    max_seq_len = 2048  # Cache size
+    theta = 10000.0
+    pcc_threshold = 0.99
+
+    logger.info(
+        f"Testing HfRotarySetup.get_rot_mats with ttnn.Tensor: "
+        f"batch_size={batch_size}, head_dim={head_dim}, position_idx={position_idx}"
+    )
+
+    # Create HfRotarySetup
+    hf_rope = HfRotarySetup(
+        device=mesh_device,
+        batch_size=batch_size,
+        head_dim=head_dim,
+        max_seq_len=max_seq_len,
+        rope_theta=theta,
+    )
+
+    # Create position indices as ttnn.Tensor (simulating decode mode)
+    # Shape: [1, batch_size] - all positions are the same for this test
+    position_idxs_torch = torch.full((1, batch_size), position_idx, dtype=torch.int32)
+    position_idxs_tt = ttnn.from_torch(
+        position_idxs_torch,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Get rotation matrices using ttnn.Tensor path (trace-compatible)
+    cos_tt, sin_tt = hf_rope.get_rot_mats(position_idxs_tt)
+
+    # Verify output shape is [1, 1, 1, head_dim]
+    cos_shape = list(cos_tt.shape)
+    sin_shape = list(sin_tt.shape)
+    logger.info(f"cos_tt shape: {cos_shape}, sin_tt shape: {sin_shape}")
+
+    # Generate reference cos/sin using torch path
+    cos_ref, sin_ref = hf_rope.get_rot_mats(torch.tensor([position_idx]))
+
+    # Convert ttnn outputs to torch for comparison
+    cos_tt_torch = to_torch_auto_compose(cos_tt, mesh_device)
+    sin_tt_torch = to_torch_auto_compose(sin_tt, mesh_device)
+    cos_ref_torch = to_torch_auto_compose(cos_ref, mesh_device)
+    sin_ref_torch = to_torch_auto_compose(sin_ref, mesh_device)
+
+    # Compare cos/sin values
+    cos_passing, cos_pcc_message = comp_pcc(cos_ref_torch, cos_tt_torch, pcc_threshold)
+    sin_passing, sin_pcc_message = comp_pcc(sin_ref_torch, sin_tt_torch, pcc_threshold)
+
+    logger.info(f"cos PCC: {cos_pcc_message}")
+    logger.info(f"sin PCC: {sin_pcc_message}")
+
+    assert cos_passing, f"cos tensor PCC {cos_pcc_message} is below threshold {pcc_threshold}"
+    assert sin_passing, f"sin tensor PCC {sin_pcc_message} is below threshold {pcc_threshold}"
+
+    # Now test the full rotary embedding pipeline
+    # Create random Q and K tensors
+    q_torch = torch.randn(batch_size, n_heads, seq_len, head_dim).bfloat16().float()
+    k_torch = torch.randn(batch_size, n_heads, seq_len, head_dim).bfloat16().float()
+
+    # Reference: Apply HF RoPE using sliced cos/sin
+    cos_for_ref = cos_ref_torch[0, 0, :, :].unsqueeze(0).expand(batch_size, -1, -1)
+    sin_for_ref = sin_ref_torch[0, 0, :, :].unsqueeze(0).expand(batch_size, -1, -1)
+    q_ref, k_ref = apply_rotary_pos_emb(q_torch, k_torch, cos_for_ref, sin_for_ref)
+
+    # Apply TTNN RoPE with the sliced cos/sin from get_rot_mats
+    q_tt_outputs = []
+    k_tt_outputs = []
+
+    for i in range(batch_size):
+        q_batch_i = q_torch[i : i + 1, :, :, :]
+        k_batch_i = k_torch[i : i + 1, :, :, :]
+
+        q_tt_i = ttnn.from_torch(
+            q_batch_i,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        k_tt_i = ttnn.from_torch(
+            k_batch_i,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        # Apply TTNN RoPE with token_idx=0 (trace-compatible)
+        q_tt_out_i = ttnn.experimental.rotary_embedding(q_tt_i, cos_tt, sin_tt, 0)
+        k_tt_out_i = ttnn.experimental.rotary_embedding(k_tt_i, cos_tt, sin_tt, 0)
+
+        q_tt_outputs.append(to_torch_auto_compose(q_tt_out_i, mesh_device))
+        k_tt_outputs.append(to_torch_auto_compose(k_tt_out_i, mesh_device))
+
+    q_tt_torch = torch.cat(q_tt_outputs, dim=0)
+    k_tt_torch = torch.cat(k_tt_outputs, dim=0)
+
+    q_tt_torch = q_tt_torch[..., :seq_len, :]
+    k_tt_torch = k_tt_torch[..., :seq_len, :]
+
+    # Compare Q and K results
+    q_passing, q_pcc_message = comp_pcc(q_ref, q_tt_torch, pcc_threshold)
+    k_passing, k_pcc_message = comp_pcc(k_ref, k_tt_torch, pcc_threshold)
+
+    logger.info(f"Q PCC: {q_pcc_message}")
+    logger.info(f"K PCC: {k_pcc_message}")
+
+    if cos_passing and sin_passing and q_passing and k_passing:
+        logger.info(
+            f"✓ HfRotarySetup.get_rot_mats ttnn.Tensor path PASSED for "
+            f"batch_size={batch_size}, head_dim={head_dim}, position_idx={position_idx}"
+        )
+    else:
+        logger.warning(
+            f"✗ HfRotarySetup.get_rot_mats ttnn.Tensor path FAILED for "
+            f"batch_size={batch_size}, head_dim={head_dim}, position_idx={position_idx}"
+        )
+
+    assert q_passing, f"Q tensor PCC {q_pcc_message} is below threshold {pcc_threshold}"
+    assert k_passing, f"K tensor PCC {k_pcc_message} is below threshold {pcc_threshold}"
+
+
 if __name__ == "__main__":
     print("Running quick local test (CPU only)...")
     print("Note: This validates the logic but requires TTNN device for full test.")
