@@ -42,7 +42,6 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
                 &ttnn::sharded_to_interleaved),
             nb::arg("input_tensor").noconvert(),
             nb::arg("memory_config"),
-            nb::kw_only(),
             nb::arg("output_dtype") = nb::none()));
 }
 
