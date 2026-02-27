@@ -374,10 +374,10 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     }
     uint32_t num_q_heads;
     // Q heads parallelization
-    TT_FATAL(
-        q_locally_available && input.is_sharded(),
-        "In order for Q tensor to be locally available to all worker cores, it must be sharded");
-    if (q_locally_available && input.is_sharded()) {
+    if (q_locally_available) {
+        TT_FATAL(
+            q_locally_available && input.is_sharded(),
+            "In order for Q tensor to be locally available to all worker cores, it must be sharded");
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
