@@ -85,7 +85,7 @@ void kernel_main() {
     //           We add beta to this value
     //
     // We are now done! Nice
-    //   To look at where the code starts and stops seach for
+    //   To look at where the code starts and stops search for
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
