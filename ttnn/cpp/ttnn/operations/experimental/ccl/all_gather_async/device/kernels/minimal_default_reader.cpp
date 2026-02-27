@@ -173,7 +173,7 @@ void kernel_main() {
             input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
                                                              // the tiles, otherwise we write the entire packet
             split_forwarding_enabled = true;
-            // Match writer's special case: backward worker forwards half slice when num_targets_backward_direction == 1
+            // in split forwarding, we need to receive an additional slice for the second half of the data
             if (direction == 1) {
                 slices_expected++;  // Receive additional slice for second half of split data
                 writes_expected++;  // Forward the first slice (device at +1 hop)

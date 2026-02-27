@@ -16,7 +16,7 @@ from tracy import signpost
 
 def create_fabric_router_config(max_payload_size):
     """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config = ttnn.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
 
