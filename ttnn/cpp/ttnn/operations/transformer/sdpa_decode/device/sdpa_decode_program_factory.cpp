@@ -218,7 +218,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     //// recalculate num_cores_per_batch based on num_active_cores
     num_cores_per_batch = num_active_cores / B;
     // Calculate tree reduction parameters
-    uint32_t num_tree_reduction_rounds = 32 - __builtin_clz(num_cores_per_head);  // ceil(log2(num_cores_per_head))
+    uint32_t num_tree_reduction_rounds =
+        (num_cores_per_head <= 1) ? 0 : (32 - __builtin_clz(num_cores_per_head - 1));  // ceil(log2(num_cores_per_head))
     log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
 
     TT_FATAL(
