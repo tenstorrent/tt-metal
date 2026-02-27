@@ -24,34 +24,38 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
     uint32_t metadata_len,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     // TT_FATAL(sd_id == tt::tt_metal::SubDeviceId{0}, "Currently only subdevice 0 is supported");
 
-    // Enable fabric initialization for testing, but keep sends disabled (local dispatch only)
-    // TODO: Add topology and num_links as optional API parameters when fabric support is ready
+    // Validate fabric configuration - only tested values are supported
+    TT_FATAL(
+        cluster_axis.value_or(0) == 0,
+        "cluster_axis must be 0 (current value: {}). Other values are not tested.",
+        cluster_axis.value_or(0));
+    TT_FATAL(
+        num_links.value_or(1) == 1,
+        "num_links must be 1 (current value: {}). Other values are not tested.",
+        num_links.value_or(1));
+    TT_FATAL(
+        topology.value_or(tt::tt_fabric::Topology::Linear) == tt::tt_fabric::Topology::Linear,
+        "topology must be Linear (current value: {}). Other topologies are not tested.",
+        static_cast<uint32_t>(topology.value_or(tt::tt_fabric::Topology::Linear)));
 
-    std::optional<uint32_t> axis = 0;
-    uint32_t num_links = 1;
-    auto topology = tt::tt_fabric::Topology::Linear;
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
+    std::optional<uint32_t> axis = cluster_axis;
+    uint32_t num_links_ = num_links.value_or(1);
+    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
+    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
 
-    log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links, axis, topology_);
+    log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
 
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
-
-    // const auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(input_tensor, weights_tensor, indices_tensor,
-    // num_links, axis); TT_THROW("cb_sizes: {}, cb_page_sizes: {}", cb_sizes, cb_page_sizes); TT_THROW("num_links {};
-    // topology {}; memory_config {}; subdevice_id {}", num_links, topology_, memory_config_, sd_id);
-    // TODO: Implement parameter validation
-    // TODO: Get device and subdevice info
-    // TODO: Call device operation
-
-    // Stub implementation - return empty tensors
-    // TT_THROW("prefill_dispatch operation not yet implemented");
 
     return ttnn::prim::prefill_dispatch(
         input_tensor,
@@ -65,8 +69,8 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
         metadata_len,
         max_dispatched_tokens_per_expert,
         axis,
-        num_links,
-        topology_,  // Dummy value - will be ignored when num_links=0
+        num_links_,
+        usable_topology,
         memory_config_,
         subdevice_core_range_set);
 }

@@ -15,6 +15,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "prefill_dispatch.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek::prefill_dispatch::detail {
 
@@ -42,6 +43,9 @@ void bind_prefill_dispatch(nb::module_& mod) {
             max_dispatched_tokens_per_expert (int): Maximum number of tokens that can be dispatched to each expert
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
+            cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
+            num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
+            topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -80,7 +84,10 @@ void bind_prefill_dispatch(nb::module_& mod) {
                uint32_t metadata_len,
                uint32_t max_dispatched_tokens_per_expert,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               std::optional<uint32_t> cluster_axis,
+               std::optional<uint32_t> num_links,
+               std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
                     input_tensor,
                     weights_tensor,
@@ -93,7 +100,10 @@ void bind_prefill_dispatch(nb::module_& mod) {
                     metadata_len,
                     max_dispatched_tokens_per_expert,
                     memory_config,
-                    subdevice_id);
+                    subdevice_id,
+                    cluster_axis,
+                    num_links,
+                    topology);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("weights_tensor").noconvert(),
@@ -107,7 +117,10 @@ void bind_prefill_dispatch(nb::module_& mod) {
             nb::arg("metadata_len"),
             nb::arg("max_dispatched_tokens_per_expert"),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none()});
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch::detail
