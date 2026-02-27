@@ -10,6 +10,7 @@
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -47,6 +48,9 @@ bool can_use_sharded_optimized_factories(
 
     if (input_tensor.shard_spec().value().orientation != ShardOrientation::ROW_MAJOR) {
         return false;
+    }
+    if (operation_attributes.sub_core_grids.has_value()) {
+        return false;  // Sharded tilize does not support sub core grid specification
     }
 
     return true;
@@ -102,10 +106,14 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    if (tensor_args.input_tensor.memory_layout_type() == MemoryLayoutType::SHARDED) {
+    if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+        log_warning(
+            tt::LogOp,
+            "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
+            "factory is being used");
         auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
-            input_tensor.memory_config()
-                .shard_spec());  // If the input is legacy sharded, the output has the same shard spec as the input.
+            input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
+                                                         // factory, the output has the same shard spec as the input.
         return {TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -145,9 +153,6 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
-            TT_FATAL(
-                !operation_attributes.sub_core_grids.has_value(),
-                "Sharded tilize does not support sub core grid specification");
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 return ttnn::prim::TilizeMultiCoreWidthShardedProgramFactory{};
             }
