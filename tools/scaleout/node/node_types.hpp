@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,14 @@ enum class NodeType {
     P150_QB_AE,
     P150_QB_AE_DEFAULT,
     P300_QB_GE,
+    BH_GALAXY_REV_AB,
+    BH_GALAXY_REV_AB_X_TORUS,
+    BH_GALAXY_REV_AB_Y_TORUS,
+    BH_GALAXY_REV_AB_XY_TORUS,
+    BH_GALAXY_REV_C,
+    BH_GALAXY_REV_C_X_TORUS,
+    BH_GALAXY_REV_C_Y_TORUS,
+    BH_GALAXY_REV_C_XY_TORUS,
     BH_GALAXY,
     BH_GALAXY_X_TORUS,
     BH_GALAXY_Y_TORUS,
