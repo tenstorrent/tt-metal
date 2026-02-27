@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate as NewMoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
+from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 from tests.ttnn.utils_for_testing import comp_pcc
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
@@ -416,7 +417,7 @@ def test_new_forward_pass(
 
     # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_topk_weights, tt_topk_indices = run_module_forward(NewMoEGate, mode, tt_input, run_config)
+    tt_topk_weights, tt_topk_indices, logits = run_module_forward(NewMoEGate, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
@@ -441,14 +442,28 @@ def test_new_forward_pass(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
     )[:, 0, :8]
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_topk_weights)
-    ttnn.deallocate(tt_topk_indices)
+    # test the golden
+    logits = ttnn.unsqueeze(logits, dim=0)
+    tt_logits_torch = ttnn.to_torch(
+        logits,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0, :, :, :].reshape(128, 8, 32)
+    bias_tensor = torch.zeros((128, 8, 32), dtype=torch.bfloat16)
+    top8_scores, top8_indices = DeepseekMoeGateSingleCore.golden(
+        tt_logits_torch[:32, :, :], bias_tensor[:32, :, :], 1e-20, 2.5, enable_sigmoid=True
+    )
+
+    torch.save(tt_logits_torch, "/home/ronnie/tt_logits_torch.pt")
+    # end here
 
     import pdb
 
     pdb.set_trace()
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_topk_indices)
 
     # Compare outputs
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")

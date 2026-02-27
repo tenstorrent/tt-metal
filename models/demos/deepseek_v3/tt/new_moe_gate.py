@@ -419,7 +419,7 @@ class MoEGate(AbstractModule):
         bias_tensor = torch.zeros((1, 16, 16), dtype=torch.bfloat16)
         input_tensor = temp_b[0, :16, :].unsqueeze(0)
 
-        return topk_experts_scores_normalized, topk_experts_indices
+        return topk_experts_scores_normalized, topk_experts_indices, logits
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
