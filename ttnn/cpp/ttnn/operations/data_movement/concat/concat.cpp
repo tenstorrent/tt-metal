@@ -99,7 +99,6 @@ MassagedConcat build_untilize_rm_retilize_concat(
                         tensor.logical_shape().rank() == 1);
             });
             concat_db_print(res, "untilize_rm_retilize required");
-            std::cout << "build_untilize_rm_retilize_concat.predicate " << (int)res << ": I have got here\n";
             return res;
         },
         .pre_transform = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups)
@@ -135,10 +134,8 @@ MassagedConcat build_untilize_rm_retilize_concat(
         },
         .operation = [&output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
-            std::cout << "build_untilize_rm_retilize_concat.operation IN" << ": I have got here\n";
             const std::vector<ttnn::Tensor>& itensors(tensors);
             auto res = concat_impl(itensors, dim, groups, output_memory_config);
-            std::cout << "build_untilize_rm_retilize_concat.operation OUT" << ": I have got here\n";
             return res;
         }});
 }

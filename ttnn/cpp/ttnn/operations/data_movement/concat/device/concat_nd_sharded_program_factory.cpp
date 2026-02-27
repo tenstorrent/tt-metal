@@ -77,6 +77,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
             input_page_sizes[i],
             input_page_sizes[0]);
     }
+    std::cout << " input page size " << input_page_sizes[0] << "  Element size:" << input_t0.element_size() << "\n";
 
     // some debug information about output tensor
     {
@@ -112,8 +113,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     }
 
     // Host-allocated L1 scratch buffer (one page, max page size across all tensors) for copy_tensor_data.
-    const uint32_t scratch_page_size =
-        std::max(output_page_size, *std::max_element(input_page_sizes.begin(), input_page_sizes.end()));
+    const uint32_t scratch_page_size = std::max(output_page_size, input_page_sizes[0]);
     ShardSpecBuffer scratch_shard_spec(single_core_set, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     ShardedBufferConfig scratch_l1_config{
         .device = output.device(),
@@ -208,15 +208,12 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
             std::cout << "result acum_pages: " << num_accum_pages << "\n";
 
             dim_pages = input_t0.padded_shape()[dim];
-
-            if (dim == num_dims - 1) {
-                num_output_pages_per_block_total += num_accum_pages;
-            } else {
-                num_output_pages_per_block_total += num_accum_pages * dim_pages;
-            }
+            std::cout << "pages for dimention " << dim << "(input T 0): " << dim_pages << "\n";
 
             if (dim == num_dims - 1) {
                 num_output_pages_per_block_total = 1;
+            } else {
+                num_output_pages_per_block_total += num_accum_pages * dim_pages;
             }
         };
 

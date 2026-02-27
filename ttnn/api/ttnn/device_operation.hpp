@@ -590,12 +590,10 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
-    std::cout << "lavanch 08\n";
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
-    std::cout << "lavanch 09\n";
     return tensor_return_value;
 }
 
