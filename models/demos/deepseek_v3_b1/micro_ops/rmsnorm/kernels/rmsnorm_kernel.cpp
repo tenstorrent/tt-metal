@@ -32,7 +32,9 @@ void kernel_main() {
 
     // Setup sharded persistent buffers (input and gamma are backed by L1 shards)
     if constexpr (Core::is_active_core) {
-        unified_kernels::setup_sharded_buffer(gamma_cb, num_tiles);
+        if constexpr (get_named_compile_time_arg_val("rmsnorm_enable_gamma") == 1) {
+            unified_kernels::setup_sharded_buffer(gamma_cb, num_tiles);
+        }
         unified_kernels::setup_sharded_buffer(input_cb, num_tiles);
     }
 
@@ -59,7 +61,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         input_cb,
         gamma_cb,
-        output_cb>;
+        output_cb,
+        get_named_compile_time_arg_val("rmsnorm_enable_gamma") == 1>;
 
     // Compute args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{

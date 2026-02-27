@@ -36,7 +36,10 @@ class RMSNormSingleCore:
         """
         variance = input_tensor.pow(2).mean(-1, keepdim=True)
         normalized = input_tensor * torch.rsqrt(variance + epsilon)
-        return normalized * gamma_tensor
+        if gamma_tensor is not None:
+            return normalized * gamma_tensor
+        else:
+            return normalized
 
     @staticmethod
     def op(
@@ -106,8 +109,12 @@ class RMSNormSingleCore:
         gamma_cb = 1
         output_cb = 2
 
+        enable_gamma = gamma_tensor is not None
+
         # Create tile descriptor for proper tile dimensions
         tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
+
+        cb_descriptors = []
 
         # Create circular buffer descriptors
         # CB 0: Input (created from sharded tensor)
@@ -115,18 +122,22 @@ class RMSNormSingleCore:
         # Update the tile descriptor in the format descriptor
         in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+        cb_descriptors.append(in_cb_descriptor)
 
-        # CB 3: Gamma (created from sharded tensor)
-        gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
-        # Update the tile descriptor in the format descriptor
-        gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
-        gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+        if enable_gamma:
+            # CB 3: Gamma (created from sharded tensor)
+            gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
+            # Update the tile descriptor in the format descriptor
+            gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+            gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+            cb_descriptors.append(gamma_cb_descriptor)
 
         # CB 4: Output (created from sharded tensor)
         out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
         # Update the tile descriptor in the format descriptor
         out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+        cb_descriptors.append(out_cb_descriptor)
 
         # Named compile-time args for NCRISC (reader)
         ncrisc_named_compile_time_args = [
@@ -134,6 +145,7 @@ class RMSNormSingleCore:
             ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_num_faces", num_faces),
+            ("rmsnorm_enable_gamma", 1 if enable_gamma else 0),
         ]
 
         # Named compile-time args for TRISC (compute)
@@ -144,6 +156,7 @@ class RMSNormSingleCore:
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
+            ("rmsnorm_enable_gamma", 1 if enable_gamma else 0),
         ]
 
         # Unified kernel descriptor
@@ -173,11 +186,14 @@ class RMSNormSingleCore:
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[in_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor],
+            cbs=cb_descriptors,
         )
 
         # Execute generic op
-        io_tensors = [input_tensor, gamma_tensor, output_tensor]
+        io_tensors = [input_tensor]
+        if enable_gamma:
+            io_tensors.append(gamma_tensor)
+        io_tensors.append(output_tensor)
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
         return output

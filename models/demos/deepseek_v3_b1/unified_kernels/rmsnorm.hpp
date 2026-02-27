@@ -61,7 +61,8 @@ struct RMSNorm {
         bool RsqrtFastApprox,
         uint32_t InputCb,
         uint32_t GammaCb,
-        uint32_t OutputCb>
+        uint32_t OutputCb,
+        bool EnableGamma = true>
     struct ComputeCTArgs {
         static constexpr bool fp32_acc = FP32Acc;
         static constexpr uint32_t num_tiles = NumTiles;
@@ -69,6 +70,7 @@ struct RMSNorm {
         static constexpr uint32_t input_cb = InputCb;
         static constexpr uint32_t gamma_cb = GammaCb;
         static constexpr uint32_t output_cb = OutputCb;
+        static constexpr bool enable_gamma = EnableGamma;
     };
 
     // ========================================================================
@@ -104,7 +106,9 @@ struct RMSNorm {
             // TRISC (Compute)
             // ================================================================
             // Init block done only once
-            cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
+            if constexpr (CTArgs::enable_gamma) {
+                cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
+            }
 
             compute_rmsnorm(args);
 #endif
@@ -138,9 +142,12 @@ struct RMSNorm {
             {
                 // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
+                if constexpr (CTArgs::enable_gamma) {
+                    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                    for (uint32_t i = 0; i < num_tiles; i++) {
+                        binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                            CTArgs::gamma_cb, i, i);
+                    }
                 }
 
                 tile_regs_commit();

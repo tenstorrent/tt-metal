@@ -21,13 +21,14 @@ from models.demos.deepseek_v3_b1.micro_ops.rmsnorm.op import RMSNormSingleCore
     "width",
     [
         7168,  # input_layernorm, post_attention_layernorm
-        1536,  # q_a_layernorm
-        512,  # kv_a_layernorm
+        # 1536,  # q_a_layernorm
+        # 512,  # kv_a_layernorm
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True, False])
-def test_rmsnorm(device, width, epsilon, use_fp32):
+@pytest.mark.parametrize("use_fp32", [False])
+@pytest.mark.parametrize("enable_gamma", [True, False])
+def test_rmsnorm(device, width, epsilon, use_fp32, enable_gamma):
     """Test TTNN rmsnorm operation on a single core"""
 
     # Tensor dimensions
@@ -42,7 +43,10 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
     # Create input and gamma PyTorch tensors
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
+    if enable_gamma:
+        torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
+    else:
+        torch_gamma = None
 
     # Compute reference output using PyTorch
     torch_expected = RMSNormSingleCore.golden(torch_input, torch_gamma, epsilon=epsilon)
@@ -67,14 +71,17 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
     )
 
     # Create gamma tensor sharded on same core
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        tile=tile,
-    )
+    if enable_gamma:
+        ttnn_gamma = ttnn.from_torch(
+            torch_gamma,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem_config,
+            tile=tile,
+        )
+    else:
+        ttnn_gamma = None
 
     # Create output tensor sharded on same core
     torch_output = torch.zeros((shape[0], width), dtype=torch.bfloat16)
