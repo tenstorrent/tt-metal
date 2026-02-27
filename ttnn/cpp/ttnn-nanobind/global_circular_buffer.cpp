@@ -16,13 +16,7 @@
 namespace ttnn::global_circular_buffer {
 
 void py_module_types(nb::module_& mod) {
-    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
-        .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::reference)
-        .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::reference)
-        .def("all_cores", &GlobalCircularBuffer::all_cores, nb::rv_policy::reference)
-        .def("buffer_address", &GlobalCircularBuffer::buffer_address)
-        .def("config_address", &GlobalCircularBuffer::config_address)
-        .def("size", &GlobalCircularBuffer::size);
+    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer").def("size", &GlobalCircularBuffer::size);
 }
 
 void py_module(nb::module_& mod) {
