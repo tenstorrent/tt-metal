@@ -11,9 +11,8 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from analysis_common import (
+from tools.scaleout.exabox.analysis_common import (
     DOMAIN_DISPATCH,
     Colors,
     analysis_timestamp,
@@ -21,7 +20,6 @@ from analysis_common import (
     apply_common_args,
     build_base_argparser,
     csv_stem_and_suffix,
-    deduplicate_and_count_messages,
     print_message_section,
     print_section_header,
     print_separator,
