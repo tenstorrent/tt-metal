@@ -3,6 +3,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/metallium_object.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/context_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/dispatch_kernel_initializer.cpp
@@ -12,6 +14,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
