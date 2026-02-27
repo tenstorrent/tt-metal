@@ -264,14 +264,17 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
     // token activations metadata
-    // page size: (2 * experts_per_device + 1) * sizeof(uint32_t)
+    // page size: total tokens * (2 * experts_per_device + 1 + 3) * sizeof(uint32_t)
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    TT_FATAL(activations_stride_elm == 8, "unexpected stride");
+
     const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
     constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_token_activations_config =
         CircularBufferConfig(
-            aligned_token_activations_page_size_bytes * total_tokens,
-            {{token_activations_cb_id, tt::DataFormat::UInt32}})
+            aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(token_activations_cb_id, token_activations_page_size_bytes);
 
     // client interface
@@ -309,6 +312,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"token_activations_cb_id", token_activations_cb_id},
         {"token_activations_page_size_bytes", token_activations_page_size_bytes},
         {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
+        {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
         {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
@@ -349,7 +353,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"data_cb_id", data_cb_id},
         {"token_activations_cb_id", token_activations_cb_id},
         {"token_counts_cb_id", token_counts_cb_id},
-        {"aligned_token_activation_page_size", aligned_token_activations_page_size_bytes / sizeof(uint32_t)},
+        {"activations_stride_elm", activations_stride_elm},
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},

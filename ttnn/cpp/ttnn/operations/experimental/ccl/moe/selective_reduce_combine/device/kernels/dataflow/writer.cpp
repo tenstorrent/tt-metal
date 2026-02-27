@@ -51,8 +51,7 @@ void kernel_main() {
     constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
     constexpr uint32_t token_activations_cb_id = get_named_compile_time_arg_val("token_activations_cb_id");
-    constexpr uint32_t aligned_token_activation_page_size =
-        get_named_compile_time_arg_val("aligned_token_activation_page_size");
+    constexpr uint32_t activations_stride_elm = get_named_compile_time_arg_val("activations_stride_elm");
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
@@ -170,7 +169,7 @@ void kernel_main() {
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
-    cb_wait_front(token_activations_cb_id, global_num_tokens);
+    cb_wait_front(token_activations_cb_id, 1);
     const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
@@ -193,14 +192,14 @@ void kernel_main() {
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
-            token_activations_l1_ptr + token_activation_offsets[e] * aligned_token_activation_page_size;
+            token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
-                [(e * global_num_tokens + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
+                [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
             uint32_t guard = 0;
             while (expert_token_activations_ptr[0] != st) {
-                expert_token_activations_ptr += aligned_token_activation_page_size;
+                expert_token_activations_ptr += activations_stride_elm;
                 ASSERT(guard++ < global_num_tokens);
             }
             const uint32_t k = expert_token_activations_ptr[1 + e];
@@ -245,6 +244,7 @@ void kernel_main() {
         }
     }
     cb_pop_front(dense_token_maps_cb_id, num_local_experts);
+    cb_pop_front(token_activations_cb_id, 1);
 
     if (needs_barrier) {
         noc_async_write_barrier();
