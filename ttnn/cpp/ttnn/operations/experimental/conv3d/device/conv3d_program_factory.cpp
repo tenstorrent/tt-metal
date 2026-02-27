@@ -125,13 +125,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     log_debug(tt::LogOp, "Matmul M_t: {}", matmul_M_t);
     log_debug(tt::LogOp, "Matmul K_t: {}", matmul_K_t);
     log_debug(tt::LogOp, "Matmul N_t: {}", matmul_N_t);
-    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
-    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
-    log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
-    log_debug(
-        tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
-    log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
-
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
@@ -183,6 +176,13 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
+    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
+    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
+    log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
+    log_debug(
+        tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
+    log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
+
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
@@ -192,11 +192,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     constexpr uint32_t L1_USABLE_FOR_CBS = 1300 * 1024;
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
 
-    uint32_t other_cbs_bytes = patch_size_bytes * vol2col_rm_pages +  // vol2col_rm
-                               tile_size * matmul_M_t * matmul_K_t +  // vol2col_tiled
-                               tile_size * matmul_K_t * matmul_N_t +  // weight_tiled
-                               tile_size * matmul_M_t * matmul_N_t +  // matmul_interm
-                               tile_size * matmul_M_t * matmul_N_t;   // matmul_result_rm
+    uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
+                               (tile_size * matmul_M_t * matmul_K_t) +  // vol2col_tiled
+                               (tile_size * matmul_K_t * matmul_N_t) +  // weight_tiled
+                               (tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm
+                               (tile_size * matmul_M_t * matmul_N_t);   // matmul_result_rm
     if (C_in_num_blocks > 1) {
         other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;  // reduction
         other_cbs_bytes += tile_size;                            // worker_ack
