@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "width_sharded_descriptor.hpp"
+#include "conv2d_width_sharded_descriptor.hpp"
 
 #include <cstdint>
 #include <string>
