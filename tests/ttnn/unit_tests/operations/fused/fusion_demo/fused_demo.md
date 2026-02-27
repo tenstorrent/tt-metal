@@ -12,7 +12,7 @@ python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_d
 TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs
 ```
 
-All timing measured on Wormhole n150, BF16, `l1_small_size=24576`.
+All timing measured on Wormhole n150, BF16.
 
 ## How Timing Was Measured
 
@@ -68,20 +68,19 @@ Unfused `ttnn.rms_norm` and `ttnn.layer_norm` calls use the default interleaved 
 
 ## Demo 1: RMS -> Matmul -> RMS
 
-Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a single fused kernel dispatch. Each phase still writes its output to DRAM (matching the original op's output buffer); the speedup comes from eliminating host-side dispatch gaps between ops.
+Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a single fused kernel dispatch. Each phase still writes its output to DRAM and the next phase reads from DRAM — intermediates are **not** kept in L1. At small H (dispatch-dominated), the speedup comes from eliminating host-side dispatch gaps. At large H (compute-dominated), there is no device speedup.
 
-**Setup:**
-| | Shape | Tiles | Memory |
-|-|-------|-------|--------|
-| Input | `(1, 1, 256, 128)` | 8x4 | BF16, DRAM interleaved |
-| Weight (norm) | `(1, 1, 1, 128)` | 1x4 | BF16, DRAM interleaved |
-| Weight B (matmul) | `(1, 1, 128, 128)` | 4x4 | BF16, DRAM interleaved |
-| Output | `(1, 1, 256, 128)` | 8x4 | BF16, DRAM interleaved |
+**Setup (parameterized on H):**
+| | Shape | Memory |
+|-|-------|--------|
+| Input | `(1, 1, 256, H)` | BF16, DRAM interleaved |
+| Weight (norm) | `(1, 1, 1, H)` | BF16, DRAM interleaved |
+| Weight B (matmul) | `(1, 1, H, H)` | BF16, DRAM interleaved |
+| Output | `(1, 1, 256, H)` | BF16, DRAM interleaved |
 
 **Program configs:**
 - **RMS #1, RMS #2:** Interleaved, `(0,0)-(3,1)` = 4x2 = 8 cores
-- **Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 2), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=1, per_core_N=4)`
-
+- **Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 2), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=1, per_core_N=H/32)`
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 3 phases)
 
 **Dataflow:**
@@ -90,55 +89,114 @@ Input (DRAM) -> [RMS norm -> Matmul -> RMS norm] -> Output (DRAM)
                   L1 intermediate   L1 intermediate
 ```
 
-**Timing:**
+### H=128 (small — dispatch-dominated)
+
+**Timing (Tracy):**
 
 | | FW | Kernel | Host gap | Cores |
 |--|---:|------:|--------:|------:|
-| **Fused (1 dispatch)** | **26.4 us** | 25.8 us | — | 8 |
-| Unfused RMS #1 | 7.9 us | 7.2 us | | 8 |
+| **Fused (1 dispatch)** | **26.0 us** | 25.4 us | — | 8 |
+| Unfused RMS #1 | 7.9 us | 7.3 us | | 8 |
 | | | | 59.1 us | |
-| Unfused matmul | 8.7 us | 8.0 us | | 8 |
+| Unfused matmul | 9.2 us | 8.5 us | | 8 |
 | | | | 37.8 us | |
-| Unfused RMS #2 | 7.9 us | 7.2 us | | 8 |
-| **Unfused total (3 dispatches)** | **24.5 us** | 22.4 us | **96.9 us** | |
-| **Unfused end-to-end** | | | | **121.4 us** |
+| Unfused RMS #2 | 7.9 us | 7.3 us | | 8 |
+| **Unfused total (3 dispatches)** | **25.0 us** | 23.1 us | **96.9 us** | |
+| **Unfused end-to-end** | | | | **121.9 us** |
 
-Compile fused: 23 ms. **Fused is 4.6x faster end-to-end** (26.4 us vs 121.4 us). Host gaps are 80% of unfused E2E.
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,603 ms | 2,074 ms | **1.29x** |
+| E2E steady state | 0.042 ms | 0.064 ms | **1.52x** |
+| Device FW (Tracy) | 26.0 us | 25.0 us | 1.04x |
+| Device kernel (Tracy) | 25.4 us | 23.1 us | 1.10x |
 
-**PCC:** fused=0.999973, unfused=0.999976
+At H=128, each op takes 7-9 us on device. Host dispatch gaps (59+38 = 97 us) are **4x** the total kernel time (23 us). The **1.52x E2E speedup** comes entirely from eliminating those gaps. The fused kernel is ~2 us slower than the unfused sum due to inter-phase barrier overhead.
+
+### H=1536 (large — compute-dominated)
+
+**Timing (Tracy):**
+
+| | FW | Kernel | Cores |
+|--|---:|------:|------:|
+| **Fused (1 dispatch)** | **906.1 us** | 905.5 us | 8 |
+| Unfused RMS #1 | 30.1 us | 29.5 us | 8 |
+| Unfused matmul | 897.1 us | 896.4 us | 8 |
+| Unfused RMS #2 | — | 30.4 us | 8 |
+| **Unfused kernel total** | | **956.3 us** | |
+
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,678 ms | 2,114 ms | **1.26x** |
+| E2E steady state | 0.998 ms | 0.967 ms | **0.97x** |
+| Device kernel (Tracy) | 905.5 us | 956.3 us | **1.06x** |
+
+At H=1536, the matmul dominates (~880 us). Host dispatch gaps are noise compared to compute time. **Intermediates still round-trip through DRAM** in the fused path — each phase's writer writes to DRAM and the next phase's reader reads from DRAM, identical to unfused. The fused kernel adds ~9 us of barrier overhead (2 segment-sync barriers between 3 phases). The apparent 1.06x in the table above is within run-to-run DRAM bandwidth variance (~30 us); a repeat run showed fused 39 us *slower*. There is **no structural device speedup** for a linear chain of DRAM-interleaved ops.
+
+**PCC:** 1.000000 (both H values)
 
 ## Demo 2: RMS -> LN (Block-Sharded)
 
 Fusion with block-sharded memory layout. The CB allocator detects pinned buffer addresses from the shard spec and preserves them while pool-allocating other CB slots. Rebind addresses are passed as runtime args so the JIT cache is not busted when tensor allocations change.
 
-**Setup:**
-| | Shape | Tiles | Memory |
-|-|-------|-------|--------|
-| Input | `(1, 1, 128, 512)` | 4x16 | BF16, block-sharded L1 |
-| Weight | `(1, 1, 1, 512)` | 1x16 | BF16, DRAM interleaved |
-| Output | `(1, 1, 128, 512)` | 4x16 | BF16, block-sharded L1 |
+**Setup (parameterized on H):**
+| | Shape | Memory |
+|-|-------|--------|
+| Input | `(1, 1, H, 512)` | BF16, block-sharded L1 |
+| Weight | `(1, 1, 1, 512)` | BF16, L1 interleaved |
+| Output | `(1, 1, H, 512)` | BF16, block-sharded L1 |
 
-- **Shard spec:** `(32, 128)` = 1x4 tiles per core, `ROW_MAJOR` orientation
+- **Shard spec:** `(H/4, 128)` per core, `ROW_MAJOR` orientation, 4x4 = 16 cores
 
 **Program configs:**
-- **RMS, LN:** `LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(4, 4), subblock_w=4, block_h=1, block_w=4, inplace=False)`, 4x4 = 16 cores
-
+- **RMS, LN:** `LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(4, 4), subblock_w=4, block_h=H/128, block_w=4, inplace=False)`, 4x4 = 16 cores
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (both phases)
 
-**Timing:**
+### H=128 (small — dispatch-dominated)
+
+**Timing (Tracy):**
 
 | | FW | Kernel | Host gap | Cores |
 |--|---:|------:|--------:|------:|
-| **Fused (1 dispatch)** | **17.5 us** | 16.7 us | — | 16 |
-| Unfused RMS | 7.3 us | 6.3 us | | 16 |
+| **Fused (1 dispatch)** | **17.5 us** | 16.8 us | — | 16 |
+| Unfused RMS | 7.3 us | 6.5 us | | 16 |
 | | | | 62.5 us | |
-| Unfused LN | 10.4 us | 9.4 us | | 16 |
-| **Unfused total (2 dispatches)** | **17.7 us** | 15.8 us | **62.5 us** | |
+| Unfused LN | 10.4 us | 9.5 us | | 16 |
+| **Unfused total (2 dispatches)** | **17.7 us** | 16.0 us | **62.5 us** | |
 | **Unfused end-to-end** | | | | **80.2 us** |
 
-Compile fused: 45 ms. **Fused is 4.6x faster end-to-end** (17.5 us vs 80.2 us). Host gaps are 78% of unfused E2E.
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,504 ms | 2,421 ms | **1.61x** |
+| E2E steady state | 0.083 ms | 0.060 ms | 0.72x |
+| Device FW (Tracy) | 17.5 us | 17.7 us | 1.01x |
+| Device kernel (Tracy) | 16.8 us | 16.0 us | 0.95x |
 
-**PCC:** fused=0.999993, unfused=0.999993
+At H=128, each op takes 7-10 us. The single host dispatch gap (62.5 us) is **4x** the total kernel time. At the Tracy device level, fused is 4.6x faster than the unfused end-to-end. However, the **E2E steady state is 0.72x (slower fused)** because `generic_op` dispatch overhead (RT-arg rebuild via `override_runtime_arguments`) is larger than the native program-cache fast path used by individual `ttnn.rms_norm`/`ttnn.layer_norm` calls. The build cache is NOT in the E2E timing loop — this is purely dispatch overhead.
+
+### H=1536 (large — compute-dominated)
+
+**Timing (Tracy):**
+
+| | FW | Kernel | Cores |
+|--|---:|------:|------:|
+| **Fused (1 dispatch)** | **78.0 us** | 77.2 us | 16 |
+| Unfused RMS | 29.5 us | 28.8 us | 16 |
+| Unfused LN | 45.1 us | 44.2 us | 16 |
+| **Unfused kernel total** | **74.7 us** | **72.9 us** | |
+
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,514 ms | 2,449 ms | **1.62x** |
+| E2E steady state | 0.084 ms | 0.075 ms | 0.89x |
+| Device FW (Tracy) | 78.0 us | 74.7 us | 0.96x |
+| Device kernel (Tracy) | 77.2 us | 72.9 us | 0.94x |
+
+At H=1536, the sharded norm ops take 29-45 us each. The fused kernel (77.2 us) is 4.3 us slower than the unfused kernel sum (72.9 us) — the inter-phase barrier overhead is a larger fraction of total work compared to Demo 1 because there are no DRAM intermediates to eliminate (both paths keep data in sharded L1). The E2E is 0.89x (slower fused) for the same reason as H=128: fusion build cache overhead exceeds the saved dispatch gap.
+
+**PCC:** 1.000000 (both H values)
+
+**PCC:** fused=1.000000, unfused reference=1.000000
 
 ## Demo 3: Branching Topology on Full Grid (Segment Barrier Measurement)
 
@@ -271,19 +329,18 @@ For comparison, the per-core **phase barrier** zones (which synchronize between 
 
 Two completely independent 2-op chains running on disjoint 4x4 core groups within a single kernel dispatch. No inter-chain synchronization needed.
 
-**Setup:**
-| | Shape | Tiles | Memory |
-|-|-------|-------|--------|
-| Input A | `(1, 1, 512, 128)` | 16x4 | BF16, DRAM interleaved |
-| Input B | `(1, 1, 512, 128)` | 16x4 | BF16, DRAM interleaved |
-| Weight B | `(1, 1, 128, 128)` | 4x4 | BF16, DRAM interleaved |
+**Setup (parameterized on H):**
+| | Shape | Memory |
+|-|-------|--------|
+| Input A | `(1, 1, 512, H)` | BF16, DRAM interleaved |
+| Input B | `(1, 1, 512, H)` | BF16, DRAM interleaved |
+| Weight B | `(1, 1, H, H)` | BF16, DRAM interleaved |
 
 **Program configs:**
 - **Chain A — LN:** Interleaved, `(0,0)-(3,3)` = 4x4 = 16 cores
-- **Chain A — Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 4), in0_block_w=4, out_subblock_h=1, out_subblock_w=4, per_core_M=1, per_core_N=4)`
+- **Chain A — Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(4, 4), in0_block_w=4, out_subblock_h=1, out_subblock_w=min(H/32, 4), per_core_M=1, per_core_N=H/32)`
 - **Chain B — RMS:** Interleaved, `(4,0)-(7,3)` = 4x4 = 16 cores
-- **Chain B — Matmul:** Same `MatmulMultiCoreReuseProgramConfig` as Chain A
-
+- **Chain B — Matmul:** Same config as Chain A
 - **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 4 ops)
 
 **API:**
@@ -296,30 +353,53 @@ Parallel(
 
 **Fused vs unfused comparison:**
 
-The fused kernel runs both chains **simultaneously** on 32 cores (16 per chain). The fused kernel time is approximately `max(chain_a, chain_b)` since the chains overlap.
+The fused kernel runs both chains **simultaneously** on 32 cores (16 per chain). The fused kernel time is approximately `max(chain_a, chain_b)` since the chains overlap. The unfused comparison runs the same 4 ops **sequentially** as 4 separate `ttnn` dispatches, each on 16 cores.
 
-The unfused comparison runs the same 4 ops **sequentially** as 4 separate `ttnn` dispatches (LN -> matmul -> RMS -> matmul), each on 16 cores. There is no way to express cross-core parallelism with standard `ttnn` op calls.
+### H=128 (small — dispatch-dominated)
 
-Fused benefits from both dispatch elimination AND parallelism.
+**Timing (Tracy):**
 
-**Timing:**
+| | FW | Kernel | Cores |
+|--|---:|------:|------:|
+| **Fused (1 dispatch)** | **30.6 us** | 29.7 us | 32 (16+16 parallel) |
+| Unfused LN (chain A) | 10.5 us | 9.9 us | 16 |
+| Unfused matmul (chain A) | 12.4 us | 11.7 us | 16 |
+| Unfused RMS (chain B) | 8.5 us | 7.8 us | 16 |
+| Unfused matmul (chain B) | 11.9 us | 11.2 us | 16 |
+| **Unfused total (4 dispatches)** | **43.3 us** | 40.7 us | |
 
-| | FW | Kernel | Host gap | Cores |
-|--|---:|------:|--------:|------:|
-| **Fused (1 dispatch)** | **31.0 us** | 30.0 us | — | 32 (16+16 parallel) |
-| Unfused LN (chain A) | 10.7 us | 10.0 us | | 16 |
-| | | | 34.7 us | |
-| Unfused matmul (chain A) | 11.9 us | 11.3 us | | 16 |
-| | | | 25.6 us | |
-| Unfused RMS (chain B) | 8.5 us | 7.8 us | | 16 |
-| | | | 28.0 us | |
-| Unfused matmul (chain B) | 11.8 us | 11.2 us | | 16 |
-| **Unfused total (4 dispatches)** | **42.9 us** | 40.3 us | **88.3 us** | |
-| **Unfused end-to-end** | | | | **131.2 us** |
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,541 ms | 3,438 ms | **2.24x** |
+| E2E steady state | 0.066 ms | 0.092 ms | **1.39x** |
+| Device FW (Tracy) | 30.6 us | 43.3 us | 1.42x |
+| Device kernel (Tracy) | 29.7 us | 40.7 us | 1.37x |
 
-Compile fused: 35 ms. **Fused is 4.2x faster end-to-end** (31.0 us vs 131.2 us). Two sources of speedup: host-gap elimination (88.3 us of inter-op overhead removed) and parallelism (unfused runs 42.9 us of firmware sequentially; fused overlaps both chains into 31.0 us).
+At H=128, each op takes 8-12 us. Fused runs both chains in parallel so device time ≈ `max(chain_a, chain_b)` ≈ 30 us vs unfused sequential sum of 43 us. The **1.39x E2E speedup** comes from both parallelism (1.4x device) and host dispatch elimination (4 dispatches → 1).
 
-**PCC:** Chain A (LN->MM)=0.999973, Chain B (RMS->MM)=0.999975
+### H=512 (large — compute-dominated)
+
+**Timing (Tracy):**
+
+| | FW | Kernel | Cores |
+|--|---:|------:|------:|
+| **Fused (1 dispatch)** | **342.9 us** | 342.0 us | 32 (16+16 parallel) |
+| Unfused LN (chain A) | 21.1 us | 20.4 us | 16 |
+| Unfused matmul (chain A) | 168.3 us | 167.7 us | 16 |
+| Unfused RMS (chain B) | 15.8 us | 15.1 us | 16 |
+| Unfused matmul (chain B) | 171.4 us | 170.7 us | 16 |
+| **Unfused total (4 dispatches)** | **376.5 us** | 374.0 us | |
+
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start | 1,628 ms | 3,544 ms | **2.18x** |
+| E2E steady state | 0.349 ms | 0.379 ms | **1.09x** |
+| Device FW (Tracy) | 342.9 us | 376.5 us | 1.10x |
+| Device kernel (Tracy) | 342.0 us | 374.0 us | 1.09x |
+
+At H=512, matmul dominates (~168-171 us per chain). Fused overlaps both chains: device time ≈ `max(chain_a, chain_b)` ≈ 342 us vs unfused sequential 377 us. Chain A (LN+MM ≈ 188 us) and Chain B (RMS+MM ≈ 186 us) are nearly balanced, so parallelism gives close to 2x on the op sum, but the matmuls already dominate each chain.
+
+**PCC:** Chain A (LN->MM) = 1.0000, Chain B (RMS->MM) = 1.0000
 
 ## Demo 5: GlobalCircularBuffer Mid-Kernel Write
 
@@ -358,18 +438,172 @@ No unfused comparison (GlobalCB mid-kernel write has no unfused equivalent).
 
 **PCC:** Receiver=1.000000, Phase 1=1.000000
 
+## Demo 8: Block-Sharded Branching Tree (LN → Slice → Matmul → Slice → LN)
+
+Full block-sharded tree topology with 13 ops across 5 levels. Exercises all three descriptor-based op types (LayerNorm, Slice, Matmul) on a 2×8 core grid with hierarchical core subset splitting. The unfused comparison launches the **exact same OpDescriptors** individually via `generic_op`, making it a true apples-to-apples comparison — identical ops, identical memory configs, identical kernels. The only difference is 1 dispatch vs 13.
+
+**Topology:**
+```
+                            ln_stem (2×8 = 16 cores)
+                                    |
+                    +───────────────+───────────────+
+                    |                               |
+               sl_top (1×8=8)                  sl_bot (1×8=8)
+              row 0, cols 0-7                 row 1, cols 0-7
+                    |                               |
+              mm_left (1×8=8)                mm_right (1×8=8)
+                    |                               |
+              +─────+─────+                   +─────+─────+
+              |           |                   |           |
+         sl_tl (1×4)  sl_bl (1×4)       sl_tr (1×4)  sl_br (1×4)
+        r0,c0-3      r0,c4-7           r1,c0-3      r1,c4-7
+              |           |                   |           |
+         ln_ll (1×4)  ln_lr (1×4)       ln_rl (1×4)  ln_rr (1×4)
+```
+
+**Setup:**
+| | Shape | Tiles | Memory |
+|-|-------|-------|--------|
+| Input | `(1, 1, 2048, 256)` | 64×8 | BF16, block-sharded L1 |
+| B_left | `(1, 1, 256, 128)` | 8×4 | BF16, L1 interleaved |
+| B_right | `(1, 1, 256, 128)` | 8×4 | BF16, L1 interleaved |
+
+**Core assignments:**
+| Cores | Range | Count | Used by |
+|-------|-------|------:|---------|
+| `stem_cores` | `(0,0)-(1,7)` | 16 | `ln_stem` |
+| `left_cores` | `(0,0)-(0,7)` | 8 | `sl_top`, `mm_left` |
+| `right_cores` | `(1,0)-(1,7)` | 8 | `sl_bot`, `mm_right` |
+| `ll_cores` | `(0,0)-(0,3)` | 4 | `sl_tl`, `ln_ll` |
+| `lr_cores` | `(0,4)-(0,7)` | 4 | `sl_bl`, `ln_lr` |
+| `rl_cores` | `(1,0)-(1,3)` | 4 | `sl_tr`, `ln_rl` |
+| `rr_cores` | `(1,4)-(1,7)` | 4 | `sl_br`, `ln_rr` |
+
+**Shard specs (all block-sharded, ROW_MAJOR):**
+| Config key | Tensor shape | Shard shape | Grid | Used after |
+|------------|-------------|-------------|------|-----------|
+| `stem` | `2048×256` | `[256, 128]` | 2×8 | Input, `ln_stem` output |
+| `left` / `right` | `1024×256` | `[128, 256]` | 1×8 | `sl_top` / `sl_bot` output |
+| `mm_left` / `mm_right` | `1024×128` | `[128, 128]` | 1×8 | `mm_left` / `mm_right` output |
+| `ll`/`lr`/`rl`/`rr` | `512×128` | `[128, 128]` | 1×4 | Leaf slice output, leaf LN input |
+
+**Program configs:**
+- **ln_stem, leaf LNs:** `LayerNormShardedMultiCoreProgramConfig`, auto-detected from block-sharded input grid. Multicast sender (row 0) / receiver (row 1) kernels for `ln_stem`; single-row for leaf LNs.
+- **Matmul:** `MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(1, 8), in0_block_w=8, out_subblock_h=1, out_subblock_w=4, per_core_M=4, per_core_N=4)` — `in0_block_w = 256/32 = 8` (full K in one block).
+- **Slice:** Tile-path slice with named compile-time args (`cb_in`, `cb_out`) for fusion CB remapping.
+- **Compute:** `fp32=False`, `math_approx=True`, `HiFi4` (all 13 ops)
+
+**API:**
+```python
+Sequential(
+    ln_stem,
+    Parallel(
+        Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
+        Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
+    ),
+).build(device)
+```
+
+**Unfused comparison (apples-to-apples):**
+
+The unfused test creates the exact same 13 OpDescriptors via `_demo8_make_ops` and launches them individually:
+```python
+all_ops = [ln_stem, sl_top, sl_bot, mm_left, mm_right,
+           sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr]
+for op in all_ops:
+    ttnn.generic_op(list(op.input_tensors) + list(op.output_tensors), op.descriptor)
+```
+
+Both paths use identical block-sharded memory configs, identical kernels, and identical core assignments. The only difference is dispatch granularity: 1 fused dispatch vs 13 individual dispatches.
+
+**Timing (Tracy, single iteration):**
+
+| | FW | Kernel | Cores |
+|--|---:|------:|------:|
+| **Fused (1 dispatch)** | **87.4 us** | **86.0 us** | 16 |
+| `ln_stem` — LayerNorm | 31.3 us | 30.6 us | 16 |
+| `sl_top` — Slice top half | 14.8 us | 13.9 us | 8 |
+| `sl_bot` — Slice bottom half | 17.1 us | 16.2 us | 8 |
+| `mm_left` — Matmul left | 13.0 us | 12.4 us | 8 |
+| `mm_right` — Matmul right | 13.0 us | 12.4 us | 8 |
+| `sl_tl` — Leaf slice | 4.6 us | 3.7 us | 4 |
+| `sl_bl` — Leaf slice | 4.6 us | 3.8 us | 4 |
+| `sl_tr` — Leaf slice | 5.9 us | 5.1 us | 4 |
+| `sl_br` — Leaf slice | 6.0 us | 5.1 us | 4 |
+| `ln_ll` — Leaf LN | 18.3 us | 17.6 us | 4 |
+| `ln_lr` — Leaf LN | 18.2 us | 17.6 us | 4 |
+| `ln_rl` — Leaf LN | 18.3 us | 17.6 us | 4 |
+| `ln_rr` — Leaf LN | 18.3 us | 17.6 us | 4 |
+| **Unfused total (13 dispatches)** | **183.3 us** | **173.6 us** | |
+
+**Summary:**
+
+| Metric | Fused | Unfused | Speedup |
+|--------|------:|--------:|--------:|
+| Cold start (build + first run) | 1,732 ms | 8,191 ms | **4.7x** |
+| E2E steady state (host→device→host) | 0.199 ms | 0.217 ms | **1.09x** |
+| Device FW duration (Tracy) | 87.4 us | 183.3 us | **2.10x** |
+| Device kernel duration (Tracy) | 86.0 us | 173.6 us | **2.02x** |
+
+The **2x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets, while the unfused path dispatches each op sequentially. At each level of the tree:
+
+- **Level 0:** `ln_stem` runs on all 16 cores (no parallelism possible — same in both).
+- **Level 1:** `sl_top` and `sl_bot` overlap on 8 cores each (fused: `max(14, 17)` = 17 us; unfused: `14 + 17` = 32 us).
+- **Level 2:** `mm_left` and `mm_right` overlap on 8 cores each (fused: `max(13, 13)` = 13 us; unfused: `13 + 13` = 26 us).
+- **Level 3:** 4 leaf slices overlap on 4 cores each (fused: `max(4, 5, 5, 6)` = 6 us; unfused: `4+5+5+6` = 20 us).
+- **Level 4:** 4 leaf LNs overlap on 4 cores each (fused: `max(18, 18, 18, 18)` = 18 us; unfused: `18×4` = 72 us).
+
+Critical path (fused): `31 + 17 + 13 + 6 + 18` = **85 us** ≈ observed 86 us. The theoretical max is achieved within ~1 us of barrier overhead.
+
+The **E2E speedup (1.09x)** is modest because the descriptor path (`generic_op`) has minimal host overhead per dispatch — no Python framework layering, no op decomposition, no autoformat. With the standard `ttnn` API (which adds 30-60 us host gaps per dispatch), the E2E unfused time would be ~3-4x higher.
+
+The **cold start speedup (4.7x)** reflects that fusion JIT-compiles 1 kernel program instead of 13 separate ones.
+
+**PCC:** 0.992 (leaf LN output vs torch reference). Lower than demos 1-4 due to 5 levels of accumulated numerical error across block-sharded ops.
+
 ---
 
 ## Summary
 
+### Device-level timing (Tracy, H=128 / small variants)
+
 For small, fast ops on Wormhole, **host gaps between dispatches (30–62 us each) dominate per-op firmware time (5–11 us each)**. Fusion eliminates all inter-op host gaps, and for parallel topologies also overlaps independent chains.
 
-| Demo | Fused FW | Unfused E2E | Speedup | Host gap % of unfused |
-|------|----------:|------------:|--------:|----------------------:|
-| 1: RMS->MM->RMS (3 ops, 8 cores) | 26.4 us | 121.4 us | 4.6x | 80% |
-| 2: RMS->LN sharded (2 ops, 16 cores) | 17.5 us | 80.2 us | 4.6x | 78% |
-| 3: Branching (5 ops, 64 cores) | 64.5 us | 205.3 us | 3.2x | 59% (+ parallelism) |
-| 4: Parallel chains (4 ops, 32 cores) | 31.0 us | 131.2 us | 4.2x | 67% (+ parallelism) |
+| Demo | Fused FW | Unfused FW sum | FW speedup | Source of speedup |
+|------|----------:|------------:|--------:|:-----------------|
+| 1: RMS→MM→RMS (3 ops, 8 cores) | 26.0 us | 25.0 us | 1.0x | No device speedup (linear chain) |
+| 2: RMS→LN sharded (2 ops, 16 cores) | 17.5 us | 17.7 us | 1.0x | No device speedup (linear chain) |
+| 3: Branching (5 ops, 64 cores) | 64.5 us | 205.3 us | 3.2x | Branch parallelism |
+| 4: Parallel chains (4 ops, 32 cores) | 30.6 us | 43.3 us | 1.4x | Parallelism (2 chains overlap) |
+| 8: Sharded tree (13 ops, 16 cores) | 87.4 us | 183.3 us | 2.1x | Branch parallelism |
+
+### Device-level timing (Tracy, H=1536 / large variants)
+
+At larger H, compute dominates and host gaps become irrelevant. **Linear chains show no device speedup at large H** — intermediates still round-trip through DRAM in the fused path, so there is no I/O elimination. Fusion only adds barrier overhead.
+
+| Demo | Fused kernel | Unfused kernel sum | Kernel speedup | Why |
+|------|----------:|------------:|--------:|:---|
+| 1: RMS→MM→RMS | ~906 us | ~911 us | **~1.00x** | Within DRAM variance; ~9 us barrier overhead |
+| 2: RMS→LN sharded | 77.2 us | 72.9 us | **0.94x** | 4.3 us barrier overhead (sharded, no DRAM) |
+| 4: Parallel chains (H=512) | 342.0 us | 374.0 us | **1.09x** | Parallelism overlaps balanced chains |
+
+### Host-level timing (cold start + steady-state E2E)
+
+| Demo | H | Fused cold | Unfused cold | Cold | Fused E2E | Unfused E2E | E2E |
+|------|--:|----------:|-----------:|--------:|----------:|-----------:|--------:|
+| 1: RMS→MM→RMS | 128 | 1,603 ms | 2,074 ms | 1.29x | 0.042 ms | 0.064 ms | **1.52x** |
+| 1: RMS→MM→RMS | 1536 | 1,678 ms | 2,114 ms | 1.26x | 0.998 ms | 0.967 ms | 0.97x |
+| 2: RMS→LN sharded | 128 | 1,504 ms | 2,421 ms | 1.61x | 0.083 ms | 0.060 ms | 0.72x |
+| 2: RMS→LN sharded | 1536 | 1,514 ms | 2,449 ms | 1.62x | 0.084 ms | 0.075 ms | 0.89x |
+| 4: Parallel chains | 128 | 1,541 ms | 3,438 ms | 2.23x | 0.066 ms | 0.092 ms | **1.39x** |
+| 4: Parallel chains | 512 | 1,628 ms | 3,544 ms | 2.18x | 0.349 ms | 0.379 ms | **1.09x** |
+| 8: Sharded tree | — | 1,732 ms | 8,191 ms | 4.73x | 0.199 ms | 0.217 ms | **1.09x** |
+
+**Key takeaways:**
+- **Small H, linear chains** (demos 1, 2 at H=128): No device speedup — fused FW ≈ sum of unfused kernels + small barrier overhead. Speedup comes entirely from host gap elimination, visible at the Tracy device timeline level. At the Python E2E level, demo 1 (3 ops) shows 1.52x from eliminating 2 dispatch roundtrips; demo 2 (2 ops) is slower fused because `generic_op` dispatch overhead exceeds the single saved dispatch gap.
+- **Large H, linear chains** (demos 1, 2 at H=1536): Compute dominates, host gaps are negligible. Neither demo sees device speedup — intermediates still round-trip through DRAM (Demo 1) or stay in sharded L1 (Demo 2) in both fused and unfused paths. Fusion only adds ~5-9 us of barrier overhead per inter-phase transition.
+- **Branching topologies** (demos 3, 4, 8): Device speedup from overlapping independent branches on disjoint core subsets. Demo 8's apples-to-apples comparison isolates this: 2x device speedup, purely from parallelism.
+- **Cold start**: Always faster fused (1 JIT compilation vs N), with the gap growing with op count (1.3x for 3 ops → 4.7x for 13 ops).
 
 ---
 
