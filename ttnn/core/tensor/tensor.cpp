@@ -515,9 +515,9 @@ const TensorSpec& Tensor::tensor_spec() const {
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
-const DeviceStorage& Tensor::device_storage() const& { return device_tensor().get_storage(); }
+const DeviceStorage& Tensor::device_storage() const& { return device_tensor().get_legacy_device_storage(); }
 
-const HostStorage& Tensor::host_storage() const& { return host_tensor().get_storage(); }
+const HostStorage& Tensor::host_storage() const& { return host_tensor().get_legacy_host_storage(); }
 
 const HostTensor& Tensor::host_tensor() const& {
     const auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());

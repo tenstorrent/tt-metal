@@ -131,6 +131,7 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .view()
+//        These maybe replaced by dedicated view types, See: #38093
 // ======================================================================================
 HostTensor view(
     const HostTensor& tensor,

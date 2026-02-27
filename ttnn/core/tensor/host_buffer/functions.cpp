@@ -12,7 +12,7 @@
 namespace tt::tt_metal::host_buffer {
 
 HostBuffer get_host_buffer(const HostTensor& tensor) {
-    const auto& storage = tensor.get_storage();
+    const auto& storage = tensor.get_legacy_host_storage();
     std::vector<HostBuffer> buffers;
     storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
     TT_FATAL(

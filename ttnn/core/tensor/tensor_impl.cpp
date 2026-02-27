@@ -546,7 +546,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 
 HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
-    const auto& storage = tensor.get_storage();
+    const auto& storage = tensor.get_legacy_device_storage();
     const auto& mesh_buffer = storage.mesh_buffer;
     distributed::MeshDevice* device = mesh_buffer->device();
 
@@ -649,7 +649,8 @@ MeshTensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(queue.device(), *tensor_spec);
-    return to_device_mesh_buffer(queue, tensor.get_storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology());
+    return to_device_mesh_buffer(
+        queue, tensor.get_legacy_host_storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology());
 }
 
 void copy_to_host(
@@ -662,7 +663,7 @@ void copy_to_host(
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    const auto& device_storage = device_tensor.get_storage();
+    const auto& device_storage = device_tensor.get_legacy_device_storage();
     const auto& mesh_buffer = device_storage.mesh_buffer;
     distributed::MeshDevice* device = mesh_buffer->device();
 
@@ -714,7 +715,7 @@ void copy_to_host(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_ptr(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_invariant_breaking(), blocking);
 }
 
 void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor) {
@@ -726,10 +727,14 @@ void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.mesh_buffer_ptr();
+    auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
 
     device_tensor = to_device_mesh_buffer(
-        queue, host_tensor.get_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology());
+        queue,
+        host_tensor.get_legacy_host_storage(),
+        mesh_buffer,
+        device_tensor.tensor_spec(),
+        host_tensor.tensor_topology());
 }
 
 void copy_to_device(
@@ -742,7 +747,7 @@ void copy_to_device(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.mesh_buffer_ptr(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.mesh_buffer_invariant_breaking(), shard_data_transfers, false);
 }
 
 // ======================================================================================
@@ -1055,7 +1060,8 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     };
 
     return HostTensor(
-        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
+        tensor.get_legacy_host_storage().transform(
+            [&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -1137,7 +1143,7 @@ HostTensor view(const HostTensor& tensor, const Shape& new_logical_shape, const 
             new_logical_shape,
             new_padded_shape));
 
-    return HostTensor(tensor.get_storage(), new_spec, tensor.tensor_topology());
+    return HostTensor(tensor.get_legacy_host_storage(), new_spec, tensor.tensor_topology());
 }
 
 // TODO (#25340): Review tensor topology logic for reshape
@@ -1179,7 +1185,7 @@ MeshTensor view(const MeshTensor& tensor, const Shape& new_logical_shape, const 
             new_logical_shape,
             new_padded_shape));
 
-    auto device_storage = tensor.get_storage();
+    auto device_storage = tensor.get_legacy_device_storage();
     if (tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
         return MeshTensor(std::move(device_storage), new_spec, tensor.tensor_topology());
     }
@@ -1307,7 +1313,7 @@ HostTensor pad_impl(
     };
 
     return HostTensor(
-        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
+        tensor.get_legacy_host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -1392,7 +1398,7 @@ HostTensor unpad_impl(
     };
 
     return HostTensor(
-        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
+        tensor.get_legacy_host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
@@ -1545,7 +1551,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         return input_tensor;
     }
 
-    auto input_storage = detail::preprocess_storage(input_tensor.get_storage(), src_type);
+    auto input_storage = detail::preprocess_storage(input_tensor.get_legacy_host_storage(), src_type);
 
     auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_storage]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
