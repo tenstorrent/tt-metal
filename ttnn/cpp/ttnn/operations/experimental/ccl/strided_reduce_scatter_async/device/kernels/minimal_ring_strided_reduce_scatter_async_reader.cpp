@@ -192,25 +192,23 @@ void kernel_main() {
                                     tiles_ht_per_core,
                                     mm_block_ht,  // full stride between blocks for absolute row calculation
                                     chunk_width_in_tiles);
-                                const uint32_t slice_tile_idx =
-                                    slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
                                 const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                     slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                 const uint32_t input_tile_id = global_tile_idx + batch_offset;
 
+                                // slice_row increases monotonically, so once out-of-bounds all
+                                // subsequent tiles in this loop are ghost rows too.
                                 if (slice_row < slice_Ht) {
                                     const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                                    l1_write_addr += page_size;
                                     if (do_reduce) {
                                         const uint64_t intermediate_noc_read_addr =
                                             get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
                                         noc_async_read(
                                             intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                                        intermediate_l1_write_addr += page_size;
                                     }
-                                }
-                                l1_write_addr += page_size;
-                                if (do_reduce) {
-                                    intermediate_l1_write_addr += page_size;
                                 }
 
                                 get_next_tile_coordinates(
