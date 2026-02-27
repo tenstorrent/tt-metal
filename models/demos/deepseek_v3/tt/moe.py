@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import torch
@@ -221,7 +222,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
                     dim=3,
-                    memory_config=input_output_memory_config,
+                    output_memory_config=input_output_memory_config,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -536,10 +537,12 @@ class MoE(SharedStateAddOn, AbstractModule):
                 output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     output,
                     dim=0,
-                    split_size=int(output[-1] // tp_size),
+                    split_size=int(output.shape[-1] // tp_size),
                     output_memory_config=cfg["ring_sum_experts_output_memory_config"],
                 )
-                output = ttnn.experimental.deepseek_moe_reduce_scatter(output, cfg["ring_final_output_reduce_scatter"])
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                    output, **cfg["ring_final_output_reduce_scatter"]
+                )
             else:
                 output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
                 output = ttnn.experimental.reduce_scatter_minimal_async(

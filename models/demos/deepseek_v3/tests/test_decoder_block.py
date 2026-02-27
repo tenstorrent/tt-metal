@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     paged_cache_from_torch,
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
+)
+
+fabric_config = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
 )
 
 
@@ -207,7 +212,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": fabric_config},
     ],
     indirect=True,
 )

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from abc import abstractmethod
 from pathlib import Path
 
@@ -120,13 +121,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
-        # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
-        # of a reduce on the MoE experts followed by an add with the SharedExpert. This enables us to use
-        # the optimized reduce_scatter.
-        combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
+        mlp_out = ttnn.sum(combined_out, dim=0, keepdim=True)
+        combined_out = ttnn.add(mlp_out, shared_expert_out)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
-        combined_out = ttnn.sum(combined_out, dim=0, keepdim=True)
 
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
@@ -173,6 +171,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
         # of a reduce on the MoE experts followed by an add with the SharedExpert. This enables us to use
         # the optimized reduce_scatter.
+        shared_expert_out = ttnn.to_memory_config(shared_expert_out, ttnn.L1_MEMORY_CONFIG)
         combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
@@ -187,12 +186,12 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
-                    split_size=int(combined_out[-1] // tp_size),
+                    split_size=int(combined_out.shape[-1] // tp_size),
                     output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
                 )
                 ttnn.deallocate(combined_out)
                 output = ttnn.experimental.deepseek_moe_reduce_scatter(
-                    summed_experts, cfg["moe"]["ring_final_output_reduce_scatter"]
+                    summed_experts, **cfg["moe"]["ring_final_output_reduce_scatter"]
                 )
             else:
                 summed_experts = ttnn.sum(
