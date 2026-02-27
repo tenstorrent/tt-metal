@@ -35,6 +35,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
+    _get_node_allowed_coords,
     _get_node_core_range,
 )
 from models.experimental.ops.descriptors.fusion.cb_allocator import (
@@ -64,6 +65,7 @@ class OpNode:
 
     op: OpDescriptor
     children: List["OpNode"] = field(default_factory=list)
+    allowed_core_range: Optional[Any] = field(default=None, repr=False)
 
 
 @dataclass
@@ -596,47 +598,98 @@ class OpGraphBuilder:
         _collect_leaves(self._root)
         return _coords_to_core_range_set(all_coords)
 
-    def _validate_topology(self) -> None:
-        """Validate the tree topology.
+    @staticmethod
+    def _propagate_allowed_ranges(root: OpNode) -> None:
+        """Propagate allowed_core_range bottom-up through the tree.
 
-        Checks:
-        - Each child's core_range is a subset of its parent's range.
-        - Sibling nodes have disjoint core ranges.
+        Post-order traversal:
+        1. If ``node.op.allowed_core_range`` is set, use it.
+        2. Else if leaf, default to actual core range.
+        3. Else, union of own actual range + children's allowed ranges.
+
+        After this, every node has ``allowed_core_range`` set.
+        """
+
+        def _propagate(node: OpNode):
+            # Recurse children first (post-order)
+            for child in node.children:
+                _propagate(child)
+
+            if node.op.allowed_core_range is not None:
+                node.allowed_core_range = node.op.allowed_core_range
+            elif not node.children:
+                # Leaf: default to actual core range
+                node.allowed_core_range = _get_node_core_range(node)
+            else:
+                # Internal node: union of own actual range + children's allowed ranges.
+                # Including the actual range ensures partial coverage is valid
+                # (parent may use more cores than children collectively cover).
+                all_coords: Set[Tuple[int, int]] = _core_range_set_to_coords(_get_node_core_range(node))
+                for child in node.children:
+                    all_coords |= _core_range_set_to_coords(child.allowed_core_range)
+                node.allowed_core_range = _coords_to_core_range_set(all_coords)
+
+        _propagate(root)
+
+    def _validate_topology(self) -> None:
+        """Validate the tree topology using allowed core ranges.
+
+        First propagates ``allowed_core_range`` on all nodes, then checks:
+
+        1. **Actual subset of allowed**: Each node's actual core range is a
+           subset of its allowed range.
+        2. **Child allowed subset of parent allowed**: Each child's allowed
+           range is a subset of its parent's allowed range.
+        3. **Sibling disjointness**: Siblings' allowed ranges are pairwise
+           disjoint.
 
         Raises:
             ValueError: On any topology violation.
         """
+        # Propagate allowed ranges before validation
+        self._propagate_allowed_ranges(self._root)
 
-        def _validate_children(node: OpNode, parent_coords: Set[Tuple[int, int]], depth: int):
+        def _validate_node(node: OpNode, parent_allowed_coords: Set[Tuple[int, int]], depth: int):
+            # Check actual ⊆ allowed for this node
+            actual_coords = _core_range_set_to_coords(_get_node_core_range(node))
+            allowed_coords = _get_node_allowed_coords(node)
+            if not actual_coords.issubset(allowed_coords):
+                extra = sorted(actual_coords - allowed_coords)
+                raise ValueError(
+                    f"OpGraph topology error: node at depth {depth} "
+                    f"has actual cores {extra} outside its allowed range "
+                    f"{sorted(allowed_coords)}"
+                )
+
             if not node.children:
                 return
 
-            # Check sibling disjointness
+            # Check sibling disjointness (using allowed ranges)
             seen_coords: Set[Tuple[int, int]] = set()
             for child in node.children:
-                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
-                overlap = seen_coords & child_coords
+                child_allowed = _get_node_allowed_coords(child)
+                overlap = seen_coords & child_allowed
                 if overlap:
                     raise ValueError(
                         f"OpGraph topology error: sibling nodes at depth {depth + 1} "
                         f"have overlapping cores {sorted(overlap)}"
                     )
-                seen_coords |= child_coords
+                seen_coords |= child_allowed
 
-            # Check each child is subset of parent, then recurse
+            # Check each child's allowed ⊆ parent's allowed, then recurse
             for child in node.children:
-                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
-                if not child_coords.issubset(parent_coords):
-                    extra = sorted(child_coords - parent_coords)
+                child_allowed = _get_node_allowed_coords(child)
+                if not child_allowed.issubset(allowed_coords):
+                    extra = sorted(child_allowed - allowed_coords)
                     raise ValueError(
                         f"OpGraph topology error: node at depth {depth + 1} "
-                        f"(cores {sorted(child_coords)}) has cores {extra} "
-                        f"outside parent range {sorted(parent_coords)}"
+                        f"(cores {sorted(child_allowed)}) has cores {extra} "
+                        f"outside parent range {sorted(allowed_coords)}"
                     )
-                _validate_children(child, child_coords, depth + 1)
+                _validate_node(child, allowed_coords, depth + 1)
 
-        root_coords = _core_range_set_to_coords(_get_node_core_range(self._root))
-        _validate_children(self._root, root_coords, depth=0)
+        root_allowed = _get_node_allowed_coords(self._root)
+        _validate_node(self._root, root_allowed, depth=0)
 
     @staticmethod
     def _effective_leaf_range(node: OpNode) -> Set[Tuple[int, int]]:

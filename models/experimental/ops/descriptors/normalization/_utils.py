@@ -108,4 +108,4 @@ def _create_layernorm_op_descriptor(
     inputs, outputs = _build_layernorm_io_tensors(tensor_args, output_tensor)
 
     name = "rms_norm" if norm_type == ttnn.LayerNormType.RMSNORM else "layer_norm"
-    return OpDescriptor(program_descriptor, inputs, outputs, name)
+    return OpDescriptor(program_descriptor, inputs, outputs, name, allowed_core_range=core_range_set)
