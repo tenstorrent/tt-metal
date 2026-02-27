@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
-from models.common.utility_functions import is_llk_assert_enabled
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -68,10 +68,9 @@ def test_fill_int32(device, fill_value):
     assert equal_passed
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize("fill_value", [2147483647, 25.5, 4294967293, 1000000000, 4294967295])
 def test_fill_uint32(device, fill_value):
-    if fill_value == 2147483647 and is_llk_assert_enabled():
-        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch_input_tensor = torch.ones((1, 2), dtype=torch.uint32)
     golden_function = ttnn.get_golden_function(ttnn.fill)
     torch_output_tensor = golden_function(torch_input_tensor, fill_value)

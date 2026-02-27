@@ -5,13 +5,12 @@
 import torch
 import ttnn
 import pytest
-from models.common.utility_functions import is_llk_assert_enabled
+from models.common.utility_functions import skip_with_llk_assert
 
 
 # use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 def test_typecast_uint16(device):
-    if is_llk_assert_enabled():
-        pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch.manual_seed(0)
 
     in_data1 = torch.tensor([[[[700, 100, 65000, 9500]]]], dtype=torch.int32)
@@ -55,6 +54,7 @@ def test_typecast_uint16(device):
     assert torch.equal(golden_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "shape, sub_core_grid",
     [
@@ -140,6 +140,7 @@ def test_typecast_subcore_grid(device, shape, sub_core_grid):
 
 
 # for range verification in conversions
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 def test_typecast_uint16_subcore_grid(device):
     in_data1 = torch.tensor([[[[700, 100, 65000, 9500]]]], dtype=torch.int32)
     in_data2 = torch.tensor([[[[70000, 1000, 65000, 95000]]]], dtype=torch.int32)

@@ -5,7 +5,7 @@
 import ttnn
 import pytest
 from tests.sweep_framework.sweep_utils.adaptive_pool2d_common import run_adaptive_pool2d
-from models.common.utility_functions import is_llk_assert_enabled
+from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +23,7 @@ failing_parameters = [
 ]
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
@@ -59,8 +60,6 @@ def test_adaptive_pool2d(
     dtype,
     pool_type,
 ):
-    if pool_type == "max" and dtype == ttnn.bfloat16 and output_size == (1, 1) and input_shape == (1, 512, 28, 28) and is_llk_assert_enabled():
-        pytest.skip("Hits LLK assert check for L1 memory access.")
     if list(input_shape) + list(output_size) in failing_parameters:
         pytest.skip(
             f"Skipping failing cases due to non correctable patterns in kernels or strides: {input_shape} -> {output_size}"

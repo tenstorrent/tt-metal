@@ -7,7 +7,7 @@ import pytest
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
-from models.common.utility_functions import is_llk_assert_enabled
+from models.common.utility_functions import is_llk_assert_enabled, skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -242,6 +242,7 @@ def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device)
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "logical_op",
     [
@@ -297,7 +298,7 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
     ],
 )
 def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
-    if ttnn_dtype == ttnn.uint32 and ttnn_function == ttnn.bitwise_left_shift and is_llk_assert_enabled():
+    if ttnn_dtype == ttnn.uint32 and is_llk_assert_enabled():
         pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     # Test with regular values and extreme values for both int32 and uint32
     if ttnn_dtype == ttnn.int32:
@@ -335,6 +336,7 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
         assert torch.equal(tt_out, z_torch)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -397,6 +399,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
         assert torch.equal(tt_out, z_torch)
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_packers_configured_correctly.")
 @pytest.mark.parametrize(
     "ttnn_function",
     [

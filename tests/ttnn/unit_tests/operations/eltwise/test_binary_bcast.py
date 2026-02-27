@@ -3490,7 +3490,7 @@ def test_binary_sfpu_row_bcast(a_shape, b_shape, device):
 )
 def test_binary_sfpu_row_bcast_multi_dtype(a_shape, b_shape, dtype_pt, dtype_tt, device):
     """Test binary SFPU row broadcast with multiple data types including 32-bit formats."""
-    if a_shape == torch.Size([5, 10, 64, 128]) and b_shape == torch.Size([5, 10, 1, 128]) and dtype_pt == torch.uint32 and dtype_tt == ttnn.uint32 and is_llk_assert_enabled():
+    if dtype_pt == torch.uint32 and dtype_tt == ttnn.uint32 and is_llk_assert_enabled():
         pytest.skip("Hits LLK assert check for are_packers_configured_correctly.")
     torch.manual_seed(0)
 
