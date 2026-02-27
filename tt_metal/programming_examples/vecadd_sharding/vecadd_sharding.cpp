@@ -96,14 +96,14 @@ int main(int argc, char** argv) {
     // need for NoC bandwidth. This example demonstrates how to set up sharded L1 buffers and perform vector addition
     // across them.
     //
-    // Sharding is quite percise and requires exact division of the data across the cores. The example tries to
+    // Sharding is quite precise and requires exact division of the data across the cores. The example tries to
     // distribute 64 (4x4) tiles across 4 cores. But in different sharding modes:
     // * height: Shard the tensors across the height dimension
     // * width: Shard the tensors across the width dimension
     // * block: Shard the tensors across both height and width dimensions
     //
     // In different modes, the data is distributed differently across the cores in different patterns. Each core:
-    // * hight: Uses 4 cores in the y direction. Each core gets 1 rows of 4 tiles each.
+    // * height: Uses 4 cores in the y direction. Each core gets 1 rows of 4 tiles each.
     // * width: Uses 4 cores in the x direction. Each core gets 1 column of 4 tiles each.
     // * block: Uses a 2x2 grid of cores. Each core gets 2 rows and 2 columns of tiles, effectively sharding the tensor
     // into blocks.
@@ -203,7 +203,7 @@ int main(int argc, char** argv) {
     // Create circular buffers so the compute APIs can access the data.
     // NOTE: These are special circular buffers that have explicitly set L1 buffer address. As data already fully
     // resides in L1, we can simply point the circular buffers to the L1 buffers and avoid any extra allocation or data
-    // copy. This is an impotant optimization for performance. But hyper specific to use cases like this one.
+    // copy. This is an important optimization for performance. But hyper specific to use cases like this one.
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, num_tiles_per_core, a);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, num_tiles_per_core, c);

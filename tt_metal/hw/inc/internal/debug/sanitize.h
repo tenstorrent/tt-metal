@@ -367,7 +367,7 @@ uint32_t debug_sanitize_noc_addr(
     // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
-        1;  // Default alignment, only override in ceratin cases.
+        1;  // Default alignment, only override in certain cases.
     if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
