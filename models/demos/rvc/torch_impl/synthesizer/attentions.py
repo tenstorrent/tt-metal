@@ -165,22 +165,13 @@ class MultiHeadAttention(nn.Module):
         x: [b, h, l, 2*l-1]
         ret: [b, h, l, l]
         """
-        batch, heads, length, _ = x.size()
-        # Concat columns of pad to shift from relative to absolute indexing.
-        x = F.pad(
-            x,
-            [0, 1, 0, 0, 0, 0, 0, 0],
-        )
-
-        # Concat extra elements so to add up to shape (len+1, 2*len-1).
-        x_flat = x.view([batch, heads, length * 2 * length])
-        x_flat = F.pad(
-            x_flat,
-            [0, int(length) - 1, 0, 0, 0, 0],
-        )
-
-        # Reshape and slice out the padded elements.
-        x_final = x_flat.view([batch, heads, length + 1, 2 * length - 1])[:, :, :length, length - 1 :]
+        _, _, length, _ = x.size()
+        device = x.device
+        idx_row = torch.arange(length, device=device).view(length, 1)
+        idx_col = torch.arange(length, device=device).view(1, length)
+        rel_idx = idx_col - idx_row + (length - 1)  # [l, l], in [0, 2*l-2]
+        rel_idx = rel_idx.view(1, 1, length, length).expand(x.size(0), x.size(1), length, length)
+        x_final = x.gather(dim=3, index=rel_idx)
         return x_final
 
     def _absolute_position_to_relative_position(self, x):
@@ -189,19 +180,14 @@ class MultiHeadAttention(nn.Module):
         ret: [b, h, l, 2*l-1]
         """
         batch, heads, length, _ = x.size()
-        # padd along column
-        x = F.pad(
-            x,
-            [0, int(length) - 1, 0, 0, 0, 0, 0, 0],
-        )
-        x_flat = x.view([batch, heads, int(length**2) + int(length * (length - 1))])
-        # add 0's in the beginning that will skew the elements after reshape
-        x_flat = F.pad(
-            x_flat,
-            [length, 0, 0, 0, 0, 0],
-        )
-        x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
-        return x_final
+        device = x.device
+        idx_row = torch.arange(length, device=device).view(length, 1)
+        idx_col = torch.arange(length, device=device).view(1, length)
+        rel_idx = idx_col - idx_row + (length - 1)  # [l, l], in [0, 2*l-2]
+        rel_idx = rel_idx.view(1, 1, length, length).expand(batch, heads, length, length)
+        out = x.new_zeros(batch, heads, length, 2 * length - 1)
+        out.scatter_(dim=3, index=rel_idx, src=x)
+        return out
 
 
 class FFN(nn.Module):
