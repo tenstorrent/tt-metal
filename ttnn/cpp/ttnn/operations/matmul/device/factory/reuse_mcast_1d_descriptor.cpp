@@ -519,8 +519,6 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             (std::uint32_t)batch,
             (std::uint32_t)ring_size,
             (std::uint32_t)in0_signal_semaphore_id,
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)src2_cb_index,
         };
 
         std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -535,11 +533,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             (std::uint32_t)in1_block_page_size_last,
             (std::uint32_t)in1_block_width_num_pages,
             (std::uint32_t)in1_shard_width_in_dram,
-            (std::uint32_t)src1_cb_index,
-            (std::uint32_t)sync_cb_index,
-            (std::uint32_t)sync_cb2_index,
-            (std::uint32_t)remote_cb_index,
-            (std::uint32_t)false,  // fused_op_signaler.has_value() is always false
+            (std::uint32_t)false,  // fused_op_signaler.has_value() is always false in descriptor path
         };
         tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
 
