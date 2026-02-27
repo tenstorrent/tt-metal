@@ -32,6 +32,7 @@ constexpr auto kCbMOutIndex = tt::CBIndex::c_5;    // M output tiles
 
 constexpr uint32_t kBlockSize = 4U;
 constexpr uint32_t kTilesPerBatch = kBlockSize * kBlockSize;
+constexpr uint32_t kL1UsableBytes = 1300U * 1024U;
 
 // Runtime arg indices for IN0 sender
 constexpr uint32_t kIn0SenderXAddrIdx = 0U;
@@ -89,6 +90,15 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     uint32_t per_core_N_rounded = round_up(per_core_N, kBlockSize);
     uint32_t num_n_blocks = per_core_N_rounded / kBlockSize;
 
+    // block_h: number of M tile-rows processed per K-loop pass.
+    // Larger block_h amortizes weight reads across more M rows.
+    // L1 = (2*block_h*kBlockSize + 4*kTilesPerBatch + 3*block_h*per_core_N_rounded) * tile_size
+    uint32_t fixed_l1 = 4U * kTilesPerBatch * single_tile_size;
+    uint32_t per_row_l1 = (2U * kBlockSize + 3U * per_core_N_rounded) * single_tile_size;
+    uint32_t max_block_h = (kL1UsableBytes > fixed_l1) ? (kL1UsableBytes - fixed_l1) / per_row_l1 : 1U;
+    uint32_t block_h = std::clamp(max_block_h, 1U, per_core_M);
+    uint32_t num_m_blocks = (per_core_M + block_h - 1U) / block_h;
+
     // -------------------------------------------------------------------------
     // 3) Build core ranges
     // -------------------------------------------------------------------------
@@ -120,10 +130,10 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     // -------------------------------------------------------------------------
     // 4) Allocate circular buffers
     // -------------------------------------------------------------------------
-    uint32_t x_cb_tiles = 2U * kBlockSize;      // double-buffered
-    uint32_t w_cb_tiles = 2U * kTilesPerBatch;  // double-buffered
-    uint32_t acc_cb_tiles = per_core_N_rounded;
-    uint32_t m_out_cb_tiles = per_core_N_rounded;
+    uint32_t x_cb_tiles = 2U * block_h * kBlockSize;         // double-buffered, block_h rows
+    uint32_t w_cb_tiles = 2U * kTilesPerBatch;               // double-buffered (unchanged)
+    uint32_t acc_cb_tiles = block_h * per_core_N_rounded;    // block_h rows of accumulators
+    uint32_t m_out_cb_tiles = block_h * per_core_N_rounded;  // block_h rows of M output
 
     [[maybe_unused]] auto cb_in0 =
         create_circular_buffer(program, all_cores_set, kCbIn0Index, data_format, single_tile_size, x_cb_tiles);
@@ -168,8 +178,8 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     std::vector<uint32_t> in0_sender_ct_args = {
         kBlockSize,
         Wt,
-        per_core_M,
-        num_n_blocks,
+        block_h,
+        num_m_blocks,
         in0_mcast_sender_semaphore_id,
         in0_mcast_receiver_semaphore_id,
     };
@@ -189,8 +199,8 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         std::vector<uint32_t> in0_receiver_ct_args = {
             kBlockSize,
             Wt,
-            per_core_M,
-            num_n_blocks,
+            block_h,
+            num_m_blocks,
             in0_mcast_sender_semaphore_id,
             in0_mcast_receiver_semaphore_id,
         };
@@ -209,7 +219,8 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         kBlockSize,
         Wt,
         hidden_Wt,
-        per_core_M,
+        block_h,
+        num_m_blocks,
         per_core_N,
         per_core_N_rounded,
         num_n_blocks,
@@ -235,7 +246,8 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
             kBlockSize,
             Wt,
             hidden_Wt,
-            per_core_M,
+            block_h,
+            num_m_blocks,
             per_core_N,
             per_core_N_rounded,
             num_n_blocks,
@@ -257,12 +269,13 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     // 9) Create compute kernel
     // -------------------------------------------------------------------------
     std::vector<uint32_t> compute_ct_args = {
-        per_core_M,
         per_core_N,
         per_core_N_rounded,
         kBlockSize,
         Wt,
         num_n_blocks,
+        block_h,
+        num_m_blocks,
     };
     auto compute_kernel_id = create_compute_kernel(
         program, all_cores_set, compute_ct_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);

@@ -5,14 +5,8 @@
 // ============================================================================
 // IN0 Sender (RISCV_1) — Left column cores
 //
-// Reads X tiles from DRAM and multicasts across the row to all C cores.
-// Each left-column core handles its row's M tile-rows.
-//
-// Loop structure:
-//   for m in per_core_M:
-//     for k_block in K_blocks:
-//       for n_sub in num_n_blocks:  (sync with compute's N inner loop)
-//         read X[m, k_block] from DRAM, multicast across row
+// Reads block_h rows of X tiles from DRAM per K-block and multicasts across
+// the row. Outer loop iterates num_m_blocks times.
 // ============================================================================
 
 #include <algorithm>
@@ -24,10 +18,12 @@ constexpr auto cb_in0_idx = tt::CBIndex::c_0;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
-constexpr uint32_t per_core_M = get_compile_time_arg_val(2);
-constexpr uint32_t num_n_blocks = get_compile_time_arg_val(3);
+constexpr uint32_t block_h = get_compile_time_arg_val(2);
+constexpr uint32_t num_m_blocks = get_compile_time_arg_val(3);
 constexpr uint32_t in0_mcast_sender_semaphore_id = get_compile_time_arg_val(4);
 constexpr uint32_t in0_mcast_receiver_semaphore_id = get_compile_time_arg_val(5);
+
+constexpr uint32_t x_tiles_per_send = block_h * block_size;
 
 void kernel_main() {
     uint32_t ra = 0U;
@@ -63,28 +59,30 @@ void kernel_main() {
         .num_receivers = num_receivers,
     };
 
-    for (uint32_t m = 0U; m < per_core_M; ++m) {
-        const uint32_t m_row = std::min(m_start + m, m_start + actual_m_tiles - 1U);
-        const uint32_t x_row_start = m_row * Wt;
-
+    for (uint32_t mb = 0U; mb < num_m_blocks; ++mb) {
         for (uint32_t k_block_start = 0U; k_block_start < Wt; k_block_start += block_size) {
             const uint32_t k_block_size = std::min(block_size, Wt - k_block_start);
 
             if (num_receivers > 0U) {
                 mcast_sender_wait_for_receivers(sender_sem_ptr, num_receivers);
-                cb_reserve_back(cb_in0_idx, block_size);
+                cb_reserve_back(cb_in0_idx, x_tiles_per_send);
                 uint32_t l1_addr = get_write_ptr(cb_in0_idx);
-                for (uint32_t t = 0U; t < k_block_size; ++t) {
-                    uint64_t noc_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + t);
-                    noc_async_read(noc_addr, l1_addr, tile_bytes);
-                    l1_addr += tile_bytes;
-                }
-                // Pad remaining slots with last valid tile
-                if (k_block_size < block_size) {
-                    uint64_t pad_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + k_block_size - 1U);
-                    for (uint32_t t = k_block_size; t < block_size; ++t) {
-                        noc_async_read(pad_addr, l1_addr, tile_bytes);
+
+                for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
+                    uint32_t m = mb * block_h + m_sub;
+                    uint32_t m_row = std::min(m_start + m, m_start + actual_m_tiles - 1U);
+                    uint32_t x_row_start = m_row * Wt;
+                    for (uint32_t t = 0U; t < k_block_size; ++t) {
+                        uint64_t noc_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + t);
+                        noc_async_read(noc_addr, l1_addr, tile_bytes);
                         l1_addr += tile_bytes;
+                    }
+                    if (k_block_size < block_size) {
+                        uint64_t pad_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + k_block_size - 1U);
+                        for (uint32_t t = k_block_size; t < block_size; ++t) {
+                            noc_async_read(pad_addr, l1_addr, tile_bytes);
+                            l1_addr += tile_bytes;
+                        }
                     }
                 }
                 noc_async_read_barrier();
@@ -94,7 +92,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    block_size * tile_bytes,
+                    x_tiles_per_send * tile_bytes,
                     num_receivers + 1U);
                 mcast_sender_signal_receivers_loopback(
                     receiver_sem_ptr,
@@ -104,18 +102,29 @@ void kernel_main() {
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
                     num_receivers + 1U);
-                cb_push_back(cb_in0_idx, block_size);
+                cb_push_back(cb_in0_idx, x_tiles_per_send);
             } else {
-                // Single column — no multicast, just read locally
-                cb_reserve_back(cb_in0_idx, block_size);
+                cb_reserve_back(cb_in0_idx, x_tiles_per_send);
                 uint32_t l1_addr = get_write_ptr(cb_in0_idx);
-                for (uint32_t t = 0U; t < k_block_size; ++t) {
-                    uint64_t noc_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + t);
-                    noc_async_read(noc_addr, l1_addr, tile_bytes);
-                    l1_addr += tile_bytes;
+                for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
+                    uint32_t m = mb * block_h + m_sub;
+                    uint32_t m_row = std::min(m_start + m, m_start + actual_m_tiles - 1U);
+                    uint32_t x_row_start = m_row * Wt;
+                    for (uint32_t t = 0U; t < k_block_size; ++t) {
+                        uint64_t noc_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + t);
+                        noc_async_read(noc_addr, l1_addr, tile_bytes);
+                        l1_addr += tile_bytes;
+                    }
+                    if (k_block_size < block_size) {
+                        uint64_t pad_addr = x_addr_gen.get_noc_addr(x_row_start + k_block_start + k_block_size - 1U);
+                        for (uint32_t t = k_block_size; t < block_size; ++t) {
+                            noc_async_read(pad_addr, l1_addr, tile_bytes);
+                            l1_addr += tile_bytes;
+                        }
+                    }
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_in0_idx, block_size);
+                cb_push_back(cb_in0_idx, x_tiles_per_send);
             }
         }
     }
