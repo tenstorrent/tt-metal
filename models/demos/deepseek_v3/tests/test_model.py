@@ -3,6 +3,7 @@
 
 import errno
 import hashlib
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -36,6 +37,10 @@ REFERENCE_OUTPUT_CACHE_LEGACY_FILENAME = f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}.
 PCC_REQUIRED_PREFILL = 0.97
 PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
+
+fabric_config = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
 
 
 def _default_reference_cache_dir(cache_path: Path) -> Path:
@@ -528,7 +533,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": fabric_config},
     ],
     indirect=True,
 )

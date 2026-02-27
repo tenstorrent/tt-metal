@@ -21,6 +21,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+fabric_config = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 @pytest.fixture
 def reference_model(hf_config):
@@ -39,7 +43,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": fabric_config},
     ],
     indirect=True,
 )
