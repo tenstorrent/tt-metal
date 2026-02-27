@@ -49,6 +49,10 @@ using namespace tt::tt_fabric;
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
+constexpr size_t L1_TO_LOCAL_MEM_DUMP_SIZE = 32;
+std::array<uint32_t, L1_TO_LOCAL_MEM_DUMP_SIZE> L1_values = {};
+// bool first_worker_connection = false;
+// size_t last_worker_connection_value = 0;
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
@@ -435,6 +439,12 @@ constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id(uint32
 }
 #endif
 
+FORCE_INLINE uintptr_t GET_SP() {
+    uintptr_t _sp;
+    asm volatile("mv %0, sp" : "=r"(_sp));
+    return _sp;
+}
+
 FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t compact_index) {
 #if defined(FABRIC_2D)
     return static_cast<eth_chan_directions>(edm_index_to_edm_direction[my_direction][compact_index]);
@@ -516,6 +526,17 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
+// Debug counters for flow-control sanity checking.
+// All are cumulative totals over the lifetime of the router.
+uint32_t dbg_sent_total = 0;
+// uint32_t dbg_sent_per_channel[MAX_NUM_SENDER_CHANNELS] = {};
+uint32_t dbg_received_total = 0;
+uint32_t dbg_acks_sent_total = 0;
+uint32_t dbg_completions_sent_total = 0;
+uint32_t dbg_first_level_acks_total = 0;
+// uint32_t dbg_first_level_acks_per_channel[MAX_NUM_SENDER_CHANNELS] = {};
+uint32_t dbg_completions_total = 0;
+
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -582,8 +603,15 @@ FORCE_INLINE void send_next_data(
         pkt_header->src_ch_id = sender_channel_index;
     }
 
+    size_t count = 0;
+    bool logged = false;
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            count++;
+            if (count > 1000 && !logged) {
+                WATCHER_RING_BUFFER_PUSH(0x5555dd11);
+                logged = true;
+            }
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
@@ -600,7 +628,13 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+    count = 0;
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        count++;
+        if (count > 1000 && !logged) {
+            WATCHER_RING_BUFFER_PUSH(0x5555dd22);
+            logged = true;
+        }
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
@@ -1568,7 +1602,7 @@ FORCE_INLINE void update_bw_cycles(
         }
     }
 }
-
+bool hung = false;
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1599,6 +1633,9 @@ FORCE_INLINE
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
+    if (hung) {
+        return true;
+    }
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
@@ -1627,6 +1664,8 @@ FORCE_INLINE
     if (can_send) {
         did_something = true;
         progress = true;
+        dbg_sent_total++;
+        // dbg_sent_per_channel[sender_channel_index]++;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -1649,6 +1688,38 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
+        if (completions_since_last_check > 64) {
+            WATCHER_RING_BUFFER_PUSH(0xDEADC000);
+            hung = true;
+        }
+        size_t dbg_completions_total_old = dbg_completions_total;
+        dbg_completions_total += completions_since_last_check;
+        if (dbg_completions_total > 2000000000) {
+            hung = true;
+            WATCHER_RING_BUFFER_PUSH(0xDEADC002);
+        }
+        if (hung) {
+            WATCHER_RING_BUFFER_PUSH(completions_since_last_check);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)sender_channel_from_receiver_credits.completions_received_and_processed);
+            WATCHER_RING_BUFFER_PUSH(*sender_channel_from_receiver_credits.completions_received_counter_ptr);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)sender_channel_from_receiver_credits.completions_received_counter_ptr);
+            L1_values[0] = 0xdeadbeef;
+            L1_values[1] = (uint32_t)(sender_channel_from_receiver_credits.completions_received_counter_ptr - 24);
+            for (size_t i = 2; i < L1_TO_LOCAL_MEM_DUMP_SIZE - 1; i++) {
+                L1_values[i] =
+                    uint32_t((sender_channel_from_receiver_credits.completions_received_counter_ptr - 24)[i]);
+            }
+            L1_values[L1_TO_LOCAL_MEM_DUMP_SIZE - 1] = 0xdeadbeef;
+            WATCHER_RING_BUFFER_PUSH(GET_SP());
+            asm volatile("fence");
+            WATCHER_RING_BUFFER_PUSH(*sender_channel_from_receiver_credits.completions_received_counter_ptr);
+            for (size_t i = 0; i < 15000; i++) {
+                asm volatile("nop");
+            }
+            WATCHER_RING_BUFFER_PUSH(*sender_channel_from_receiver_credits.completions_received_counter_ptr);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)&L1_values[0]);
+            return false;
+        }
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
@@ -1667,6 +1738,8 @@ FORCE_INLINE
     if constexpr (enable_first_level_ack) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
+            dbg_first_level_acks_total += acks_since_last_check;
+            // dbg_first_level_acks_per_channel[sender_channel_index] += acks_since_last_check;
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
@@ -1784,6 +1857,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
+            dbg_acks_sent_total++;
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             ack_counter.increment();
@@ -1872,6 +1946,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #endif
             }
             wr_sent_counter.increment();
+            dbg_received_total++;
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
@@ -1920,6 +1995,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
+            dbg_completions_sent_total++;
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
@@ -2119,6 +2195,18 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
     [[maybe_unused]] uint32_t link_health_outer_loop_counter = 0;
+    [[maybe_unused]] uint32_t last_remote_link_health_outer_loop_counter = 0;
+    [[maybe_unused]] bool captured_link_health_telemetry = false;
+    [[maybe_unused]] size_t missed_heartbeat_from_remote_count = 0;
+    [[maybe_unused]] bool flow_control_sanity_check_failed = false;
+    [[maybe_unused]] bool logged_link_down = false;
+    [[maybe_unused]] bool logged_link_up = true;
+    [[maybe_unused]] size_t idle_counter = 0;
+    [[maybe_unused]] bool logged_idle = false;
+    [[maybe_unused]] bool logged_credit_issue = false;
+
+    [[maybe_unused]] size_t dbg_sent_total_last_logged = 0;
+
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
@@ -2359,33 +2447,112 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
 
+            // if constexpr (is_sender_channel_serviced[0]) {
+            // if (logged_idle && dbg_sent_total_last_logged != dbg_sent_total) {
+            //     logged_idle = false;
+            //     WATCHER_RING_BUFFER_PUSH(0xabaddad0);
+            // }
+            // if (dbg_sent_total_last_logged != dbg_sent_total) {
+            //     idle_counter = 0;
+            // } else {
+            //     idle_counter++;
+            //     if (idle_counter > 20000000 && (dbg_sent_total != 0 || dbg_received_total != 0) && !logged_idle) {
+            //         WATCHER_RING_BUFFER_PUSH(0xdead0004);
+            //         logged_idle = true;
+            //         WATCHER_RING_BUFFER_PUSH(dbg_sent_total);
+            //         WATCHER_RING_BUFFER_PUSH(dbg_first_level_acks_total);
+            //         WATCHER_RING_BUFFER_PUSH(dbg_completions_total);
+            //         // WATCHER_RING_BUFFER_PUSH(dbg_received_total);
+            //         // WATCHER_RING_BUFFER_PUSH(dbg_acks_sent_total);
+            //         // WATCHER_RING_BUFFER_PUSH(dbg_completions_sent_total);
+            //     }
+            // }
+            // // Sanity check: flow-control invariants must hold after each inner loop pass.
+            // // Acks and completions should never exceed total packets sent.
+            // bool failed = false;
+            // if (dbg_first_level_acks_total > dbg_sent_total && !flow_control_sanity_check_failed) {
+            //     // first-level acks (total) raced ahead of sent (total)
+            //     WATCHER_RING_BUFFER_PUSH(0xdead0001);
+            //     flow_control_sanity_check_failed = true;
+            // }
+            // if (dbg_completions_total > dbg_sent_total && !flow_control_sanity_check_failed) {
+            //     WATCHER_RING_BUFFER_PUSH(0xdead0003);
+            //     // completions raced ahead of sent (total)
+            //     flow_control_sanity_check_failed = true;
+            // }
+            // if (flow_control_sanity_check_failed && !logged_credit_issue) {
+
+            //     WATCHER_RING_BUFFER_PUSH(dbg_sent_total);
+            //     WATCHER_RING_BUFFER_PUSH(dbg_first_level_acks_total);
+            //     WATCHER_RING_BUFFER_PUSH(dbg_completions_total);
+            //     // WATCHER_RING_BUFFER_PUSH(dbg_received_total);
+            //     // WATCHER_RING_BUFFER_PUSH(dbg_acks_sent_total);
+            //     // WATCHER_RING_BUFFER_PUSH(dbg_completions_sent_total);
+            //     WATCHER_RING_BUFFER_PUSH((uint32_t)sender_channel_from_receiver_credits[0].completions_received_counter_ptr);
+            //     WATCHER_RING_BUFFER_PUSH(*sender_channel_from_receiver_credits[0].completions_received_counter_ptr);
+            //     WATCHER_RING_BUFFER_PUSH(0xc0ffee);
+            //     // for (size_t dbg_ch = 0; dbg_ch < NUM_SENDER_CHANNELS; dbg_ch++) {
+            //     //     WATCHER_RING_BUFFER_PUSH(dbg_sent_per_channel[dbg_ch]);
+            //     //     WATCHER_RING_BUFFER_PUSH(dbg_first_level_acks_per_channel[dbg_ch]);
+            //     // }
+
+            //     logged_credit_issue = true;
+            // }
+            // }
             // Link health probe: every LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD outer loop iterations,
             // erisc0 sends its local counter to the remote peer's scratch register and reads
             // back the remote peer's counter from its own local scratch register.
-            if constexpr (MY_ERISC_ID == 0 && LINK_HEALTH_TELEMETRY_ENABLED) {
-                link_health_outer_loop_counter++;
-                if ((link_health_outer_loop_counter & (LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD - 1)) == 0) {
-                    // Best-effort write: skip if TXQ is busy (packet send in progress).
-                    // A missed ping is not an error; next window will retry.
-                    size_t count = 0;
-                    while (count < 1000 && internal_::eth_txq_is_busy(sender_txq_id)) {
-                        // need to make sure we don't get stuck here from filling up the txq
-                        // from previous writes submitted during downed link
-                        count++;
-                    }
+            // if constexpr (MY_ERISC_ID == 0 && LINK_HEALTH_TELEMETRY_ENABLED) {
+            //     // if (dbg_sent_total != 0 || dbg_received_total != 0) {
+            //         // link_health_outer_loop_counter++;
+            //         // if ((link_health_outer_loop_counter & (LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD - 1)) == 0) {
+            //         //     // Best-effort write: skip if TXQ is busy (packet send in progress).
+            //         //     // A missed ping is not an error; next window will retry.
+            //         //     size_t count = 0;
+            //         //     while (count < 1000 && internal_::eth_txq_is_busy(sender_txq_id)) {
+            //         //         // need to make sure we don't get stuck here from filling up the txq
+            //         //         // from previous writes submitted during downed link
+            //         //         count++;
+            //         //     }
+            //         //     if (count == 1000) {
+            //         //         WATCHER_RING_BUFFER_PUSH(0xdeaddead);
+            //         //         // run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
+            //         //     } else {
 
-                    const uint32_t remote_reg_addr = get_stream_scratch_register_address(link_health_overlay_stream_id);
-                    internal_::eth_write_remote_reg_no_txq_check(
-                        sender_txq_id, remote_reg_addr, link_health_outer_loop_counter);
-
-                    // Read the local copy — contains the last value written by the remote peer.
-                    const uint32_t remote_peer_counter = read_stream_scratch_register(link_health_overlay_stream_id);
-                    // Push to watcher ring buffer: [0] local counter, [1] remote peer's counter.
-                    WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
-                    WATCHER_RING_BUFFER_PUSH(link_health_outer_loop_counter);
-                    WATCHER_RING_BUFFER_PUSH(remote_peer_counter);
-                }
-            }
+            //         //         const uint32_t remote_reg_addr =
+            //         get_stream_scratch_register_address(link_health_overlay_stream_id);
+            //         //         internal_::eth_write_remote_reg_no_txq_check(
+            //         //             sender_txq_id, remote_reg_addr, link_health_outer_loop_counter);
+            //         //         // Read the local copy — contains the last value written by the remote peer.
+            //         //     }
+            //         // }
+            //         // const uint32_t remote_peer_counter =
+            //         read_stream_scratch_register(link_health_overlay_stream_id);
+            //         // bool missed_heartbeat_from_remote = captured_link_health_telemetry &&
+            //         (last_remote_link_health_outer_loop_counter != remote_peer_counter);
+            //         // if (remote_peer_counter != last_remote_link_health_outer_loop_counter) {
+            //         //     captured_link_health_telemetry = true;
+            //         //     last_remote_link_health_outer_loop_counter = remote_peer_counter;
+            //         // }
+            //         // if (missed_heartbeat_from_remote) {
+            //         //     missed_heartbeat_from_remote_count++;
+            //         // } else {
+            //         //     missed_heartbeat_from_remote_count = 0;
+            //         // }
+            //         // if (missed_heartbeat_from_remote_count > 1000) {
+            //         //     logged_link_down = true;
+            //         //     WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+            //         //     WATCHER_RING_BUFFER_PUSH(link_health_outer_loop_counter);
+            //         //     WATCHER_RING_BUFFER_PUSH(last_remote_link_health_outer_loop_counter);
+            //         //     WATCHER_RING_BUFFER_PUSH(remote_peer_counter);
+            //         //     logged_link_up = false;
+            //         // } else if (logged_link_down && !logged_link_up) {
+            //         //     logged_link_down = false;
+            //         //     logged_link_up = true;
+            //         //     WATCHER_RING_BUFFER_PUSH(0xabcd1234);
+            //         // }
+            //     // }
+            // }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
@@ -2410,17 +2577,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     } else {
                         if (did_nothing_count++ > SWITCH_INTERVAL) {
                             did_nothing_count = 0;
-                            run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
+                            // run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                         }
                     }
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
-                        run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
+                        // run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
             } else {
-                run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
+                // run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
             if constexpr (is_sender_channel_serviced[0]) {
@@ -2530,6 +2697,12 @@ __attribute__((optimize("Os"))) FORCE_INLINE typename std::enable_if<(I < NUM_SE
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
     auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
         local_sender_connection_info_addresses[I]);
+    if constexpr (I == 0) {
+        // WATCHER_RING_BUFFER_PUSH(0xabcd1234);
+        // WATCHER_RING_BUFFER_PUSH((uint32_t)connection_worker_info_ptr);
+        // WATCHER_RING_BUFFER_PUSH((uint32_t)(&connection_worker_info_ptr->edm_read_counter));
+        // WATCHER_RING_BUFFER_PUSH((uint32_t)(connection_worker_info_ptr->edm_read_counter));
+    }
     new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
         StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
             connection_worker_info_ptr,
@@ -2749,12 +2922,21 @@ __attribute__((optimize("Os"))) void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+    // dbg_sent_total = 0;
+    // dbg_received_total = 0;
+    // dbg_acks_sent_total = 0;
+    // dbg_completions_sent_total = 0;
+    // dbg_first_level_acks_total = 0;
+    dbg_completions_total = 0;
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+    if (state_manager_l1->state == RouterState::RUNNING) {
+        WATCHER_RING_BUFFER_PUSH(0xabcdead1);
+    }
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     state_manager_l1->state = RouterState::INITIALIZING;
 
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();

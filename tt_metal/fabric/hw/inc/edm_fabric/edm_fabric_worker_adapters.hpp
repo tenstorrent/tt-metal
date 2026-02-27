@@ -269,7 +269,17 @@ struct WorkerToFabricEdmSenderImpl {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        size_t count = 0;
+        bool logged = false;
+        while (!this->edm_has_space_for_packet<1>()) {
+            count++;
+            if (count > 100000000 && !logged) {
+                logged = true;
+                WATCHER_RING_BUFFER_PUSH(0xdeaddead);
+                WATCHER_RING_BUFFER_PUSH(this->buffer_slot_write_counter.counter);
+                WATCHER_RING_BUFFER_PUSH(*this->edm_buffer_local_free_slots_read_ptr);
+            }
+        }
         WAYPOINT("FWSD");
     }
 
@@ -382,6 +392,14 @@ struct WorkerToFabricEdmSenderImpl {
         const uint64_t edm_connection_handshake_noc_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr, WORKER_HANDSHAKE_NOC);
         noc_async_read_barrier(WORKER_HANDSHAKE_NOC);
+        // auto stream_scratch_register_value = read_stream_scratch_register<0>();
+        // if (stream_scratch_register_value < 1000 && *this->edm_buffer_local_free_slots_read_ptr > 200) {
+        //     WATCHER_RING_BUFFER_PUSH(0x55555555);
+        //     WATCHER_RING_BUFFER_PUSH(*this->edm_buffer_local_free_slots_read_ptr);
+        //     WATCHER_RING_BUFFER_PUSH(this->edm_noc_x | (this->edm_noc_y << 16));
+        //     WATCHER_RING_BUFFER_PUSH(*this->edm_buffer_local_free_slots_read_ptr);
+        //     write_stream_scratch_register<0>(*this->edm_buffer_local_free_slots_read_ptr);
+        // }
         // Order here is important
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well

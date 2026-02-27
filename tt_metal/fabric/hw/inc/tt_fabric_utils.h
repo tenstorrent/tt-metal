@@ -35,12 +35,25 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
            cached == tt::tt_fabric::connection_interface::close_connection_request_value;
 }
 
+bool first_worker_connection = false;
+size_t last_worker_connection_value = 0;
+size_t num_connections = 0;
+
 template <uint8_t MY_ETH_CHANNEL, bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_worker_connection(
     tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<RISC_CPU_DATA_CACHE_ENABLED, MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+    if (local_sender_channel_worker_interface.get_local_read_counter() - last_worker_connection_value > 128) {
+        first_worker_connection = true;
+
+        WATCHER_RING_BUFFER_PUSH(0xCCCCDDDD);
+        WATCHER_RING_BUFFER_PUSH(local_sender_channel_worker_interface.get_local_read_counter());
+        WATCHER_RING_BUFFER_PUSH(last_worker_connection_value);
+        WATCHER_RING_BUFFER_PUSH(num_connections++);
+        last_worker_connection_value = local_sender_channel_worker_interface.get_local_read_counter();
+    }
 }
 
 template <uint8_t MY_ETH_CHANNEL,  bool RISC_CPU_DATA_CACHE_ENABLED, typename WorkerInterfaceT>
@@ -66,6 +79,7 @@ FORCE_INLINE void check_worker_connections(
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_worker_connection<true, RISC_CPU_DATA_CACHE_ENABLED>();
+        last_worker_connection_value = local_sender_channel_worker_interface.get_local_read_counter();
     }
 }
 

@@ -20,7 +20,9 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         ack_counters({}) {
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             completion_counters[i] = 0;
+            completion_counters_base_ptr[i] = 0;
             ack_counters[i] = 0;
+            ack_counters_base_ptr[i] = 0;
         }
     }
 
@@ -117,14 +119,17 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
 }
 struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
-    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
+    FORCE_INLINE SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
         acks_received_counter_ptr(
             reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address) + sender_channel_index),
         completions_received_counter_ptr(
             reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) +
             sender_channel_index),
         acks_received_and_processed(0),
-        completions_received_and_processed(0) {}
+        completions_received_and_processed(0) {
+        *acks_received_counter_ptr = 0;
+        *completions_received_counter_ptr = 0;
+    }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {

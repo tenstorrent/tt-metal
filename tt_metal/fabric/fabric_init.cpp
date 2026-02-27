@@ -63,14 +63,27 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
-    const auto& router_config = builder_context.get_fabric_router_config();
-    std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
+
+    if (addresses_to_clear.empty()) {
+        return;
+    }
+
+    auto local_clear_bufffer_size_words =
+        std::max_element(addresses_to_clear.begin(), addresses_to_clear.end(), [](const auto& a, const auto& b) {
+            return a.second < b.second;
+        })->second;
+    std::vector<uint32_t> router_zero_buf;
+    router_zero_buf.reserve(local_clear_bufffer_size_words);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-        for (const auto& address : addresses_to_clear) {
+        for (const auto& [address, size_words] : addresses_to_clear) {
+            router_zero_buf.resize(size_words, 0);
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
     }
+
+    // Barrier to ensure all zeroing writes land before fabric binaries are written to these cores
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 }
 
 }  // namespace tt::tt_fabric

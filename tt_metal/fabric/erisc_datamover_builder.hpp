@@ -370,7 +370,8 @@ private:
     bool enable_interrupts_ = false;
     bool telemetry_enabled_ = true;
     uint8_t telemetry_stats_mask_ = 0xFF;
-    uint8_t link_health_overlay_stream_id_ = 0xFF;  // 0xFF = disabled
+    uint8_t link_health_overlay_stream_id_ =
+        StreamRegAssignments::link_health_overlay_stream_id;  // 0xFF;  // 0xFF = disabled
 };
 
 struct edm_termination_info_t {

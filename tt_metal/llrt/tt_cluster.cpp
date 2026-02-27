@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <tuple>  // for get
@@ -77,6 +79,32 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
         rtoptions.get_mock_cluster_desc_path());
     return mock_cluster_desc;
 }
+
+// Logger for host-to-eth-core writes.  Enable by setting TT_METAL_ETH_WRITE_LOG to a file path.
+struct EthWriteLogger {
+    std::mutex mu;
+    std::ofstream file;
+    bool enabled = false;
+
+    EthWriteLogger() {
+        if (const char* path = std::getenv("TT_METAL_ETH_WRITE_LOG")) {
+            file.open(path, std::ios::app);
+            enabled = file.is_open();
+        }
+    }
+
+    void log(int chip, uint32_t x, uint32_t y, uint64_t addr, uint32_t size) {
+        if (!enabled) {
+            return;
+        }
+        std::lock_guard<std::mutex> lk(mu);
+        file << "chip=" << chip << " core=(" << x << "," << y << ") addr=0x" << std::hex << addr << std::dec
+             << " size=" << size << "\n";
+        file.flush();
+    }
+};
+
+static EthWriteLogger g_eth_write_logger;
 
 }  // namespace
 namespace tt {
@@ -772,6 +800,10 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
             addr,
             sz_in_bytes);
     }
+    if (this->is_ethernet_core({core.x, core.y}, chip_id)) {
+        g_eth_write_logger.log(chip_id, core.x, core.y, addr, sz_in_bytes);
+    }
+
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
@@ -825,6 +857,10 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
             sz_in_bytes);
     }
 
+    if (this->is_ethernet_core({core.x, core.y}, chip_id)) {
+        g_eth_write_logger.log(chip_id, core.x, core.y, addr, sz_in_bytes);
+    }
+
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
 
@@ -854,6 +890,10 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
             addr,
             size_in_bytes);
     }
+    if (this->is_ethernet_core({target.x, target.y}, chip_id)) {
+        g_eth_write_logger.log(chip_id, target.x, target.y, addr, size_in_bytes);
+    }
+
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->write_to_device_reg(mem_ptr, size_in_bytes, target.chip, target_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {

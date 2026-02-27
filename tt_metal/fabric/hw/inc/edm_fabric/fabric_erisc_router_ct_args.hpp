@@ -455,6 +455,7 @@ constexpr size_t LINK_HEALTH_OVERLAY_STREAM_ID_IDX = CODE_PROFILING_BUFFER_ADDR_
 constexpr uint8_t link_health_overlay_stream_id =
     static_cast<uint8_t>(get_compile_time_arg_val(LINK_HEALTH_OVERLAY_STREAM_ID_IDX));
 constexpr bool LINK_HEALTH_TELEMETRY_ENABLED = (link_health_overlay_stream_id != 0xFF);
+static_assert(LINK_HEALTH_TELEMETRY_ENABLED, "Link health telemetry must be enabled");
 // Power-of-2 period enables cheap modulo via bitwise AND
 constexpr uint32_t LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD = 512;
 
