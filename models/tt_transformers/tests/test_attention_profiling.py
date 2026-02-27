@@ -150,12 +150,24 @@ def _create_attention_model_for_benchmark(
         "default_attention",
     ),
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    (
+        1,
+        32,
+    ),
+    ids=(
+        "1",
+        "32",
+    ),
+)
 @pytest.mark.parametrize("use_hf_rope", (True, False), ids=("hf_rope", "mllama_rope"))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_profiling(
     mesh_device: ttnn.MeshDevice,
     paged_attention: bool,
     use_hf_rope: bool,
+    batch_size: int,
     reset_seeds,
     ensure_gc,
 ):
@@ -172,7 +184,6 @@ def test_attention_profiling(
     """
     mesh_shape = mesh_device.shape
     num_devices = mesh_shape[0] * mesh_shape[1]
-    batch_size = 8
     max_seq_len = 2048
     prefill_seq_len = 128
     num_runs = 100
@@ -211,20 +222,10 @@ def test_attention_profiling(
         dim = model_args.dim
         head_dim = model_args.head_dim
 
-        # Prefill to populate KV cache
-        log_messages.append(f"Running prefill (seq_len={prefill_seq_len})...")
-        pt_prefill_input = torch.randn(
-            batch_size, prefill_seq_len, dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
-        )
+        # Prefill to populate KV cache (prefill only supports batch_size=1, so we loop over users)
+        log_messages.append(f"Running prefill (seq_len={prefill_seq_len}) for {batch_size} users...")
 
-        # Prepare prefill input
-        tt_prefill_input = pt_prefill_input.clone()
-        attention_input_prefill = model_args.prepare_residual_tensor_prefill(
-            tt_prefill_input,
-            force_replicated=False if model_args.is_galaxy else True,
-        )
-
-        # Get rotation matrices for prefill
+        # Get rotation matrices for prefill (shared across all users)
         if use_hf_rope:
             from models.tt_transformers.tt.rope import get_rot_mats_hf
 
@@ -246,18 +247,31 @@ def test_attention_profiling(
                 rope_scaling=model_args.rope_scaling,
             )
 
-        # Run prefill
-        _ = tt_model(
-            attention_input_prefill,
-            current_pos=None,
-            rot_mats=rot_mats_prefill,
-            user_id=0,
-            mode=Mode.PREFILL,
-            page_table=page_table_tt,
+        # Run prefill for each user (prefill only supports batch_size=1)
+        pt_prefill_input = torch.randn(
+            batch_size, prefill_seq_len, dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
         )
+        for user_id in range(batch_size):
+            # Prepare prefill input for single user (batch_size=1)
+            tt_prefill_input = pt_prefill_input[user_id : user_id + 1].clone()
+            attention_input_prefill = model_args.prepare_residual_tensor_prefill(
+                tt_prefill_input,
+                force_replicated=False if model_args.is_galaxy else True,
+            )
+
+            _ = tt_model(
+                attention_input_prefill,
+                current_pos=None,
+                rot_mats=rot_mats_prefill,
+                user_id=user_id,
+                mode=Mode.PREFILL,
+                page_table=page_table_tt,
+            )
         ttnn.synchronize_device(mesh_device)
 
-        # Run HF prefill for accuracy check
+        # Run HF prefill for accuracy check (only user 0 - HF model doesn't have user_id slots)
+        # The HF reference model's KV cache accumulates across calls, so we only run once.
+        # Accuracy comparison is done on decode step anyway.
         positions_prefill = torch.LongTensor(range(prefill_seq_len))
         cos, sin = precompute_freqs(
             model_args.head_dim,
@@ -271,14 +285,15 @@ def test_attention_profiling(
         freqs_cis_prefill = freqs_cis[positions_prefill]
         attn_mask = torch.full((prefill_seq_len, prefill_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        _ = reference_model(pt_prefill_input, positions_prefill[0], freqs_cis_prefill, mask=attn_mask_torch)
+        _ = reference_model(pt_prefill_input[0:1], positions_prefill[0], freqs_cis_prefill, mask=attn_mask_torch)
 
         # Prepare decode
         log_messages.append(f"Preparing decode profiling...")
         pt_decode_input = torch.randn(
             batch_size, 1, dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
         )
-        current_pos = torch.tensor([prefill_seq_len], dtype=torch.long)
+        # current_pos needs batch_size elements (one position per user), all at prefill_seq_len
+        current_pos = torch.full((batch_size,), prefill_seq_len, dtype=torch.long)
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
@@ -310,17 +325,18 @@ def test_attention_profiling(
         )
         ttnn.synchronize_device(mesh_device)
 
-        # Convert output and check PCC
+        # Convert output and check PCC (only compare user 0 since HF reference only has user 0's KV cache)
         tt_out_torch = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
         tt_output_torch = tt_out_torch[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, dim)
+        tt_output_user0 = tt_output_torch[0:1]  # Only user 0 for comparison
 
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
-        reference_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(pt_decode_input[0:1], current_pos[0], freqs_cis_i, mask=None)
 
-        _, pcc_value = comp_pcc(reference_output, tt_output_torch, 0.9)
+        _, pcc_value = comp_pcc(reference_output, tt_output_user0, 0.9)
         pcc = float(pcc_value)
 
         log_messages.append(f"Initial decode PCC: {pcc:.4f}")
@@ -403,46 +419,14 @@ def test_attention_profiling(
 
             # Trace warmup - prepare fresh input for each iteration
             for _ in range(5):
-                tt_warmup_input = model_args.prepare_residual_tensor_decode(
-                    pt_decode_input.clone(),
-                    model_args.get_attn_input_mem_config(Mode.DECODE, None),
-                    force_replicated=False if model_args.is_galaxy else True,
-                )
-                # Execute trace with new input (trace will use the new tensor)
-                # Note: This requires updating the trace input, which may not work as expected
-                # For now, we'll do regular forward pass for warmup
-                _ = tt_model(
-                    tt_warmup_input,
-                    current_pos_tensor,
-                    rot_mats=rot_mats,
-                    mode=Mode.DECODE,
-                    page_table=page_table_tt,
-                )
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
 
-            # For trace-based timing with tt_transformers, we need to prepare input outside trace
-            # and execute trace. However, since prepare_residual_tensor_decode creates new tensors,
-            # we can't easily update the trace input. As a workaround, we'll time the forward pass
-            # with pre-prepared inputs (which still eliminates some dispatch overhead).
-            # This is not true trace replay, but provides a middle ground.
+            # Timed trace executions
             trace_timings = []
             for _ in range(num_runs):
-                # Prepare input (this is fast, mostly memory allocation)
-                tt_trace_input_iter = model_args.prepare_residual_tensor_decode(
-                    pt_decode_input.clone(),
-                    model_args.get_attn_input_mem_config(Mode.DECODE, None),
-                    force_replicated=False if model_args.is_galaxy else True,
-                )
-                # Note: Can't easily update trace input, so we'll do regular forward
-                # This still measures performance but includes input preparation
                 start = time.perf_counter()
-                _ = tt_model(
-                    tt_trace_input_iter,
-                    current_pos_tensor,
-                    rot_mats=rot_mats,
-                    mode=Mode.DECODE,
-                    page_table=page_table_tt,
-                )
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
                 end = time.perf_counter()
                 trace_timings.append((end - start) * 1e6)
