@@ -42,9 +42,6 @@
 
 namespace deepseek_b1_ops {
 
-// Atomic semaphore decrement by 1
-inline void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) { __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED); }
-
 // Device roles
 constexpr uint32_t MESH_LEAF = 0;
 constexpr uint32_t MESH_ROOT3 = 1;
@@ -152,7 +149,7 @@ struct ReduceToOneB1 {
         uint32_t fabric_core_noc_x;
         uint32_t fabric_core_noc_y;
         uint32_t my_slot_idx;
-        uint32_t worker_sem_id;
+        uint32_t worker_sem_addr;
         uint32_t dst_l1_addr;
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
@@ -221,7 +218,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
-                semaphore_dec(recv_sem1_ptr);
+                unified_kernels::semaphore_dec(recv_sem1_ptr);
                 cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
             }
 
@@ -231,7 +228,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
-                semaphore_dec(recv_sem2_ptr);
+                unified_kernels::semaphore_dec(recv_sem2_ptr);
                 cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
             }
 
@@ -241,7 +238,7 @@ struct ReduceToOneB1 {
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
-                semaphore_dec(recv_sem3_ptr);
+                unified_kernels::semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
             }
 
@@ -257,12 +254,11 @@ struct ReduceToOneB1 {
                     return;
                 }
 
-                // Read worker semaphore IDs from runtime args
+                // Read worker semaphore addresses from runtime args
                 size_t arg_idx = CTArgs::fabric_rt_arg_base;
                 uint32_t worker_sem_addr[CTArgs::num_workers];
                 for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
-                    uint32_t sem_id = get_arg_val<uint32_t>(arg_idx++);
-                    worker_sem_addr[i] = get_semaphore(sem_id);
+                    worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
                 }
 
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
@@ -281,7 +277,7 @@ struct ReduceToOneB1 {
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
-                    semaphore_dec(worker_sem_ptr);
+                    unified_kernels::semaphore_dec(worker_sem_ptr);
 
                     fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
@@ -353,7 +349,7 @@ struct ReduceToOneB1 {
 
             // Non-ROOT1: send via fabric
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
-            const uint32_t arrival_sem_addr = get_semaphore(args.worker_sem_id);
+            const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
             // Get packet header from CB (persistent across iterations)
             uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
