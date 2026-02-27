@@ -107,8 +107,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
-    uint32_t patch_size_bytes =
-        tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per patch row
+    uint32_t patch_size_bytes = patch_size * dtype_bytes;    // bytes per patch row (tile-aligned by assert above)
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
