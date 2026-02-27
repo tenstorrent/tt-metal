@@ -199,6 +199,7 @@ class PI0SimulationEnv:
         replan_interval=5,
         use_delta_actions=True,
         max_velocity=0.5,
+        image_size=224,
     ):
         """
         Initialize simulation environment and PI0 model.
@@ -216,6 +217,7 @@ class PI0SimulationEnv:
             replan_interval: How many actions to execute before re-planning (default 5)
             use_delta_actions: Interpret actions as position deltas instead of absolute (default True, reduces oscillation)
             max_velocity: Maximum joint velocity in rad/s (default 0.5, lower = smoother but slower)
+            image_size: Image resolution for observations (default 224, lower = faster inference)
         """
         # Set random seeds for reproducibility
         self.seed = seed
@@ -223,6 +225,7 @@ class PI0SimulationEnv:
         self.replan_interval = replan_interval
         self.use_delta_actions = use_delta_actions
         self.max_velocity = max_velocity
+        self.image_size = image_size
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
@@ -267,12 +270,15 @@ class PI0SimulationEnv:
         print(f"   🤖 This robot was used in PI0's training data!")
 
         # Add a simple cube as a manipulation target
-        self.cube_id = p.loadURDF("cube_small.urdf", [0.5, 0.0, 0.5])
+        # Position it in a reachable location for Franka Panda
+        cube_position = [0.5, 0.0, 0.025]  # On the table, reachable
+        self.cube_id = p.loadURDF("cube_small.urdf", cube_position)
+        self.cube_initial_position = cube_position
 
-        print("   ✅ Environment loaded (plane + cube + robot)")
+        print(f"   ✅ Environment loaded (plane + cube at {cube_position} + robot)")
 
         # Setup camera configuration for observations
-        self.camera_config = {"width": 224, "height": 224, "fov": 60, "near": 0.1, "far": 5.0}
+        self.camera_config = {"width": self.image_size, "height": self.image_size, "fov": 60, "near": 0.1, "far": 5.0}
 
         # Initialize PI0 model
         print("\n📦 Loading PI0 model...")
@@ -480,7 +486,7 @@ class PI0SimulationEnv:
         rgb2_tensor = torch.from_numpy(rgb2).permute(2, 0, 1).unsqueeze(0)
         images.append(rgb2_tensor)
 
-        # Get robot joint states from Kuka IIWA
+        # Get robot joint states
         joint_states = p.getJointStates(self.robot_id, self.controllable_joints)
         positions = [state[0] for state in joint_states]
         velocities = [state[1] for state in joint_states]
@@ -525,6 +531,17 @@ class PI0SimulationEnv:
         tokens, mask = self.tokenizer.encode(prompt, max_length=32)
         lang_tokens = torch.tensor([tokens], dtype=torch.long)
         lang_masks = torch.tensor([mask], dtype=torch.bool)
+
+        # Debug: Print tokenization on first call
+        if not hasattr(self, "_tokenization_printed"):
+            print(f"\n   🔍 Task tokenization debug:")
+            print(f"      Prompt: '{prompt}'")
+            print(f"      Tokens: {tokens[:10]}... (first 10)")
+            print(f"      Mask: {mask[:10]}... (first 10)")
+            print(
+                f"      Vocab size: {self.tokenizer.vocab_size if hasattr(self.tokenizer, 'vocab_size') else 'unknown'}"
+            )
+            self._tokenization_printed = True
 
         # Convert language tokens to TTNN
         lang_tokens_ttnn = ttnn.from_torch(
@@ -722,6 +739,7 @@ class PI0SimulationEnv:
         print(f"   Robot DOF: 7 (using first 7 of {self.config.action_dim} predicted actions)")
         print(f"   State: 14-dim (7 pos + 7 vel), padded to {self.config.state_dim}")
         print(f"   Action horizon: {self.config.action_horizon}")
+        print(f"   Image size: {self.image_size}x{self.image_size} (lower = faster inference)")
         print(
             f"   Re-plan interval: {self.replan_interval} (execute {self.replan_interval} actions before re-planning)"
         )
@@ -747,18 +765,24 @@ class PI0SimulationEnv:
 
         # Warm-up inference (first call includes JIT compilation)
         print("⏳ Warming up model (first inference includes JIT compilation)...")
-        warmup_images, warmup_state = self.capture_observations()
-        warmup_inputs = self.preprocess_for_ttnn(warmup_images, warmup_state, task_prompt)
+        print("   Running 3 warm-up iterations to ensure full compilation...")
 
-        with torch.no_grad():
-            _ = self.model.sample_actions(
-                images=warmup_inputs[0],
-                img_masks=warmup_inputs[1],
-                lang_tokens=warmup_inputs[2],
-                lang_masks=warmup_inputs[3],
-                state=warmup_inputs[4],
-            )
+        for i in range(3):
+            warmup_images, warmup_state = self.capture_observations()
+            warmup_inputs = self.preprocess_for_ttnn(warmup_images, warmup_state, task_prompt)
+
+            warmup_start = time.time()
+            with torch.no_grad():
+                _ = self.model.sample_actions(
+                    images=warmup_inputs[0],
+                    img_masks=warmup_inputs[1],
+                    lang_tokens=warmup_inputs[2],
+                    lang_masks=warmup_inputs[3],
+                    state=warmup_inputs[4],
+                )
             ttnn.synchronize_device(self.device)
+            warmup_time = (time.time() - warmup_start) * 1000
+            print(f"   Warm-up {i+1}/3: {warmup_time:.1f}ms")
 
         print("✅ Warm-up complete! Starting control loop...\n")
         time.sleep(1.0)
@@ -796,9 +820,14 @@ class PI0SimulationEnv:
                         lang_masks=lang_masks_ttnn,
                         state=state_ttnn,
                     )
-                ttnn.synchronize_device(self.device)
+                    # Synchronize before measuring time (critical for accurate timing)
+                    ttnn.synchronize_device(self.device)
                 inf_time = (time.time() - inf_start) * 1000
                 self.inference_times.append(inf_time)
+
+                # Detailed timing breakdown every 50 steps
+                if step % 50 == 0 and step > 0:
+                    print(f"   ⚡ Inference breakdown: Total={inf_time:.1f}ms")
 
                 # Convert to torch for application
                 if isinstance(actions_ttnn, ttnn.Tensor):
@@ -861,6 +890,16 @@ class PI0SimulationEnv:
                 num_inferences = sum(1 for t in self.inference_times if t > 0)
                 num_buffered = len(self.inference_times) - num_inferences
 
+                # Get end-effector position (link 11 is typically the end-effector for Franka)
+                ee_state = p.getLinkState(self.robot_id, 11)
+                ee_pos = ee_state[0]  # World position
+
+                # Get cube position
+                cube_pos, _ = p.getBasePositionAndOrientation(self.cube_id)
+
+                # Calculate distance to cube
+                distance_to_cube = np.linalg.norm(np.array(ee_pos) - np.array(cube_pos))
+
                 print(
                     f"Step {step:4d} | "
                     f"Cap: {avg_cap:.1f}ms | "
@@ -870,6 +909,12 @@ class PI0SimulationEnv:
                     f"Freq: {hz:.1f} Hz | "
                     f"Inferences: {num_inferences}/{len(self.inference_times)}"
                 )
+
+                # Print spatial information every 100 steps
+                if step % 100 == 0:
+                    print(f"   📍 EE pos: [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}]")
+                    print(f"   🎯 Cube: [{cube_pos[0]:.3f}, {cube_pos[1]:.3f}, {cube_pos[2]:.3f}]")
+                    print(f"   📏 Distance to cube: {distance_to_cube:.3f}m")
 
             # Optional: Add a small sleep to maintain real-time sync
             # Uncomment if simulation runs too fast
@@ -984,6 +1029,12 @@ def main():
         default=0.5,
         help="Maximum joint velocity in rad/s (default: 0.5, lower = smoother but slower, higher = faster but may overshoot)",
     )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=224,
+        help="Image resolution for observations (default: 224, try 112 or 160 for faster inference)",
+    )
 
     args = parser.parse_args()
 
@@ -1022,6 +1073,7 @@ def main():
         replan_interval=args.replan_interval,
         use_delta_actions=args.use_delta_actions,
         max_velocity=args.max_velocity,
+        image_size=args.image_size,
     )
 
     try:
