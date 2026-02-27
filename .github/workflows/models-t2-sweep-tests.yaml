@@ -1,7 +1,6 @@
-name: "[Tier 2] Models End-To-End Tests"
+name: "[Tier 2] Models Sweep Tests"
 
 on:
-  push:
   workflow_dispatch:
     inputs:
       model:
