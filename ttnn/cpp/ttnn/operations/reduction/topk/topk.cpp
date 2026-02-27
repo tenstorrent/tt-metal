@@ -101,7 +101,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
 
     // Calculate the expected final logical shape after all transformations
@@ -112,7 +112,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
     // If we had to round up K for op, slice down to the requested K value
     if (adjusted_k != k) {
-        const auto output_shape = result[0].padded_shape();
+        const auto output_shape = result[0].logical_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
@@ -123,12 +123,15 @@ std::vector<Tensor> post_topk_transform_tensor(
     }
 
     // Rank restoration - convert from op-required 4D back to original rank
-    if (orig_rank < 4) {
+    if (orig_rank < 4 && orig_rank > 1) {
         // For tensors originally < 4D, squeeze out the extra dimensions that were added
+        // This doesn't work for 1D tensors in tile layout, because their padded shape is
+        // (1, 1, 32, 32) in tile layout, which cannot be squeezed to 1D since only
+        // dimensions of size 1 can be squeezed. We handle that case separately below
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
-    } else if (orig_rank > 4) {
-        // For tensors originally > 4D, reshape back to original higher-dimensional structure
+    } else if (orig_rank != 4) {
+        // For tensors originally > 4D, or 1D, reshape back to original higher-dimensional structure
         ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result_shape[result_shape.size() - 1] = k;  // Update last dimension to K
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
@@ -194,7 +197,7 @@ std::vector<Tensor> topk(
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     // Analyze input tensor properties to determine required transformations
-    auto rank = input_tensor.padded_shape().rank();
+    auto rank = input_tensor.logical_shape().rank();
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
     const bool is_rank_le_4d = rank <= 4;
 
