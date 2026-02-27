@@ -324,35 +324,41 @@ void kernel_main() {
     // ROUND 1: Send local input to R1 neighbor via forwarder
     // All local data is ready, send all packets immediately
     // ==========================================================================
-    sender.setup_round(
-        {cb_local_l,
-         cb_local_ms,
-         r1_dst_mesh_id,
-         r1_dst_chip_id,
-         r1_neighbor_dst_addr,
-         r1_neighbor_sem_addr,
-         r1_fwd_slot_addr,
-         r1_fwd_sem_addr,
-         r1_base_slot_idx});
-    sender.send_all();
-    sender.finish_round();
+    {
+        DeviceZoneScopedN("R1-SEND");
+        sender.setup_round(
+            {cb_local_l,
+             cb_local_ms,
+             r1_dst_mesh_id,
+             r1_dst_chip_id,
+             r1_neighbor_dst_addr,
+             r1_neighbor_sem_addr,
+             r1_fwd_slot_addr,
+             r1_fwd_sem_addr,
+             r1_base_slot_idx});
+        sender.send_all();
+        sender.finish_round();
+    }
 
     // ==========================================================================
     // ROUND 2: Send R1 result to R2 neighbor via forwarder (STREAMING)
     // Overlap R2 fabric transfer with R1 compute by sending as data is produced
     // ==========================================================================
-    sender.setup_round(
-        {cb_r1_result_l,
-         cb_r1_result_ms,
-         r2_dst_mesh_id,
-         r2_dst_chip_id,
-         r2_neighbor_dst_addr,
-         r2_neighbor_sem_addr,
-         r2_fwd_slot_addr,
-         r2_fwd_sem_addr,
-         r2_base_slot_idx});
-    sender.send_streaming();
-    sender.finish_round();
+    {
+        DeviceZoneScopedN("R2-SEND-STREAMING");
+        sender.setup_round(
+            {cb_r1_result_l,
+             cb_r1_result_ms,
+             r2_dst_mesh_id,
+             r2_dst_chip_id,
+             r2_neighbor_dst_addr,
+             r2_neighbor_sem_addr,
+             r2_fwd_slot_addr,
+             r2_fwd_sem_addr,
+             r2_base_slot_idx});
+        sender.send_streaming();
+        sender.finish_round();
+    }
 
     noc_async_full_barrier();
 }

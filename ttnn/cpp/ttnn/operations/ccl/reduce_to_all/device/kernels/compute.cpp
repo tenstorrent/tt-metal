@@ -115,23 +115,29 @@ void kernel_main() {
     // ROUND 1: reduce(local, r1_neighbor) → r1_result
     // =========================================================================
     // Non-final reduction: outputs L and MS (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, false /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_r1_neighbor_ms,  // worker (neighbor)
-        cb_local_ms,        // prev (local)
-        cb_r1_result_ms,    // cur output MS
-        cb_r1_neighbor_l,   // l1 (neighbor)
-        cb_local_l,         // l2 (local)
-        cb_r1_result_l);    // l_out
+    {
+        DeviceZoneScopedN("R1-COMPUTE");
+        sdpa_tail_streaming<EXP_APPROX_MODE, false /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
+            cb_r1_neighbor_ms,  // worker (neighbor)
+            cb_local_ms,        // prev (local)
+            cb_r1_result_ms,    // cur output MS
+            cb_r1_neighbor_l,   // l1 (neighbor)
+            cb_local_l,         // l2 (local)
+            cb_r1_result_l);    // l_out
+    }
 
     // =========================================================================
     // ROUND 2: reduce(r1_result, r2_neighbor) → final output (normalized L)
     // =========================================================================
     // Final reduction with normalization: outputs only normalized L (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, true /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_r2_neighbor_ms,  // worker (neighbor)
-        cb_r1_result_ms,    // prev (R1 result)
-        cb_ms_out,          // cur output MS (unused when final=true)
-        cb_r2_neighbor_l,   // l1 (neighbor)
-        cb_r1_result_l,     // l2 (R1 result)
-        cb_l_out);          // l_out (normalized, aliased to output tensor)
+    {
+        DeviceZoneScopedN("R2-COMPUTE");
+        sdpa_tail_streaming<EXP_APPROX_MODE, true /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
+            cb_r2_neighbor_ms,  // worker (neighbor)
+            cb_r1_result_ms,    // prev (R1 result)
+            cb_ms_out,          // cur output MS (unused when final=true)
+            cb_r2_neighbor_l,   // l1 (neighbor)
+            cb_r1_result_l,     // l2 (R1 result)
+            cb_l_out);          // l_out (normalized, aliased to output tensor)
+    }
 }

@@ -113,19 +113,28 @@ void kernel_main() {
     // =========================================================================
     // Push local input (aliased CBs, no copy needed)
     // =========================================================================
-    cb_reserve_back(cb_local_l, out_tiles);
-    cb_push_back(cb_local_l, out_tiles);
+    {
+        DeviceZoneScopedN("R1-LOCAL-INPUT");
+        cb_reserve_back(cb_local_l, out_tiles);
+        cb_push_back(cb_local_l, out_tiles);
 
-    cb_reserve_back(cb_local_ms, 1);
-    cb_push_back(cb_local_ms, 1);
+        cb_reserve_back(cb_local_ms, 1);
+        cb_push_back(cb_local_ms, 1);
+    }
 
     // =========================================================================
     // Prepare R1 neighbor data for compute
     // =========================================================================
-    prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    {
+        DeviceZoneScopedN("R1-WAIT-NEIGHBOR");
+        prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    }
 
     // =========================================================================
     // Prepare R2 neighbor data for compute
     // =========================================================================
-    prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+    {
+        DeviceZoneScopedN("R2-WAIT-NEIGHBOR");
+        prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+    }
 }

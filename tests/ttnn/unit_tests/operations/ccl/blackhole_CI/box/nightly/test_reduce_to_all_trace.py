@@ -176,7 +176,7 @@ def compute_forwarder_scratch_size(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "trace_region_size": 548880,
-                # "fabric_router_config": create_fabric_router_config(9600),
+                # "fabric_router_config": create_fabric_router_config(15232),
             }
         ),
     ],

@@ -73,7 +73,10 @@ FORCE_INLINE uint32_t process_ready_slots(
         auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
         uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
 
-        fabric_connection.wait_for_empty_write_slot();
+        {
+            DeviceZoneScopedN("FWD-FABRIC-WAIT");
+            fabric_connection.wait_for_empty_write_slot();
+        }
         fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
 
         sent_mask |= (1u << slot);
@@ -113,16 +116,19 @@ void kernel_main() {
     uint32_t r1_sent_mask = 0;
     uint32_t r2_sent_mask = 0;
 
-    do {
-        invalidate_l1_cache();
+    {
+        DeviceZoneScopedN("FWD-FORWARD-LOOP");
+        do {
+            invalidate_l1_cache();
 
-        // Process R1 slots (at r1_buffer_base)
-        r1_sent_mask = process_ready_slots(r1_sem_ptr, r1_sent_mask, r1_buffer_base, fabric_connection);
+            // Process R1 slots (at r1_buffer_base)
+            r1_sent_mask = process_ready_slots(r1_sem_ptr, r1_sent_mask, r1_buffer_base, fabric_connection);
 
-        // Process R2 slots (at r2_buffer_base, separate region)
-        r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection);
+            // Process R2 slots (at r2_buffer_base, separate region)
+            r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection);
 
-    } while (r1_sent_mask != all_sent_mask || r2_sent_mask != all_sent_mask);
+        } while (r1_sent_mask != all_sent_mask || r2_sent_mask != all_sent_mask);
+    }
 
     fabric_connection.close();
 
