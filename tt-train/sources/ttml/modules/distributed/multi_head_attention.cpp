@@ -12,8 +12,8 @@
 namespace ttml::modules::distributed {
 
 DistributedMultiHeadAttention::DistributedMultiHeadAttention(
-    uint32_t embedding_dim_, uint32_t num_heads_, float dropout_prob_, bool use_composite_sdpa) :
-    m_embedding_dim(embedding_dim_), m_num_heads(num_heads_), m_use_composite_sdpa(use_composite_sdpa) {
+    uint32_t embedding_dim_, uint32_t num_heads_, float dropout_prob_) :
+    m_embedding_dim(embedding_dim_), m_num_heads(num_heads_) {
     auto* device = &autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     if (m_num_heads % num_devices != 0) {
@@ -44,10 +44,7 @@ ttml::autograd::TensorPtr DistributedMultiHeadAttention::operator()(
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_local_num_heads);
 
-    auto attention = m_use_composite_sdpa ? ttml::ops::composite_scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask)
-                                          : ttml::ops::scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask);
+    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
 
     attention = ops::heads_fusion(attention);
 

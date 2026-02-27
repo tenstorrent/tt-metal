@@ -10,7 +10,6 @@ transformer_config:
   max_sequence_length: 1024
   experimental:
     use_composite_layernorm: false
-    use_composite_sdpa: false
 
 multihost_config:
   enabled: true

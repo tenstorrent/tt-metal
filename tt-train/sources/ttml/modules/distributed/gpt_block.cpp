@@ -35,16 +35,11 @@ autograd::TensorPtr DistributedGPTMLP::operator()(const autograd::TensorPtr& inp
 }
 
 DistributedGPTBlock::DistributedGPTBlock(
-    uint32_t embedding_size,
-    uint32_t num_heads,
-    float dropout_prob,
-    bool use_composite_layernorm,
-    bool use_composite_sdpa) {
+    uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm) {
     m_mlp = std::make_shared<DistributedGPTMLP>(embedding_size, dropout_prob);
     m_ln1 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
     m_ln2 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
-    m_attention =
-        std::make_shared<DistributedMultiHeadAttention>(embedding_size, num_heads, dropout_prob, use_composite_sdpa);
+    m_attention = std::make_shared<DistributedMultiHeadAttention>(embedding_size, num_heads, dropout_prob);
 
     create_name("gpt_block");
     register_module(m_mlp, "mlp");

@@ -15,10 +15,7 @@
 namespace ttml::modules {
 
 GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
-    m_embedding_dim(config.embedding_dim),
-    m_num_heads(config.num_heads),
-    m_num_groups(config.num_groups),
-    m_use_composite_sdpa(config.use_composite_sdpa) {
+    m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
     // create layers
     m_q_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, config.bias_linears);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
@@ -50,10 +47,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    auto attention = m_use_composite_sdpa ? ttml::ops::composite_scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask)
-                                          : ttml::ops::scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask);
+    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);
@@ -106,10 +100,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const auto k_cache_to_process = ttml::autograd::create_tensor(k_cache_slice);
     const auto v_cache_to_process = ttml::autograd::create_tensor(v_cache_slice);
 
-    auto attention = m_use_composite_sdpa ? ttml::ops::composite_scaled_dot_product_attention(
-                                                query_with_heads, k_cache_to_process, v_cache_to_process, mask)
-                                          : ttml::ops::scaled_dot_product_attention(
-                                                query_with_heads, k_cache_to_process, v_cache_to_process, mask);
+    auto attention =
+        ttml::ops::scaled_dot_product_attention(query_with_heads, k_cache_to_process, v_cache_to_process, mask);
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);

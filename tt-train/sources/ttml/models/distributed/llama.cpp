@@ -68,7 +68,6 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     fmt::print("    Num blocks: {}\n", num_blocks);
     fmt::print("    Positional embedding type: RoPE\n");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
-    fmt::print("    Composite SDPA: {}\n", config.experimental.use_composite_sdpa);
     fmt::print("    Theta: {}\n", theta);
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
@@ -106,11 +105,10 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
-    auto use_composite_sdpa = config.experimental.use_composite_sdpa;
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
-            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim, use_composite_sdpa));
+            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(

@@ -52,7 +52,6 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
     uint32_t num_blocks = config.num_blocks;
     auto position_embedding_type = config.positional_embedding_type;
     auto use_composite_layernorm = config.experimental.use_composite_layernorm;
-    auto use_composite_sdpa = config.experimental.use_composite_sdpa;
     runner_type = config.runner_type;
 
     fmt::print("DistributedTransformer configuration:\n");
@@ -67,7 +66,6 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
         position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
-    fmt::print("    Composite SDPA: {}\n", use_composite_sdpa);
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
@@ -108,7 +106,7 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<ttml::modules::distributed::DistributedGPTBlock>(
-            embedding_dim, num_heads, dropout_prob, use_composite_layernorm, use_composite_sdpa));
+            embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(

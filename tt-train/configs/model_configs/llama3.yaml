@@ -10,8 +10,6 @@ transformer_config:
   runner_type: default
   theta: 500000
   weight_tying: "enabled"
-  experimental:
-    use_composite_sdpa: false
 
   rope_scaling:
     scaling_factor: 32.0

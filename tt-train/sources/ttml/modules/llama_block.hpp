@@ -40,8 +40,7 @@ public:
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
         float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt,
-        bool use_composite_sdpa = false);
+        std::optional<uint32_t> intermediate_dim = std::nullopt);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 

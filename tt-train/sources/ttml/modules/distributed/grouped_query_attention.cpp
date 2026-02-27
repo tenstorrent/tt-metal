@@ -14,10 +14,7 @@
 namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
-    m_embedding_dim(config.embedding_dim),
-    m_num_heads(config.num_heads),
-    m_num_groups(config.num_groups),
-    m_use_composite_sdpa(config.use_composite_sdpa) {
+    m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     auto tp_size = pctx.get_tp_size();
@@ -39,7 +36,6 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
     m_num_local_heads = m_num_heads / tp_size;
     m_num_local_groups = m_num_groups / tp_size;
 
-    // create layers
     m_q_linear = std::make_shared<ColumnParallelLinear>(
         m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
@@ -50,7 +46,6 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
         m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
-    // register modules
     create_name("grouped_query_attention");
     register_module(m_q_linear, "q_linear");
     register_module(m_kv_linear, "kv_linear");
@@ -71,10 +66,7 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    auto attention = m_use_composite_sdpa ? ttml::ops::composite_scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask)
-                                          : ttml::ops::scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask);
+    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
 
     attention = ops::heads_fusion(attention);
 

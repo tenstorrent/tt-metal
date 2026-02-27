@@ -16,14 +16,12 @@ private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
     uint32_t m_local_num_heads{};
-    bool m_use_composite_sdpa = false;
     std::shared_ptr<ColumnParallelLinear> m_qkv_linear;
     std::shared_ptr<RowParallelLinear> m_out_linear;
     std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
-    explicit DistributedMultiHeadAttention(
-        uint32_t embedding_dim, uint32_t num_heads, float dropout_prob, bool use_composite_sdpa = false);
+    explicit DistributedMultiHeadAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
 };

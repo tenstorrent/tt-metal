@@ -9,4 +9,3 @@ transformer_config:
   positional_embedding_type: trainable
   experimental:
     use_composite_layernorm: false
-    use_composite_sdpa: false

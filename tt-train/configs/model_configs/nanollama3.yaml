@@ -9,5 +9,3 @@ transformer_config:
   max_sequence_length: 256
   runner_type: default
   theta: 500000.0
-  experimental:
-    use_composite_sdpa: false

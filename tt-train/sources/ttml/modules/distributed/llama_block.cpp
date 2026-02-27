@@ -24,7 +24,8 @@ DistributedLlamaMLP::DistributedLlamaMLP(
         hidden_size = *intermediate_dim;
     } else {
         const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4U * embedding_size) * (2.0F / 3.0F));
-        hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
+        const uint32_t rounded_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
+        hidden_size = rounded_size;
     }
     m_w1 = std::make_shared<ColumnParallelLinear>(
         embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
@@ -56,8 +57,7 @@ DistributedLlamaBlock::DistributedLlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim,
-    bool use_composite_sdpa) {
+    std::optional<uint32_t> intermediate_dim) {
     m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob, intermediate_dim);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
@@ -67,7 +67,6 @@ DistributedLlamaBlock::DistributedLlamaBlock(
         .num_groups = num_groups,
         .dropout_prob = dropout_prob,
         .rope_params = rope_params,
-        .use_composite_sdpa = use_composite_sdpa,
     });
 
     create_name("llama_block");

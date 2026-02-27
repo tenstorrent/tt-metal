@@ -9,9 +9,8 @@
 
 namespace ttml::modules {
 
-MultiHeadAttention::MultiHeadAttention(
-    uint32_t embedding_dim_, uint32_t num_heads_, float dropout_prob_, bool use_composite_sdpa) :
-    m_embedding_dim(embedding_dim_), m_num_heads(num_heads_), m_use_composite_sdpa(use_composite_sdpa) {
+MultiHeadAttention::MultiHeadAttention(uint32_t embedding_dim_, uint32_t num_heads_, float dropout_prob_) :
+    m_embedding_dim(embedding_dim_), m_num_heads(num_heads_) {
     // create layers
     m_qkv_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim * 3);
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(dropout_prob_);
@@ -30,10 +29,7 @@ ttml::autograd::TensorPtr MultiHeadAttention::operator()(
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_num_heads);
 
-    auto attention = m_use_composite_sdpa ? ttml::ops::composite_scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask)
-                                          : ttml::ops::scaled_dot_product_attention(
-                                                query_with_heads, key_with_heads, value_with_heads, mask);
+    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
 
     attention = ops::heads_fusion(attention);
 

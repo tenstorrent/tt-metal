@@ -9,5 +9,3 @@ transformer_config:
   max_sequence_length: 1024
   runner_type: memory_efficient
   theta: 10000.0
-  experimental:
-    use_composite_sdpa: false

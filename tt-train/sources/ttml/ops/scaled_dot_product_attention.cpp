@@ -137,7 +137,7 @@ void validate_qkv_shapes(
 
 }  // namespace
 
-autograd::TensorPtr composite_scaled_dot_product_attention(
+autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,

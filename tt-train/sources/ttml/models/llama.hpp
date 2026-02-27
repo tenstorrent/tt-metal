@@ -41,9 +41,7 @@ struct LlamaConfig {
     uint32_t original_context_length = 0U;
 
     struct Experimental {
-        bool use_composite_sdpa = false;
-    };
-    Experimental experimental;
+    } experimental;
 };
 
 class Llama : public BaseTransformer {
