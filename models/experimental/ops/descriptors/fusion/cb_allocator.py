@@ -125,6 +125,47 @@ class CBPoolAllocator:
         """
         self._allocated_indices.add(index)
 
+    def force_phase_remap(
+        self,
+        phase_idx: int,
+        cb_info: Dict[int, "CBInfo"],
+        forced_remap: Dict[int, int],
+    ) -> None:
+        """Apply a pre-determined remap for a phase.
+
+        Used when multiple groups share a phase (e.g. stem LN in a branching
+        tree) and must produce identical CB slot assignments so that cross-group
+        multicast addresses match.  The forced_remap was computed by a reference
+        pool allocation and is replayed here to ensure consistency.
+
+        Registers slots/configs as if they were freshly allocated, so subsequent
+        phases can reuse them normally.  Phantom indices (present in the remap
+        but not in cb_info) are reserved without creating pool slots.
+        """
+        for orig_idx, slot_idx in forced_remap.items():
+            self._allocated_indices.add(slot_idx)
+            info = cb_info.get(orig_idx)
+            if info is None:
+                # Phantom CB — just reserve the index.
+                continue
+            key = info.pool_key
+            if slot_idx in self._slots:
+                # Slot already exists (from an earlier forced phase) — just update size.
+                self._slots[slot_idx].total_size = max(self._slots[slot_idx].total_size, info.total_size)
+            else:
+                self._slots[slot_idx] = CBSlot(
+                    slot_index=slot_idx,
+                    config=key,
+                    total_size=info.total_size,
+                    source_cb=info.source_cb,
+                    source_fmt=info.source_fmt,
+                )
+                self._slot_to_orig_index[slot_idx] = orig_idx
+                if key not in self._config_to_slots:
+                    self._config_to_slots[key] = []
+                self._config_to_slots[key].append(slot_idx)
+        self.phase_remaps.append(dict(forced_remap))
+
     def _alloc_index(self) -> int:
         """Find the next free slot index."""
         while self._next_index in self._allocated_indices:

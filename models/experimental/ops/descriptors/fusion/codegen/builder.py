@@ -16,6 +16,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     MultiBarrierSpec,
     _BuildResult,
     _get_role_key,
+    _kernel_overlaps_core_range,
 )
 from models.experimental.ops.descriptors.fusion.cb_allocator import (
     PhaseInfo,
@@ -152,6 +153,7 @@ def _build_fused_descriptor(
     device: Any,
     target_core_range: Optional[Any] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
+    forced_phase_remaps: Optional[Dict[int, Dict[int, int]]] = None,
 ) -> _BuildResult:
     """Build a fused ProgramDescriptor from multiple phases with barrier sync.
 
@@ -163,10 +165,16 @@ def _build_fused_descriptor(
     # Discover all kernel roles from ALL phases (not just phase 0).
     # Different ops may have different role sets — e.g. slice has no compute
     # kernel, while layer_norm has reader+compute+writer.  We need the union.
+    # When target_core_range is set, skip kernels whose native core ranges
+    # do not overlap the target — this prevents e.g. a block-sharded LN's
+    # mcast receiver (row 1) from overwriting the sender (row 0) when
+    # building a fused kernel for a row-0 branch.
     role_keys: List[Tuple[str, frozenset]] = []
     role_keys_set: Set[Tuple[str, frozenset]] = set()
     for phase in phases:
         for kernel_desc in phase.op_descriptor.descriptor.kernels:
+            if not _kernel_overlaps_core_range(kernel_desc, target_core_range):
+                continue
             rk = _get_role_key(kernel_desc, target_core_range)
             if rk not in role_keys_set:
                 role_keys.append(rk)
@@ -180,6 +188,8 @@ def _build_fused_descriptor(
         role_map: Dict[Any, Any] = {}
         idx_map: Dict[Any, int] = {}
         for k_idx, kernel_desc in enumerate(phase.op_descriptor.descriptor.kernels):
+            if not _kernel_overlaps_core_range(kernel_desc, target_core_range):
+                continue
             rk = _get_role_key(kernel_desc, target_core_range)
             role_map[rk] = kernel_desc
             idx_map[rk] = k_idx
@@ -194,8 +204,11 @@ def _build_fused_descriptor(
         for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
             pool.reserve_index(remote_idx)
     for phase_idx, phase in enumerate(phases):
-        phantom_indices = _get_phantom_cb_indices(phase)
-        pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
+        if forced_phase_remaps and phase_idx in forced_phase_remaps:
+            pool.force_phase_remap(phase_idx, phase.cb_info, forced_phase_remaps[phase_idx])
+        else:
+            phantom_indices = _get_phantom_cb_indices(phase)
+            pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
 
     # Compute CB address rebinding info using remapped slot indices.
     rebind_info = _compute_rebind_info(phases, pool.phase_remaps)

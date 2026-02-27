@@ -22,7 +22,7 @@ Usage::
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
@@ -104,6 +104,111 @@ def _extract_device_from_tree(node: OpNode):
         if dev is not None:
             return dev
     return None
+
+
+def _compute_shared_cb_remaps(
+    groups: List[CoreGroup],
+) -> List[Optional[Dict[int, Dict[int, int]]]]:
+    """Compute forced CB remaps for phases shared across multiple groups.
+
+    When an op appears in multiple groups (e.g. block-sharded LN with sender
+    on group 0 and receiver on group 1), its CB slot assignments must be
+    identical across groups.  Otherwise, multicast writes hit wrong L1
+    addresses on receiver cores.
+
+    Strategy: build a single reference pool from the union of ALL shared ops
+    (in the order they first appear across groups), then force each group to
+    use that pool's slot assignments for its shared phases.
+
+    Returns a list (one per group) of forced_phase_remaps dicts, or None for
+    groups that don't need forcing.
+    """
+    from models.experimental.ops.descriptors.fusion.cb_allocator import (
+        CBPoolAllocator,
+        _get_phantom_cb_indices,
+        _extract_remote_cb_indices,
+    )
+    from models.experimental.ops.descriptors.fusion.codegen import _create_phase_info
+
+    # Count how many groups each op (by identity) appears in.
+    op_group_count: Dict[int, int] = defaultdict(int)
+    for group in groups:
+        seen_ops: Set[int] = set()
+        for op in group.phases:
+            op_id = id(op)
+            if op_id not in seen_ops:
+                op_group_count[op_id] += 1
+                seen_ops.add(op_id)
+
+    shared_op_ids = {op_id for op_id, count in op_group_count.items() if count > 1}
+    if not shared_op_ids:
+        return [None] * len(groups)
+
+    # Build an ordered list of unique shared ops (first occurrence order).
+    shared_ops_ordered: List[OpDescriptor] = []
+    shared_ops_seen: Set[int] = set()
+    for group in groups:
+        for op in group.phases:
+            op_id = id(op)
+            if op_id in shared_op_ids and op_id not in shared_ops_seen:
+                shared_ops_ordered.append(op)
+                shared_ops_seen.add(op_id)
+
+    # Build a reference pool from the shared ops.
+    ref_pool = CBPoolAllocator(max_slots=32)
+    ref_phase_infos = [_create_phase_info(op, i) for i, op in enumerate(shared_ops_ordered)]
+    for pi in ref_phase_infos:
+        for remote_idx in _extract_remote_cb_indices(pi.op_descriptor.descriptor):
+            ref_pool.reserve_index(remote_idx)
+    for phase_idx, pi in enumerate(ref_phase_infos):
+        phantom_indices = _get_phantom_cb_indices(pi)
+        ref_pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices)
+
+    # Build op_id -> reference remap lookup.
+    ref_remaps: Dict[int, Dict[int, int]] = {}
+    for ref_idx, op in enumerate(shared_ops_ordered):
+        ref_remaps[id(op)] = ref_pool.get_remap(ref_idx)
+
+    # For each group, build forced_phase_remaps for its shared phases.
+    result: List[Optional[Dict[int, Dict[int, int]]]] = []
+    for group in groups:
+        forced: Dict[int, Dict[int, int]] = {}
+        for phase_idx, op in enumerate(group.phases):
+            if id(op) in shared_op_ids:
+                forced[phase_idx] = ref_remaps[id(op)]
+        result.append(forced if forced else None)
+
+    return result
+
+
+def _equalize_cb_sizes(results: List[_BuildResult]) -> None:
+    """Equalize CB total_sizes across multi-group build results.
+
+    When multiple groups share an op whose kernels communicate across groups
+    via multicast (e.g. block-sharded LN sender/receiver), the CB L1
+    addresses must be identical on all cores.  CB addresses are allocated
+    sequentially by buffer_index, so any per-slot size difference shifts
+    all subsequent addresses.
+
+    Fix: for each buffer_index, compute the max total_size across all
+    groups and pad smaller allocations to match.
+    """
+    # Collect max total_size per buffer_index across all groups.
+    max_sizes: Dict[int, int] = {}
+    for result in results:
+        for cb in result.descriptor.cbs:
+            for fmt in cb.format_descriptors:
+                idx = fmt.buffer_index
+                if idx not in max_sizes or cb.total_size > max_sizes[idx]:
+                    max_sizes[idx] = cb.total_size
+
+    # Pad any CB whose total_size is below the cross-group max.
+    for result in results:
+        for cb in result.descriptor.cbs:
+            for fmt in cb.format_descriptors:
+                idx = fmt.buffer_index
+                if cb.total_size < max_sizes[idx]:
+                    cb.total_size = max_sizes[idx]
 
 
 def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
@@ -264,8 +369,18 @@ class OpGraphBuilder:
         # pass target_core_range to restrict the fused kernel to the group.
         multi_group = len(groups) > 1
 
+        # For multi-group builds, compute forced CB remaps for shared phases.
+        # Ops whose kernels span multiple groups (e.g. block-sharded LN with
+        # mcast sender on row 0 and receiver on row 1) MUST get identical CB
+        # slot assignments in every group, otherwise multicast writes hit wrong
+        # L1 addresses.  We build a reference pool from the shared phases and
+        # force each group to use those slot assignments.
+        per_group_forced: List[Optional[Dict[int, Dict[int, int]]]] = [None] * len(groups)
+        if multi_group:
+            per_group_forced = _compute_shared_cb_remaps(groups)
+
         results = []
-        for group in groups:
+        for g_idx, group in enumerate(groups):
             # Save CB descriptor state before building each group.
             group_prog_descs = [op.descriptor for op in group.phases]
             saved_cb_state = _save_cb_state(group_prog_descs)
@@ -278,6 +393,7 @@ class OpGraphBuilder:
                 all_sem_refs,
                 segment_cache,
                 needs_target_core_range=multi_group,
+                forced_phase_remaps=per_group_forced[g_idx],
             )
             results.append(result)
 
@@ -285,7 +401,29 @@ class OpGraphBuilder:
             _restore_cb_state(saved_cb_state)
             _verify_cb_restore(saved_cb_state)
 
+        # Equalize CB total_sizes across groups so that all fused kernel
+        # binaries produce the same L1 layout.  This is critical even with
+        # forced remaps: non-shared phases can still change slot sizes which
+        # shifts L1 addresses for subsequent slots.
+        if multi_group:
+            _equalize_cb_sizes(results)
+
         return _merge_build_results(results)
+
+    @staticmethod
+    def _kernel_variant_key(op: OpDescriptor, coord: Tuple[int, int]) -> tuple:
+        """Return tuple of kernel indices whose core ranges contain *coord*.
+
+        For interleaved ops (all kernels on the same range), every core
+        produces the same key.  For block-sharded ops with per-core-subset
+        kernels (e.g. mcast sender on row 0, receiver on row 1), different
+        cores produce different keys, causing them to land in separate groups.
+        """
+        indices = []
+        for k_idx, kernel in enumerate(op.descriptor.kernels):
+            if coord in _core_range_set_to_coords(kernel.core_ranges):
+                indices.append(k_idx)
+        return tuple(indices)
 
     def _compute_core_groups(self) -> List[CoreGroup]:
         """Compute per-core phase sequences and group by identity.
@@ -293,6 +431,11 @@ class OpGraphBuilder:
         Walks the tree pre-order.  For each node, records its op and
         barrier scope (effective leaf range) for every core in the node's
         range.  Cores with identical phase sequences are grouped together.
+
+        The grouping key includes both op identity and a kernel variant key
+        (which kernel indices cover each core).  This ensures that cores
+        seeing different kernel subsets for the same op (e.g. mcast sender
+        vs receiver in block-sharded LayerNorm) end up in separate groups.
 
         Returns list of CoreGroups, one per unique phase sequence.
         """
@@ -310,10 +453,10 @@ class OpGraphBuilder:
 
         _walk(self._root)
 
-        # Group cores by identical phase sequence (by op identity)
+        # Group cores by identical phase sequence (by op identity + kernel variant)
         groups_by_key: Dict[tuple, Set[Tuple[int, int]]] = defaultdict(set)
         for coord, entries in per_core.items():
-            key = tuple(id(op) for op, _ in entries)
+            key = tuple((id(op), self._kernel_variant_key(op, coord)) for op, _ in entries)
             groups_by_key[key].add(coord)
 
         # Build CoreGroups
@@ -342,6 +485,7 @@ class OpGraphBuilder:
         shared_sem_refs: List[Any],
         segment_cache: Dict[frozenset, BarrierConfig],
         needs_target_core_range: bool = False,
+        forced_phase_remaps: Optional[Dict[int, Dict[int, int]]] = None,
     ) -> _BuildResult:
         """Build a fused _BuildResult for one core group.
 
@@ -351,6 +495,8 @@ class OpGraphBuilder:
                 needed for branching trees where the stem's native core
                 range differs from the group's (leaf) core range.  For
                 single-group linear chains, this should be False.
+            forced_phase_remaps: If provided, maps phase_idx -> {orig_cb -> hw_slot}
+                for phases whose CB remaps must match across groups.
         """
         from models.experimental.ops.descriptors.fusion.codegen import (
             _build_fused_descriptor,
@@ -384,6 +530,7 @@ class OpGraphBuilder:
             device,
             target_core_range=target_cr,
             multi_barrier=multi_barrier,
+            forced_phase_remaps=forced_phase_remaps,
         )
 
     @staticmethod
