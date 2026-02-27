@@ -183,14 +183,14 @@ def test_graph_capture_without_dtype(device):
 
     assert full_like_op is not None, "FullDeviceOperation should be in the captured graph"
 
-    # FullLikeOperation arguments — now contain real serialized content
+    # FullDeviceOperation arguments: operation_attributes_t + empty tensor vector
     node_full_like = full_like_op["arguments"]
     assert "DataType::INT32" in node_full_like[0]
     assert "Layout::TILE" in node_full_like[0]
     assert "MemoryConfig(" in node_full_like[0]
 
-    assert "Tensor(" in node_full_like[1]
-    assert "Shape([32, 32])" in node_full_like[1]
+    # tensor_args_t is empty for FullDeviceOperation, so input_tensors is an empty vector
+    assert node_full_like[1] == "{}"
 
     # tt::tt_metal::create_device_tensor
     create_tensor_op = None
@@ -353,8 +353,8 @@ def test_graph_capture_without_dtype_json_output(device):
     arg0_raw = str(item0["arguments"][0])
     assert "DataType::INT32" in arg0_raw
     assert "Layout::TILE" in arg0_raw
-    arg1_raw = str(item0["arguments"][1])
-    assert "Tensor" in arg1_raw
+    # tensor_args_t is empty for FullDeviceOperation, so input_tensors is an empty vector
+    assert item0["arguments"][1]["arg1"] == "{}"
 
     # --- Content item 1: create_device_tensor ---
     item1 = data["content"][1]
