@@ -22,7 +22,7 @@ from .perf_counters import PERF_COUNTERS
 
 try:
     import ttnn
-except Exception:  # pragma: no cover
+except (ImportError, OSError):  # pragma: no cover
     ttnn = None
 
 LOG = logging.getLogger(__name__)
@@ -41,12 +41,23 @@ class DPTTTPipeline:
     pretrained: bool = True
     device: str = "cpu"
     tt_device_override: Optional[Any] = None
+    # Optional overrides so callers (e.g., PCC tests) can reuse a single HF
+    # model instance across CPU + TT pipelines. This avoids nondeterminism when
+    # transformers initializes missing keys.
+    hf_model: Optional[torch.nn.Module] = None
+    hf_processor: Optional[Any] = None
 
     def __post_init__(self):
         # Avoid mutating a caller-provided config (and never mutate the module-level DEFAULT_CONFIG).
         self.config = copy.deepcopy(self.config)
 
-        self.fallback = DPTFallbackPipeline(config=self.config, pretrained=self.pretrained, device=self.device)
+        self.fallback = DPTFallbackPipeline(
+            config=self.config,
+            pretrained=self.pretrained,
+            device=self.device,
+            _model=self.hf_model,
+            _processor=self.hf_processor,
+        )
         # Align neck shapes with HF when using pretrained weights
         # Align fusion/head flags too (BN usage, optional projection)
         try:
@@ -54,13 +65,13 @@ class DPTTTPipeline:
                 self.fallback._model.config.use_batch_norm_in_fusion_residual
             )
             self.config.add_projection = bool(getattr(self.fallback._model.config, "add_projection", False))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         try:
             hf_neck_sizes = list(self.fallback._model.config.neck_hidden_sizes)
             if isinstance(hf_neck_sizes, list) and len(hf_neck_sizes) == len(self.config.neck_hidden_sizes):
                 self.config.neck_hidden_sizes = hf_neck_sizes
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         # Reuse the same HF weights for the "TT" path; later this can be swapped
         # with real TTNN modules.
@@ -116,10 +127,9 @@ class DPTTTPipeline:
     def close(self):
         if self._full_trace_id is not None:
             try:
-                import ttnn  # type: ignore
-
-                ttnn.release_trace(self.backbone.tt_device, self._full_trace_id)
-            except Exception:
+                if ttnn is not None:
+                    ttnn.release_trace(self.backbone.tt_device, self._full_trace_id)
+            except (RuntimeError, TypeError, AttributeError):
                 pass
             self._full_trace_id = None
             self._full_trace_input = None
@@ -189,7 +199,8 @@ class DPTTTPipeline:
         scheduled on cq=1 and synchronized via events (similar to other performant
         runners in the repo).
         """
-        import ttnn  # type: ignore
+        if ttnn is None:
+            raise RuntimeError("ttnn is required for tracing")
 
         if self._full_trace_id is not None:
             return
@@ -244,9 +255,7 @@ class DPTTTPipeline:
         `ttnn.Tensor` created with `ttnn.from_torch(..., layout=TILE_LAYOUT)` and
         no device, so input copies can be scheduled efficiently.
         """
-        try:
-            import ttnn  # type: ignore
-        except Exception:
+        if ttnn is None:
             raise RuntimeError("ttnn is required for forward_tt_host_tensor")
 
         requested_exec_mode = str(getattr(self.config, "tt_execution_mode", "eager")).lower()
@@ -407,13 +416,8 @@ class DPTTTPipeline:
                     fusion_head_ms += (time.perf_counter() - t2) * 1000.0
                     # depth may be a TT tensor, torch tensor, or numpy array; ensure
                     # we normalize and return a float32 torch tensor.
-                    try:
-                        import ttnn
-
-                        if isinstance(depth, ttnn.Tensor):
-                            depth = depth.cpu().to_torch()
-                    except Exception:
-                        pass
+                    if ttnn is not None and isinstance(depth, ttnn.Tensor):
+                        depth = depth.cpu().to_torch()
                     depth_t = torch.as_tensor(depth)
                     # Ensure channel dimension matches CPU fallback ([B,1,H,W]) before normalization.
                     if depth_t.dim() == 3:

@@ -20,15 +20,10 @@ from .tt_cnn_ops import (
     tt_upsample_nchw,
 )
 
-
-def _ensure_tt_device_tensor(x, tt_device, ttnn):
-    """Ensure TT tensors are materialized in DEVICE storage for TT ops."""
-    return ensure_tt_device_tensor(x, tt_device)
-
-
-def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
-    """Apply ReLU entirely on TT device in the TT fast path."""
-    return tt_relu(hidden_state)
+try:
+    import ttnn  # type: ignore
+except (ImportError, OSError):  # pragma: no cover
+    ttnn = None  # type: ignore
 
 
 def _shape4_hw(x) -> Tuple[int, int]:
@@ -114,24 +109,17 @@ class DPTPreActResidualLayerTT(nn.Module):
         return cache(x, device=self.tt_device)
 
     def forward(self, hidden_state: torch.Tensor):
-        try:
-            import ttnn  # type: ignore
-        except Exception:
-            ttnn = None
-
         if ttnn is not None and self.tt_device is not None and isinstance(hidden_state, ttnn.Tensor):
-            residual = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
-            # Device ReLU with fallback to host
-            hidden_state = _tt_relu_with_fallback(residual, self.tt_device, ttnn)
+            residual = ensure_tt_device_tensor(hidden_state, self.tt_device)
+            hidden_state = tt_relu(residual)
 
             hidden_state = self._tt_convolution(1, hidden_state)
 
-            # Device ReLU with fallback to host
-            hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
+            hidden_state = tt_relu(hidden_state)
 
             hidden_state = self._tt_convolution(2, hidden_state)
             # residual add on device
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = ensure_tt_device_tensor(hidden_state, self.tt_device)
             return ttnn.add(hidden_state, residual)
 
         residual = hidden_state
@@ -191,20 +179,15 @@ class DPTFeatureFusionLayerTT(nn.Module):
         expected_input_hw: Optional[Tuple[int, int]] = None,
         expected_output_hw: Optional[Tuple[int, int]] = None,
     ):
-        try:
-            import ttnn  # type: ignore
-        except Exception:
-            ttnn = None
-
         if ttnn is not None and isinstance(hidden_state, ttnn.Tensor) and self.tt_device is not None:
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = ensure_tt_device_tensor(hidden_state, self.tt_device)
             hidden_state = tt_canonicalize_nchw_spatial(
                 hidden_state,
                 expected_hw=expected_input_hw,
                 op_name="dpt_fusion.hidden_state.input",
             )
             if residual is not None:
-                residual = _ensure_tt_device_tensor(residual, self.tt_device, ttnn)
+                residual = ensure_tt_device_tensor(residual, self.tt_device)
                 residual = tt_canonicalize_nchw_spatial(
                     residual,
                     expected_hw=expected_input_hw,
@@ -243,7 +226,7 @@ class DPTFeatureFusionLayerTT(nn.Module):
                     op_name="dpt_fusion.hidden_state.output",
                 )
             hidden_state = self._tt_projection(hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = ensure_tt_device_tensor(hidden_state, self.tt_device)
             return hidden_state
 
         if residual is not None:
@@ -403,7 +386,8 @@ class DPTDepthEstimationHeadTT(nn.Module):
         return predicted_depth
 
     def _forward_tt(self, hidden_states):
-        import ttnn  # type: ignore
+        if ttnn is None:
+            raise RuntimeError("ttnn is required for TT fusion execution")
 
         hidden_state = hidden_states[self.config.head_in_index]
 
@@ -411,7 +395,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
             if self._tt_proj is None:
                 self._tt_proj = TTConv2dCached.from_conv(self.projection)
             hidden_state = self._tt_proj(hidden_state, device=self.tt_device)
-            hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
+            hidden_state = tt_relu(hidden_state)
 
         # Head[0] conv
         conv0 = self.head[0]
@@ -433,14 +417,14 @@ class DPTDepthEstimationHeadTT(nn.Module):
         conv1 = self.head[2]
         tt_conv1 = self._tt_conv_for(2, conv1)
         hidden_state = tt_conv1(hidden_state, device=self.tt_device)
-        hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
+        hidden_state = tt_relu(hidden_state)
 
         # Final 1x1 conv to depth + device ReLU
         conv2 = self.head[4]
         tt_conv2 = self._tt_conv_for(4, conv2)
         hidden_state = tt_conv2(hidden_state, device=self.tt_device)
-        hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
-        hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+        hidden_state = tt_relu(hidden_state)
+        hidden_state = ensure_tt_device_tensor(hidden_state, self.tt_device)
 
         return hidden_state
 
@@ -449,11 +433,6 @@ class DPTDepthEstimationHeadTT(nn.Module):
         Dispatch to either the TT or torch implementation depending on the
         type of the incoming feature maps and TT device availability.
         """
-        try:
-            import ttnn  # type: ignore
-        except Exception:
-            ttnn = None
-
         # Optionally convert incoming torch tensors to TT tensors to keep fusion entirely on device
         if (
             ttnn is not None
@@ -463,7 +442,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
             new_states: List[torch.Tensor] = []
             for x in hidden_states:
                 if isinstance(x, ttnn.Tensor):
-                    new_states.append(_ensure_tt_device_tensor(x, self.tt_device, ttnn))
+                    new_states.append(ensure_tt_device_tensor(x, self.tt_device))
                 else:
                     try:
                         new_states.append(
@@ -474,7 +453,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
                                 device=self.tt_device,
                             )
                         )
-                    except Exception:
+                    except (RuntimeError, TypeError, ValueError):
                         new_states.append(x)
             hidden_states = new_states
 

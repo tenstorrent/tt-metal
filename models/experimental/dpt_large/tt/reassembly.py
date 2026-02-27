@@ -18,9 +18,10 @@ from .tt_cnn_ops import (
 )
 from .perf_counters import inc_reassembly_readout_fallback
 
-
-def _ensure_tt_device_tensor(x, tt_device, ttnn):
-    return ensure_tt_device_tensor(x, tt_device)
+try:
+    import ttnn  # type: ignore
+except (ImportError, OSError):  # pragma: no cover
+    ttnn = None  # type: ignore
 
 
 class DPTReassembleLayerTT(nn.Module):
@@ -114,11 +115,6 @@ class DPTReassembleLayerTT(nn.Module):
 
     def forward(self, x, *, expected_input_hw: Optional[tuple[int, int]] = None):
         # x: torch.Tensor or ttnn.Tensor of shape [B, hidden_size, H, W] / TT layout.
-        try:
-            import ttnn  # type: ignore
-        except Exception:
-            ttnn = None
-
         if ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
             x = self._tt_project(x)
             expected_output_hw = None
@@ -268,7 +264,7 @@ class DPTReassembly(nn.Module):
             # Broadcast cls across the sequence dimension.
             try:
                 cls_rep = ttnn.expand(cls_tt4, [-1, -1, int(Np1 - 1), -1])
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 cls_rep = ttnn.repeat(cls_tt4, [1, 1, int(Np1 - 1), 1])
             out_tt4 = ttnn.add(patch_tt4, cls_rep)
         elif self.readout_type == "project":
@@ -324,7 +320,7 @@ class DPTReassembly(nn.Module):
             )
             try:
                 cls_rep = ttnn.expand(cls_proj, [-1, -1, int(Np1 - 1), -1])
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 cls_rep = ttnn.repeat(cls_proj, [1, 1, int(Np1 - 1), 1])
             out_tt4 = ttnn.add(patch_proj, cls_rep)
             if cache["act"] == "gelu":
@@ -390,11 +386,6 @@ class DPTReassembly(nn.Module):
             `fusion_hidden_size` channels.
         """
         outputs: List[torch.Tensor] = []
-        try:
-            import ttnn  # type: ignore
-        except Exception:
-            ttnn = None
-
         # Map selected backbone outputs to stage indices 0..len(neck_hidden_sizes)-1.
         max_idx = max(0, self.config.num_hidden_layers - 1)
         safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
@@ -423,7 +414,7 @@ class DPTReassembly(nn.Module):
                         fmap_hw=(int(H), int(W)),
                         ttnn=ttnn,
                     )
-                except Exception:
+                except (RuntimeError, TypeError, ValueError):
                     inc_reassembly_readout_fallback()
                     if not bool(getattr(self.config, "allow_cpu_fallback", True)):
                         raise
@@ -497,17 +488,12 @@ class DPTReassembly(nn.Module):
             # 3x3 conv to common fusion_hidden_size.
             conv = self.convs[stage_idx]
 
-            try:
-                import ttnn  # type: ignore
-            except Exception:
-                ttnn = None
-
             if ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
                 # Lazily materialize TT conv for this stage.
                 if self._tt_convs[stage_idx] is None:
                     self._tt_convs[stage_idx] = TTConv2dCached.from_conv(conv)
                 x = self._tt_convs[stage_idx](x, device=self.tt_device)
-                x = _ensure_tt_device_tensor(x, self.tt_device, ttnn)
+                x = ensure_tt_device_tensor(x, self.tt_device)
                 outputs.append(x)
             else:
                 outputs.append(conv(x))
