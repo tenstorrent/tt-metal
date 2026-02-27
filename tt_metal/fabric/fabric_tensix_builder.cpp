@@ -125,6 +125,7 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
         // Create round-robin mapping using the actual ethernet channel IDs from active_channels
         // Skip dispatch link channels - they don't get tensix builders
         size_t channel_index = 0;
+
         for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
             routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
             eth_chan_to_core_index_[dev_id][eth_chan_id] = channel_index;
@@ -690,14 +691,14 @@ size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
 }
 
 size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(
-    uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id, bool use_overlay) const {
     TT_FATAL(
         core_id == FabricTensixCoreType::MUX,
         "caller must be for accessing mux config, but was accessing: {} config",
         core_id);
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::ChannelTypes::WORKER_CHANNEL;
-    return config->get_connection_handshake_address(channel_type, channel_id);
+    return config->get_connection_handshake_address(channel_type, channel_id, use_overlay);
 }
 
 size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(

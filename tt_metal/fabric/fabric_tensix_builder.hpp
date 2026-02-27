@@ -89,7 +89,7 @@ public:
     // Callers must explicitly specify which core type (MUX or RELAY) they want to access
     size_t get_local_flow_control_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    size_t get_connection_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_connection_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id, bool use_overlay) const;
 
     size_t get_worker_conn_info_base_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
