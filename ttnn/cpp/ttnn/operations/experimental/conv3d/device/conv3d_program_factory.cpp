@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -187,10 +188,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // Budget: compute remaining L1 after all other CBs, capped at 500 KB.
-    // BH has ~1496 KB usable L1; we reserve 200 KB for kernel code/stack/alignment.
-    constexpr uint32_t L1_USABLE_FOR_CBS = 1300 * 1024;
+    // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
+    // hal::get_max_worker_l1_unreserved_size() gives total L1 for CBs + kernel code;
+    // subtract a conservative 200 KB reserve for kernel code/stack.
+    constexpr uint32_t L1_KERNEL_CODE_RESERVE = 200 * 1024;
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
+    const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
     uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
                                (tile_size * matmul_M_t * matmul_K_t) +  // vol2col_tiled
@@ -205,7 +208,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
     }
     uint32_t l1_prefetch_max_bytes =
-        (other_cbs_bytes < L1_USABLE_FOR_CBS) ? std::min(L1_USABLE_FOR_CBS - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
+        (other_cbs_bytes < l1_usable_for_cbs) ? std::min(l1_usable_for_cbs - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
 
     const uint32_t kT = operation_attributes.kernel_size[0];
     const uint32_t kH = operation_attributes.kernel_size[1];
