@@ -24,7 +24,7 @@ namespace ckernel {
  * | Argument    | Description                                       | Type     | Valid Range                                        | Required |
  * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
  * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
- * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set   | False    |
+ * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set  | False    |
  * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
  */
 // clang-format on
@@ -58,7 +58,7 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  * |----------------|-------------------------------------------------------------------|----------|---------------------------------------------------|----------|
  * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31                                           | True     |
  * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
- * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set  | False    |
+ * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
