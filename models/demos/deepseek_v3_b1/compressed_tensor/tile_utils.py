@@ -12,12 +12,12 @@ import ttnn
 
 from .metrics import metric_value, pearson_corr
 
-COMPRESSED_FORMATS = ["bf16", "bfp8", "bfp4", "bfp2"]
+COMPRESSED_FORMATS = ["bfp8", "bfp4", "bfp2", "bfp0"]
 COMPRESSED_BYTES_PER_ELEM = {
-    "bf16": 2.0,
     "bfp8": 1.088,
     "bfp4": 0.50097,
     "bfp2": 0.25097,
+    "bfp0": 0.0,
 }
 
 
@@ -135,16 +135,17 @@ def quantize_dequantize_bfp(x: np.ndarray, mant_bits: int) -> np.ndarray:
 
 
 TTNN_DTYPE_MAP = {
-    "bf16": ttnn.bfloat16,
     "bfp8": ttnn.bfloat8_b,
     "bfp4": ttnn.bfloat4_b,
 }
 
-BFP_MANT_BITS = {"bfp8": 7, "bfp4": 3, "bfp2": 1}
+BFP_MANT_BITS = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
 
 
 def ttnn_quantize_fn(x: torch.Tensor, fmt: str) -> torch.Tensor:
-    """Quantize-dequantize round trip. Uses ttnn for bfp8/bfp4, numpy emulation for bfp2."""
+    """Quantize-dequantize round trip. Uses ttnn for bfp8/bfp4, numpy emulation for bfp2, zeros for fp0."""
+    if fmt == "bfp0":
+        return torch.zeros_like(x)
     if fmt in BFP_MANT_BITS and fmt not in TTNN_DTYPE_MAP:
         xn = x.detach().float().cpu().numpy()
         q = quantize_dequantize_bfp(xn, mant_bits=BFP_MANT_BITS[fmt])
@@ -163,7 +164,10 @@ def bfp_tile_packed_size(mant_bits: int, tile_hw: int = 32) -> int:
       bfp8 (mant_bits=7): 8 bits × 1024 = 1024 bytes → total 1088
       bfp4 (mant_bits=3): 4 bits × 1024 =  512 bytes → total  576
       bfp2 (mant_bits=1): 2 bits × 1024 =  256 bytes → total  320
+      fp0  (mant_bits=-1): 0 bits × 1024 =    0 bytes → total    0
     """
+    if mant_bits == 0:
+        return 0  # bfp0: no data stored, all zeros
     num_elements = tile_hw * tile_hw  # 1024
     num_faces = 4
     face_h = tile_hw // 2  # 16
@@ -179,11 +183,13 @@ _bfp = ttnn._ttnn.bfp_utils
 _PACK_FN = {
     7: _bfp.pack_bfp8,
     3: _bfp.pack_bfp4,
+    1: _bfp.pack_bfp2,
 }
 
 _UNPACK_FN = {
     7: _bfp.unpack_bfp8,
     3: _bfp.unpack_bfp4,
+    1: _bfp.unpack_bfp2,
 }
 
 
@@ -194,7 +200,6 @@ def pack_bfp_tile(tile: np.ndarray, mant_bits: int) -> np.ndarray:
     """
     assert tile.shape == (32, 32), f"Expected (32, 32), got {tile.shape}"
     pack_fn = _PACK_FN[mant_bits]
-    # C++ expects tile-ordered flat float32; tile is already 32×32
     packed_u32 = np.asarray(pack_fn(tile.astype(np.float32).ravel()))
     return packed_u32.view(np.uint8)
 
