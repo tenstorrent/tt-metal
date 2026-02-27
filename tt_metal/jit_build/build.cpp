@@ -68,19 +68,6 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::error_code ec;
-        std::filesystem::remove_all(dir_path, ec);
-        // Ignore ENOENT (file not found) - another process may have already deleted it
-        // Also ignore ENOTEMPTY - directory may have been repopulated by another process
-        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::directory_not_empty) {
-            log_warning(
-                tt::LogBuildKernels, "Failed to remove cache directory {}: {}", dir_path.string(), ec.message());
-        }
-    }
-}
-
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
