@@ -154,62 +154,88 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     // Runtime args for the single core: scratch_l1_addr, output addr, then per-input (addr, absolute_offset_to_start,
     // amount_to_write, amount_to_skip), then shard_id
     {
-        uint32_t dim_pages{0};  // how many pages I need to write from every Tensor, sequentially
         const uint32_t num_dims = output.padded_shape().rank();
         const uint32_t dim = operation_attributes.dim;
-        const bool rm_layout = (output.layout() == Layout::ROW_MAJOR);
+
+        uint32_t dim_pages{0};  // how many pages I need to write from every Tensor, sequentially
+        uint32_t num_output_pages_per_block_total = 0;
+        std::vector<uint32_t> runtime_args;
         uint32_t scale_factor = 1;
-        if (!rm_layout) {
+
+        const bool rm_layout = (output.layout() == Layout::ROW_MAJOR);
+
+        auto fill_for_tile_layout = [&]() {
+            std::cout << " --> TILE layout ";
             if (dim == num_dims - 2) {
                 scale_factor = TILE_HEIGHT;
             } else if (dim == num_dims - 1) {
                 scale_factor = TILE_WIDTH;
             }
-        }
-        uint32_t num_accum_pages = 1;
-        for (uint32_t i = dim + 1; i < num_dims; ++i) {
-            num_accum_pages *= output.padded_shape()[i];
-            std::cout << "num_acum_pages at " << i << ": " << num_accum_pages;
-        }
-        std::cout << "\n";
 
-        if (rm_layout) {
-            if (num_dims > 1 && dim < num_dims - 1) {
-                num_accum_pages /= output.padded_shape()[-1];
+            uint32_t num_accum_pages = 1;
+            for (uint32_t i = dim + 1; i < num_dims; ++i) {
+                num_accum_pages *= output.padded_shape()[i];
+                std::cout << "num_acum_pages at " << i << ": " << num_accum_pages;
             }
-        } else {
+            std::cout << "\n";
+
             if (dim < num_dims - 2) {
                 num_accum_pages /= TILE_HW;
             } else if (dim == num_dims - 2) {
                 num_accum_pages /= TILE_WIDTH;
             }
-        }
-        std::cout << "result acum_pages: " << num_accum_pages << "\n";
-        uint32_t num_output_pages_per_block_total = 0;
+
+            std::cout << "result acum_pages: " << num_accum_pages << "\n";
+
+            dim_pages = input_t0.padded_shape()[dim] / scale_factor;
+
+            num_output_pages_per_block_total += num_accum_pages * dim_pages;
+        };
+
+        auto fill_for_raw_major_layout = [&]() {
+            std::cout << " --> Raw Major layout ";
+
+            uint32_t num_accum_pages = 1;
+            for (uint32_t i = dim + 1; i < num_dims; ++i) {
+                num_accum_pages *= output.padded_shape()[i];
+                std::cout << "num_acum_pages at " << i << ": " << num_accum_pages;
+            }
+            std::cout << "\n";
+
+            if (num_dims > 1 && dim < num_dims - 1) {
+                num_accum_pages /= output.padded_shape()[-1];
+            }
+            std::cout << "result acum_pages: " << num_accum_pages << "\n";
+
+            dim_pages = input_t0.padded_shape()[dim];
+
+            if (dim == num_dims - 1) {
+                num_output_pages_per_block_total += num_accum_pages;
+            } else {
+                num_output_pages_per_block_total += num_accum_pages * dim_pages;
+            }
+
+            if (dim == num_dims - 1) {
+                num_output_pages_per_block_total = 1;
+            }
+        };
 
         if (rm_layout) {
-            dim_pages = input_t0.padded_shape()[dim];
+            fill_for_raw_major_layout();
         } else {
-            dim_pages = input_t0.padded_shape()[dim] / scale_factor;
-        }
-        if (rm_layout && dim == num_dims - 1) {
-            num_output_pages_per_block_total += num_accum_pages;
-        } else {
-            num_output_pages_per_block_total += num_accum_pages * dim_pages;
-        }
-        if (rm_layout && dim == num_dims - 1) {
-            num_output_pages_per_block_total = 1;
+            fill_for_tile_layout();
         }
 
         std::cout << "dim pages: " << dim_pages << ". pages per block: " << num_output_pages_per_block_total << "\n";
 
-        std::vector<uint32_t> runtime_args;
         runtime_args.push_back(scratch_l1_addr);
         runtime_args.push_back(output.buffer()->address());
+
         const uint32_t per_tensor_to_write = num_output_pages_per_block_total * input_page_sizes[0];
         const uint32_t per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
         std::cout << "per tensor write " << per_tensor_to_write << "  per tensor to skip " << per_tensor_to_skip
                   << "\n";
+
         for (uint32_t i = 0; i < CONCAT_ND_SHARDED_MAX_NUM_INPUTS; ++i) {
             const Buffer* buf = (i < num_input_tensors) ? input_tensors[i].buffer() : input_t0.buffer();
             runtime_args.push_back(buf->address());
