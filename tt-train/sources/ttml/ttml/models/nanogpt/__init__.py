@@ -192,8 +192,12 @@ class NanoGPT(AbstractModuleBase):
         for block in self.blocks:
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
                 out = memory_efficient_runner(block, out, mask)
-            else:
+            elif self.config.runner_type == ttml.models.RunnerType.Default:
                 out = block(out, mask)
+            else:
+                raise ValueError(
+                    "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
+                )
 
         if self.config.experimental.use_composite_layernorm:
             layernorm_op = ttml.ops.layernorm.composite_layernorm
