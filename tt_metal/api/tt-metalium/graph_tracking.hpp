@@ -98,7 +98,11 @@ std::string serialize_tracked_arg(const std::any& a) {
     const auto& val = ref.get();
     using CleanT = std::remove_cv_t<T>;
 
-    if constexpr (ttsl::is_specialization_v<CleanT, std::vector>) {
+    // Guard against incomplete types (e.g. forward-declared MeshCommandQueue)
+    // so that type traits below are never evaluated on them.
+    if constexpr (!requires { sizeof(CleanT); }) {
+        oss << "<incomplete type>";
+    } else if constexpr (ttsl::is_specialization_v<CleanT, std::vector>) {
         ttsl::reflection::operator<<(oss, val);
     } else if constexpr (requires { oss << val; }) {
         oss << val;
