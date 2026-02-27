@@ -6,6 +6,9 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <bit>
+#include <numeric>
+
 namespace ttnn {
 
 using namespace ccl;
@@ -125,14 +128,20 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         cb_page_size,     // page_size
     };
 
+    // For linar topology, reduce the packet size to 2048.
+    // There is an issue if multiple packets of 4096 are sent.
+    uint32_t packet_size_workaround = operation_attributes.topology == Topology::Linear
+                                          ? std::min(MAX_PACKET_SIZE_BYTES, 2048u)
+                                          : MAX_PACKET_SIZE_BYTES;
+
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,  // cb0_id
         cb_page_size,
         output_page_size,
-        MAX_PACKET_SIZE_BYTES,  // packet_size,
-        num_targets_forward,    // num_targets_forward_direction
-        num_targets_backward,   // num_targets_backward_direction
+        packet_size_workaround,  // packet_size,
+        num_targets_forward,     // num_targets_forward_direction
+        num_targets_backward,    // num_targets_backward_direction
     };
 
     std::vector<uint32_t> mcast_forward_args(2, 0);
