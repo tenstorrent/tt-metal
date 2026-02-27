@@ -595,10 +595,11 @@ void ControlPlane::init_control_plane(
     // Synchronize error count across all ranks to ensure consistent state before MPI collectives
     // This prevents deadlocks where some ranks throw exceptions and others don't
     int global_error_count = 0;
-    distributed_context.all_reduce(
+    distributed_context->all_reduce(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_error_count), sizeof(local_error_count)),
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&global_error_count), sizeof(global_error_count)),
-        tt::tt_metal::distributed::multihost::ReduceOp::SUM);
+        tt::tt_metal::distributed::multihost::ReduceOp::SUM,
+        tt::tt_metal::distributed::multihost::DType::INT32);
 
     if (global_error_count > 0) {
         log_warning(
@@ -2364,7 +2365,7 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
     return host_local_context_;
 }
 
-const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
 ControlPlane::get_global_logical_bindings() const {
     return global_logical_bindings_;
 }
@@ -2624,12 +2625,13 @@ void ControlPlane::generate_intermesh_connectivity() {
     // Synchronize the decision across all ranks using all_reduce with LAND
     // If ANY rank needs multi-host processing (generate_mapping_locally=false), ALL ranks must participate
     bool global_generate_mapping_locally = false;
-    distributed_context.all_reduce(
+    distributed_context->all_reduce(
         tt::stl::Span<std::byte>(
             reinterpret_cast<std::byte*>(&generate_mapping_locally), sizeof(generate_mapping_locally)),
         tt::stl::Span<std::byte>(
             reinterpret_cast<std::byte*>(&global_generate_mapping_locally), sizeof(global_generate_mapping_locally)),
-        tt::tt_metal::distributed::multihost::ReduceOp::LAND);
+        tt::tt_metal::distributed::multihost::ReduceOp::LAND,
+        tt::tt_metal::distributed::multihost::DType::BOOL);
 
     log_debug(
         tt::LogDistributed,
