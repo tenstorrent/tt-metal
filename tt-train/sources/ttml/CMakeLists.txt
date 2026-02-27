@@ -61,6 +61,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
@@ -120,6 +121,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.cpp
+    # Softmax Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/softmax_backward.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_program_factory.cpp
     # ProfilerNoOp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
@@ -285,6 +290,15 @@ endforeach()
 
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
+
+# Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
+# Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
+target_compile_options(
+    ttml
+    PRIVATE
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+)
 
 target_link_libraries(
     ttml

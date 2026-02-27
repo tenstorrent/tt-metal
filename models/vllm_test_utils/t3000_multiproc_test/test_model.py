@@ -73,12 +73,3 @@ class DummyT3000MultiProcessModel(GenerativeTestModelBase):
     def decode_forward(self, *args, **kwargs):
         # Run nothing for decode forward in this dummy model
         return torch.zeros(self.max_batch_size, 1, self.vocab_size)
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return None
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        pass
-
-    def warmup_model_decode(self, *args, **kwargs):
-        pass
