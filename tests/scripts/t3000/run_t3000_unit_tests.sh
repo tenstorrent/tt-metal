@@ -638,7 +638,7 @@ run_t3000_tt_dit_tests() {
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
 
   #UMT5 Encoder
-  DIT_UNIT_TEST=1 pytest pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
 
   #Clip Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
