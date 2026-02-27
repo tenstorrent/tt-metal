@@ -24,14 +24,14 @@ using namespace tt::tt_metal;
 constexpr uint32_t NUM_DM_CORES = 8;
 constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYTES;
 
-static bool is_legacy_mode() {
-    const char* use_legacy_env = std::getenv("USE_LEGACY_KERNELS");
-    if (use_legacy_env == nullptr) return true;
-    return std::strcmp(use_legacy_env, "0") != 0;
-}
+class LegacyVsNonLegacyTest
+    : public MeshDeviceSingleCardFixture,
+      public testing::WithParamInterface<bool> {
+};
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
+TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
+    auto is_legacy_kernel = GetParam();
     tt::tt_metal::MetalContext::instance().rtoptions().set_force_jit_compile(true);
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device->get_devices()[0];
@@ -66,19 +66,19 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_1.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 4});
+        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 4, .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_1 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_2.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 3});
+        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 3, .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_2 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_3.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
+        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .is_legacy_kernel = is_legacy_kernel});
 
     // signal_address, dram_dst_address, dram_dst_bank_id, l1_result_addr, kernel_id
     SetRuntimeArgs(
@@ -94,8 +94,6 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
 
     std::vector<uint32_t> dram_data;
     tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
-
-    const bool legacy = is_legacy_mode();
 
     // Reference global addresses for non-legacy check 6 (DM 0-3 same, 4-6 same, 7 unique)
     auto slot_global_addr = [&dram_data](uint32_t dm) {
@@ -131,7 +129,7 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
         EXPECT_EQ(hartid, dm) << "dm=" << dm;
 
         // 4. thread_0_hartid
-        if (legacy) {
+        if (is_legacy_kernel) {
             EXPECT_EQ(thread_0_hartid, dm) << "dm=" << dm << " (legacy)";
         } else {
             uint32_t expected_t0 = (dm <= 3) ? 0u : (dm <= 6) ? 4u : 7u;
@@ -139,7 +137,7 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
         }
 
         // 5. global start & end
-        if (legacy) {
+        if (is_legacy_kernel) {
             EXPECT_EQ(global_start, 5u) << "dm=" << dm << " (legacy)";
             EXPECT_EQ(global_end, 6u) << "dm=" << dm << " (legacy)";
         } else {
@@ -156,7 +154,7 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
         }
 
         // 6. global address
-        if (legacy) {
+        if (is_legacy_kernel) {
             (void)global_addr;
         } else {
             if (dm <= 3) {
@@ -171,7 +169,7 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
             }
         }
     }
-    if (legacy) {
+    if (is_legacy_kernel) {
         std::set<uint64_t> addrs;
         for (uint32_t dm = 0; dm < NUM_DM_CORES; dm++) {
             addrs.insert(slot_global_addr(dm));
@@ -179,3 +177,11 @@ TEST_F(MeshDeviceSingleCardFixture, GlobalsAndTLS) {
         EXPECT_EQ(addrs.size(), NUM_DM_CORES) << "Legacy: all global addresses should be unique";
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    LegacyVsNonLegacyTest,
+    LegacyVsNonLegacyTest,
+    ::testing::Values(true, false),
+    [](const ::testing::TestParamInfo<bool>& info) {
+        return info.param ? "Legacy" : "Threaded";
+});
