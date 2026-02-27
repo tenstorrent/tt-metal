@@ -650,6 +650,12 @@ void py_module(nb::module_& mod) {
         - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
           - if they are default then they should be set based on optional output tensor
           - if the are not default then they should be compared and if there is a difference an error is reported
+        - Note: Due to a hardware bug on Wormhole (fixed on Blackhole), when fp32_acc_to_dest is enabled in the
+          compute_kernel_config, output values can rarely be off by a negative power of two (e.g. -128).
+          This bug happens most frequently at HiFi4, and in decreasing frequency as math fidelity is reduced (e.g. HiFi3, HiFi2, LoFi).
+          This bug can happen when the original mantissa contains all 1.
+          If affected, consider either disabling fp32_acc_to_dest, if that does not impact numerical stability
+          in your use case, or decreasing fidelity.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
