@@ -183,27 +183,18 @@ class SocketInterface:
         use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
         use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
 
-        if use_fabric_on_receiver or use_fabric_on_sender:
-            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            num_whole_fabric_packets = self.page_size // fabric_max_payload_size
-            partial_packet_size = self.page_size % fabric_max_payload_size
-        else:
-            num_whole_fabric_packets = 0
-            partial_packet_size = 0
-            fabric_max_payload_size = 0
-
         num_fwd_links = 2
         num_bwd_links = 1
 
-        if num_whole_fabric_packets > 0:
-            num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // num_fwd_links) + int(partial_packet_size > 0)
-            num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
-            num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
-        else:
-            num_whole_fabric_packets_link_0 = 0
-            num_whole_fabric_packets_link_1 = 0
+        fabric_max_payload_size = 0
+        num_whole_fabric_packets_per_link = 0
+        partial_packet_size_per_link = 0
 
         if use_fabric_on_receiver or use_fabric_on_sender:
+            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            page_size_per_link = self.page_size // num_fwd_links
+            num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
+            partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
             packet_header_cb_num_pages = num_fwd_links + num_bwd_links
             packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
@@ -224,10 +215,9 @@ class SocketInterface:
             upstream_socket_config_addr,
             ttnn.get_global_semaphore_address(self.termination_semaphore),
             self.page_size,
-            num_whole_fabric_packets_link_0,
-            num_whole_fabric_packets_link_1,
+            num_whole_fabric_packets_per_link,
             fabric_max_payload_size,
-            partial_packet_size,
+            partial_packet_size_per_link,
             packet_header_cb_index,
             use_fabric_on_receiver,
             use_fabric_on_sender,
