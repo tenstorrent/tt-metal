@@ -100,12 +100,10 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(),
-        torch_gamma.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
         indices=torch_indices_all,
@@ -187,15 +185,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         tile=a_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=ttnn.bfloat8_b,
@@ -259,7 +248,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         input_tensor_mesh,
         intermediate_tensor_mesh,
         ttnn_gamma,
-        ttnn_gamma,
         ttnn_b,
         ttnn_scores,
         sender_coord=sender_coord,
@@ -281,7 +269,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         _ = LMHeadSampling.op(
             input_tensor_mesh,
             intermediate_tensor_mesh,
-            ttnn_gamma,
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
@@ -305,7 +292,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         _ = LMHeadSampling.op(
             input_tensor_mesh,
             intermediate_tensor_mesh,
-            ttnn_gamma,
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
@@ -405,12 +391,8 @@ def test_single_device(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
-        torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
-    )
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
     )
@@ -467,14 +449,6 @@ def test_single_device(
         memory_config=input_a_mem_config,
         tile=a_tile,
     )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-    )
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=ttnn.bfloat8_b,
@@ -509,7 +483,6 @@ def test_single_device(
     LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
-        ttnn_gamma,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
@@ -584,12 +557,8 @@ def test_single_device_d2h(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
-        torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
-    )
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
     )
@@ -646,14 +615,6 @@ def test_single_device_d2h(
         memory_config=input_a_mem_config,
         tile=a_tile,
     )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-    )
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=ttnn.bfloat8_b,
@@ -691,7 +652,6 @@ def test_single_device_d2h(
     LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
-        ttnn_gamma,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
@@ -785,13 +745,11 @@ def test_multidevice(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     # Global indices are unique across mesh devices.
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(),
-        torch_gamma.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
         indices=torch_indices_all,
@@ -873,15 +831,6 @@ def test_multidevice(
         tile=a_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=ttnn.bfloat8_b,
@@ -934,7 +883,6 @@ def test_multidevice(
     LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
-        ttnn_gamma,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
@@ -1024,12 +972,10 @@ def test_d2h(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(),
-        torch_gamma.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
         indices=torch_indices_all,
@@ -1111,15 +1057,6 @@ def test_d2h(
         tile=a_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=ttnn.bfloat8_b,
@@ -1175,7 +1112,6 @@ def test_d2h(
     LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
-        ttnn_gamma,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
@@ -1300,12 +1236,10 @@ def test_d2d_to_d2h_pipeline(
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(),
-        torch_gamma.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
         indices=torch_indices_all,
@@ -1377,15 +1311,6 @@ def test_d2d_to_d2h_pipeline(
         dtype=ttnn.bfloat16,
         memory_config=input_a_mem_config,
         mesh_mapper=mesh_mapper,
-    )
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
@@ -1508,7 +1433,6 @@ def test_d2d_to_d2h_pipeline(
     LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
-        ttnn_gamma,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
