@@ -125,12 +125,24 @@ jobs:
           python3 - <<'PYEOF'
           import json, os
 
-          repo   = os.environ.get("GITHUB_WORKSPACE", ".")
+          repo   = os.path.realpath(os.environ.get("GITHUB_WORKSPACE", "."))
           rhash  = os.environ["ISSUE_HASH"]
           checker = os.environ["ISSUE_CHECKER"]
           filepath = os.environ["ISSUE_FILE"]
           line   = os.environ["ISSUE_LINE"]
           msg    = os.environ["ISSUE_MESSAGE"]
+
+          def strip_prefix(p, prefix="/work/"):
+              return p[len(prefix):] if p.startswith(prefix) else p
+
+          def read_lines(path, cache={}):
+              if path not in cache:
+                  try:
+                      with open(path, encoding="utf-8", errors="replace") as f:
+                          cache[path] = f.read().splitlines()
+                  except OSError:
+                      cache[path] = None
+              return cache[path]
 
           # Look up the full report to get bug_path_events
           bug_path_text = ""
@@ -144,7 +156,7 @@ jobs:
                   lines = ["", "Bug path (sequence of events leading to the finding):"]
                   seen = set()
                   for i, ev in enumerate(events, 1):
-                      ep = ev["file"]["path"].replace("/work/", "", 1)
+                      ep = strip_prefix(ev["file"]["path"])
                       el, ec = ev.get("line", 0), ev.get("column", 0)
                       em = ev.get("message", "")
                       key = (ep, el)
@@ -153,14 +165,15 @@ jobs:
                       seen.add(key)
                       lines.append(f"\n  Step {len(seen)}: {ep}:{el}:{ec} -- {em}")
                       # Show source snippet (2 lines of context)
-                      try:
-                          src = open(os.path.join(repo, ep)).read().splitlines()
+                      full = os.path.realpath(os.path.join(repo, ep))
+                      if not full.startswith(repo):
+                          continue
+                      src = read_lines(full)
+                      if src and 0 < el <= len(src):
                           lo, hi = max(0, el - 3), min(len(src), el + 2)
                           for n in range(lo, hi):
                               marker = " >> " if n + 1 == el else "    "
                               lines.append(f"  {marker}{n+1:4d} | {src[n]}")
-                      except OSError:
-                          pass
                   bug_path_text = "\n".join(lines)
           except Exception as e:
               print(f"Warning: could not extract bug path: {e}")
