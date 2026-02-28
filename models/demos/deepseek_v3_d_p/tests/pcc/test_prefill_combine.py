@@ -9,25 +9,24 @@ Uses torch-generated dispatch inputs to isolate the combine operation.
 import pytest
 import torch
 from loguru import logger
-
-import ttnn
 from tracy import signpost
 
-from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
-    initialize_test_inputs,
-    initialize_predictable_test_inputs,
     create_fabric_router_config,
+    initialize_predictable_test_inputs,
+    initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor",
+    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (512, 7 * 1024, 16, 4, 2, 2),
+        (512, 7 * 1024, 16, 4, 2),
     ],
 )
 @pytest.mark.parametrize(
@@ -44,7 +43,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
     "mesh_device",
     [
         (2, 1),  # SP=2, TP=1
+        (4, 1),  # SP=4, TP=1
+        (8, 1),  # SP=8, TP=1
     ],
+    ids=["linear-2", "linear-4", "linear-8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -54,11 +56,14 @@ def test_ttnn_combine(
     hidden_dim,
     n_routed_experts,
     num_experts_per_tok,
-    num_chips,
     capacity_factor,
     use_predictable_data,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
+
+    num_devices = num_chips = mesh_device.get_num_devices()
+    logger.info(f"Testing with mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
         f"Combine {mesh_device=} {seq_len_per_chip=} {hidden_dim=} "
@@ -72,12 +77,6 @@ def test_ttnn_combine(
         seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
-
-    # Verify mesh configuration
-    num_devices = mesh_device.get_num_devices()
-    assert num_chips == num_devices
-    mesh_shape = mesh_device.shape
-    logger.info(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
 
     # Step 1: Generate initial inputs using torch
     if use_predictable_data:
