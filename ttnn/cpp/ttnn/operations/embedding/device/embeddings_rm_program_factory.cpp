@@ -211,7 +211,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
          .writer_kernel_id = writer_kernel_id,
          .cores = cores,
          .cb_out = cb_out,
-         .output_sharded = is_local_shard_only}};
+         .is_local_shard_only = is_local_shard_only}};
 }
 
 void EmbeddingsRMProgramFactory::override_runtime_arguments(
@@ -225,7 +225,7 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;
     const auto& cores = shared_variables.cores;
     const auto& cb_out = shared_variables.cb_out;
-    const auto& is_local_shard_only = shared_variables.output_sharded;
+    const auto& is_local_shard_only = shared_variables.is_local_shard_only;
 
     auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
