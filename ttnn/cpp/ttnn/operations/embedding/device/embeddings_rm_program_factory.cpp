@@ -42,9 +42,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     uint32_t output_page_size = static_cast<uint32_t>(out_buffer->page_size());
 
     uint32_t num_input_elems = static_cast<uint32_t>(a.padded_shape().volume());
-    uint32_t input_page_size = is_sharded(a.buffer()->buffer_layout())
-                                   ? static_cast<uint32_t>(a.buffer()->page_size())  // shard_shape[-1]
-                                   : (a.padded_shape()[-1] * input_element_size_bytes);
+    uint32_t input_page_size = a.buffer()->page_size();
     uint32_t num_input_elems_per_page = input_page_size / input_element_size_bytes;
     auto alignment = a.buffer()->alignment();
     uint32_t block_height = (alignment / input_element_size_bytes);
