@@ -34,8 +34,8 @@ def umt5_device_config(func):
         [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
     )(func)
     func = pytest.mark.parametrize(
-        "mesh_device, num_links",
-        [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
+        "mesh_device, num_links, max_execution_time",
+        [[(2, 4), 1, 0.13], [(4, 8), 4, 0.1], [(4, 8), 2, 0.1]],
         ids=["t3k", "wh_glx", "bh_glx"],
         indirect=["mesh_device", "num_links"],
     )(func)
@@ -86,6 +86,7 @@ def test_umt5_embeddings(
     mesh_device: ttnn.Device,
     parallel_config_and_ccl_manager: tuple,
     dit_unit_test: bool,
+    max_execution_time: float,
 ) -> None:
     torch.manual_seed(0)
 
@@ -193,6 +194,7 @@ def test_umt5_encoder(
     mesh_device: ttnn.Device,
     parallel_config_and_ccl_manager: tuple,
     dit_unit_test: bool,
+    max_execution_time: float,
 ) -> None:
     torch.manual_seed(0)
 
@@ -212,8 +214,11 @@ def test_umt5_encoder(
 
     prompt = [
         "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
-        "Negative prompt: A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
+        "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
     ]
+    total_prompts = len(prompt)
+    num_devices = mesh_device.shape[1 - parallel_config.tensor_parallel.mesh_axis]
+    prompt += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
     tokenizer = AutoTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer", trust_remote_code=True)
     text_inputs = tokenizer(
         prompt,
@@ -226,12 +231,17 @@ def test_umt5_encoder(
     )
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
 
+    dims = [None, None]
+    DP_axis = 1 - parallel_config.tensor_parallel.mesh_axis
+    dims[DP_axis] = 0
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+
     tt_prompt = ttnn.from_torch(
         text_input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
 
     tt_mask = ttnn.from_torch(
@@ -239,7 +249,7 @@ def test_umt5_encoder(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
 
     # === TT-DiT UMT5 ====
@@ -268,11 +278,16 @@ def test_umt5_encoder(
 
     # warmup
     tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)
+    ttnn.synchronize_device(mesh_device)  # wait for all operations to complete
     benchmark_profiler = BenchmarkProfiler()
     num_runs = 10
     for i in range(num_runs):
         with benchmark_profiler("tt_umt5_encoder", i):
             tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)[-1]
+            tt_output = ccl_manager.all_gather(tt_output, dim=0, mesh_axis=DP_axis, use_hyperparams=True)
+            ttnn.synchronize_device(
+                mesh_device
+            )  # wait for all operations to complete to get correct dispatch + execution time
 
     # get HF reference outputs
     with torch.no_grad():
@@ -284,7 +299,6 @@ def test_umt5_encoder(
     tt_execution_time = benchmark_profiler.get_duration_average("tt_umt5_encoder")
     logger.info(f"TT encoder execution time benchmark: {tt_execution_time:.4f} seconds")
     assert_quality(hf_outputs, tt_output_torch, pcc=0.99)
-    expected_execution_time = 0.1
     assert (
-        tt_execution_time < expected_execution_time
-    ), f"TT Encoder execution time {tt_execution_time:.4f} seconds is greater than expected {expected_execution_time} seconds"
+        tt_execution_time < max_execution_time
+    ), f"TT Encoder execution time {tt_execution_time:.4f} seconds is greater than the max {max_execution_time} seconds"
