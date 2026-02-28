@@ -45,7 +45,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
-                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor with filled values. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to `None`.
 
             Returns:
                 tuple[ttnn.Tensor, ttnn.Tensor]: a tuple of (values_tensor, indices_tensor).
