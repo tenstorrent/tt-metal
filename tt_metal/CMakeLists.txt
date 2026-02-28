@@ -280,7 +280,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        tt_metal_scaleout
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
