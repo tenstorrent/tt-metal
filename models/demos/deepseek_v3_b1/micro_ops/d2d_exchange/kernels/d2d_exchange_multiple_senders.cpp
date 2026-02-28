@@ -53,8 +53,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_blocking_from_address((uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
 FORCE_INLINE void send_pages_over_socket(

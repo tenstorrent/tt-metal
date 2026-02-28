@@ -52,7 +52,7 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
-def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embedding_dim):
+def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embedding_dim, device_params):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -77,10 +77,6 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
     # Log pipeline configuration for debugging
     for i, stage in enumerate(pipeline_config):
         logger.info(f"Pipeline Stage {i}: entry={stage.entry_node_coord}, exit={stage.exit_node_coord}")
-    if my_mesh_id == 1:
-        logger.info(
-            f"Pipeline stage entry and exit device coordinates:, {mesh_device.get_device_id(stage.entry_node_coord)}, {mesh_device.get_device_id(stage.exit_node_coord)}"
-        )
 
     # Configuration
     element_size = 2  # bfloat16
@@ -89,10 +85,6 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
 
     # Pipeline parameters
     pipeline_core_coord = ttnn.CoreCoord(11, 9)
-    upstream_d2d_page_size = aggregated_size_bytes
-    downstream_d2d_page_size = aggregated_size_bytes
-    upstream_d2d_fifo_size = aggregated_size_bytes * 2
-    downstream_d2d_fifo_size = aggregated_size_bytes * 2
 
     # ============================================================
     # PHASE 1: All hosts instantiate their pipeline infrastructure
@@ -122,8 +114,6 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
 
     data_all = torch.stack(data_per_device, dim=0).reshape(4, 2, *tensor_shape)
 
-    if my_mesh_id == 1:
-        print("root coord is :", root_coord)
     if my_mesh_id == 0:
         # HOST 0: Pipeline orchestrator with dummy H2D and validation D2H
         logger.info("Stage 0: Dummy H2D → Exit (dummy data) → Host 1")
@@ -296,6 +286,7 @@ def test_reduce_to_one_b1_multihost(mesh_device, tensor_shape, vocab_size, embed
             enable_d2d0_output=True,
             d2d0_infrastructure=d2d0_infra,
             num_iterations=100,
+            is_torus=(device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_TORUS_Y),
         )
 
         if isinstance(result, tuple):

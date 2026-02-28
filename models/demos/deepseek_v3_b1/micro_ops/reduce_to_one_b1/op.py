@@ -313,6 +313,7 @@ class ReduceToOneB1:
         enable_d2d0_output: bool = False,  # Enable D2D_0 aggregation output
         d2d0_infrastructure: Optional[dict] = None,
         num_iterations: int = 1,  # Pre-created D2D_0 infrastructure
+        is_torus: bool = False,
     ) -> tuple:
         """
         Execute reduce-to-one operation using generic_op with optional D2D_0 aggregation output.
@@ -349,9 +350,8 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
-        use_torus = False
-        if root_coord[0] in [0, 3]:
-            use_torus = True
+        use_torus = is_torus and root_coord[0] in [0, 3]
+
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)

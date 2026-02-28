@@ -46,6 +46,7 @@ class DeepseekMinimalBroadcast:
         secondary_cluster_axis=None,
         num_links=1,
         num_iterations=1,
+        is_torus=False,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -138,7 +139,7 @@ class DeepseekMinimalBroadcast:
                 ring_size = mesh_rows
                 ring_index = row
 
-                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1
+                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1 and is_torus
 
                 if enable_torus:
                     num_targets_forward = (ring_size - 1) // 2
