@@ -374,7 +374,10 @@ int main(int argc, char* argv[]) {
     bool links_reset = false;
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = (cluster.arch() == tt::ARCH::WORMHOLE_B0 || cluster.arch() == tt::ARCH::BLACKHOLE);
+    bool link_retrain_supported =
+        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
+         (cluster.arch() == tt::ARCH::BLACKHOLE &&
+          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;

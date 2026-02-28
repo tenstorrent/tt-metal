@@ -17,6 +17,7 @@ using tt::ChipId;
 using tt::CoordSystem;
 using tt::CoreType;
 using tt::tt_metal::CoreCoord;
+using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 struct ResetLink {
@@ -26,29 +27,11 @@ struct ResetLink {
 };
 
 // ============================================================================
-// Wormhole-specific defines (write to specific L1 addresses)
-// ============================================================================
-
-#define WH_ETH_RESET_L1_ADDR 0x1EFC
-
-// ============================================================================
 // Blackhole-specific defines (write to mailbox)
 // ============================================================================
 
-#define BH_ETH_MSG_STATUS_MASK 0xFFFF0000
-#define BH_ETH_MSG_CALL 0xCA110000
-#define BH_ETH_MSG_ACK 0xCEDE0000
-#define BH_ETH_MSG_DONE 0xD0E50000
-#define BH_ETH_MSG_TYPE_MASK 0x0000FFFF
-#define BH_ETH_MSG_PORT_REINIT_MACPCS 0x0006
-#define BH_ETH_MSG_PORT_ACTION 0x0009
-
-// 4 mailboxes starting from 0x7D000, each with 1 msg DW and 3 arg DWs
-// Mailbox IDs are HOST, RISC1, CMFW, OTHER, validation should only use HOST mailbox
-#define BH_ETH_HOST_MAILBOX_BASE_ADDR 0x7D000
-
 struct BHEthMsg {
-    uint32_t msg_type;
+    FWMailboxMsg msg_type;
     std::vector<uint32_t> msg_args;
     std::string log_message;
 };
@@ -74,7 +57,7 @@ bool eth_mailbox_ready(ChipId chip_id, uint32_t channel, bool wait_for_ready);
 void send_eth_msg(
     ChipId chip_id,
     uint32_t channel,
-    uint32_t msg_type,
+    FWMailboxMsg msg_type,
     std::vector<uint32_t> args,
     bool wait_for_ready,
     bool wait_for_done);
