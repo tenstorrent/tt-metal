@@ -138,8 +138,7 @@ struct Broadcast {
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        // memmove((void*)(get_write_ptr(CTArgs::cb0_id)), (void*)(recv.read_ptr),
-                        // (size_t)(args.socket_page_size));
+
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),

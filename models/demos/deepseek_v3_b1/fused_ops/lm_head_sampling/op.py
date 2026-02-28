@@ -588,11 +588,7 @@ class LMHeadSampling:
                             )
 
                     if emit_socket_on_this_device:
-                        # print(f"Socket Core Device Coord: {socket_core.device_coord}")
-                        # print(f"Socket Core Core Coord: {socket_core.core_coord}")
-                        # print(f"Argmax Final Core: {argmax_final_core}")
-                        # print(f"Row: {row}")
-                        # print(f"Col: {col}")
+
                         if (
                             socket_core.device_coord != ttnn.MeshCoordinate(row, col)
                             or socket_core.core_coord.x != argmax_final_core.x
