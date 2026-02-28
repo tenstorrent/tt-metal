@@ -430,10 +430,8 @@ def run_flash_mla_decode_impl(
 
     for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
         tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)
-        for b in range(batch):
-            for h in range(nh):
-                out_pass, out_pcc = comp_pcc(tt_out_torch[b, h, :, :], out_t[b, h, :, :], pcc_threshold)
-                logger.debug(f"Output PCC for batch {b}, head {h}: {out_pcc}")
+        out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
+        logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 

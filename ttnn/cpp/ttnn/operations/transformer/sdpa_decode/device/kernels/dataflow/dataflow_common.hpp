@@ -644,6 +644,7 @@ uint64_t read_k(
             // Wait for single signal that the full K^T chunk is ready
             noc_semaphore_wait(mcast_params.mcast_sem_ptr, 1);
             noc_semaphore_set(mcast_params.mcast_sem_ptr, 0);
+            noc_async_atomic_barrier();
             cb_push_back(cb_k_in, k_chunk_tiles);
         }
     } else {
