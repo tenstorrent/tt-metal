@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#include "experimental/noc.h"
+#endif
 
 #include "api/debug/dprint.h"
 
@@ -27,8 +31,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
 
     constexpr uint32_t onetile = 1;
+#ifdef ARCH_QUASAR
+    experimental::Noc noc;
+    experimental::DataflowBuffer dfb0(0);
+    experimental::DataflowBuffer dfb1(1);
+    const uint32_t src0_tile_bytes = dfb0.get_entry_size();
+    const uint32_t src1_tile_bytes = dfb1.get_entry_size();
+#else
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+#endif
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
@@ -45,20 +57,37 @@ void kernel_main() {
             uint32_t itileB = itileB_batch;
             for (uint32_t nt = 0; nt < Nt; nt++) {
                 for (uint32_t kt = 0; kt < Kt; kt++) {
-                    {  // Read A's tile at (mt, kt)
+                    // Read A's tile at (mt, kt)
+                    {
+#ifdef ARCH_QUASAR
+                        dfb0.reserve_back(onetile);
+                        uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
+                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                        noc.async_read_barrier();
+                        dfb0.push_back(onetile);
+#else
                         cb_reserve_back(cb_id_in0, onetile);
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                         noc_async_read_tile(itileA, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in0, onetile);
+#endif
                     }
 
                     {  // Read B's tile at (kt, nt)
+#ifdef ARCH_QUASAR
+                        dfb1.reserve_back(onetile);
+                        uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
+                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                        noc.async_read_barrier();
+                        dfb1.push_back(onetile);
+#else
                         cb_reserve_back(cb_id_in1, onetile);
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         noc_async_read_tile(itileB, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in1, onetile);
+#endif
                     }
                     // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
 

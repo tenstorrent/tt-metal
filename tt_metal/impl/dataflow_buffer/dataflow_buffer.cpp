@@ -42,7 +42,7 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
     TT_FATAL(producer_kernel != nullptr, "Producer kernel not found");
     TT_FATAL(consumer_kernel != nullptr, "Consumer kernel not found");
 
-    if (auto compute_producer = std::dynamic_pointer_cast<ComputeKernel>(producer_kernel)) {
+    if (auto compute_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(producer_kernel)) {
         TT_FATAL(dfb->config.num_producers == 1, "Only one Tensix is supported for now");
         dfb->config.producer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
@@ -54,7 +54,7 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
         TT_FATAL(false, "Unsupported kernel type");
     }
 
-    if (auto compute_consumer = std::dynamic_pointer_cast<ComputeKernel>(consumer_kernel)) {
+    if (auto compute_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(consumer_kernel)) {
         TT_FATAL(dfb->config.num_consumers == 1, "Only one Tensix is supported for now");
         dfb->config.consumer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
@@ -366,6 +366,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
 
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
+
     TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
         core_range_set.num_cores() == 1,

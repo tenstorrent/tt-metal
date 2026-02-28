@@ -6,41 +6,46 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ckernel.h"
+#include "ckernel_trisc_common.h"
 #include "internal/circular_buffer_interface.h"
+#include "internal/dataflow_buffer_init.h"
 
 /**
- * @brief  Wait for num_tiles of free space in the circular buffer
- * @param cb_id: Circular Buffer ID, values = [0-31]
- * @param num_tiles: Number of tiles of free space to wait for in circular buffer
+ * @brief  Wait for num_tiles of free space in the dataflow buffer
+ * @param dfb_id: Dataflow Buffer ID, values = [0-31]
+ * @param num_tiles: Number of tiles of free space to wait for in dataflow buffer
  */
-inline void llk_wait_for_free_tiles(const std::int32_t cb_id, const std::int32_t num_tiles) {
-    TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, cb_id);
+inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
+    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
+    uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+    TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
 }
 
 /**
- * @brief  Push num_tiles into the circular buffer, increment write pointer
- * @param cb_id: Circular Buffer ID, values = [0-31]
- * @param num_tiles: Number of tiles to push into circular buffer
+ * @brief  Push num_tiles into the dataflow buffer, increment write pointer
+ * @param dfb_id: Dataflow Buffer ID, values = [0-31]
+ * @param num_tiles: Number of tiles to push into dataflow buffer
  */
 // Push N tiles to stream buffer (increment write pointer)
 template <std::uint8_t PACK_SEL = 0x1>
-inline void llk_push_tiles(const std::int32_t cb_id, const std::int32_t num_tiles) {
+inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
+    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
+    uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     // Update the tile counters values
-    TT_PUSH_TILES(PACK_SEL, num_tiles, cb_id);
+    TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
 
-    // Independent software tracking and tile tracking is used
-    // Not the right approach; it will be fixed when moving to DFBs
-    // Update the CB buffer information
-    const std::uint32_t num_words = num_tiles * get_local_cb_interface(cb_id).fifo_page_size;
+    const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
 
-    get_local_cb_interface(cb_id).tiles_received += num_tiles;
-    get_local_cb_interface(cb_id).fifo_wr_ptr += num_words;
-    get_local_cb_interface(cb_id).fifo_wr_tile_idx += num_tiles;
-    get_local_cb_interface(cb_id).fifo_wr_tile_ptr = 0;
+    local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr += num_words;
+    local_dfb_interface.wr_entry_idx += num_tiles;
+    local_dfb_interface.wr_entry_ptr = 0;
 
-    // Reset fifo_wr_tile_idx when fifo_wr_ptr reaches limit (back to beginning of CB)
-    if (get_local_cb_interface(cb_id).fifo_wr_ptr >= get_local_cb_interface(cb_id).fifo_limit) {
-        get_local_cb_interface(cb_id).fifo_wr_ptr -= get_local_cb_interface(cb_id).fifo_size;
-        get_local_cb_interface(cb_id).fifo_wr_tile_idx = 0;
+    if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr == local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_ptr = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].base_addr;
+        if (local_dfb_interface.tc_idx == local_dfb_interface.num_tcs_to_rr - 1) {
+            local_dfb_interface.wr_entry_idx = 0;
+        }
     }
+
+    local_dfb_interface.tc_idx = (local_dfb_interface.tc_idx + 1) % local_dfb_interface.num_tcs_to_rr;
 }
