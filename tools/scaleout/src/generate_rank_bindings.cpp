@@ -12,7 +12,10 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
+
+#include <unistd.h>
 
 #include <cxxopts.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -35,9 +38,11 @@ using namespace tt::tt_metal::experimental::tt_fabric;
 using namespace tt::tt_fabric;
 
 struct RankBindingConfig {
-    int rank;
-    int mesh_id;
-    std::optional<int> mesh_host_rank;
+    int rank;                // MPI rank (0 to N-1, unique and contiguous)
+    int mesh_id;             // Mesh ID this rank belongs to
+    int mesh_host_rank = 0;  // Host rank within the mesh (from MeshGraph), defaults to 0
+    std::string hostname;    // Physical host for rankfile
+    int slot;                // Slot number on host for rankfile (OpenMPI format)
     std::map<std::string, std::string> env_overrides;
 };
 
@@ -201,21 +206,32 @@ TopologyMappingResult run_topology_mapping(
 }
 
 /**
- * @brief Extract rank bindings from topology mapping result
+ * @brief Get actual hostname (replace "localhost" with resolved name)
+ */
+std::string get_actual_hostname(const std::string& hostname) {
+    if (hostname == "localhost") {
+        char buf[256];
+        if (gethostname(buf, sizeof(buf)) == 0) {
+            return std::string(buf);
+        }
+        return "localhost";
+    }
+    return hostname;
+}
+
+/**
+ * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
- * This function:
- * 1. Extracts mesh_id from FabricNodeId
- * 2. Groups ASICs by mesh_id and MPI rank (via hostname)
- * 3. Gets mesh_host_rank from MeshGraph API based on fabric node ID
- * 4. Generates RankBindingConfig for each (rank, mesh_id) pair
+ * Splitting rules:
+ * - If meshes span multiple hosts: one process per (mesh_id, hostname) pair, each host gets
+ *   at most one process per mesh. Total processes = sum over meshes of (hosts per mesh).
+ * - If meshes fit on single host (num_meshes > num_hosts): each mesh gets one process with
+ *   mesh_host_rank 0. Hosts are split into multiple slots. Total processes = num_meshes.
+ *
+ * Assigns contiguous MPI ranks 0..N-1 and (hostname, slot) for rankfile generation.
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
     const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
-    std::vector<RankBindingConfig> rank_bindings;
-
-    // Get hostname to rank mapping from PSD
-    const auto& host_to_rank_map = psd.get_host_to_rank_map();
-
     // Structure: mesh_id -> hostname -> {ASIC IDs, ChipIds, MeshHostRankId}
     std::map<
         int,
@@ -224,11 +240,9 @@ std::vector<RankBindingConfig> extract_rank_bindings(
 
     // Iterate through fabric_node_to_asic mapping
     for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
-        // Extract mesh_id and chip_id from FabricNodeId
         MeshId mesh_id = fabric_node_id.mesh_id;
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
 
-        // Get mesh host rank from MeshGraph API
         std::optional<MeshHostRankId> mesh_host_rank =
             mesh_graph.get_host_rank_for_chip(mesh_id, chip_id_from_fabric_node);
 
@@ -241,68 +255,66 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             continue;
         }
 
-        // Get hostname for this ASIC
         std::string hostname = psd.get_host_name_for_asic(asic_id);
-
-        // Verify hostname exists in rank map (we'll use it later when building rank bindings)
-        auto rank_it = host_to_rank_map.find(hostname);
-        if (rank_it == host_to_rank_map.end()) {
-            log_error(tt::LogFabric, "No rank found for hostname: {}", hostname);
-            continue;
-        }
-
-        // Get ChipId from ASICDescriptor using umd_unique_id
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
-        // Store ASIC ID, ChipId, and mesh host rank for this (mesh_id, hostname) pair
         int mesh_id_int = static_cast<int>(*mesh_id);
         std::get<0>(mesh_host_asics[mesh_id_int][hostname]).push_back(asic_id);
         std::get<1>(mesh_host_asics[mesh_id_int][hostname]).push_back(chip_id);
-        // Store mesh host rank (will be the same for all ASICs from the same hostname in the same mesh)
         std::get<2>(mesh_host_asics[mesh_id_int][hostname]) = mesh_host_rank;
     }
 
-    // Build rank bindings: for each (mesh_id, hostname) pair, create a RankBindingConfig
-    // Use mesh_host_rank from MeshGraph API
+    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank) and sort for canonical ordering
+    // Order: mesh_id, mesh_host_rank, hostname - groups by mesh, then host rank within mesh
+    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int>;
+    std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
         for (const auto& [hostname, asic_data] : hostname_map) {
-            auto rank_it = host_to_rank_map.find(hostname);
-            if (rank_it == host_to_rank_map.end()) {
-                continue;  // Already logged error above
-            }
-            int mpi_rank = static_cast<int>(rank_it->second);
-
             const auto& [asic_ids, chip_ids, mesh_host_rank] = asic_data;
-
             if (!mesh_host_rank.has_value()) {
-                log_error(tt::LogFabric, "No mesh host rank found for hostname {} in mesh {}", hostname, mesh_id);
                 continue;
             }
-
-            // Create rank binding config
-            RankBindingConfig binding;
-            binding.rank = mpi_rank;
-            binding.mesh_id = mesh_id;
-            binding.mesh_host_rank = static_cast<int>(*mesh_host_rank.value());
-
-            // Build TT_VISIBLE_DEVICES string from ChipIds
-            std::vector<std::string> chip_id_strings;
-            for (tt::ChipId chip_id : chip_ids) {
-                chip_id_strings.push_back(std::to_string(chip_id));
-            }
-            std::string visible_devices = "";
-            for (size_t i = 0; i < chip_id_strings.size(); ++i) {
-                if (i > 0) {
-                    visible_devices += ",";
-                }
-                visible_devices += chip_id_strings[i];
-            }
-            if (!visible_devices.empty()) {
-                binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
-            }
-
-            rank_bindings.push_back(binding);
+            entries.emplace_back(mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()));
         }
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        if (std::get<0>(a) != std::get<0>(b)) {
+            return std::get<0>(a) < std::get<0>(b);
+        }
+        if (std::get<3>(a) != std::get<3>(b)) {
+            return std::get<3>(a) < std::get<3>(b);
+        }
+        return std::get<1>(a) < std::get<1>(b);
+    });
+
+    // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
+    std::vector<RankBindingConfig> rank_bindings;
+    std::map<std::string, int> host_slot_counters;
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& [mesh_id, hostname, chip_ids, mesh_host_rank] = entries[i];
+
+        RankBindingConfig binding;
+        binding.rank = static_cast<int>(i);
+        binding.mesh_id = mesh_id;
+        binding.mesh_host_rank = mesh_host_rank;
+        binding.hostname = hostname;
+        binding.slot = host_slot_counters[hostname]++;
+        binding.env_overrides = {};
+
+        // Build TT_VISIBLE_DEVICES from ChipIds
+        std::string visible_devices;
+        for (size_t j = 0; j < chip_ids.size(); ++j) {
+            if (j > 0) {
+                visible_devices += ",";
+            }
+            visible_devices += std::to_string(chip_ids[j]);
+        }
+        if (!visible_devices.empty()) {
+            binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
+        }
+
+        rank_bindings.push_back(binding);
     }
 
     return rank_bindings;
@@ -310,6 +322,9 @@ std::vector<RankBindingConfig> extract_rank_bindings(
 
 /**
  * @brief Write rank bindings to YAML file
+ *
+ * Includes rank, mesh_id, mesh_host_rank, and env_overrides.
+ * MPI rank in bindings matches the rank in the rankfile for correct process placement.
  */
 void write_rank_bindings_yaml(
     const std::vector<RankBindingConfig>& rank_bindings,
@@ -323,9 +338,7 @@ void write_rank_bindings_yaml(
         binding_node["rank"] = binding.rank;
         binding_node["mesh_id"] = binding.mesh_id;
 
-        if (binding.mesh_host_rank.has_value()) {
-            binding_node["mesh_host_rank"] = binding.mesh_host_rank.value();
-        }
+        binding_node["mesh_host_rank"] = binding.mesh_host_rank;
 
         if (!binding.env_overrides.empty()) {
             YAML::Node env_overrides_node;
@@ -347,6 +360,26 @@ void write_rank_bindings_yaml(
     }
 
     out_file << root << std::endl;
+    out_file.close();
+}
+
+/**
+ * @brief Write MPI rankfile (OpenMPI format)
+ *
+ * Format: rank N=hostname slot=X
+ * Replaces "localhost" with actual hostname. MPI ranks match rank_bindings.
+ */
+void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const std::string& output_file) {
+    std::ofstream out_file(output_file);
+    if (!out_file.is_open()) {
+        throw std::runtime_error("Failed to open rankfile for writing: " + output_file);
+    }
+
+    for (const auto& binding : rank_bindings) {
+        std::string hostname = get_actual_hostname(binding.hostname);
+        out_file << "rank " << binding.rank << "=" << hostname << " slot=" << binding.slot << "\n";
+    }
+
     out_file.close();
 }
 
@@ -485,6 +518,10 @@ int main(int argc, char** argv) {
             std::filesystem::path output_file = output_dir / "rank_bindings.yaml";
             write_rank_bindings_yaml(rank_bindings, args.mesh_graph_descriptor_path, output_file.string());
             log_info(tt::LogFabric, "Successfully wrote: {}", output_file.string());
+
+            std::filesystem::path rankfile_path = output_dir / "rankfile";
+            write_rankfile(rank_bindings, rankfile_path.string());
+            log_info(tt::LogFabric, "Successfully wrote: {}", rankfile_path.string());
 
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {

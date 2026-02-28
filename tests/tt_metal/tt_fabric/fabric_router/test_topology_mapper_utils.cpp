@@ -4003,4 +4003,47 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Custom
         }
     }
 }
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_32x4QuadGalaxyTorusXy_ShouldFail) {
+    // Negative test: 32x4 WORMHOLE MGD should fail with BH PGD and mock cluster.
+    // The PGD (triple_16x8_quad_bh_galaxy) has groupings for 2x4/4x2 meshes (8 ASICs),
+    // not 32x4 (128 ASICs). Architecture and size mismatch -> no MESH groupings ->
+    // build_physical_multi_mesh_adjacency_graph asserts.
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Negative test should fail quickly (within 20 seconds)
+    constexpr int timeout_seconds = 20;
+    auto start_time = std::chrono::steady_clock::now();
+
+    EXPECT_THROW(
+        { build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd); }, std::exception)
+        << "Expected exception: 32x4 WORMHOLE MGD does not match BH PGD groupings (no 32x4 mesh)";
+
+    auto elapsed = std::chrono::steady_clock::now() - start_time;
+    auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+    EXPECT_LE(elapsed_seconds, timeout_seconds)
+        << "Test took " << elapsed_seconds << " seconds, expected to complete within " << timeout_seconds << " seconds";
+}
 }  // namespace tt::tt_metal::experimental::tt_fabric
