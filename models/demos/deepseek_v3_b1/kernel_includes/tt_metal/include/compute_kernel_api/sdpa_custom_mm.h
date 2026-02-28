@@ -10,7 +10,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_custom_mm_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
 namespace ckernel {
 
@@ -59,8 +59,8 @@ ALWI void sdpa_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk, mask_cb_id)));
+    UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed>(
+        in0_cb_id, in1_cb_id, mask_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk)));
     MATH((llk_math_sdpa_custom_mm(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
 }
 

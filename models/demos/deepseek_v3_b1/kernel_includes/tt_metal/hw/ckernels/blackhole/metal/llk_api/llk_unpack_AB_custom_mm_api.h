@@ -38,9 +38,7 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_0,
     const std::uint32_t tile_index_1,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1,
-    const bool mask_chunk = false,
-    const std::uint32_t operand_mask = 0) {
+    const std::uint32_t ct_dim = 1) {
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_id = get_operand_id(operand0);
@@ -50,17 +48,7 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
-    const std::uint32_t mask_address = mask_chunk ? get_local_cb_interface(operand_mask).fifo_rd_ptr - 1 : 0;
 
     _llk_unpack_AB_custom_mm_<read_transposed>(
-        base_address_A,
-        base_address_B,
-        tile_index_A,
-        tile_index_B,
-        tile_size_A,
-        tile_size_B,
-        kt_dim,
-        ct_dim,
-        mask_chunk,
-        mask_address);
+        base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }
