@@ -201,7 +201,6 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false>
 inline void _llk_unpack_AB_custom_mm_run_(
     volatile uint* cfg,
     std::uint32_t address_a,
@@ -314,6 +313,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_<read_transposed>(
-        cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
