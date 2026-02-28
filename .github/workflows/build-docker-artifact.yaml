@@ -31,7 +31,7 @@ permissions:
   packages: write
 
 env:
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=19,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_call:
