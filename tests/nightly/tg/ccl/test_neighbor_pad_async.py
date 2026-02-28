@@ -166,6 +166,10 @@ def test_neighbor_pad_async_1d(
         ([1, 2, 16, 8, 32], 2, 3, 1, 0, 1, 1),
         # 4D tensor [B, H, W, C]
         ([2, 8, 16, 32], 1, 2, 0, 1, 1, 1),
+        # Larger channel dim
+        ([1, 2, 8, 16, 384], 2, 3, 0, 1, 1, 1),
+        # Padding > 1
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 2, 2),
     ],
     ids=[
         "small_5d_h0w1",
@@ -173,6 +177,8 @@ def test_neighbor_pad_async_1d(
         "vae_conv0_h0w1",
         "small_5d_h1w0",
         "small_4d_h0w1",
+        "small_5d_largeC",
+        "small_5d_pad2",
     ],
 )
 @pytest.mark.parametrize(

@@ -12,6 +12,41 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
+def pad_chunks_along_dim(chunks, dim, padding_left, padding_right, padding_mode="zeros"):
+    """
+    Pad each chunk with neighbor data along *dim*.  At boundaries, use zeros
+    or replicate the edge value depending on *padding_mode*.
+
+    Returns a list of padded chunks (same length as *chunks*).
+    """
+    n = len(chunks)
+    padded = []
+    for i in range(n):
+        chunk = chunks[i]
+        # Left padding
+        left_parts = []
+        for p in range(padding_left):
+            if i == 0:
+                if padding_mode == "zeros":
+                    left_parts.append(torch.zeros_like(torch.narrow(chunk, dim, 0, 1)))
+                else:
+                    left_parts.append(torch.narrow(chunk, dim, 0, 1))
+            else:
+                left_parts.append(torch.narrow(chunks[i - 1], dim, chunks[i - 1].shape[dim] - padding_left + p, 1))
+        # Right padding
+        right_parts = []
+        for p in range(padding_right):
+            if i == n - 1:
+                if padding_mode == "zeros":
+                    right_parts.append(torch.zeros_like(torch.narrow(chunk, dim, 0, 1)))
+                else:
+                    right_parts.append(torch.narrow(chunk, dim, chunk.shape[dim] - 1, 1))
+            else:
+                right_parts.append(torch.narrow(chunks[i + 1], dim, p, 1))
+        padded.append(torch.cat(left_parts + [chunk] + right_parts, dim=dim))
+    return padded
+
+
 # ---------------------------------------------------------------------------
 # 1D neighbor pad
 # ---------------------------------------------------------------------------
@@ -81,41 +116,9 @@ def run_neighbor_pad_1d_impl(
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
         num_chunks = mesh_device.shape[cluster_axis]
-        chunks = torch.chunk(input_tensor, num_chunks, halo_shard_dim)
-        np_output_tensor = []
-        # pad left
-        if padding_mode == "zeros":
-            slice_shape = list(chunks[0].shape)
-            slice_shape[halo_shard_dim] = 1
-            first_slice_front = torch.zeros(slice_shape)
-        else:
-            first_slice_front = torch.narrow(chunks[0], halo_shard_dim, 0, 1)
-        first_slice = torch.cat((first_slice_front, chunks[0]), dim=halo_shard_dim)
-        np_output_tensor.append(first_slice)
-        for p in range(padding_left - 1):
-            np_output_tensor[0] = torch.cat((first_slice_front, np_output_tensor[0]), dim=halo_shard_dim)
-        for k in range(1, num_chunks):
-            prev_halo = torch.narrow(
-                chunks[k - 1], halo_shard_dim, chunks[k - 1].shape[halo_shard_dim] - padding_left, padding_left
-            )
-            np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=halo_shard_dim))
-
-        # pad right
-        if padding_mode == "zeros":
-            slice_shape = list(np_output_tensor[num_chunks - 1].shape)
-            slice_shape[halo_shard_dim] = 1
-            last_slice_back = torch.zeros(slice_shape)
-        else:
-            last_slice_size = np_output_tensor[num_chunks - 1].shape[halo_shard_dim]
-            last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], halo_shard_dim, last_slice_size - 1, 1)
-        for p in range(padding_right):
-            np_output_tensor[num_chunks - 1] = torch.cat(
-                (np_output_tensor[num_chunks - 1], last_slice_back), dim=halo_shard_dim
-            )
-        for k in range(0, num_chunks - 1):
-            next_halo = torch.narrow(chunks[k + 1], halo_shard_dim, 0, padding_right)
-            np_output_tensor[k] = torch.cat((np_output_tensor[k], next_halo), dim=halo_shard_dim)
-        np_output_tensor_goldens_list.append(torch.cat(np_output_tensor, dim=halo_shard_dim))
+        chunks = list(torch.chunk(input_tensor, num_chunks, halo_shard_dim))
+        padded = pad_chunks_along_dim(chunks, halo_shard_dim, padding_left, padding_right, padding_mode)
+        np_output_tensor_goldens_list.append(torch.cat(padded, dim=halo_shard_dim))
 
         dims = [None, None]
         dims[cluster_axis] = halo_shard_dim
@@ -206,51 +209,21 @@ def compute_2d_pad_golden(input_tensor, mesh_shape, h_dim, w_dim, h_axis, w_axis
     Pads h_dim along h_axis, then w_dim along w_axis.
     Returns dict mapping (mesh_row, mesh_col) -> expected per-device tensor.
     """
-    assert padding_mode == "zeros", f"2D golden only supports zeros mode, got {padding_mode}"
     h_factor = mesh_shape[h_axis]
     w_factor = mesh_shape[w_axis]
 
     # Step 1: Chunk along H, pad H boundaries
     h_chunks = list(torch.chunk(input_tensor, h_factor, dim=h_dim))
-    h_padded = []
-    for i in range(h_factor):
-        chunk = h_chunks[i]
-        left_parts = []
-        for p in range(pH):
-            if i == 0:
-                left_parts.append(torch.zeros_like(torch.narrow(chunk, h_dim, 0, 1)))
-            else:
-                left_parts.append(torch.narrow(h_chunks[i - 1], h_dim, h_chunks[i - 1].shape[h_dim] - pH + p, 1))
-        right_parts = []
-        for p in range(pH):
-            if i == h_factor - 1:
-                right_parts.append(torch.zeros_like(torch.narrow(chunk, h_dim, 0, 1)))
-            else:
-                right_parts.append(torch.narrow(h_chunks[i + 1], h_dim, p, 1))
-        h_padded.append(torch.cat(left_parts + [chunk] + right_parts, dim=h_dim))
+    h_padded = pad_chunks_along_dim(h_chunks, h_dim, pH, pH, padding_mode)
 
     # Step 2: For each H chunk, chunk along W and pad W boundaries
     goldens = {}
     for h_idx in range(h_factor):
         w_chunks = list(torch.chunk(h_padded[h_idx], w_factor, dim=w_dim))
+        w_padded = pad_chunks_along_dim(w_chunks, w_dim, pW, pW, padding_mode)
         for w_idx in range(w_factor):
-            chunk = w_chunks[w_idx]
-            left_parts = []
-            for p in range(pW):
-                if w_idx == 0:
-                    left_parts.append(torch.zeros_like(torch.narrow(chunk, w_dim, 0, 1)))
-                else:
-                    left_parts.append(
-                        torch.narrow(w_chunks[w_idx - 1], w_dim, w_chunks[w_idx - 1].shape[w_dim] - pW + p, 1)
-                    )
-            right_parts = []
-            for p in range(pW):
-                if w_idx == w_factor - 1:
-                    right_parts.append(torch.zeros_like(torch.narrow(chunk, w_dim, 0, 1)))
-                else:
-                    right_parts.append(torch.narrow(w_chunks[w_idx + 1], w_dim, p, 1))
             key = (h_idx, w_idx) if h_axis == 0 else (w_idx, h_idx)
-            goldens[key] = torch.cat(left_parts + [chunk] + right_parts, dim=w_dim)
+            goldens[key] = w_padded[w_idx]
 
     return goldens
 
@@ -446,6 +419,10 @@ def test_neighbor_pad_async_1d(
         ([1, 2, 16, 8, 32], 2, 3, 1, 0, 1, 1),
         # 4D tensor [B, H, W, C]
         ([2, 8, 16, 32], 1, 2, 0, 1, 1, 1),
+        # Larger channel dim
+        ([1, 2, 10, 16, 384], 2, 3, 0, 1, 1, 1),
+        # Padding > 1
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 2, 2),
     ],
     ids=[
         "small_5d_h0w1",
@@ -453,6 +430,8 @@ def test_neighbor_pad_async_1d(
         "vae_conv0_h0w1",
         "small_5d_h1w0",
         "small_4d_h0w1",
+        "medium_5d_largeC",
+        "small_5d_pad2",
     ],
 )
 @pytest.mark.parametrize(
@@ -481,7 +460,7 @@ def test_neighbor_pad_async_2d(
         pH=pH,
         pW=pW,
         padding_mode="zeros",
-        num_links=[1, 1],
+        num_links=1,
         input_dtype=ttnn.bfloat16,
         topology=ttnn.Topology.Linear,
     )
