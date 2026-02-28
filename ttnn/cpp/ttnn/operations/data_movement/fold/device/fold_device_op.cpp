@@ -67,12 +67,13 @@ Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
     const ttnn::Shape& input_shape = input_tensor.logical_shape();
-    tt::tt_metal::DataType output_dtype;
-    switch (input_tensor.dtype()) {
-        case tt::tt_metal::DataType::FLOAT32: output_dtype = tt::tt_metal::DataType::FLOAT32; break;
-        case tt::tt_metal::DataType::UINT16: output_dtype = tt::tt_metal::DataType::UINT16; break;
-        default: output_dtype = tt::tt_metal::DataType::BFLOAT16; break;
-    }
+    auto input_dtype = input_tensor.dtype();
+
+    tt::tt_metal::DataType output_dtype =
+        (input_dtype == tt::tt_metal::DataType::FLOAT32 ||
+         input_dtype == tt::tt_metal::DataType::UINT16)
+            ? input_dtype
+            : tt::tt_metal::DataType::BFLOAT16;
 
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     ttnn::Shape output_shape(
