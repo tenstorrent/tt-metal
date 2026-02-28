@@ -488,9 +488,9 @@ bool is_llk_bcast(
         subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) /*||
-            all_match(DataType::FLOAT32) || all_match(DataType::INT32)  || all_match(DataType::UINT32) ||
-            all_match(DataType::UINT16)*/) {
+        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) ||
+            all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
+            all_match(DataType::UINT16)) {
             return true;
         }
     }
@@ -765,6 +765,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = UnpackToDestMode::UnpackToDestFp32;
         } else {
             unpack_to_dest_mode[src0_cb_index] =
                 (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
@@ -773,6 +775,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             unpack_to_dest_mode[src0interim_cb_index] =
                 (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
             unpack_to_dest_mode[src1interim_cb_index] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] =
                 (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
         }
     }
@@ -783,10 +789,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     bool use_llk_bcast =
         CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
 
-    // LLK bcast skips the software row-fill in the reader; the compute kernel
-    // calls unary_bcast to broadcast row 0 after PREPROCESS.  EXP/EXP2
-    // applied to unfilled rows produces Inf which corrupts BFP8 block
-    // exponents.  Fall back to the software-fill path for these ops only.
+    // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
+    // amplifies beyond acceptable tolerance.
     if (use_llk_bcast && op_has_exp) {
         use_llk_bcast = false;
     }
