@@ -399,247 +399,10 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     return env_args
 
 
-def find_generate_rank_bindings_tool() -> Optional[str]:
-    """Find the generate_rank_bindings tool executable.
-
-    Returns:
-        Path to the tool if found, None otherwise.
-    """
-    # Try common build directory locations
-    tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
-    possible_paths = [
-        Path(tt_metal_home) / "build" / "tools" / "scaleout" / "generate_rank_bindings",
-        Path(tt_metal_home) / "build_Debug" / "tools" / "scaleout" / "generate_rank_bindings",
-        Path(tt_metal_home) / "build_Release" / "tools" / "scaleout" / "generate_rank_bindings",
-        Path(ORIGINAL_CWD) / "build" / "tools" / "scaleout" / "generate_rank_bindings",
-        Path(ORIGINAL_CWD) / "build_Debug" / "tools" / "scaleout" / "generate_rank_bindings",
-        Path(ORIGINAL_CWD) / "build_Release" / "tools" / "scaleout" / "generate_rank_bindings",
-    ]
-
-    for path in possible_paths:
-        if path.exists() and path.is_file():
-            return str(path)
-
-    # Try in PATH
-    tool_path = shutil.which("generate_rank_bindings")
-    if tool_path:
-        return tool_path
-
-    return None
-
-
-def distribute_processes_across_hosts(hosts: List[str], num_processes: int) -> List[tuple]:
-    """Distribute processes across hosts, attempting even distribution when possible.
-
-    Args:
-        hosts: List of hostnames to distribute processes across
-        num_processes: Total number of processes to distribute
-
-    Returns:
-        List of tuples (hostname, num_processes_on_host) representing the distribution
-    """
-    if not hosts:
-        return []
-
-    if num_processes <= 0:
-        return []
-
-    num_hosts = len(hosts)
-    base_processes_per_host = num_processes // num_hosts
-    remainder = num_processes % num_hosts
-
-    distribution = []
-    for i, host in enumerate(hosts):
-        # Distribute remainder processes to first hosts
-        processes_on_host = base_processes_per_host + (1 if i < remainder else 0)
-        if processes_on_host > 0:
-            distribution.append((host, processes_on_host))
-
-    return distribution
-
-
-def write_mpi_rankfile(rank_to_host: List[tuple], output_dir: Path) -> None:
-    """Write MPI rankfile based on rank-to-host mapping.
-
-    Args:
-        rank_to_host: List of tuples (rank, hostname) representing rank distribution
-        output_dir: Directory to write the rankfile to
-    """
-    import socket
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    rankfile_path = output_dir / "rankfile"
-
-    # Get actual hostname to replace "localhost" if present
-    actual_hostname = socket.gethostname()
-
-    # Track slot numbers per host (slot resets to 0 for each host)
-    host_slot_counters: dict[str, int] = {}
-
-    with open(rankfile_path, "w") as f:
-        for rank, host in rank_to_host:
-            # Replace "localhost" with actual hostname to explicitly name each host
-            if host == "localhost":
-                host = actual_hostname
-
-            # Assign slot number based on position within this host
-            if host not in host_slot_counters:
-                host_slot_counters[host] = 0
-            slot = host_slot_counters[host]
-            host_slot_counters[host] += 1
-
-            # OpenMPI rankfile format: rank <rank>=<host> slot=<slot>
-            f.write(f"rank {rank}={host} slot={slot}\n")
-
-    logger.info(f"{TT_RUN_PREFIX} Generated MPI rankfile: {rankfile_path}")
-
-
-def generate_binding_files(
-    hosts: List[str],
-    num_processes: int,
-    config: TTRunConfig,
-    mesh_graph_descriptor_path: Path,
-    mpi_args: Optional[List[str]] = None,
-    verbose: bool = False,
-    dry_run: bool = False,
-) -> None:
-    """Run generate_rank_bindings tool via MPI to generate binding files.
-
-    Args:
-        hosts: List of hostnames to distribute processes across
-        num_processes: Total number of processes to run
-        config: TTRunConfig containing mock cluster rank binding configuration
-        mesh_graph_descriptor_path: Path to Mesh Graph Descriptor file (.textproto)
-        mpi_args: Optional MPI arguments to use (will be merged with host distribution)
-        verbose: If True, log additional information
-        dry_run: If True, only print the command without executing
-    """
-    tool_path = find_generate_rank_bindings_tool()
-    if not tool_path:
-        logger.warning(
-            f"{TT_RUN_PREFIX} generate_rank_bindings tool not found, skipping binding file generation. "
-            "Rank bindings will not be auto-generated."
-        )
-        return
-
-    if not hosts or num_processes <= 0:
-        logger.warning(
-            f"{TT_RUN_PREFIX} Invalid hosts or num_processes for generate_binding_files. "
-            f"hosts={hosts}, num_processes={num_processes}"
-        )
-        return
-
-    # Check if running in SLURM interactive session
-    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
-        mpi_launcher = "mpirun"
-    else:
-        # Find mpirun-ulfm executable, fall back to mpirun if not found
-        mpi_launcher = shutil.which("mpirun-ulfm")
-        if not mpi_launcher:
-            mpi_launcher = "mpirun"
-
-    # Distribute processes across hosts
-    distribution = distribute_processes_across_hosts(hosts, num_processes)
-
-    if not distribution:
-        logger.warning(f"{TT_RUN_PREFIX} No valid process distribution, skipping binding file generation")
-        return
-
-    # Build MPI command for generate_rank_bindings
-    cmd = [mpi_launcher]
-
-    # Add --tag-output for easier debugging
-    cmd.append("--tag-output")
-
-    # Build --host argument with process distribution
-    # Format: --host host1:np1,host2:np2,host3:np3
-    host_specs = [f"{host}:{np}" for host, np in distribution]
-    cmd.extend(["--host", ",".join(host_specs)])
-
-    # Add MPI args if provided, but filter out --host if present (we set it above)
-    if mpi_args:
-        filtered_mpi_args = []
-        i = 0
-        while i < len(mpi_args):
-            if mpi_args[i] == "--host":
-                # Skip --host and its value
-                i += 2
-            else:
-                filtered_mpi_args.append(mpi_args[i])
-                i += 1
-        cmd.extend(filtered_mpi_args)
-
-    # Build per-rank environment variables using : separator (similar to build_target_mpi_command)
-    # Map ranks to hosts based on distribution
-    rank_to_host = []
-    current_rank = 0
-    for host, np_on_host in distribution:
-        for _ in range(np_on_host):
-            rank_to_host.append((current_rank, host))
-            current_rank += 1
-
-    # Generate MPI rankfile based on partition distribution
-    # Replace "localhost" with actual hostnames for explicit host naming
-    output_dir = ORIGINAL_CWD / "tt-run-generated"
-    write_mpi_rankfile(rank_to_host, output_dir)
-
-    # Build per-rank command sections with environment variables
-    for rank_idx, (rank, host) in enumerate(rank_to_host):
-        if rank_idx > 0:
-            cmd.append(":")
-
-        cmd.extend(["-np", "1"])
-
-        # Set basic environment variables that generate_rank_bindings might need
-        default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
-        env_vars = [
-            ("TT_METAL_HOME", default_tt_metal_home),
-            ("TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home)),
-            ("TT_RUN_ORIGINAL_CWD", str(ORIGINAL_CWD)),
-        ]
-
-        # Add mock cluster path if configured for this rank
-        if config.mock_cluster_rank_binding and rank in config.mock_cluster_rank_binding:
-            env_vars.append(("TT_METAL_MOCK_CLUSTER_DESC_PATH", str(config.mock_cluster_rank_binding[rank])))
-
-        # Add environment variables via -x flags
-        for key, value in env_vars:
-            cmd.extend(["-x", f"{key}={value}"])
-
-        # Add the tool and required arguments for this rank
-        cmd.append(tool_path)
-        cmd.extend(["--mesh-graph-descriptor", str(mesh_graph_descriptor_path)])
-
-    if verbose or dry_run:
-        logger.info(f"{TT_RUN_PREFIX} Generate binding files command:")
-        print_command(cmd, prefix=f"{TT_RUN_PREFIX} [generate-binding-files]")
-
-    if dry_run:
-        return
-
-    try:
-        logger.info(f"{TT_RUN_PREFIX} Running generate_rank_bindings to generate binding files...")
-        result = subprocess.run(cmd, cwd=ORIGINAL_CWD)
-        if result.returncode != 0:
-            logger.warning(
-                f"{TT_RUN_PREFIX} generate_rank_bindings exited with code {result.returncode}. "
-                "Continuing with existing rank bindings."
-            )
-        else:
-            logger.info(f"{TT_RUN_PREFIX} Binding files generated successfully")
-    except KeyboardInterrupt:
-        logger.error(f"{TT_RUN_PREFIX} Generate binding files interrupted")
-        raise
-    except OSError as e:
-        logger.warning(
-            f"{TT_RUN_PREFIX} Error running generate_rank_bindings: {e}. Continuing with existing rank bindings."
-        )
-
-
-def build_target_mpi_command(
+def build_mpi_command(
     config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
 ) -> List[str]:
-    """Build OpenMPI command with per-rank environment variables for the target program."""
+    """Build OpenMPI command with per-rank environment variables."""
     # Check if running in SLURM interactive session
     if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
         logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
@@ -714,59 +477,7 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
         logger.info(f"{prefix} Command: " + " ".join(cmd))
 
 
-@click.command(
-    context_settings=dict(
-        ignore_unknown_options=True,
-        allow_extra_args=True,
-    )
-)
-@click.option(
-    "--rank-binding",
-    type=click.Path(path_type=Path),
-    required=True,
-    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
-)
-@click.option("--dry-run", is_flag=True, help="Print command without executing")
-@click.option(
-    "-v",
-    "--verbose",
-    is_flag=True,
-    help="Show path resolution diagnostics, environment propagation, and MPI command details",
-)
-@click.option(
-    "--mpi-args",
-    callback=lambda ctx, param, value: shlex.split(value) if value else None,
-    help="Additional MPI arguments (quoted)",
-)
-@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
-@click.option(
-    "--mock-cluster-rank-binding",
-    required=False,
-    type=click.Path(path_type=Path),
-    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
-)
-@click.option(
-    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
-)
-@click.option(
-    "--bare",
-    is_flag=True,
-    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
-)
-@click.option(
-    "--tcp-interface",
-    type=str,
-    default=None,
-    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
-)
-@click.option(
-    "--mesh-graph-descriptor",
-    type=click.Path(path_type=Path),
-    required=True,
-    help="Path to Mesh Graph Descriptor file (.textproto) - REQUIRED. Used by generate_rank_bindings tool.",
-)
-@click.pass_context
-def main(
+def legacy_flow(
     ctx: click.Context,
     rank_binding: Path,
     dry_run: bool,
@@ -777,7 +488,6 @@ def main(
     skip_executable_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
-    mesh_graph_descriptor: Path,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1038,39 +748,6 @@ def main(
         # Validate the interface exists on the local host (best-effort check)
         validate_network_interface(tcp_interface, verbose=verbose)
 
-    # FIXME: Change this to use --tt-run argument instead of mpi arg
-    # Extract hosts from mpi_args if present, otherwise default to localhost
-    # Do this before building effective_mpi_args so we can use original mpi_args
-    hosts = ["localhost"]  # Default to localhost
-    if mpi_args:
-        # Try to extract hosts from --host or --rankfile arguments
-        for i, arg in enumerate(mpi_args):
-            if arg == "--host" and i + 1 < len(mpi_args):
-                # Parse --host host1,host2,host3 or --host host1:np1,host2:np2
-                host_spec = mpi_args[i + 1]
-                # Extract hostnames (before colons if present)
-                hosts = [h.split(":")[0] for h in host_spec.split(",")]
-                break
-            elif arg == "--rankfile" and i + 1 < len(mpi_args):
-                # Parse rankfile to extract hosts
-                rankfile_path = Path(mpi_args[i + 1])
-                if rankfile_path.exists():
-                    hosts = []
-                    with open(rankfile_path, "r") as f:
-                        for line in f:
-                            line = line.strip()
-                            if line.startswith("rank ") and "=" in line:
-                                # Parse "rank N=hostname slot=X"
-                                parts = line.split("=")
-                                if len(parts) >= 2:
-                                    host_part = parts[1].split()[0]  # Get hostname before "slot"
-                                    if host_part not in hosts:
-                                        hosts.append(host_part)
-                else:
-                    # If rankfile doesn't exist, default to localhost
-                    hosts = ["localhost"]
-                break
-
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
     if not bare:
@@ -1107,20 +784,8 @@ def main(
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
 
-    # Generate binding files stage: Run generate_rank_bindings via MPI before building target command
-    num_processes = len(config.rank_bindings)
-    generate_binding_files(
-        hosts,
-        num_processes,
-        config,
-        mesh_graph_descriptor,
-        effective_mpi_args if effective_mpi_args else None,
-        verbose=verbose,
-        dry_run=dry_run,
-    )
-
-    # Build target MPI command
-    mpi_cmd = build_target_mpi_command(
+    # Build MPI command
+    mpi_cmd = build_mpi_command(
         config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
     )
 
@@ -1148,6 +813,197 @@ def main(
         sys.exit(INTERRUPTED_EXIT_CODE)
     except OSError as e:
         raise click.ClickException(f"Error launching mpirun: {e}")
+
+
+def new_mode_flow(
+    ctx: click.Context,
+    mesh_graph_descriptor: Path,
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+) -> None:
+    """New mode flow for ttrun using mesh graph descriptor.
+
+    This function implements the new mode of ttrun that uses --mesh-graph-descriptor
+    instead of --rank-binding. Implementation is pending.
+
+    Args:
+        ctx: Click context
+        mesh_graph_descriptor: Path to mesh graph descriptor file
+        hosts: List of hostnames (required unless mock_cluster_rank_binding is provided)
+        dry_run: If True, print command without executing
+        verbose: If True, show detailed diagnostics
+        mpi_args: Additional MPI arguments
+        debug_gdbserver: If True, launch with gdbserver for debugging
+        mock_cluster_rank_binding: Optional mock cluster rank binding configuration
+        skip_executable_check: If True, skip program executable validation
+        bare: If True, disable tt-run defaults
+        tcp_interface: Network interface for MPI TCP communication
+    """
+    # TODO: Implement new mode flow
+    raise NotImplementedError("New mode (--mesh-graph-descriptor) is not yet implemented.")
+
+
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+        allow_extra_args=True,
+    )
+)
+@click.option(
+    "--rank-binding",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
+)
+@click.option(
+    "--mesh-graph-descriptor",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Mesh graph descriptor file. When provided, enables new mode (mutually exclusive with --rank-binding). "
+    "Requires --hosts unless --mock-cluster-rank-binding is provided.",
+)
+@click.option(
+    "--hosts",
+    type=str,
+    required=False,
+    callback=lambda ctx, param, value: [h.strip() for h in value.split(",")] if value else None,
+    help="Comma-separated list of hostnames for MPI processes (e.g., 'node1,node2,node3'). "
+    "Required for new mode (--mesh-graph-descriptor) unless --mock-cluster-rank-binding is provided. "
+    "Not used in legacy mode (--rank-binding).",
+)
+@click.option("--dry-run", is_flag=True, help="Print command without executing")
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show path resolution diagnostics, environment propagation, and MPI command details",
+)
+@click.option(
+    "--mpi-args",
+    callback=lambda ctx, param, value: shlex.split(value) if value else None,
+    help="Additional MPI arguments (quoted)",
+)
+@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
+@click.option(
+    "--mock-cluster-rank-binding",
+    required=False,
+    type=click.Path(path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory. "
+    "When used with new mode (--mesh-graph-descriptor), makes --hosts optional.",
+)
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
+@click.option(
+    "--bare",
+    is_flag=True,
+    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
+)
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
+)
+@click.pass_context
+def main(
+    ctx: click.Context,
+    rank_binding: Optional[Path],
+    mesh_graph_descriptor: Optional[Path],
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+) -> None:
+    """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
+
+    tt-run operates in two modes:
+        - Legacy mode: Use --rank-binding (see legacy_flow function for detailed documentation)
+        - New mode: Use --mesh-graph-descriptor (mutually exclusive with --rank-binding)
+
+    The two modes are mutually exclusive - you must specify exactly one.
+
+    \b
+    Quick Start:
+        # Legacy mode
+        tt-run --rank-binding rank_binding.yaml ./my_app
+
+        # New mode (not yet implemented)
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
+        # Or with mock cluster (makes --hosts optional):
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
+
+    For detailed documentation on legacy mode, see the legacy_flow function docstring.
+    """
+    # Check for mutually exclusive options
+    if rank_binding is not None and mesh_graph_descriptor is not None:
+        raise click.ClickException(
+            "--rank-binding and --mesh-graph-descriptor are mutually exclusive. " "Please use only one of them."
+        )
+
+    if rank_binding is None and mesh_graph_descriptor is None:
+        raise click.ClickException(
+            "Either --rank-binding (legacy mode) or --mesh-graph-descriptor (new mode) must be specified."
+        )
+
+    # Legacy mode: use --rank-binding
+    if rank_binding is not None:
+        # Warn if new mode options are used with legacy mode
+        if hosts is not None:
+            logger.warning(
+                f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). "
+                "Use --mesh-graph-descriptor to enable new mode."
+            )
+        legacy_flow(
+            ctx,
+            rank_binding,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            bare,
+            tcp_interface,
+        )
+        return
+
+    # New mode: --mesh-graph-descriptor is provided
+    # Validate required arguments for new mode
+    if mesh_graph_descriptor is not None:
+        # --hosts is required unless --mock-cluster-rank-binding is provided
+        if mock_cluster_rank_binding is None and hosts is None:
+            raise click.ClickException(
+                "--hosts is required for new mode (--mesh-graph-descriptor) "
+                "unless --mock-cluster-rank-binding is provided."
+            )
+
+        new_mode_flow(
+            ctx,
+            mesh_graph_descriptor,
+            hosts,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            bare,
+            tcp_interface,
+        )
+        return
 
 
 if __name__ == "__main__":
