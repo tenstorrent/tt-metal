@@ -15,7 +15,7 @@ rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
 
 echo "Cloning OpenMPI ${OMPI_TAG} from GitHub..."
-git clone --branch "${OMPI_TAG}" --depth 1 https://github.com/open-mpi/ompi.git "${WORKDIR}"
+git clone --branch "${OMPI_TAG}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
 cd "${WORKDIR}"
 
 # Run autogen.pl to generate configure script (required when building from git)
