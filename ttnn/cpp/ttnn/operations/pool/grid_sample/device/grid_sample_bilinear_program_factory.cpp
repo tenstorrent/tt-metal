@@ -168,7 +168,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
         return tt::tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .compile_args = args};
     };
 
-    tt::tt_metal::KernelHandle reader0_kernel_id, reader1_kernel_id = 0;
+    tt::tt_metal::KernelHandle reader0_kernel_id{}, reader1_kernel_id{};
     if (is_sharded) {
         auto reader0_compile_time_args = reader_compile_time_args;
         reader0_compile_time_args[13] = 0;  // ct_arg[13]: reader_id = 0
