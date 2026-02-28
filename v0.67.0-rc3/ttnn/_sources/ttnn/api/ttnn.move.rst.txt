@@ -1,0 +1,8 @@
+﻿ttnn.move
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.move:
+
+.. autooperation:: ttnn.move
