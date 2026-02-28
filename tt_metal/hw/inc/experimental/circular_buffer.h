@@ -14,6 +14,8 @@
 #endif
 #else  // !COMPILE_FOR_TRISC
 #include "experimental/noc.h"
+#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 #include "experimental/lock.h"
@@ -133,8 +135,19 @@ public:
     }
 
     [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
+#ifndef COMPILE_FOR_TRISC
+        auto& iface = get_local_cb_interface(cb_id_);
+        uint32_t base_16b = iface.fifo_limit - iface.fifo_size;
+        uint32_t addr = base_16b << 4;
+        uint32_t num_bytes = iface.fifo_size << 4;
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
+        return Lock([this, addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
+            release_scoped_lock();
+        });
+#else
         return Lock([this]() { release_scoped_lock(); });
+#endif
     }
 
 private:

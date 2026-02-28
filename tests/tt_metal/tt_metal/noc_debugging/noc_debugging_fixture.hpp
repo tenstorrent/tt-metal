@@ -57,6 +57,17 @@ public:
                 NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/true, /*semaphore=*/false));
     }
 
+    bool has_write_to_locked_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return false;
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
+        return issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM) ||
+               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+    }
+
     template <typename T>
     void RunTestOnDevice(
         const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,

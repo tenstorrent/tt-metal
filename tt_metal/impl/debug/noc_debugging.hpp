@@ -5,12 +5,14 @@
 #pragma once
 
 #include <bitset>
+#include <compare>
 #include <cstdint>
 #include <mutex>
 #include <umd/device/types/xy_pair.hpp>
 #include <unordered_map>
 #include <array>
 #include <tools/profiler/event_metadata.hpp>
+#include <tools/profiler/noc_debugging_metadata.hpp>
 #include <unordered_set>
 #include <set>
 #include <string>
@@ -69,30 +71,58 @@ struct NocWriteFlushEvent {
 
 struct UnknownNocEvent {};
 
+struct ScopedLockEvent {
+    int8_t src_x;
+    int8_t src_y;
+    NocDebuggingEventMetadata::NocDebugEventType event_type;
+    uint32_t locked_address_base;  // 16b aligned
+    uint32_t num_bytes;
+
+    bool is_lock() const {
+        return event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
+               event_type == NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK;
+    }
+};
+
 using NOCDebugEvent = std::variant<
     NocWriteEvent,
     NocReadEvent,
     NocReadBarrierEvent,
     NocWriteBarrierEvent,
     NocWriteFlushEvent,
+    ScopedLockEvent,
     UnknownNocEvent>;
 
 enum class NOCDebugIssueBaseType : uint8_t {
     WRITE_FLUSH_BARRIER,
     READ_BARRIER,
     UNFLUSHED_WRITE_AT_END,
+    WRITE_TO_LOCKED_CORE_LOCAL_MEM,
+    WRITE_TO_LOCKED_CB,
     COUNT,
 };
 
+// TODO: Move metadata out into a variant so we can have different metadata for each issue types
 struct NOCDebugIssueType {
     NOCDebugIssueBaseType base_type;
+    uint32_t issue_address;  // The address of the issue
+    uint32_t issue_size;     // The size of the issue in bytes
+    uint8_t src_x;
+    uint8_t src_y;
+    uint8_t dst_x;
+    uint8_t dst_y;
     bool is_mcast : 1;      // True if the issue involved a multicast
     bool is_semaphore : 1;  // True if the issue involved a semaphore operation
 
-    NOCDebugIssueType() : base_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER), is_mcast(false), is_semaphore(false) {}
+    NOCDebugIssueType() :
+        base_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER),
+        issue_address(0),
+        issue_size(0),
+        is_mcast(false),
+        is_semaphore(false) {}
 
     NOCDebugIssueType(NOCDebugIssueBaseType type, bool mcast = false, bool semaphore = false) :
-        base_type(type), is_mcast(mcast), is_semaphore(semaphore) {}
+        base_type(type), issue_address(0), issue_size(0), is_mcast(mcast), is_semaphore(semaphore) {}
 
     auto operator<=>(const NOCDebugIssueType& other) const = default;
 };
@@ -130,8 +160,11 @@ struct NOCDebugIssue {
 
 class NOCDebugState {
 public:
-    // Add an event
+    // Accumulate an event (processed in timestamp order when process_accumulated_events is called)
     void push_event(size_t chip_id, uint64_t timestamp, int processor_id, const NOCDebugEvent& event);
+
+    // Sort accumulated events by timestamp, process them, then clear the queue. Call after a poll is complete.
+    void process_accumulated_events_all_chips();
 
     // Get the issue reported for a given core and processor during the lifetime of the debug state
     NOCDebugIssue get_issues(tt_cxy_pair core, int processor_id) const;
@@ -151,6 +184,19 @@ public:
         int processor_id = 0;
         bool is_semaphore = false;
         bool is_mcast = false;
+    };
+
+    struct LockedBufferInfo {
+        enum class LockType {
+            CB,
+            MEM,
+        };
+
+        uint32_t address;
+        uint32_t size;
+        LockType lock_type;
+
+        auto operator<=>(const LockedBufferInfo& other) const = default;
     };
 
 private:
@@ -175,11 +221,17 @@ private:
         std::array<bool, MAX_NOCS> any_posted_writes{};
         std::array<bool, MAX_NOCS> any_nonposted_writes{};
 
+        // Captures which buffers are marked as locked for each RISC
+        std::array<std::set<LockedBufferInfo>, MAX_PROCESSORS> locked_buffers{};
+
         // Latest RISC timestamp for each processor
         std::array<uint64_t, MAX_PROCESSORS> latest_risc_timestamp{};
 
         // Keep track of reported issues for each processor
         std::array<NOCDebugIssue, MAX_PROCESSORS> issue{};
+
+        // Check if a NOC write hit a locked buffer in this core
+        const LockedBufferInfo* get_noc_write_to_lock_buffer(const NocWriteEvent& event) const;
     };
 
     void handle_write_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteEvent event);
@@ -187,6 +239,7 @@ private:
     void handle_read_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocReadBarrierEvent event);
     void handle_write_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteBarrierEvent event);
     void handle_write_flush_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteFlushEvent event);
+    void handle_scoped_lock_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event);
 
     void update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp);
 
@@ -194,7 +247,18 @@ private:
 
     const CoreDebugState& get_state(tt_cxy_pair core) const;
 
+    bool has_state(tt_cxy_pair core) const;
+
     static std::string get_issue_description(const NOCDebugIssueType& issue_type);
+
+    struct PendingEvent {
+        size_t chip_id;
+        uint64_t timestamp;
+        int processor_id;
+        NOCDebugEvent event;
+    };
+    mutable std::vector<PendingEvent> pending_events_;
+    mutable std::mutex pending_events_mutex_;
 
     mutable std::unordered_map<tt_cxy_pair, CoreDebugState> cores;
     mutable std::mutex cores_mutex;

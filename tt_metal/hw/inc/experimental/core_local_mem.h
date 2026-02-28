@@ -6,6 +6,8 @@
 
 #include "experimental/noc.h"
 #include "experimental/lock.h"
+#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 
 namespace experimental {
 
@@ -143,6 +145,18 @@ public:
 
     [[nodiscard]] auto scoped_lock() {
         return Lock([this]() { release_scoped_lock(); });
+    }
+
+    /** @brief Lock a region of num_elements for the duration of the returned guard (same as scoped_lock(); size for
+     * future debug/profiler use). */
+    [[nodiscard]] auto scoped_lock(size_t num_elements) {
+        uint32_t addr = static_cast<uint32_t>(get_address());
+        uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
+        return Lock([this, addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
+            release_scoped_lock();
+        });
     }
 
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
