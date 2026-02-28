@@ -65,7 +65,7 @@ jobs:
       - name: Compute Python venv image tags
         id: tags
         env:
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.platform.outputs.version }}"

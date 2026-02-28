@@ -68,6 +68,11 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Docker images even if they exist in registry"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix for image tags (defaults to vars.HARBOR_PREFIX)"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -132,6 +137,8 @@ jobs:
     name: "🔧 Tool images"
     if: inputs.tool-tags == ''
     uses: ./.github/workflows/build-docker-tools.yaml
+    with:
+      harbor-prefix: ${{ inputs.harbor-prefix }}
     secrets: inherit
 
   # =============================================================================
@@ -143,6 +150,7 @@ jobs:
     with:
       platform: ${{ inputs.platform }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      harbor-prefix: ${{ inputs.harbor-prefix }}
     secrets: inherit
 
   # =============================================================================
@@ -210,7 +218,7 @@ jobs:
       - name: Compute tags
         id: tags
         env:
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
           # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from

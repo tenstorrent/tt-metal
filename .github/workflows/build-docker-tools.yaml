@@ -56,7 +56,7 @@ jobs:
       - name: Compute tool image tags
         id: tags
         env:
-          HARBOR_PREFIX: ${{ inputs.harbor-prefix || vars.HARBOR_PREFIX || '' }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
           TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
