@@ -8,6 +8,9 @@ set -e
 # Valid --compiler flag values (same as build_metal.sh)
 COMPILER_FLAGS=(clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14)
 
+# Pinned LLVM tarball version for non-Debian platforms (update on new patch releases)
+LLVM_TARBALL_VERSION_20="20.1.8"
+
 usage()
 {
     echo "Usage: sudo ./install_dependencies.sh [options]"
@@ -99,6 +102,28 @@ is_supported_os() {
             fi
             ;;
     esac
+}
+
+# Extract the major version number from a compiler binary.
+# Usage: get_compiler_major_version g++   -> "14" (on Fedora 40)
+#        get_compiler_major_version clang -> "18"
+get_compiler_major_version() {
+    local binary="$1"
+    command -v "$binary" >/dev/null 2>&1 || return 1
+    "$binary" --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1 | cut -d. -f1
+}
+
+# Create versioned symlinks in /usr/local/bin/ for unversioned system compilers.
+# Used when the system compiler IS the requested version but has no versioned binary name.
+# E.g., Fedora's g++ IS gcc-14 but the binary is just "g++".
+create_versioned_symlinks() {
+    local cc="$1" cxx="$2" ver="$3"
+    local cc_path cxx_path
+    cc_path=$(command -v "$cc") || return 1
+    cxx_path=$(command -v "$cxx") || return 1
+    ln -sf "$cc_path" "/usr/local/bin/${cc}-${ver}"
+    ln -sf "$cxx_path" "/usr/local/bin/${cxx}-${ver}"
+    echo "[INFO] Created symlinks: ${cc}-${ver} -> ${cc_path}, ${cxx}-${ver} -> ${cxx_path}"
 }
 
 update_package_cache() {
@@ -211,12 +236,14 @@ init_packages() {
                 "libstdc++6"
                 "libtbb-dev"
                 "libcapstone-dev"
-                "libc++-20-dev"
-                "libc++abi-20-dev"
                 "wget"
                 "curl"
                 "xxd"
             )
+            # libc++ packages only needed for default (backward compat) or clang-20-libcpp
+            if [ -z "$compiler" ] || [ "$compiler" = "clang-20-libcpp" ]; then
+                PACKAGES+=("libc++-20-dev" "libc++abi-20-dev")
+            fi
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
             fi
@@ -247,6 +274,7 @@ init_packages() {
                 "wget"
                 "curl"
                 "vim-common" # Includes xxd
+                "patch" # Required by CPM PATCHES keyword
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
@@ -277,11 +305,12 @@ prep_ubuntu_system() {
     apt-get update
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
 
-    # Add LLVM repository for Clang 17
-    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
-    # Also v20
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    # Add LLVM repository for Clang (skip when only GCC is needed)
+    if [[ "$compiler" != gcc* ]]; then
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+        echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+        echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    fi
 
     # Add Kitware repository for latest CMake
     # If the kitware-archive-keyring package has not been installed previously, manually obtain a copy of our signing key
@@ -328,6 +357,67 @@ prep_redhat_system() {
         echo "[WARNING] Could not enable CRB/PowerTools repository"
 }
 
+# Download and install official LLVM binary tarball from GitHub releases.
+# Installs to /opt/llvm-XX/ and creates versioned symlinks in /usr/local/bin/
+# so that build_metal.sh toolchain files find clang-XX, clang++-XX, ld.lld-XX.
+install_llvm_from_tarball() {
+    local llvm_major="$1"
+    local install_dir="/opt/llvm-${llvm_major}"
+
+    # Look up the pinned full version for this major version
+    local version_var="LLVM_TARBALL_VERSION_${llvm_major}"
+    local full_version="${!version_var:-}"
+    if [ -z "$full_version" ]; then
+        echo "[ERROR] No pinned LLVM tarball version for major version ${llvm_major}"
+        return 1
+    fi
+
+    local tarball_name="LLVM-${full_version}-Linux-X64.tar.xz"
+    local tarball_url="https://github.com/llvm/llvm-project/releases/download/llvmorg-${full_version}/${tarball_name}"
+
+    echo "[INFO] Downloading LLVM ${full_version} from GitHub releases..."
+    echo "[INFO] URL: ${tarball_url}"
+    echo "[INFO] This is ~1.9 GB, may take several minutes..."
+
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    if ! wget -q --show-progress -O "${temp_dir}/${tarball_name}" "$tarball_url"; then
+        echo "[ERROR] Failed to download LLVM tarball from ${tarball_url}"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    echo "[INFO] Extracting to ${install_dir}..."
+    mkdir -p "$install_dir"
+    tar -xf "${temp_dir}/${tarball_name}" -C "$install_dir" --strip-components=1
+    rm -rf "$temp_dir"
+
+    # Create versioned symlinks in /usr/local/bin/.
+    # The tarball contains unversioned binaries (clang, clang++, lld, etc.).
+    # build_metal.sh toolchain files expect versioned names (clang-20, clang++-20, ld.lld-20).
+    for bin in clang clang++ lld; do
+        if [ -f "${install_dir}/bin/${bin}" ]; then
+            ln -sf "${install_dir}/bin/${bin}" "/usr/local/bin/${bin}-${llvm_major}"
+            echo "[INFO] Symlink: /usr/local/bin/${bin}-${llvm_major} -> ${install_dir}/bin/${bin}"
+        fi
+    done
+
+    # ld.lld-20 is referenced by the clang-20 toolchain cmake file
+    if [ -f "${install_dir}/bin/ld.lld" ]; then
+        ln -sf "${install_dir}/bin/ld.lld" "/usr/local/bin/ld.lld-${llvm_major}"
+    fi
+
+    # Additional LLVM tools (not strictly required for build_metal.sh but useful)
+    for bin in llvm-ar llvm-ranlib llvm-nm llvm-objdump llvm-strip llvm-objcopy; do
+        if [ -f "${install_dir}/bin/${bin}" ]; then
+            ln -sf "${install_dir}/bin/${bin}" "/usr/local/bin/${bin}-${llvm_major}"
+        fi
+    done
+
+    echo "[OK] LLVM ${full_version} installed to ${install_dir} with versioned symlinks in /usr/local/bin/"
+}
+
 # We currently have an affinity to clang as it is more thoroughly tested in CI
 # However g++-12 and later should also work
 
@@ -362,6 +452,317 @@ install_llvm() {
         clang_version=$(clang --version 2>/dev/null | head -1 || echo "not found")
         echo "[INFO] Using distro-provided LLVM/Clang for $OS_ID: $clang_version"
     fi
+}
+
+# --- Compiler installation ladder functions ---
+# Each function tries sources in priority order and fails loudly if none work.
+
+# Install a specific version of clang (e.g., clang-20).
+# Ladder: already installed → version match → apt.llvm.org → llvm.sh → LLVM tarball → fail
+install_clang_versioned() {
+    local ver="$1"
+
+    # Step 0: Already installed?
+    if command -v "clang++-${ver}" >/dev/null 2>&1; then
+        echo "[INFO] clang++-${ver} already available in PATH"
+        return 0
+    fi
+
+    # Step 1: System clang matches requested version?
+    if command -v clang++ >/dev/null 2>&1; then
+        local sys_ver
+        sys_ver=$(get_compiler_major_version clang++)
+        if [ "$sys_ver" = "$ver" ]; then
+            echo "[INFO] System clang++ is version ${ver}, creating versioned symlinks"
+            create_versioned_symlinks clang clang++ "$ver"
+            return 0
+        fi
+    fi
+
+    if is_debian_based; then
+        # Step 2: Try apt package (from apt.llvm.org, set up by prep_ubuntu_system)
+        echo "[INFO] Installing clang-${ver} from apt repositories..."
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "clang-${ver}" 2>/dev/null; then
+            return 0
+        fi
+        echo "[WARNING] apt package clang-${ver} not available, trying llvm.sh..."
+
+        # Step 3: Try llvm.sh script
+        local temp_dir
+        temp_dir=$(mktemp -d)
+        if wget -q -P "$temp_dir" https://apt.llvm.org/llvm.sh 2>/dev/null; then
+            chmod u+x "$temp_dir/llvm.sh"
+            if "$temp_dir/llvm.sh" "$ver"; then
+                rm -rf "$temp_dir"
+                return 0
+            fi
+        fi
+        rm -rf "$temp_dir"
+        echo "[WARNING] llvm.sh failed, trying LLVM GitHub tarball..."
+    fi
+
+    # Step 4 (Debian fallback) / Step 2 (RedHat): LLVM GitHub tarball
+    if install_llvm_from_tarball "$ver"; then
+        return 0
+    fi
+
+    # Step 5: Fail
+    echo "[ERROR] Failed to install clang-${ver} on $OS_ID $OS_VERSION"
+    available_compilers_message
+    return 1
+}
+
+# Install any available version of clang.
+# Ladder: check existing variants → apt/dnf package → fail
+install_clang_any() {
+    for candidate in clang++-20 clang++-19 clang++-18 clang++-17 clang++; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            echo "[INFO] Found existing $candidate"
+            return 0
+        fi
+    done
+
+    if is_debian_based; then
+        echo "[INFO] Installing system clang from apt..."
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang 2>/dev/null; then
+            return 0
+        fi
+    elif is_redhat_based; then
+        # clang should have been installed by install_packages (in PACKAGES list)
+        echo "[WARNING] clang not found after package installation"
+    fi
+
+    echo "[ERROR] Failed to install any clang version on $OS_ID $OS_VERSION"
+    available_compilers_message
+    return 1
+}
+
+# Install a specific version of GCC (e.g., gcc-14).
+# Ladder: already installed → version match → apt → Ubuntu Toolchain PPA → fail
+install_gcc_versioned() {
+    local ver="$1"
+
+    # Step 0: Already installed?
+    if command -v "g++-${ver}" >/dev/null 2>&1; then
+        echo "[INFO] g++-${ver} already available in PATH"
+        return 0
+    fi
+
+    # Step 1: System g++ matches requested version?
+    if command -v g++ >/dev/null 2>&1; then
+        local sys_ver
+        sys_ver=$(get_compiler_major_version g++)
+        if [ "$sys_ver" = "$ver" ]; then
+            echo "[INFO] System g++ is version ${ver}, creating versioned symlinks"
+            create_versioned_symlinks gcc g++ "$ver"
+            return 0
+        fi
+    fi
+
+    if is_debian_based; then
+        # Step 2: Try distro repos
+        echo "[INFO] Attempting to install g++-${ver} from apt..."
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null; then
+            return 0
+        fi
+        echo "[WARNING] g++-${ver} not available in configured repos"
+
+        # Step 3: Try Ubuntu Toolchain PPA (Ubuntu only)
+        if [[ "$OS_ID" == "ubuntu" ]]; then
+            echo "[INFO] Trying Ubuntu Toolchain PPA for g++-${ver}..."
+            if ! grep -rq ubuntu-toolchain-r /etc/apt/sources.list.d/ 2>/dev/null; then
+                add-apt-repository -y ppa:ubuntu-toolchain-r/test
+                apt-get update
+            fi
+            if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "g++-${ver}" 2>/dev/null; then
+                return 0
+            fi
+        fi
+    elif is_redhat_based; then
+        # RedHat doesn't have versioned gcc packages (gcc-12, gcc-14)
+        echo "[WARNING] Versioned GCC packages are not available on $OS_ID"
+    fi
+
+    # Step 4: Fail (no official GCC binary tarballs exist)
+    echo "[ERROR] Failed to install gcc-${ver} on $OS_ID $OS_VERSION"
+    available_compilers_message
+    return 1
+}
+
+# Install any available version of GCC.
+# Ladder: check existing → already installed via PACKAGES → fail
+install_gcc_any() {
+    for candidate in g++-14 g++-13 g++-12 g++; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            echo "[INFO] Found existing $candidate"
+            return 0
+        fi
+    done
+
+    echo "[ERROR] No g++ found after package installation on $OS_ID $OS_VERSION"
+    available_compilers_message
+    return 1
+}
+
+# Install libc++ development packages for clang-20-libcpp.
+install_libcxx() {
+    local ver="$1"
+
+    if is_debian_based; then
+        echo "[INFO] Installing libc++ ${ver} development packages..."
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            "libc++-${ver}-dev" "libc++abi-${ver}-dev" 2>/dev/null; then
+            return 0
+        fi
+        echo "[ERROR] Failed to install libc++-${ver}-dev"
+        return 1
+    elif is_redhat_based; then
+        # Check if libc++ is available from LLVM tarball installation
+        if [ -d "/opt/llvm-${ver}/include/c++/v1" ]; then
+            echo "[INFO] libc++ headers available from LLVM tarball at /opt/llvm-${ver}/"
+            return 0
+        fi
+        echo "[ERROR] libc++ ${ver} is not available on $OS_ID"
+        return 1
+    fi
+}
+
+# Verify that the requested compiler binary exists in PATH after installation.
+verify_compiler() {
+    local comp="$1"
+    local expected_cxx="" expected_cc=""
+
+    case "$comp" in
+        clang-20|clang-20-libcpp)
+            expected_cxx="clang++-20"; expected_cc="clang-20" ;;
+        clang)
+            if command -v clang++ >/dev/null 2>&1; then
+                echo "[OK] Compiler verified: $(clang++ --version 2>/dev/null | head -1)"
+                return 0
+            fi
+            echo "[ERROR] Verification failed: clang++ not found in PATH"
+            exit 1
+            ;;
+        gcc-12)
+            expected_cxx="g++-12"; expected_cc="gcc-12" ;;
+        gcc-14)
+            expected_cxx="g++-14"; expected_cc="gcc-14" ;;
+        gcc)
+            if command -v g++ >/dev/null 2>&1; then
+                echo "[OK] Compiler verified: $(g++ --version 2>/dev/null | head -1)"
+                return 0
+            fi
+            echo "[ERROR] Verification failed: g++ not found in PATH"
+            exit 1
+            ;;
+    esac
+
+    if [ -n "$expected_cxx" ]; then
+        if ! command -v "$expected_cxx" >/dev/null 2>&1; then
+            echo "[ERROR] Verification failed: $expected_cxx not found in PATH"
+            echo "[ERROR] PATH=$PATH"
+            exit 1
+        fi
+        if ! command -v "$expected_cc" >/dev/null 2>&1; then
+            echo "[ERROR] Verification failed: $expected_cc not found in PATH"
+            exit 1
+        fi
+        echo "[OK] Compiler verified: $($expected_cxx --version 2>/dev/null | head -1)"
+    fi
+}
+
+# Print OS-specific list of available --compiler values. Called on failure.
+available_compilers_message() {
+    echo ""
+    echo "Available compiler options for $OS_ID $OS_VERSION:"
+    echo ""
+    case "$OS_ID" in
+        ubuntu)
+            case "$OS_VERSION" in
+                22.04)
+                    echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
+                    echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
+                    echo "  --compiler clang           system clang"
+                    echo "  --compiler gcc-12          g++ 12 (system)"
+                    echo "  --compiler gcc-14          g++ 14 (via Ubuntu Toolchain PPA)"
+                    echo "  --compiler gcc             system g++"
+                    ;;
+                24.04)
+                    echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
+                    echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
+                    echo "  --compiler clang           system clang"
+                    echo "  --compiler gcc-14          g++ 14 (system)"
+                    echo "  --compiler gcc-12          g++ 12 (via Ubuntu Toolchain PPA)"
+                    echo "  --compiler gcc             system g++"
+                    ;;
+                *)
+                    echo "  (Ubuntu $OS_VERSION: check available packages)"
+                    ;;
+            esac
+            ;;
+        debian)
+            echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
+            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
+            echo "  --compiler clang           system clang"
+            echo "  --compiler gcc-12          g++ 12 (system on Debian 12)"
+            echo "  --compiler gcc             system g++"
+            echo "  NOTE: gcc-14 is NOT available on Debian 12"
+            ;;
+        fedora)
+            echo "  --compiler clang-20        clang 20 (via LLVM GitHub tarball, ~1.9 GB download)"
+            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via LLVM GitHub tarball)"
+            echo "  --compiler clang           system clang"
+            echo "  --compiler gcc             system gcc"
+            echo "  NOTE: gcc-12, gcc-14 require version match with system gcc"
+            ;;
+        rocky|almalinux|rhel|centos)
+            echo "  --compiler clang-20        clang 20 (via LLVM GitHub tarball, ~1.9 GB download)"
+            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via LLVM GitHub tarball)"
+            echo "  --compiler clang           system clang (EPEL)"
+            echo "  --compiler gcc             system gcc"
+            echo "  NOTE: gcc-12, gcc-14 are NOT available on $OS_ID"
+            ;;
+        *)
+            echo "  (check system packages for available compilers)"
+            ;;
+    esac
+    echo ""
+}
+
+# Main compiler installation orchestrator.
+# Routes to the appropriate ladder function based on the --compiler flag value.
+install_compiler() {
+    # No --compiler flag: preserve existing default behavior
+    if [ -z "$compiler" ]; then
+        install_llvm
+        return
+    fi
+
+    echo "[INFO] Installing requested compiler: $compiler"
+
+    case "$compiler" in
+        clang-20)
+            install_clang_versioned 20
+            ;;
+        clang-20-libcpp)
+            install_clang_versioned 20
+            install_libcxx 20
+            ;;
+        clang)
+            install_clang_any
+            ;;
+        gcc-12)
+            install_gcc_versioned 12
+            ;;
+        gcc-14)
+            install_gcc_versioned 14
+            ;;
+        gcc)
+            install_gcc_any
+            ;;
+    esac
+
+    verify_compiler "$compiler"
 }
 
 install_sfpi() {
@@ -488,7 +889,7 @@ install() {
 
     # Install specialized components
     install_sfpi
-    install_llvm
+    install_compiler
     install_mpi_ulfm
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
