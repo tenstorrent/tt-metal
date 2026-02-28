@@ -617,7 +617,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 
 constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
@@ -855,7 +855,7 @@ void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
-#endif
+#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
