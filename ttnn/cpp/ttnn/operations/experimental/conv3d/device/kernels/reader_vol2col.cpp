@@ -104,7 +104,6 @@ void kernel_main() {
     constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-
     // L1 prefetch buffer parameters
     constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
     constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
