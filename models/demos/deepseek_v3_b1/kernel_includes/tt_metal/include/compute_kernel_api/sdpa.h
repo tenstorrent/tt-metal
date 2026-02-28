@@ -452,6 +452,9 @@ template <
     bool dense = false>
 ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
     copy_tile_to_dst_init_short(cb_worker_ms);
+    UNPACK(
+        DPRINT << " SDPA TAIL MS REDUCE cb_worker_ms=" << cb_worker_ms << " cb_prev_ms=" << cb_prev_ms
+               << " cb_cur_ms=" << cb_cur_ms << " cb_l_for_init=" << cb_l_for_init << ENDL());
     cb_wait_front(cb_worker_ms, 1);
     cb_wait_front(cb_prev_ms, 1);
     constexpr uint32_t dst_reg_0 = 0;  // prev_ms

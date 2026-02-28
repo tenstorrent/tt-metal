@@ -428,7 +428,12 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout);
 
 template <typename T>
 std::string to_string_impl(const Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
+    if (tensor.dtype() == DataType::BFLOAT8_B) {
+        return std::string("test");
+    } else {
+        return std::string("test");
+    }
+    /*const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
         return fmt::format(
@@ -498,7 +503,7 @@ std::string to_string_impl(const Tensor& tensor) {
             ss << std::endl;
         }
     }
-    return ss.str();
+    return ss.str();*/
 }
 
 template <>
