@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -88,7 +88,7 @@ class TransformerModelFactory:
         Returns:
             Llama model instance
         """
-        lcfg = ttml.models.llama.LlamaConfig()
+        lcfg = ttml.models.llama.CppLlamaConfig()
 
         # Core fields with sensible defaults
         lcfg.num_heads = self.transformer_config.num_heads
@@ -147,7 +147,7 @@ class TransformerModelFactory:
 
         if self.device_config.enable_tp:
             return ttml.models.distributed.llama.create_llama_model(lcfg)
-        return ttml.models.llama.create_llama_model(lcfg)
+        return ttml.models.llama.create_cpp_llama_model(lcfg)
 
     def create_model(self):
         """Create model based on model_type configuration.

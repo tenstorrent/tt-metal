@@ -215,24 +215,17 @@ jobs:
   ttnn-unit-tests:
     needs: [build-artifact, tests-to-run]
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 }
-        ]
     if: ${{ needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
-      timeout: ${{ inputs.enable-watcher && 240 || 40 }}
 
   # FD Model Tests
   models-unit-tests:

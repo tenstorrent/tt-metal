@@ -15,6 +15,7 @@ from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 from models.tt_transformers.tt.model_config import is_phi1
 import ttnn
+from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
 
 
 class URL(BaseModel):
@@ -478,13 +479,11 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead):
+def get_rot_transformation_mat(dhead=32):
     # ROPE op uses a single tile
     dhead = 32
-    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
-    return rot_emb_matrix
+    # Delegate to TTTv2 implementation for consistency
+    return get_rot_transformation_mat_v2(dhead)
 
 
 def get_single_rot_mat(

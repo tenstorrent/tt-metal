@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
