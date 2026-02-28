@@ -112,6 +112,71 @@ jobs:
           path: attempted_hashes.txt
           key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
 
+      - name: Build Copilot prompt with bug path context
+        if: steps.select-issue.outputs.has-issue == 'true'
+        env:
+          ISSUE_HASH: ${{ steps.select-issue.outputs.hash }}
+          ISSUE_CHECKER: ${{ steps.select-issue.outputs.checker }}
+          ISSUE_FILE: ${{ steps.select-issue.outputs.file }}
+          ISSUE_LINE: ${{ steps.select-issue.outputs.line }}
+          ISSUE_MESSAGE: ${{ steps.select-issue.outputs.message }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json, os
+
+          repo   = os.environ.get("GITHUB_WORKSPACE", ".")
+          rhash  = os.environ["ISSUE_HASH"]
+          checker = os.environ["ISSUE_CHECKER"]
+          filepath = os.environ["ISSUE_FILE"]
+          line   = os.environ["ISSUE_LINE"]
+          msg    = os.environ["ISSUE_MESSAGE"]
+
+          # Look up the full report to get bug_path_events
+          bug_path_text = ""
+          try:
+              with open("clangsa-results/codechecker_issues.json") as f:
+                  reports = json.load(f).get("reports", [])
+              report = next((r for r in reports if r["report_hash"] == rhash), None)
+              events = report.get("bug_path_events", []) if report else []
+
+              if len(events) > 1:
+                  lines = ["", "Bug path (sequence of events leading to the finding):"]
+                  seen = set()
+                  for i, ev in enumerate(events, 1):
+                      ep = ev["file"]["path"].replace("/work/", "", 1)
+                      el, ec = ev.get("line", 0), ev.get("column", 0)
+                      em = ev.get("message", "")
+                      key = (ep, el)
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      lines.append(f"\n  Step {len(seen)}: {ep}:{el}:{ec} -- {em}")
+                      # Show source snippet (2 lines of context)
+                      try:
+                          src = open(os.path.join(repo, ep)).read().splitlines()
+                          lo, hi = max(0, el - 3), min(len(src), el + 2)
+                          for n in range(lo, hi):
+                              marker = " >> " if n + 1 == el else "    "
+                              lines.append(f"  {marker}{n+1:4d} | {src[n]}")
+                      except OSError:
+                          pass
+                  bug_path_text = "\n".join(lines)
+          except Exception as e:
+              print(f"Warning: could not extract bug path: {e}")
+
+          with open("/tmp/prompt.txt", "w") as f:
+              f.write(f"Fix this Clang Static Analyzer issue. "
+                      f"Verify it is a real issue, apply a minimal fix, and follow coding standards.\n\n"
+                      f"Checker: {checker}\n"
+                      f"File: {filepath}:{line}\n"
+                      f"Message: {msg}\n"
+                      f"{bug_path_text}\n")
+          PYEOF
+          echo "--- Copilot prompt ---"
+          cat /tmp/prompt.txt
+          echo "--- end prompt ---"
+
       - name: Run Copilot fix
         if: steps.select-issue.outputs.has-issue == 'true'
         id: copilot-fix
@@ -128,22 +193,6 @@ jobs:
             exit 1
           fi
           echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
-
-          # Build prompt
-          CHECKER="${{ steps.select-issue.outputs.checker }}"
-          FILE="${{ steps.select-issue.outputs.file }}"
-          LINE="${{ steps.select-issue.outputs.line }}"
-          MSG="${{ steps.select-issue.outputs.message }}"
-
-          {
-            echo "Fix this Clang Static Analyzer issue:"
-            echo ""
-            echo "- $CHECKER in $FILE:$LINE — $MSG"
-            echo ""
-            echo "Verify it's a real issue, apply minimal fix, follow coding standards."
-          } > /tmp/prompt.txt
-
-          cat /tmp/prompt.txt
 
           # Run Copilot
           BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
