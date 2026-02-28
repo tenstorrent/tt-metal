@@ -79,7 +79,6 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
-    // Bytes to write per output row (one embedding row); TensorAccessor uses output_page_size for addressing
     uint32_t output_stick_size = rounded_weight_page_size;
     uint32_t out_cb_size;
     if (is_local_shard_only) {
@@ -186,8 +185,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
-        // Reader: batch_offset = starting input page, weights_offset = byte offset within page, index_idx = index
-        // within first block
+        // Reader
         {
             reader_runtime_args[2] = input_offset / num_input_elems_per_page;
             reader_runtime_args[3] =
