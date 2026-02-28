@@ -147,7 +147,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   metalium-smoke-tests:
-    needs: [ asan-build, find-changed-files ]
+    needs: [ check-harbor, asan-build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -168,9 +168,10 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   ttnn-smoke-tests:
-    needs: [ asan-build, find-changed-files ]
+    needs: [ check-harbor, asan-build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -192,6 +193,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -312,7 +314,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
-    needs: [ build, find-changed-files ]
+    needs: [ check-harbor, build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -330,9 +332,10 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   ttnn-examples:
-    needs: [ build, find-changed-files ]
+    needs: [ check-harbor, build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -350,9 +353,10 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   ttsim-integration-tests:
-    needs: [ build ]
+    needs: [ check-harbor, build ]
     if: >-
       ${{ github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.fork == false }}
@@ -366,6 +370,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.

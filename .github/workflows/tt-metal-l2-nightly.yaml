@@ -96,12 +96,16 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -305,7 +309,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_cpp_tests) &&
       needs.generate-arch-matrix.outputs.matrix-cpp-tests != '[]'
@@ -316,6 +320,7 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-cpp-tests) }}
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -324,7 +329,7 @@ jobs:
       nightly-run: true
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_metal_iommu_tests) &&
       needs.generate-arch-matrix.outputs.matrix-blackhole-only != '[]'
@@ -335,6 +340,7 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-blackhole-only) }}
     uses: ./.github/workflows/metal-iommu-unit-tests.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -360,7 +366,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_fd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
@@ -371,13 +377,14 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN Tutorials
   test-ttnn-tutorials:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tutorials != '[]'
@@ -388,6 +395,7 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tutorials) }}
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
@@ -411,7 +419,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
@@ -422,6 +430,7 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -429,7 +438,7 @@ jobs:
       gtest_filter: "*"
   # FD Model Tests
   models-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
@@ -440,6 +449,7 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

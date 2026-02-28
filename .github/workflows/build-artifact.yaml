@@ -631,6 +631,7 @@ jobs:
         ${{ inputs.manylinux-docker-image ||
             needs.build-docker-image.outputs.manylinux-tag ||
             'docker-image-unresolved!' }}
+      harbor-prefix: ${{ inputs.harbor-prefix }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}

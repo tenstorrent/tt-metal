@@ -166,14 +166,18 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -213,11 +217,12 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [check-harbor, build-artifact, tests-to-run]
     secrets: inherit
     if: ${{ needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -229,7 +234,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [check-harbor, build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -240,6 +245,7 @@ jobs:
     if: ${{ needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -251,7 +257,7 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [check-harbor, build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -262,6 +268,7 @@ jobs:
     if: ${{ needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -297,10 +304,11 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [build-artifact, tests-to-run]
+    needs: [check-harbor, build-artifact, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

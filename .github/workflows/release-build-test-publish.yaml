@@ -53,13 +53,16 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-      needs: parse-platform
+      needs: [check-harbor, parse-platform]
       uses: ./.github/workflows/build-artifact.yaml
       permissions:
         packages: write
       secrets: inherit
       with:
+        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
         platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: false

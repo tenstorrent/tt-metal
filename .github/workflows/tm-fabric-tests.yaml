@@ -88,12 +88,17 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -185,7 +190,7 @@ jobs:
           echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
           echo "Generated matrix: $matrix_json"
   fabric-tests:
-    needs: [build-artifact, generate-fabric-matrix]
+    needs: [check-harbor, build-artifact, generate-fabric-matrix]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -193,6 +198,7 @@ jobs:
         test-config: ${{ fromJson(needs.generate-fabric-matrix.outputs.matrix) }}
     uses: ./.github/workflows/tm-fabric-tests-impl.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

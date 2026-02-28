@@ -75,22 +75,7 @@ jobs:
   # Check Harbor availability first
   check-harbor:
     name: "Check Harbor"
-    runs-on: ubuntu-latest
-    outputs:
-      harbor-prefix: ${{ steps.check.outputs.harbor-prefix }}
-    steps:
-      - name: Check Harbor availability
-        id: check
-        run: |
-          # Try to reach Harbor registry API
-          if curl -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" > /dev/null 2>&1 || \
-             curl -sf "https://harbor.ci.tenstorrent.net/v2/" > /dev/null 2>&1; then
-            echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
-            echo "Harbor is available"
-          else
-            echo "harbor-prefix=" >> $GITHUB_OUTPUT
-            echo "Harbor unavailable, falling back to direct GHCR"
-          fi
+    uses: ./.github/workflows/check-harbor.yaml
 
   # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share.
   build-tools:
