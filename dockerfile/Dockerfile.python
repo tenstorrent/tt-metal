@@ -19,6 +19,7 @@
 
 # Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
 ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
@@ -37,13 +38,14 @@ FROM ${UV_IMAGE} AS uv-layer
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
 
+ARG PYTHON_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
 
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
-# Install Python and required build dependencies
+# Install required build dependencies (without system python3 - we'll use uv's managed Python)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
@@ -51,16 +53,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create relocatable virtual environment
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+# Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
+# This ensures the Python interpreter is installed to a path that can be read
+# when running bundle_python_into_venv.sh
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Set environment variables for the venv (must be Docker ENV so they persist
 # across RUN layers and are visible to uv's build subprocesses)
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Install base packages
-RUN umask 000 && uv pip install --no-cache build numpy setuptools==80
+# Install Python with uv and create relocatable virtual environment
+# umask 000 ensures the venv is world-writable for multi-host NFS access
+RUN umask 000 && \
+    uv python install ${PYTHON_VERSION} && \
+    uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv pip install --no-cache uv build numpy setuptools==80
+
+# Bundle the Python interpreter into the venv for full portability
+# This makes the venv hermetic and suitable for sharing across multi-host SLURM environments
+COPY scripts/bundle_python_into_venv.sh /tmp/
+RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
@@ -73,6 +86,7 @@ COPY --from=ci-build-venv-builder /opt/venv /install/venv
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-test-venv-builder
 
+ARG PYTHON_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
@@ -80,7 +94,7 @@ ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
-# Install Python and required build dependencies
+# Install required build dependencies (without system python3 - we'll use uv's managed Python)
 # Some packages require compilation, so we need build-essential and dev headers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -96,19 +110,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create relocatable virtual environment (separate RUN so the venv is fully
-# materialized on disk before any pip installs reference it)
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+# Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Set environment variables for the venv (must be Docker ENV, not shell export,
 # so they persist across RUN layers and are inherited by uv's build subprocesses)
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
+# Install Python with uv and create relocatable virtual environment
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
-RUN umask 000 && uv pip install --no-cache setuptools==80
+RUN umask 000 && \
+    uv python install ${PYTHON_VERSION} && \
+    uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv pip install --no-cache uv setuptools==80
 
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
@@ -132,6 +149,11 @@ RUN umask 000 && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Bundle the Python interpreter into the venv for full portability
+# This makes the venv hermetic and suitable for sharing across multi-host SLURM environments
+COPY scripts/bundle_python_into_venv.sh /tmp/
+RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-test-venv

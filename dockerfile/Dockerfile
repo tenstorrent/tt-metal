@@ -136,8 +136,6 @@ COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
 COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=cba-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
-
-# Copy pre-built mold from GHCR tool image
 COPY --from=mold-layer /install/ /usr/local/
 
 # Copy pre-built ci-build venv from tool image
@@ -276,29 +274,25 @@ ARG PYTHON_VERSION
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+ARG WHEEL_FILENAME
+ADD $WHEEL_FILENAME $WHEEL_FILENAME
+
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
-
 # Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
 COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
-RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-RUN mkdir -p /etc && \
-    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
-
-ARG WHEEL_FILENAME
-ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN umask 000 && uv pip install $WHEEL_FILENAME
+RUN umask 000 && \
+    uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR" && \
+    /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR" && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc && \
+    mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf && \
+    umask 000 && \
+    uv pip install $WHEEL_FILENAME
 
 #############################################################
 # Release models image
@@ -333,7 +327,7 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
     && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 

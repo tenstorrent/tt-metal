@@ -151,6 +151,7 @@ target "ci-build-venv" {
   target     = "ci-build-venv"
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
+    PYTHON_VERSION = PYTHON_VERSION
   }
   tags = ["python-ci-build-venv:local"]
 }
@@ -161,6 +162,7 @@ target "ci-test-venv" {
   target     = "ci-test-venv"
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
+    PYTHON_VERSION = PYTHON_VERSION
   }
   tags = ["python-ci-test-venv:local"]
 }
