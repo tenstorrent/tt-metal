@@ -220,13 +220,17 @@ def run_flash_mla_decode_impl(
     # When Q memory config is provided, it is expected that Q is sharded such that
     # each worker core has its own local Q shard
     if q_mem_config is not None:
-        num_cores_per_head = 4
         q_heads_parallel_factor = math.ceil(nh / ttnn.TILE_SIZE)
+        assert (
+            q_heads_parallel_factor > 1
+        ), f"Custom Q memory config requires q_heads_parallel_factor > 1, got {q_heads_parallel_factor}."
         heads_per_vbatch = nh // q_heads_parallel_factor
-        q_permuted = q.permute(2, 0, 1, 3)
-        q_reshaped = q_permuted.reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)
-        q_replicated = q_reshaped.repeat_interleave(num_cores_per_head, dim=2)
-        q_for_tt = q_replicated.reshape(1, 1, -1, q_replicated.shape[-1])
+        q_for_tt = (
+            q.permute(2, 0, 1, 3)
+            .reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)
+            .repeat_interleave(max_cores_per_head_batch, dim=2)
+            .reshape(1, 1, -1, q.shape[-1])
+        )
     else:
         q_for_tt = q.permute(2, 0, 1, 3)  # Original path: (1, 4, 128, 576)
 
