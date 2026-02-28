@@ -146,6 +146,9 @@ if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+    # Disable reflect's built-in static_assert self-tests.  They use unqualified
+    # `detail::` which is ambiguous when fmt::detail is also in scope.
+    target_compile_definitions(reflect INTERFACE NTEST)
 
     target_sources(
         reflect
@@ -344,6 +347,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
+        "BUILD_SHARED_LIBS OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -353,7 +357,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.7
+    VERSION 1.1.8
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
@@ -374,4 +378,5 @@ CPMAddPackage(
         "CMAKE_CXX_EXTENSIONS ON"
     PATCHES
         capnproto_capture_this.patch
+        capnproto_pthread.patch
 )

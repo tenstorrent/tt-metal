@@ -105,6 +105,7 @@ struct Broadcast {
         uint32_t ring_index;
         uint32_t secondary_sync_sem;
         uint32_t num_connections;
+        uint32_t fabric_args_start_index = 0;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -172,10 +173,6 @@ struct Broadcast {
 
                 // Reset pool so broadcast can be called across loop iterations
                 PacketHeaderPool::reset();
-                size_t arg_for_fab = 0;
-
-                // Reset pool so broadcast can be called across loop iterations
-                PacketHeaderPool::reset();
 
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
@@ -184,8 +181,9 @@ struct Broadcast {
 
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
+                size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
                 }
 
                 uint8_t starts[] = {
@@ -261,10 +259,18 @@ struct Broadcast {
                     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
                     // 3. wait for mcast output ready semaphore
+                    // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
+                    // is async and a fast device increments the semaphore multiple times before a slow
+                    // device observes it. With wait+reset the slow device could miss an increment and
+                    // hang. In a real decoder this shouldn't be a problem because other ops
+                    // between iterations will naturally sync the devices, but wait_min is a
+                    // pragmatic choice to streamline standalone testing.
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xA1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xA2);
                     }
 
                     // 4. global semaphore reset
@@ -279,9 +285,11 @@ struct Broadcast {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xB1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xB2);
                     }
 
                     // Reset semaphore after receiving data
@@ -312,9 +320,11 @@ struct Broadcast {
                 } else {
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xC1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xC2);
                     }
 
                     // Reset global semaphore

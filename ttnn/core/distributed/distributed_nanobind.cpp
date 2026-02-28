@@ -4,6 +4,7 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -38,6 +39,7 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -1023,6 +1025,9 @@ void py_module(nb::module_& mod) {
                 >>> ttnn.distributed_context_barrier()
                 >>> # All processes continue from here
         )doc");
+
+    auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
 }
 
 }  // namespace ttnn::distributed

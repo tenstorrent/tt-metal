@@ -31,7 +31,7 @@ protected:
             return;
         }
 
-        const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+        const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
         auto core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
         mesh_device_ = tt::tt_metal::distributed::MeshDevice::create(

@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 
-#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"

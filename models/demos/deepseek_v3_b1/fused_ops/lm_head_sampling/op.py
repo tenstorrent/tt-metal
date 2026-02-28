@@ -76,17 +76,23 @@ class LMHeadSampling:
         Args:
             input_tensor: Input tensor (torch.Tensor) [M, K]
             gamma_tensor: RMSNorm gamma/weight tensor (torch.Tensor) [M, K]
+            gamma_tensor: RMSNorm gamma/weight tensor (torch.Tensor) [M, K]
             vocab_tensor: Vocab tensor (torch.Tensor) [K, N]
             indices: Optional indices tensor used by fused sampling. If provided,
                 golden returns sampled index tensor [1, 1]. If omitted, returns scores.
             k: Sampling k; currently only k=1 supported when indices is provided.
             p: Top-p threshold (unused for k=1 path).
             epsilon: Small value to avoid division by zero in RMS norm.
+            epsilon: Small value to avoid division by zero in RMS norm.
 
         Returns:
             - If indices is None: output scores tensor [M, N]
             - If indices is provided: sampled index tensor [1, 1] (uint32)
         """
+        variance = input_tensor.pow(2).mean(-1, keepdim=True)
+        normalized = input_tensor * torch.rsqrt(variance + epsilon)
+        rmsnorm_out = normalized * gamma_tensor
+        scores = rmsnorm_out @ vocab_tensor
         variance = input_tensor.pow(2).mean(-1, keepdim=True)
         normalized = input_tensor * torch.rsqrt(variance + epsilon)
         rmsnorm_out = normalized * gamma_tensor
@@ -108,17 +114,13 @@ class LMHeadSampling:
         max_score = torch.max(scores_f32)
         tied_mask = scores_f32 == max_score
         selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
-        topk_count = min(10, scores_f32.numel())
-        topk_scores, topk_positions = torch.topk(scores_f32, k=topk_count, largest=True, sorted=True)
-        topk_indices = indices_i64[topk_positions]
-        topk_pairs = [(int(idx.item()), float(score.item())) for idx, score in zip(topk_indices, topk_scores)]
-
         return selected_index.reshape(1, 1)
 
     @staticmethod
     def op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
+        gamma_tensor,
         gamma_tensor,
         vocab_tensor,
         output_tensor,
@@ -135,6 +137,8 @@ class LMHeadSampling:
         secondary_cluster_axis=None,
         num_links=1,
         fp32_dest_acc_en=False,
+        epsilon=1e-6,
+        rsqrt_fast_approx=False,
         epsilon=1e-6,
         rsqrt_fast_approx=False,
         skip_ccl=None,
@@ -155,6 +159,7 @@ class LMHeadSampling:
         Args:
             input_tensor_mesh: Input tensor mesh [1, K] height-sharded in L1 on a single sender core
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
+            gamma_tensor: RMSNorm gamma tensor [1, K], same tile/layout as input
             gamma_tensor: RMSNorm gamma tensor [1, K], same tile/layout as input
             vocab_tensor: Vocab weights [K, N_total] width-sharded across matmul cores as [K, N_per_core]
             output_tensor: Pre-allocated output [1, N_total] width-sharded across matmul cores
@@ -245,6 +250,7 @@ class LMHeadSampling:
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
+        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
         vocab_tensors_per_device = ttnn.get_device_tensors(vocab_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
@@ -331,8 +337,11 @@ class LMHeadSampling:
         # CB indices
         # ====================================================================
         rmsnorm_input_cb = 0  # raw input on sender core (tensor-backed)
+        rmsnorm_input_cb = 0  # raw input on sender core (tensor-backed)
         mcast_dst_cb = 1  # Mcast destination = matmul in0 (all mcast grid cores, intermediate)
         matmul_in1_cb = 2  # vocab_tensor weights on matmul cores (tensor-backed)
+        rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
+        mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
         rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
         mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
         argmax_winner_cb = 3
@@ -372,6 +381,7 @@ class LMHeadSampling:
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
+                gamma_tensor_device = gamma_tensors_per_device[device_idx]
                 gamma_tensor_device = gamma_tensors_per_device[device_idx]
                 vocab_tensor_device = vocab_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
@@ -668,6 +678,10 @@ class LMHeadSampling:
                     ("rmsnorm_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
                     ("rmsnorm_num_tiles", rms_num_tiles),
+                    ("mcast_src_num_pages", rms_num_tiles),
+                    ("rmsnorm_input_cb", rmsnorm_input_cb),
+                    ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
+                    ("rmsnorm_num_tiles", rms_num_tiles),
                     # Mcast receiver
                     ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
                     ("mcast_dst_cb", mcast_dst_cb),
@@ -731,6 +745,7 @@ class LMHeadSampling:
                     ("rmsnorm_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_num_tiles", rms_num_tiles),
                     ("mcast_src_cb", mcast_src_cb),
+                    ("mcast_src_num_pages", rms_num_tiles),
                     ("mcast_src_num_pages", rms_num_tiles),
                     ("mcast_dst_cb", mcast_dst_cb),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
@@ -869,8 +884,37 @@ class LMHeadSampling:
                 # Circular buffer descriptors
                 # ================================================================
                 # CB 0: RMSNorm input source — In multi-device mode, backed by intermediate_tensor
+                # CB 0: RMSNorm input source — In multi-device mode, backed by intermediate_tensor
                 #       (where CCL broadcast placed the data). In single-device mode,
                 #       backed by input_tensor directly.
+                rmsnorm_input_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
+                rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm_input_cb, rmsnorm_input_backing_tensor
+                )
+                rms_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                rmsnorm_input_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                # CB 7: RMSNorm gamma — tensor-backed on sender core.
+                rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm_gamma_cb, gamma_tensor_device
+                )
+                rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+
+                # CB 8: RMSNorm output — intermediate on sender core, becomes mcast source.
+                rmsnorm_out_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                rmsnorm_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=mcast_src_cb,
+                    data_format=data_format,
+                    page_size=rms_tile_size,
+                    tile=rmsnorm_out_tile_descriptor,
+                )
+                rmsnorm_out_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=rms_num_tiles * rms_tile_size,
+                    core_ranges=mcast_sender_core_grid,
+                    format_descriptors=[rmsnorm_out_cb_format],
+                )
                 rmsnorm_input_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
                 rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm_input_cb, rmsnorm_input_backing_tensor
@@ -929,8 +973,11 @@ class LMHeadSampling:
                 # CB list
                 cbs_list = [
                     rmsnorm_input_cb_descriptor,
+                    rmsnorm_input_cb_descriptor,
                     mcast_dst_cb_descriptor,
                     matmul_in1_cb_descriptor,
+                    rmsnorm_gamma_cb_descriptor,
+                    rmsnorm_out_cb_descriptor,
                     rmsnorm_gamma_cb_descriptor,
                     rmsnorm_out_cb_descriptor,
                     matmul_out_cb_descriptor,
@@ -1036,6 +1083,10 @@ class LMHeadSampling:
                         epsilon_packed,
                         scalar_packed,
                     ],
+                    trisc_common_runtime_args=[
+                        epsilon_packed,
+                        scalar_packed,
+                    ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_input_core",
@@ -1052,6 +1103,12 @@ class LMHeadSampling:
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul_core",
                             core_range=matmul_core_grid,
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_rmsnorm_core",
+                            core_range=mcast_sender_core_grid,
                             value=1,
                             other_value=0,
                         ),
@@ -1219,6 +1276,7 @@ class LMHeadSampling:
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
         # Execute generic op
+        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
         io_tensors.extend([indices_tensor, output_index_tensor])
         if not skip_ccl:

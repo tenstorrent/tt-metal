@@ -36,9 +36,6 @@ def _mesh_device_index(final_mesh_coord, mesh_device):
 def _run_sampling_argmax_single_device_101_cores(device, seed: int, final_core_idx: int):
     grid_size = device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
-    if len(all_device_cores) < 101:
-        pytest.skip(f"Need at least 101 cores, found {len(all_device_cores)}")
-
     active_cores = all_device_cores[:101]
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
@@ -136,6 +133,7 @@ def _run_sampling_argmax_single_device_101_cores(device, seed: int, final_core_i
         (4242, 73),  # non-boundary core
     ],
 )
+@pytest.mark.requires_grid_size(101)
 def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     """
     Test k=1 sampling (argmax path) for a single device and 101 cores.
@@ -159,6 +157,7 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
         ((2, 0), 4242, 73, 7),  # force winner off device 0
     ],
 )
+@pytest.mark.requires_grid_size(101)
 def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx, forced_winner_device_idx):
     """
     Mesh extension test on 4x2 only:
@@ -167,9 +166,6 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
     """
     grid_size = mesh_device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
-    if len(all_device_cores) < 101:
-        pytest.skip(f"Need at least 101 cores, found {len(all_device_cores)}")
-
     active_cores = all_device_cores[:101]
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"

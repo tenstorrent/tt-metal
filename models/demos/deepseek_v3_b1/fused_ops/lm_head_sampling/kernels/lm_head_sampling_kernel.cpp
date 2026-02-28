@@ -37,6 +37,7 @@
 #include "../../../unified_kernels/broadcast.hpp"
 #include "../../../unified_kernels/argmax.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
+#include "../../../unified_kernels/rmsnorm.hpp"
 
 // Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
 // Each flag is specialized per core group at compile time, enabling if constexpr
@@ -114,7 +115,7 @@ void kernel_main() {
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -219,11 +220,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
+        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         get_write_ptr(mcast_dst_cb),
     };
@@ -264,6 +266,18 @@ void kernel_main() {
 
     // Matmul compute: [1, K] x [K, N_per_core] -> [1, N_per_core]
     // out_w (output tiles per core) is a compile-time template param for loop unrolling
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
+    };
+
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hostdevcommon/fabric_common.h"
