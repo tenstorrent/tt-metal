@@ -30,21 +30,22 @@ Quick Start:
 
 __version__ = "0.1.0"
 
+from models.experimental.openvoice.tt.duration_predictor import TTNNDurationPredictor
+from models.experimental.openvoice.tt.generator import TTNNGenerator
+from models.experimental.openvoice.tt.melo_tts import TTNNMeloTTS
+from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
+from models.experimental.openvoice.tt.reference_encoder import TTNNReferenceEncoder
+from models.experimental.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock
+
 # Models
 from models.experimental.openvoice.tt.synthesizer import TTNNSynthesizerTrn
-from models.experimental.openvoice.tt.tone_color_converter import TTNNToneColorConverter
-from models.experimental.openvoice.tt.reference_encoder import TTNNReferenceEncoder
-from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
-from models.experimental.openvoice.tt.generator import TTNNGenerator
-from models.experimental.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock
 from models.experimental.openvoice.tt.text_encoder import TTNNTextEncoder
-from models.experimental.openvoice.tt.duration_predictor import TTNNDurationPredictor
+from models.experimental.openvoice.tt.tone_color_converter import TTNNToneColorConverter
 from models.experimental.openvoice.tt.transformer_flow import TTNNTransformerCouplingBlock
-from models.experimental.openvoice.tt.melo_tts import TTNNMeloTTS
+from models.experimental.openvoice.utils.audio import AudioProcessor, load_audio, save_audio
 
 # Utils
 from models.experimental.openvoice.utils.weight_loader import load_openvoice_checkpoint
-from models.experimental.openvoice.utils.audio import AudioProcessor, load_audio, save_audio
 
 __all__ = [
     # Version
