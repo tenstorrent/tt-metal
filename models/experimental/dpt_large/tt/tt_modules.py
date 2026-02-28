@@ -20,7 +20,6 @@ import torch
 
 from .tt_cnn_ops import TTConv2dCached
 from .perf_counters import (
-    inc_attn_island_interleave,
     inc_attn_island_reshard,
     inc_ln_island_interleave,
     inc_ln_island_reshard,
