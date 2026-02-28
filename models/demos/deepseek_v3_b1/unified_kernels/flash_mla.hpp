@@ -402,7 +402,7 @@ struct FlashMLADecode {
             }
             // Mask logic could be overlapped with the noc txns above, but currently DRAM reading fully overlaps with
             // the mask logic
-            bool mask_last_chunk = k_chunk_end == k_num_chunks;
+            bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
             if (mask_last_chunk) {
                 DeviceZoneScopedN("mask-last-chunk");
                 cb_reserve_back(args.cb_mask, 1);
@@ -639,7 +639,7 @@ struct FlashMLADecode {
                 sdpa_ms_cb = cb_out_ms;
             }
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
-            bool mask_last_chunk = k_chunk_end == k_num_chunks;
+            bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
             if (mask_last_chunk) {
                 cb_wait_front(cb_mask, 1);
             }

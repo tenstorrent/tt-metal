@@ -40,9 +40,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
-@pytest.mark.parametrize(
-    "position_id", [0, 1, 127, 242, 255, 564, 1023]
-)  # Must test 128 chunk aligned decode postions, add other tests when causal masks are in for SDPA
+@pytest.mark.parametrize("position_id", [0, 1, 127, 242, 255, 564, 1023])
 @pytest.mark.parametrize(
     "device_params",
     [

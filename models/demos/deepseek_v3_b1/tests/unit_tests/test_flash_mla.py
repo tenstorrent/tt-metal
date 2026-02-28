@@ -235,9 +235,7 @@ def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max
         # Basic sanity check - output should not be all zeros or NaN
         assert not torch.isnan(output_torch).any(), f"Iteration {i}: Output contains NaN values"
         assert not torch.all(output_torch == 0), f"Iteration {i}: Output is all zeros"
-        torch.set_printoptions(sci_mode=False)
-        print(output_torch)
-        print(reference_output)
+
         if i == 0:
             # First iteration: compare with golden reference and store result
             out_max_diff = torch.max(torch.abs(output_torch - reference_output)).item()
