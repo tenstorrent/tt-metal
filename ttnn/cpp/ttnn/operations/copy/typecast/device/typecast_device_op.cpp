@@ -116,9 +116,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
-        const uint32_t page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
         TT_FATAL(
-            page_size_bytes % l1_alignment == 0,
+            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);
