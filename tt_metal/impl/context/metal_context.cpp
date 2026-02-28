@@ -155,7 +155,7 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
     TT_ASSERT(query_descriptor_ != nullptr);
-    TT_FATAL(query_.is_initialized(), "MetalliumObject not initialized");
+    TT_FATAL(query_.is_initialized(), "MetalliumEnv not initialized");
 
     // Workaround for galaxy, need to always re-init
     if (rtoptions().get_force_context_reinit() or get_cluster().is_galaxy_cluster()) {
@@ -469,9 +469,9 @@ void MetalContext::initialize_base_objects() {
     // Check if mock mode was configured via API (before env vars take effect)
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>(*mock_cluster_desc);
+        query_descriptor_ = std::make_shared<MetalliumEnvDescriptor>(*mock_cluster_desc);
     } else {
-        query_descriptor_ = std::make_shared<MetalliumObjectDescriptor>();
+        query_descriptor_ = std::make_shared<MetalliumEnvDescriptor>();
     }
     query_.initialize(query_descriptor_);
 

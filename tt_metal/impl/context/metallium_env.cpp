@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "metallium_object.hpp"
+#include "metallium_env.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
 #include "profiler_state_manager.hpp"
@@ -13,17 +13,17 @@
 
 namespace tt::tt_metal {
 
-MetalliumObject::MetalliumObject() = default;
+MetalliumEnv::MetalliumEnv() = default;
 
-MetalliumObject::~MetalliumObject() { this->destroy(); }
+MetalliumEnv::~MetalliumEnv() { this->destroy(); }
 
-void MetalliumObject::initialize(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) {
-    TT_FATAL(!initialized_, "MetalliumObject already initialized");
+void MetalliumEnv::initialize(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor) {
+    TT_FATAL(!initialized_, "MetalliumEnv already initialized");
     this->verify_fw_initialize_base_objects(descriptor);
     initialized_ = true;
 }
 
-void MetalliumObject::destroy() {
+void MetalliumEnv::destroy() {
     if (!initialized_) {
         return;
     }
@@ -33,24 +33,24 @@ void MetalliumObject::destroy() {
     initialized_ = false;
 }
 
-llrt::RunTimeOptions& MetalliumObject::get_rtoptions() const {
-    TT_FATAL(rtoptions_ != nullptr, "MetalliumObject not initialized");
+llrt::RunTimeOptions& MetalliumEnv::get_rtoptions() const {
+    TT_FATAL(rtoptions_ != nullptr, "MetalliumEnv not initialized");
     return *rtoptions_;
 }
 
-const tt::tt_metal::Hal& MetalliumObject::get_hal() const {
-    TT_FATAL(hal_ != nullptr, "MetalliumObject not initialized");
+const tt::tt_metal::Hal& MetalliumEnv::get_hal() const {
+    TT_FATAL(hal_ != nullptr, "MetalliumEnv not initialized");
     return *hal_;
 }
 
-tt::Cluster& MetalliumObject::get_cluster() const {
-    TT_FATAL(cluster_ != nullptr, "MetalliumObject not initialized");
+tt::Cluster& MetalliumEnv::get_cluster() const {
+    TT_FATAL(cluster_ != nullptr, "MetalliumEnv not initialized");
     return *cluster_;
 }
 
-bool MetalliumObject::is_initialized() const { return initialized_; }
+bool MetalliumEnv::is_initialized() const { return initialized_; }
 
-void MetalliumObject::verify_fw_initialize_base_objects(const std::shared_ptr<MetalliumObjectDescriptor>& descriptor) {
+void MetalliumEnv::verify_fw_initialize_base_objects(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor) {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
     if (descriptor->is_mock_device()) {
