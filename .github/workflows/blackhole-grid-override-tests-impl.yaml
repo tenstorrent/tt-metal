@@ -22,6 +22,11 @@ on:
         type: string
         default: 'blackhole'
         description: 'Architecture name to use'
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   reduced-core-count-tests:
@@ -60,7 +65,7 @@ jobs:
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
-      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib

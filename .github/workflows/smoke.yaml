@@ -27,6 +27,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   smoke:
@@ -38,7 +43,7 @@ jobs:
           || format('tt-ubuntu-2204-{0}-stable', inputs.runner)
       }}
     container:
-      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', vars.HARBOR_PREFIX, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"

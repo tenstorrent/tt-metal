@@ -90,6 +90,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -144,9 +149,14 @@ jobs:
           echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
           echo "merge-base=$merge_base" >> "$GITHUB_OUTPUT"
 
+  # Check Harbor availability first
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
@@ -154,11 +164,12 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   # Full scan: single job that analyzes everything
   clang-tidy-full:
     name: 🤖 Clang Tidy (Full)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [ check-harbor, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -176,11 +187,12 @@ jobs:
       merge-base: ''
       prereq-targets: ''
       scan-targets: ''
+      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
     name: 🤖 Clang Tidy (Metalium)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [ check-harbor, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -198,10 +210,11 @@ jobs:
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
+      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [ check-harbor, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -219,10 +232,11 @@ jobs:
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
+      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [ check-harbor, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -240,10 +254,11 @@ jobs:
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
+      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
+    needs: [ check-harbor, build-docker-image ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
@@ -251,7 +266,7 @@ jobs:
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: >-
-        ${{ vars.HARBOR_PREFIX }}${{
+        ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}${{
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!'}}

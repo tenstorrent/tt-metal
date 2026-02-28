@@ -61,6 +61,11 @@ on:
         type: boolean
         default: true
         description: "Run tests on BH-QB-GE"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   # Wormhole N300 - Fabric tests
@@ -81,6 +86,7 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      harbor-prefix: ${{ inputs.harbor-prefix }}
 
   # Wormhole T3K - Fabric tests
   wh-t3k-fabric-tests:
@@ -96,6 +102,7 @@ jobs:
       run-fabric-tests: 'true'
       run-multiprocess-tests: 'false'
       run-ccl-tests: 'false'
+      harbor-prefix: ${{ inputs.harbor-prefix }}
 
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:
@@ -103,7 +110,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

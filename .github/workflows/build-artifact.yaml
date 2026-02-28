@@ -120,6 +120,11 @@ on:
         type: string
         default: ""
         description: "Pre-built ManyLinux Docker image tag"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
     outputs:
       ci-build-docker-image:
         description: >-
@@ -216,6 +221,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   # =============================================================================
@@ -271,6 +281,7 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
+      harbor-prefix: ${{ inputs.harbor-prefix }}
 
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
@@ -343,7 +354,7 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
-        ${{ vars.HARBOR_PREFIX }}${{
+        ${{ inputs.harbor-prefix }}${{
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!' }}

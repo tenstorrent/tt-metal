@@ -43,6 +43,11 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   models:
@@ -63,7 +68,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
