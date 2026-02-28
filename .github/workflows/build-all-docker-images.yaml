@@ -17,6 +17,12 @@ name: "Build all Docker images"
 
 on:
   workflow_call:
+    inputs:
+      force-rebuild:
+        required: false
+        type: boolean
+        default: false
+        description: "Force rebuild of all Docker images even if they exist in registry"
     outputs:
       # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
       ubuntu-2204-ci-build-tag:
@@ -55,6 +61,12 @@ on:
         description: "Docker tag for ManyLinux image"
         value: ${{ jobs.build-2204.outputs.manylinux-tag }}
   workflow_dispatch:
+    inputs:
+      force-rebuild:
+        required: false
+        type: boolean
+        default: false
+        description: "Force rebuild of all Docker images even if they exist in registry"
 
 permissions:
   packages: write
@@ -64,6 +76,8 @@ jobs:
   build-tools:
     name: "🔧 Build tool images"
     uses: ./.github/workflows/build-docker-tools.yaml
+    with:
+      force-rebuild: ${{ inputs.force-rebuild }}
     secrets: inherit
 
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms.
@@ -76,6 +90,7 @@ jobs:
       architecture: "amd64"
       build-manylinux: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
+      force-rebuild: ${{ inputs.force-rebuild }}
     secrets: inherit
 
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here.
@@ -88,4 +103,73 @@ jobs:
       architecture: "amd64"
       build-manylinux: false
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
+      force-rebuild: ${{ inputs.force-rebuild }}
     secrets: inherit
+
+  # Prewarm cache by pulling images from GHCR through HARBOR
+  prewarm-cache:
+    name: "🏃 Prewarm cache from GHCR via HARBOR"
+    needs: [build-tools, build-2204, build-2404]
+    if: always() && !failure() && !cancelled()
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prewarm tool images cache
+        env:
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+          TOOL_TAGS: ${{ needs.build-tools.outputs.tool-tags }}
+        run: |
+          set -euo pipefail
+          echo "Prewarming tool images from GHCR via HARBOR..."
+          for key in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
+            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${key}-tag\"")
+            echo "Pulling $tag..."
+            docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+          done
+
+      - name: Prewarm Ubuntu 22.04 images cache
+        env:
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+        run: |
+          set -euo pipefail
+          echo "Prewarming Ubuntu 22.04 images from GHCR via HARBOR..."
+          images=(
+            "${{ needs.build-2204.outputs.ci-build-tag }}"
+            "${{ needs.build-2204.outputs.ci-test-tag }}"
+            "${{ needs.build-2204.outputs.dev-tag }}"
+            "${{ needs.build-2204.outputs.basic-dev-tag }}"
+            "${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}"
+            "${{ needs.build-2204.outputs.manylinux-tag }}"
+          )
+          for tag in "${images[@]}"; do
+            if [ -n "$tag" ]; then
+              echo "Pulling $tag..."
+              docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+            fi
+          done
+
+      - name: Prewarm Ubuntu 24.04 images cache
+        env:
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+        run: |
+          set -euo pipefail
+          echo "Prewarming Ubuntu 24.04 images from GHCR via HARBOR..."
+          images=(
+            "${{ needs.build-2404.outputs.ci-build-tag }}"
+            "${{ needs.build-2404.outputs.ci-test-tag }}"
+            "${{ needs.build-2404.outputs.dev-tag }}"
+            "${{ needs.build-2404.outputs.basic-dev-tag }}"
+            "${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}"
+          )
+          for tag in "${images[@]}"; do
+            if [ -n "$tag" ]; then
+              echo "Pulling $tag..."
+              docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+            fi
+          done

@@ -8,7 +8,7 @@ permissions:
   packages: write
 
 env:
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=19,force-compression=true,oci-mediatypes=true
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_call:
@@ -17,6 +17,11 @@ on:
         required: true
         type: string
         description: "Platform (e.g. Ubuntu 22.04) for venv base image"
+      force-rebuild:
+        required: false
+        type: boolean
+        default: false
+        description: "Force rebuild of all Python venv images even if they exist in registry"
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
@@ -32,7 +37,7 @@ jobs:
   # Compute content-addressed tags and check which venv images already exist
   tags:
     name: "📋 Compute venv tags"
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     outputs:
       ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
       ci-build-venv-exists: ${{ steps.check.outputs.ci-build-venv-exists }}
@@ -71,11 +76,16 @@ jobs:
         id: check
         run: |
           set -euo pipefail
+          FORCE_REBUILD="${{ inputs.force-rebuild }}"
           any_missing=false
           check_image() {
             local tag="$1"
             local name="$2"
-            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+            if [ "$FORCE_REBUILD" = "true" ]; then
+              echo "Force rebuild enabled: treating $tag as missing"
+              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+              any_missing=true
+            elif docker manifest inspect "$tag" > /dev/null 2>&1; then
               echo "$tag exists"
               echo "${name}-exists=true" >> $GITHUB_OUTPUT
             else

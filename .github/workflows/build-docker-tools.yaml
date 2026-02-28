@@ -8,10 +8,16 @@ permissions:
   packages: write
 
 env:
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=19,force-compression=true,oci-mediatypes=true
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_call:
+    inputs:
+      force-rebuild:
+        required: false
+        type: boolean
+        default: false
+        description: "Force rebuild of all tool images even if they exist in registry"
     outputs:
       # JSON bundle containing all tool tags
       tool-tags:
@@ -58,10 +64,15 @@ jobs:
         run: |
           set -euo pipefail
           TOOL_TAGS='${{ steps.tags.outputs.tool-tags }}'
+          FORCE_REBUILD="${{ inputs.force-rebuild }}"
           any_missing=false
           for key in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${key}-tag\"")
-            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+            if [ "$FORCE_REBUILD" = "true" ]; then
+              echo "Force rebuild enabled: treating $tag as missing"
+              echo "${key}-exists=false" >> $GITHUB_OUTPUT
+              any_missing=true
+            elif docker manifest inspect "$tag" > /dev/null 2>&1; then
               echo "$tag exists"
               echo "${key}-exists=true" >> $GITHUB_OUTPUT
             else
@@ -78,7 +89,7 @@ jobs:
     needs: tags
     if: needs.tags.outputs.any-missing == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Checkout
         uses: actions/checkout@v4

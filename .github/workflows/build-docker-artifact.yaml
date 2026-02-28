@@ -31,7 +31,7 @@ permissions:
   packages: write
 
 env:
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=19,force-compression=true,oci-mediatypes=true
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_call:
@@ -63,6 +63,11 @@ on:
           When provided, skips building tool images and uses these tags instead.
           Tags are converted to bake context overrides for Dockerfile builds.
           Example: needs.build-tools.outputs.tool-tags
+      force-rebuild:
+        required: false
+        type: boolean
+        default: false
+        description: "Force rebuild of all Docker images even if they exist in registry"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -137,6 +142,7 @@ jobs:
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
       platform: ${{ inputs.platform }}
+      force-rebuild: ${{ inputs.force-rebuild }}
     secrets: inherit
 
   # =============================================================================
@@ -238,6 +244,19 @@ jobs:
         id: images
         run: |
           set -euo pipefail
+          FORCE_REBUILD="${{ inputs.force-rebuild }}"
+
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "Force rebuild enabled: treating all images as missing"
+            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
+            echo "dev-exists=false" >> $GITHUB_OUTPUT
+            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
+            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
+            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           if docker manifest inspect "${{ steps.tags.outputs.dev-tag }}" > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.dev-tag }} exists"
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
