@@ -108,11 +108,16 @@ def prefill_forward(
             ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table_flat, batch_idx=0)
             k_fill.deallocate(True)
             v_fill.deallocate(True)
+            page_table_flat.deallocate(True)
         else:
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
             ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+            if page_len < tt_k.shape[2]:
+                tt_k_sliced.deallocate(True)
+            if page_len < tt_v.shape[2]:
+                tt_v_sliced.deallocate(True)
 
     else:
         # Non-paged attention
