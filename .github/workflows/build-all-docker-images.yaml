@@ -72,18 +72,40 @@ permissions:
   packages: write
 
 jobs:
+  # Check Harbor availability first
+  check-harbor:
+    name: "Check Harbor"
+    runs-on: ubuntu-latest
+    outputs:
+      harbor-prefix: ${{ steps.check.outputs.harbor-prefix }}
+    steps:
+      - name: Check Harbor availability
+        id: check
+        run: |
+          # Try to reach Harbor registry API
+          if curl -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" > /dev/null 2>&1 || \
+             curl -sf "https://harbor.ci.tenstorrent.net/v2/" > /dev/null 2>&1; then
+            echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
+            echo "Harbor is available"
+          else
+            echo "harbor-prefix=" >> $GITHUB_OUTPUT
+            echo "Harbor unavailable, falling back to direct GHCR"
+          fi
+
   # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share.
   build-tools:
-    name: "🔧 Build tool images"
+    name: "Build tool images"
+    needs: [check-harbor]
     uses: ./.github/workflows/build-docker-tools.yaml
     with:
       force-rebuild: ${{ inputs.force-rebuild }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
     secrets: inherit
 
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms.
   build-2204:
-    name: "🐳 Ubuntu 22.04"
-    needs: [build-tools]
+    name: "Ubuntu 22.04"
+    needs: [check-harbor, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 22.04"
@@ -91,12 +113,13 @@ jobs:
       build-manylinux: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
     secrets: inherit
 
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here.
   build-2404:
-    name: "🐳 Ubuntu 24.04"
-    needs: [build-tools]
+    name: "Ubuntu 24.04"
+    needs: [check-harbor, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 24.04"
@@ -104,11 +127,12 @@ jobs:
       build-manylinux: false
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
     secrets: inherit
 
   # Prewarm cache by pulling images from GHCR through HARBOR
   prewarm-cache:
-    name: "🏃 Prewarm cache from GHCR via HARBOR"
+    name: "Prewarm cache from GHCR via HARBOR"
     needs: [build-tools, build-2204, build-2404]
     if: always() && !failure() && !cancelled()
     runs-on: tt-ubuntu-2204-large-stable
@@ -122,7 +146,6 @@ jobs:
 
       - name: Prewarm tool images cache
         env:
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
           TOOL_TAGS: ${{ needs.build-tools.outputs.tool-tags }}
         run: |
           set -euo pipefail
@@ -130,12 +153,23 @@ jobs:
           for key in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${key}-tag\"")
             echo "Pulling $tag..."
-            docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+            if ! docker pull "$tag" 2>/dev/null; then
+              # Try fallback to direct GHCR by removing Harbor prefix
+              fallback_tag=$(echo "$tag" | sed 's|^[^/]*/ghcr.io/|ghcr.io/|')
+              if [ "$fallback_tag" != "$tag" ]; then
+                echo "  Harbor pull failed, trying direct GHCR: $fallback_tag"
+                if docker pull "$fallback_tag" 2>/dev/null; then
+                  echo "  Successfully pulled from GHCR fallback"
+                else
+                  echo "  Failed to pull from both Harbor and GHCR (may not exist yet)"
+                fi
+              else
+                echo "  Failed to pull (may not exist yet)"
+              fi
+            fi
           done
 
       - name: Prewarm Ubuntu 22.04 images cache
-        env:
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
         run: |
           set -euo pipefail
           echo "Prewarming Ubuntu 22.04 images from GHCR via HARBOR..."
@@ -150,13 +184,24 @@ jobs:
           for tag in "${images[@]}"; do
             if [ -n "$tag" ]; then
               echo "Pulling $tag..."
-              docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+              if ! docker pull "$tag" 2>/dev/null; then
+                # Try fallback to direct GHCR by removing Harbor prefix
+                fallback_tag=$(echo "$tag" | sed 's|^[^/]*/ghcr.io/|ghcr.io/|')
+                if [ "$fallback_tag" != "$tag" ]; then
+                  echo "  Harbor pull failed, trying direct GHCR: $fallback_tag"
+                  if docker pull "$fallback_tag" 2>/dev/null; then
+                    echo "  Successfully pulled from GHCR fallback"
+                  else
+                    echo "  Failed to pull from both Harbor and GHCR (may not exist yet)"
+                  fi
+                else
+                  echo "  Failed to pull (may not exist yet)"
+                fi
+              fi
             fi
           done
 
       - name: Prewarm Ubuntu 24.04 images cache
-        env:
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
         run: |
           set -euo pipefail
           echo "Prewarming Ubuntu 24.04 images from GHCR via HARBOR..."
@@ -170,6 +215,19 @@ jobs:
           for tag in "${images[@]}"; do
             if [ -n "$tag" ]; then
               echo "Pulling $tag..."
-              docker pull "$tag" || echo "Failed to pull $tag (may not exist yet)"
+              if ! docker pull "$tag" 2>/dev/null; then
+                # Try fallback to direct GHCR by removing Harbor prefix
+                fallback_tag=$(echo "$tag" | sed 's|^[^/]*/ghcr.io/|ghcr.io/|')
+                if [ "$fallback_tag" != "$tag" ]; then
+                  echo "  Harbor pull failed, trying direct GHCR: $fallback_tag"
+                  if docker pull "$fallback_tag" 2>/dev/null; then
+                    echo "  Successfully pulled from GHCR fallback"
+                  else
+                    echo "  Failed to pull from both Harbor and GHCR (may not exist yet)"
+                  fi
+                else
+                  echo "  Failed to pull (may not exist yet)"
+                fi
+              fi
             fi
           done

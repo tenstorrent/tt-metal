@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -301,7 +301,7 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -388,7 +388,7 @@ jobs:
             cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:

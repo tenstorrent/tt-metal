@@ -22,6 +22,11 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Python venv images even if they exist in registry"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix for image tags (defaults to vars.HARBOR_PREFIX)"
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"

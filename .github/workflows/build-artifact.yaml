@@ -343,7 +343,7 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
-        harbor.ci.tenstorrent.net/${{
+        ${{ vars.HARBOR_PREFIX }}${{
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!' }}

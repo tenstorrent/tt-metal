@@ -219,7 +219,7 @@ jobs:
     timeout-minutes: 20
     runs-on: tt-ubuntu-2204-large-stable
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
+      image: ${{ vars.HARBOR_PREFIX }}${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:

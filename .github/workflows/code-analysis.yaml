@@ -251,7 +251,7 @@ jobs:
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: >-
-        harbor.ci.tenstorrent.net/${{
+        ${{ vars.HARBOR_PREFIX }}${{
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!'}}

@@ -36,7 +36,7 @@ jobs:
   triage-tests:
     name: Triage tests ${{ inputs.runner-label }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ vars.HARBOR_PREFIX }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
