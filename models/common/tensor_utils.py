@@ -34,7 +34,6 @@ def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
     Returns:
         torch.Tensor of shape [1, 1, dhead, dhead].
     """
-    assert dhead == TILE_SIZE, "dhead must be equal to TILE_SIZE for RoPE op"
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
