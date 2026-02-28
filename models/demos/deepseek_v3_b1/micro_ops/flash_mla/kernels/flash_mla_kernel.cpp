@@ -91,6 +91,7 @@ void kernel_main() {
         .receiver_ready_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("receiver_ready_semaphore_id")),
         .cb_k_in = get_named_compile_time_arg_val("cb_k_in"),
         .cb_q_in = get_named_compile_time_arg_val("cb_q_in"),
+        .cb_mask = get_named_compile_time_arg_val("cb_mask"),
         .cb_out_in = get_named_compile_time_arg_val("cb_out_in"),
         .cb_ms_in = get_named_compile_time_arg_val("cb_ms_in"),
         .cb_out_ms = get_named_compile_time_arg_val("cb_out_ms"),
@@ -128,6 +129,7 @@ void kernel_main() {
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ComputeCTArgs<
         get_named_compile_time_arg_val("cb_q_in"),
         get_named_compile_time_arg_val("cb_k_in"),
+        get_named_compile_time_arg_val("cb_mask"),
         get_named_compile_time_arg_val("cb_interm_out"),
         get_named_compile_time_arg_val("cb_interm_ms"),
         get_named_compile_time_arg_val("cb_out_in"),
