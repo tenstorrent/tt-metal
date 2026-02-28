@@ -33,6 +33,10 @@ inputs:
     description: "Select buildx default builder before invoking bake"
     required: false
     default: "true"
+  validate-images:
+    description: "Validate that built images can be inspected after build"
+    required: false
+    default: "true"
 
 runs:
   using: "composite"
@@ -48,6 +52,7 @@ runs:
         INPUT_RETRIES: ${{ inputs.retries }}
         INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
+        INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
       run: |
         set -euo pipefail
 
@@ -84,10 +89,12 @@ runs:
         retries="${INPUT_RETRIES}"
         delay="${INPUT_RETRY_DELAY_SECONDS}"
         attempt=1
+        bake_success=false
         until [ "$attempt" -gt "$retries" ]; do
           echo "docker buildx bake targets=${CLEAN_TARGETS[*]} attempt ${attempt}/${retries}"
           if docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}"; then
-            exit 0
+            bake_success=true
+            break
           fi
           if [ "$attempt" -lt "$retries" ]; then
             echo "Bake failed, retrying in ${delay}s..."
@@ -96,5 +103,28 @@ runs:
           attempt=$((attempt + 1))
         done
 
-        echo "Bake failed after ${retries} attempts."
-        exit 1
+        if [ "$bake_success" != "true" ]; then
+          echo "ERROR: Bake failed after ${retries} attempts."
+          exit 1
+        fi
+
+        # Validate that images were actually built and are inspectable
+        if [ "${INPUT_VALIDATE_IMAGES}" = "true" ]; then
+          echo ""
+          echo "Validating built images..."
+          for target in "${CLEAN_TARGETS[@]}"; do
+            # Get the image name from the bake file's local tags
+            local_tag=$(docker buildx bake -f "${INPUT_BAKE_FILE}" --print "$target" 2>/dev/null | jq -r '.target["'$target'"].tags[0]' 2>/dev/null || echo "")
+            if [ -z "$local_tag" ] || [ "$local_tag" = "null" ]; then
+              local_tag="tt-metalium-${target}:local"
+            fi
+            echo "Checking image for target '$target' (tag: $local_tag)..."
+            if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
+              echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
+              echo "The build reported success but the image is not inspectable."
+              exit 1
+            fi
+            echo "  Image validated: $local_tag"
+          done
+          echo "All images validated successfully."
+        fi

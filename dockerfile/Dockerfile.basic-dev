@@ -90,9 +90,11 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN set -e; \
-    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
     DETECTED_PYTHON_VERSION="3.12"; \
@@ -102,6 +104,7 @@ RUN set -e; \
     fi; \
     echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
     umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1); \
     echo "${DETECTED_PYTHON_VERSION}" > /tmp/python_version
 
 # Install basic runtime dependencies

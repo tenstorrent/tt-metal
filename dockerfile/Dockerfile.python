@@ -63,10 +63,14 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Install Python with uv and create relocatable virtual environment
 # umask 000 ensures the venv is world-writable for multi-host NFS access
 RUN umask 000 && \
     uv python install ${PYTHON_VERSION} && \
+    uv python list | grep -q "${PYTHON_VERSION}" || (echo "ERROR: Python ${PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv build numpy setuptools==80
 
@@ -118,12 +122,16 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Install Python with uv and create relocatable virtual environment
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
 RUN umask 000 && \
     uv python install ${PYTHON_VERSION} && \
+    uv python list | grep -q "${PYTHON_VERSION}" || (echo "ERROR: Python ${PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv setuptools==80
 

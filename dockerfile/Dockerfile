@@ -80,9 +80,11 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 # must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN set -e; \
-    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
     DETECTED_PYTHON_VERSION="3.12"; \
@@ -91,7 +93,8 @@ RUN set -e; \
     fi; \
     fi; \
     echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
-    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1)
 
 # IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
