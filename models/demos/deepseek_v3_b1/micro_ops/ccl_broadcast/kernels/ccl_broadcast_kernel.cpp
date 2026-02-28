@@ -16,44 +16,29 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // Writer CTArgs
     using BcastCTArgs = Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("cb0_id"),
-        get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("tensor0_page_size"),
-        get_named_compile_time_arg_val("num_targets_forward_direction"),
-        get_named_compile_time_arg_val("num_targets_backward_direction"),
-        get_named_compile_time_arg_val("is_sender"),
-        get_named_compile_time_arg_val("core_noc_x"),
-        get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender"),
-        get_named_compile_time_arg_val("has_secondary_target"),
-        get_named_compile_time_arg_val("start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("range_hops_forward"),
-        get_named_compile_time_arg_val("start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("range_hops_backward")>;
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_connections"),
+        get_named_compile_time_arg_val("bcast_is_root"),
+        get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_num_chunks")>;
 
     // Writer runtime args
     Broadcast::WriterArgs bcast_args{
-        get_common_arg_val<uint32_t>(0),   // tensor_address0
-        get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-        get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
-        get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
-        get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
-        get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
-        get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
-        get_common_arg_val<uint32_t>(7),   // barrier_sem
-        get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
-        get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
-        get_common_arg_val<uint32_t>(10),  // ring_index
-        get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
-        get_common_arg_val<uint32_t>(12),  // num_connections
+        get_common_arg_val<uint32_t>(0),  // tensor_address0
+        get_common_arg_val<uint32_t>(1),  // sem_bank_addr
+        get_common_arg_val<uint32_t>(2),  // my_noc_x
+        get_common_arg_val<uint32_t>(3),  // my_noc_y
     };
 
 #elif defined(COMPILE_FOR_BRISC)
     // Reader CTArgs
     using BcastCTArgs = Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("cb0_id"),
-        get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("is_sender")>;
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_sender")>;
 
     // Runtime args:
     Broadcast::ReaderArgs bcast_args{};
@@ -65,7 +50,7 @@ void kernel_main() {
 #endif
 
     // Execute ccl broadcast op
-    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
+    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("bcast_num_iterations");
 
     auto body = [&]() {
         Broadcast::Op<BcastCTArgs, true> bcast;

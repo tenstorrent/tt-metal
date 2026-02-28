@@ -44,8 +44,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
@@ -70,8 +68,6 @@ def test_ccl_broadcast_dual_axis(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
     num_warmup_iter,
 ):
@@ -135,10 +131,8 @@ def test_ccl_broadcast_dual_axis(
     num_cores = compute_grid_size.x * compute_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
+    semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    ttnn.synchronize_device(submesh)
 
     # Compute expected output using golden function
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -155,9 +149,7 @@ def test_ccl_broadcast_dual_axis(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
-        semaphores=semaphores,
+        semaphore=semaphore,
     )
     ttnn.synchronize_device(submesh)
 
@@ -169,9 +161,7 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
-            semaphores=semaphores,
+            semaphore=semaphore,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -184,9 +174,7 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
-            semaphores=semaphores,
+            semaphore=semaphore,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -247,8 +235,6 @@ def test_ccl_broadcast_dual_axis(
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("num_iters", [100])
 @pytest.mark.parametrize(
     "device_params",
@@ -266,8 +252,6 @@ def test_ccl_broadcast_loop(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
 ):
     """
@@ -312,7 +296,8 @@ def test_ccl_broadcast_loop(
 
     num_cores = compute_grid_size.x * compute_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(3)]
+    semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    ttnn.synchronize_device(submesh)
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -322,9 +307,7 @@ def test_ccl_broadcast_loop(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
-        semaphores=semaphores,
+        semaphore=semaphore,
         num_iterations=num_iters,
     )
     ttnn.synchronize_device(submesh)
