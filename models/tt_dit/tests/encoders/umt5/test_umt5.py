@@ -213,7 +213,7 @@ def test_umt5_encoder(
     max_prompt_length = 512
 
     prompt = [
-        "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
+        "A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition",
         "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
     ]
     total_prompts = len(prompt)
@@ -285,9 +285,8 @@ def test_umt5_encoder(
         with benchmark_profiler("tt_umt5_encoder", i):
             tt_output = tt_encoder(tt_prompt, attention_mask=tt_mask)[-1]
             tt_output = ccl_manager.all_gather(tt_output, dim=0, mesh_axis=DP_axis, use_hyperparams=True)
-            ttnn.synchronize_device(
-                mesh_device
-            )  # wait for all operations to complete to get correct dispatch + execution time
+            # wait for all operations to complete to get correct dispatch + execution time
+            ttnn.synchronize_device(mesh_device)
 
     # get HF reference outputs
     with torch.no_grad():
@@ -298,7 +297,7 @@ def test_umt5_encoder(
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
     tt_execution_time = benchmark_profiler.get_duration_average("tt_umt5_encoder")
     logger.info(f"TT encoder execution time benchmark: {tt_execution_time:.4f} seconds")
-    assert_quality(hf_outputs, tt_output_torch, pcc=0.99)
+    assert_quality(hf_outputs[:total_prompts], tt_output_torch[:total_prompts], pcc=0.99_9, relative_rmse=0.05)
     assert (
         tt_execution_time < max_execution_time
     ), f"TT Encoder execution time {tt_execution_time:.4f} seconds is greater than the max {max_execution_time} seconds"

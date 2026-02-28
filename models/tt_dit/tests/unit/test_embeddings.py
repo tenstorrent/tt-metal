@@ -742,7 +742,7 @@ def test_wan_time_text_image_embedding(
     ).to(torch_dtype)
     torch_model.eval()
 
-    mesh_axis = 0
+    mesh_axis = 1
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
@@ -803,13 +803,12 @@ def test_wan_time_text_image_embedding(
     )
 
     assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.3%
-    assert_quality(
-        encoder_hidden_states_torch,
-        tt_encoder_hidden_states_torch,
-        pcc=0.9999,
-        relative_rmse=0.01,  # expected RMSE =0.8%
-    )  # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
     assert_quality(timestep_proj_torch, tt_timestep_proj_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.4%
+
+    # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
+    assert_quality(
+        encoder_hidden_states_torch, tt_encoder_hidden_states_torch, pcc=0.9999, relative_rmse=0.01
+    )  # expected RMSE =0.8%
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2)], indirect=["mesh_device"])
