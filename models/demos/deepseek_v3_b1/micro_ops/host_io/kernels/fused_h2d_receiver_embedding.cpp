@@ -202,7 +202,6 @@ void kernel_main() {
         // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
         // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
-
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
         noc_async_read_barrier();
@@ -218,6 +217,7 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
+
             socket_reserve_pages(sender_socket, 1);
             send_pages_over_socket(
                 sender_socket,

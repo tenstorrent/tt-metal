@@ -52,7 +52,7 @@ class PipelineBlock:
 
         self.my_mesh_id = mesh_device.get_system_mesh_id()
         self.is_pipeline_start = self.my_mesh_id == 0
-        pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         num_procs = int(ttnn.distributed_context_get_size())
         assert len(pipeline_config) == num_procs + 1
 

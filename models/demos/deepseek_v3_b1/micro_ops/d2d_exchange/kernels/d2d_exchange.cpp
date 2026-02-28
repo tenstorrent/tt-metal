@@ -131,7 +131,6 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     DPRINT << "Starting d2d exchange kernel" << ENDL();
-    DPRINT << "Page size: " << page_size << ENDL();
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
@@ -151,8 +150,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    DPRINT << "Using Fabric on Sender: " << static_cast<int>(use_fabric_on_sender) << ENDL();
-    DPRINT << "Using Fabric on Receiver: " << static_cast<int>(use_fabric_on_receiver) << ENDL();
     if constexpr (use_fabric_on_sender) {
         downstream_data_packet_header_addr =
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
@@ -175,17 +172,14 @@ void kernel_main() {
     }
 
     while (true) {
-        DPRINT << "Reserving pages on sender socket" << ENDL();
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Waiting for pages from upstream socket" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        DPRINT << "Got pages from upstream socket" << ENDL();
+
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-        DPRINT << "Sending pages over socket" << ENDL();
         send_pages_over_socket(
             sender_socket,
             downstream_fabric_connection,
@@ -195,16 +189,13 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
-        DPRINT << "Sent pages over socket" << ENDL();
         socket_pop_pages(receiver_socket, 1);
-        DPRINT << "Popped pages from upstream socket" << ENDL();
         if constexpr (use_fabric_on_receiver) {
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "Notified sender stateful" << ENDL();
         } else {
             socket_notify_sender(receiver_socket);
         }
