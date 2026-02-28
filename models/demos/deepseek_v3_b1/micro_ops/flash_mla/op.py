@@ -513,6 +513,8 @@ class FlashMLADecode:
         # =========================================================================
         q_df = input_tensor_q.dtype
         k_df = input_tensor_k.dtype
+        mask_df = ttnn.bfloat16
+        assert q_df == mask_df, "Q and mask must have the same data format"
         stats_df = ttnn.bfloat16
 
         # Create tile objects - Q uses tiny tiles, K/V use full tiles
@@ -533,22 +535,22 @@ class FlashMLADecode:
         # Tile sizes - use tile.get_tile_size(dtype) for proper sizing
         q_tile_size = q_tiny_tile.get_tile_size(q_df)
         k_tile_size = k_tile_obj.get_tile_size(k_df)
+        mask_tile_size = q_tile_size
         stats_tile_size = stats_tile.get_tile_size(stats_df)
 
         # =========================================================================
         # CB IDs - used by both CB descriptors and kernel compile-time args
         # =========================================================================
         cb_q_in = 0  # Q  input
-        cb_compute_in = 9  # Compute input
         cb_k_in = 1  # K/V cache input
-        cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
-        cb_out_in = 3  # output input for tree reduction
-        # cb_index_id removed - position is now read directly from sharded L1
-        cb_out_o = 4  # output O from compute
-        cb_out_ms = 5  # output m/s stats from compute
-        cb_interm_out = 6  # intermediate output for tree reduction
-        cb_interm_ms = 7  # intermediate m/s stats for tree reduction
-        cb_out_final = 8  # final sharded output
+        cb_mask = 2  # Mask input
+        cb_ms_in = 3  # m/s stats input (from sender in tree reduction)
+        cb_out_in = 4  # output input for tree reduction
+        cb_out_o = 5  # output O from compute
+        cb_out_ms = 6  # output m/s stats from compute
+        cb_interm_out = 7  # intermediate output for tree reduction
+        cb_interm_ms = 8  # intermediate m/s stats for tree reduction
+        cb_out_final = 9  # final sharded output
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
@@ -617,24 +619,14 @@ class FlashMLADecode:
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
             ("k_chunk_size", k_chunk_size),
-            ("num_mcast_dests", num_mcast_dests),
             ("mcast_semaphore_id", mcast_semaphore_id),
             ("k_page_size", k_page_size),
             ("k_num_pages", k_num_pages),
-            ("q_chunk_size_bytes", q_chunk_size_bytes),
-            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
-            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
-            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
-            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
-            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
-            ("q_input_mcast_semaphore_id", q_input_mcast_semaphore_id),
             ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
             ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
             ("kv_cache_cur_pos_ready_semaphore_id", kv_cache_cur_pos_ready_semaphore_id),
             ("kv_cache_cur_pos_ready_value", kv_cache_cur_pos_ready_value),
             ("cb_k_in", cb_k_in),
-            ("cb_q_in", cb_q_in),
-            ("cb_compute_in", cb_compute_in),
         ]
         # TensorAccessorArgs for K (indexed, starting at index 0)
         ncrisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
@@ -646,9 +638,15 @@ class FlashMLADecode:
             ("num_cores_per_head", num_cores_per_head),
             ("reducer_semaphore_id", reducer_semaphore_id),
             ("k_chunk_size", k_chunk_size),
-            ("q_tile_height", Q_TILE_HEIGHT),
+            ("q_chunk_size_bytes", q_chunk_size_bytes),
             ("DHt", DHt),
             ("num_mcast_dests", num_mcast_dests),
+            ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
+            ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
+            ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
+            ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
+            ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
+            ("q_input_mcast_semaphore_id", q_input_mcast_semaphore_id),
             ("mcast_semaphore_id", mcast_semaphore_id),
             ("ncrisc_brisc_sync_semaphore_id", ncrisc_brisc_sync_semaphore_id),
             ("k_page_size", k_page_size),
@@ -656,6 +654,8 @@ class FlashMLADecode:
             ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
             ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
             ("cb_k_in", cb_k_in),
+            ("cb_q_in", cb_q_in),
+            ("cb_mask", cb_mask),
             ("cb_out_in", cb_out_in),
             ("cb_ms_in", cb_ms_in),
             ("cb_out_o", cb_out_o),
@@ -676,8 +676,8 @@ class FlashMLADecode:
             ("num_tree_reduction_steps", grid.NUM_TREE_REDUCTION_STEPS),
             ("dst_size", dst_size),
             ("cb_q_in", cb_q_in),
-            ("cb_compute_in", cb_compute_in),
             ("cb_k_in", cb_k_in),
+            ("cb_mask", cb_mask),
             ("cb_interm_out", cb_interm_out),
             ("cb_interm_ms", cb_interm_ms),
             ("cb_out_in", cb_out_in),
@@ -697,21 +697,21 @@ class FlashMLADecode:
         q_input_cb_descriptor.core_ranges = core_grid
         cb_descriptors.append(q_input_cb_descriptor)
 
-        # cb_compute_in: Compute input (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=q_tiles * q_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_compute_in, q_df, q_tile_size, q_tile_descriptor)],
-            )
-        )
-
         # cb_k_in: K input (full tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=k_tiles * k_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[ttnn.CBFormatDescriptor(cb_k_in, k_df, k_tile_size)],
+            )
+        )
+
+        # cb_mask: Mask input
+        cb_descriptors.append(
+            ttnn.CBDescriptor(
+                total_size=mask_tile_size,
+                core_ranges=core_grid,
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_mask, mask_df, mask_tile_size)],
             )
         )
 
@@ -812,7 +812,6 @@ class FlashMLADecode:
             s_block_idx = i % num_s_blocks
             cur_batch = i // num_cores_per_batch
             core_num_in_reduce = i % num_cores_per_head
-            core_num_in_output = i % num_cores_per_batch
 
             do_reduce = 1 if grid.is_tree_reduction_receiver(s_block_idx) else 0
             is_output_core = 1 if s_block_idx == 0 else 0
@@ -836,13 +835,8 @@ class FlashMLADecode:
                         cur_batch,
                         core_num_in_reduce,
                         is_mcast_sender,
-                        is_output_core,
-                        output_core_noc_x,
-                        output_core_noc_y,
                         mcast_start_x,
                         mcast_start_y,
-                        mcast_end_x,
-                        mcast_end_y,
                         vc,
                     ],
                 )
@@ -855,7 +849,10 @@ class FlashMLADecode:
             brisc_args = [
                 cur_batch,
                 core_num_in_reduce,
+                is_output_core,
                 is_mcast_sender,
+                output_core_noc_x,
+                output_core_noc_y,
                 mcast_start_x,
                 mcast_start_y,
                 mcast_end_x,
@@ -871,10 +868,8 @@ class FlashMLADecode:
             trisc_args = [
                 do_reduce,
                 is_output_core,
-                0,  # cur_head (always 0, num_heads_per_core=1)
                 cur_batch,
                 core_num_in_reduce,
-                core_num_in_output,
                 is_sender_after_reduce,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:

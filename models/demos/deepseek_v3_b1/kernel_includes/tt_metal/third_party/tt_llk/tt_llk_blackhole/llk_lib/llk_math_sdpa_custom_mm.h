@@ -54,6 +54,13 @@ inline void sdpa_custom_mm_configure_addrmod() {
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 1, .clr = 0, .cr = 0},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_4);
+
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
@@ -87,20 +94,38 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+inline void _llk_math_sdpa_custom_mm_mask_dest_(
+    const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false) {
+    // Zero Dest
+    uint32_t dst_offset = dst_index + get_dest_buffer_base();
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);
+    if (mask_chunk) {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        // Zero Dest
+        uint32_t dst_face = dst_offset / 16;
+        for (uint32_t i = 0; i < ct_dim * 2; i++) {
+            TTI_MOVB2D(0, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_4, p_movb2d::MOV_8_ROW_BRCST, 0);
+        }
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    } else {
+        // Zero Dest
+        uint32_t dst_face = dst_offset / 16;
+        // A tile is 2 faces of 8x16, so clearing 16 rows per tile is equivalent to clearing the tile
+        for (uint32_t i = 0; i < ct_dim; i++) {
+            TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            dst_face++;
+        }
+    }
+}
+
 inline void _llk_math_sdpa_custom_mm_(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
-    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
-    uint32_t dst_row = dst_index + get_dest_buffer_base();
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_row);
-    // Zero Dest
-    uint32_t dst_face = dst_row / 16;
-    for (uint32_t i = 0; i < ct_dim; i++) {
-        TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
-        dst_face++;
-    }
+    const std::uint32_t ct_dim = 1,
+    const bool mask_chunk = false) {
+    // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
+    _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
 
     for (std::uint32_t i = 0; i < kt_dim - 1; i++) {
         TTI_MOP(1, 0, 0);

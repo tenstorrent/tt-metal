@@ -11,6 +11,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <algorithm>
 #include <numeric>
 

@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
@@ -49,6 +51,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+def _deepseek_kvdbg_enabled() -> bool:
+    return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
 class MLA1D(AbstractModule):
@@ -915,6 +921,97 @@ class MLA1D(AbstractModule):
 
         return out
 
+    @staticmethod
+    def _debug_prefill_page_table(
+        page_table: ttnn.Tensor,
+        local_batch_idx: int,
+        global_batch_idx: int,
+        row_idx: int | None,
+        col_idx: int,
+        block_size: int,
+        max_blocks: int,
+        mesh_device: ttnn.MeshDevice | None,
+    ) -> None:
+        """Log page table row and bounds for prefill KV cache writes."""
+        if not _deepseek_kvdbg_enabled():
+            return
+        try:
+            if page_table is None:
+                logger.warning(
+                    "KVDBG deepseek prefill: page_table=None global={} local={} row={} col={}",
+                    global_batch_idx,
+                    local_batch_idx,
+                    row_idx,
+                    col_idx,
+                )
+                return
+            if isinstance(page_table, ttnn.Tensor):
+                if mesh_device is None:
+                    logger.warning(
+                        "KVDBG deepseek prefill: mesh_device=None global={} local={} row={} col={} page_table_shape={}",
+                        global_batch_idx,
+                        local_batch_idx,
+                        row_idx,
+                        col_idx,
+                        list(page_table.shape),
+                    )
+                    return
+                mesh_composer = ttnn.concat_mesh_to_tensor_composer(mesh_device, dim=0)
+                pt_torch = ttnn.to_torch(page_table, mesh_composer=mesh_composer)
+            else:
+                pt_torch = page_table
+            if isinstance(pt_torch, torch.Tensor):
+                pt_cpu = pt_torch.detach().cpu()
+                if pt_cpu.ndim >= 2 and local_batch_idx < pt_cpu.shape[0]:
+                    row = pt_cpu[local_batch_idx]
+                    flat = row.flatten()
+                    min_v = int(flat.min().item()) if flat.numel() else None
+                    max_v = int(flat.max().item()) if flat.numel() else None
+                    if max_blocks is not None and flat.numel():
+                        oob_mask = (flat < 0) | (flat >= max_blocks)
+                        oob_count = int(oob_mask.sum().item())
+                    else:
+                        oob_mask = None
+                        oob_count = 0
+                    if oob_mask is not None and oob_count > 0:
+                        idxs = oob_mask.nonzero(as_tuple=False).flatten().tolist()[:16]
+                        vals = flat[oob_mask][:16].tolist()
+                        logger.error(
+                            "KVDBG deepseek prefill OOB user global={} local={} row={} col={} row_shape={} "
+                            "block_size={} max_blocks={} min={} max={} oob={} sample_idx_val={}",
+                            global_batch_idx,
+                            local_batch_idx,
+                            row_idx,
+                            col_idx,
+                            list(row.shape),
+                            block_size,
+                            max_blocks,
+                            min_v,
+                            max_v,
+                            oob_count,
+                            list(zip(idxs, vals)),
+                        )
+                else:
+                    logger.warning(
+                        "KVDBG deepseek prefill: row index out of range global={} local={} row={} col={} table_shape={}",
+                        global_batch_idx,
+                        local_batch_idx,
+                        row_idx,
+                        col_idx,
+                        list(pt_cpu.shape),
+                    )
+            else:
+                logger.warning(
+                    "KVDBG deepseek prefill: unexpected page_table type global={} local={} row={} col={} page_table={}",
+                    global_batch_idx,
+                    local_batch_idx,
+                    row_idx,
+                    col_idx,
+                    pt_torch,
+                )
+        except Exception as exc:
+            logger.warning("KVDBG deepseek prefill failed: {}", exc)
+
     @classmethod
     def forward_prefill(
         cls,
@@ -1018,6 +1115,17 @@ class MLA1D(AbstractModule):
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+        if _deepseek_kvdbg_enabled():
+            cls._debug_prefill_page_table(
+                page_table=page_table,
+                local_batch_idx=local_batch_idx,
+                global_batch_idx=batch_idx,
+                row_idx=row_idx,
+                col_idx=col_idx,
+                block_size=kvpe_cache.shape[2],
+                max_blocks=kvpe_cache.shape[0],
+                mesh_device=cfg.get("mesh_device", None),
+            )
 
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
