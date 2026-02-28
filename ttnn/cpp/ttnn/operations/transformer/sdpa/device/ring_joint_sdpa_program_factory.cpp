@@ -293,6 +293,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
+    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
+    const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h * DHt <= dst_size &&
+                                       qk_out_subblock_h == 1 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && DHt <= 8;
+    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
@@ -434,7 +440,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u};
+        scale_union.u,
+        (std::uint32_t)use_streaming_compute};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -590,6 +597,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
+
+    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
+    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
+    if (use_streaming_compute) {
+        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
+                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
