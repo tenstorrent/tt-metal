@@ -205,10 +205,6 @@ HostTensor from_borrowed_data(
 template <typename T>
 std::vector<T> to_vector(const HostTensor& tensor);
 
-// Explicit specialization declaration for float (handles BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32).
-template <>
-std::vector<float> to_vector<float>(const HostTensor& tensor);
-
 }  // namespace host_tensor
 
 // ======================================================================================
