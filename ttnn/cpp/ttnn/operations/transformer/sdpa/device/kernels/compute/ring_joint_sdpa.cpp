@@ -10,6 +10,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
+#include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
 void kernel_main() {
@@ -46,6 +47,8 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(29);
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(31) == 1;
+
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -77,6 +80,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
+
+    // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
+    // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
+    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -113,53 +120,98 @@ void kernel_main() {
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
-            qk_in0_block_w,
-            qk_subblock_w,
-            qk_subblock_h,
-            qk_in0_num_subblocks,
-            qk_in1_num_subblocks,
-            qk_num_blocks,
-            out_in0_block_w,
-            out_subblock_w,
-            out_subblock_h,
-            out_in0_num_subblocks,
-            out_in1_num_subblocks,
-            out_num_blocks,
-            global_q_start,
-            global_q_end,
-            0,
-            num_kv_chunks,
-            q_chunk_tiles,
-            k_chunk_tiles,
-            qk_chunk_tiles,
-            out_chunk_tiles,
-            ring_iter,
-            ring_id,
-            num_local_k_chunks,
-            local_padded_Nt,
-            logical_nt,
-            ring_iter_needs_global_n_mask,
-            ring_iter_needs_joint_n_mask,
-            local_n_needs_masking,
-            global_n_mask_chunk_id,
-            local_n_mask_chunk_id,
-            joint_n_mask_chunk_id,
-            cb_q_in,
-            cb_k_in,
-            cb_v_in,
-            cb_mask_in,
-            cb_col_identity,
-            cb_out_im_A,
-            cb_out_im_B,
-            cb_max_A,
-            cb_max_B,
-            cb_sum_A,
-            cb_sum_B,
-            cb_exp_max_diff,
-            cb_lse_in,
-            cb_lse_out,
-            cb_prev_out,
-            cb_out);
+        if constexpr (use_streaming_compute) {
+            sdpa_ring_v2<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                0,  // Skt — not used for ring
+                DHt,
+                DHt,  // vDHt = DHt for ring
+                scale_fp32,
+                qk_subblock_h,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_mask_in,
+                cb_scale_in,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out>(
+                global_q_start,
+                global_q_end,
+                num_kv_chunks,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B);
+        } else {
+            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                global_q_start,
+                global_q_end,
+                0,
+                num_kv_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out);
+        }
     }
 }
