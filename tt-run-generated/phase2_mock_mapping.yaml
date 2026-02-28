@@ -1,0 +1,5 @@
+rank_to_cluster_mock_cluster_desc:
+  '0': /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u02.yaml
+  '1': /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u08.yaml
+  '2': /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u02.yaml
+  '3': /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u08.yaml

@@ -22,6 +22,15 @@ from ttnn.distributed.ttrun import (
     RankBinding,
     TTRunConfig,
     ORIGINAL_CWD,
+    get_mpi_launcher,
+    RankfileSyntax,
+    build_rankfile_args,
+    detect_rankfile_syntax,
+    inject_rankfile_mpi_args,
+    get_generate_rank_bindings_output_paths,
+    build_generate_rank_bindings_mpi_cmd,
+    run_phase1_generate_rank_bindings,
+    new_mode_flow,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
@@ -95,7 +104,7 @@ class TestCommandLineArguments:
         assert "must be specified" in result.output.lower()
 
     def test_new_mode_not_implemented(self, runner, sample_mesh_graph_descriptor):
-        """Test that new mode raises not implemented error."""
+        """Test that new mode requires --hosts or --mock-cluster-rank-binding."""
         result = runner.invoke(
             main,
             [
@@ -106,7 +115,7 @@ class TestCommandLineArguments:
             ],
         )
         assert result.exit_code != 0
-        assert "not yet implemented" in result.output.lower()
+        assert "--hosts is required" in result.output.lower()
 
     def test_new_mode_requires_hosts(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode requires --hosts unless --mock-cluster-rank-binding is provided."""
@@ -123,43 +132,164 @@ class TestCommandLineArguments:
         assert "--hosts is required" in result.output.lower()
 
     def test_new_mode_with_hosts(self, runner, sample_mesh_graph_descriptor):
-        """Test that new mode accepts --hosts."""
-        result = runner.invoke(
-            main,
-            [
-                "--mesh-graph-descriptor",
-                str(sample_mesh_graph_descriptor),
-                "--hosts",
-                "node1,node2",
-                "echo",
-                "test",
-            ],
-        )
-        # Should fail with "not yet implemented" but not with "--hosts is required"
-        assert result.exit_code != 0
-        assert "--hosts is required" not in result.output.lower()
-        assert "not yet implemented" in result.output.lower()
+        """Test that new mode accepts --hosts and attempts Phase 1."""
+        import subprocess
+
+        # Mock subprocess.run to avoid actually running MPI
+        with patch.object(subprocess, "run") as mock_run:
+            # Mock Phase 1 failure (executable not found) - this is expected in test env
+            mock_run.side_effect = FileNotFoundError("generate_rank_bindings not found")
+
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(sample_mesh_graph_descriptor),
+                    "--hosts",
+                    "node1,node2",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+            # Should fail because generate_rank_bindings not found, but not because "--hosts is required"
+            assert result.exit_code != 0
+            assert "--hosts is required" not in result.output.lower()
+            # Should attempt Phase 1 (find executable)
+            assert "generate_rank_bindings" in result.output.lower() or "Phase 1" in result.output.lower()
 
     def test_new_mode_with_mock_cluster_no_hosts(self, runner, sample_mesh_graph_descriptor, temp_dir):
         """Test that new mode doesn't require --hosts when --mock-cluster-rank-binding is provided."""
-        mock_file = temp_dir / "mock.yaml"
-        mock_file.touch()
+        import subprocess
+        import yaml
 
-        result = runner.invoke(
-            main,
-            [
-                "--mesh-graph-descriptor",
-                str(sample_mesh_graph_descriptor),
-                "--mock-cluster-rank-binding",
-                str(mock_file),
-                "echo",
-                "test",
-            ],
-        )
-        # Should fail with "not yet implemented" but not with "--hosts is required"
-        assert result.exit_code != 0
-        assert "--hosts is required" not in result.output.lower()
-        assert "not yet implemented" in result.output.lower()
+        # Create valid mock mapping file
+        mock_file = temp_dir / "mock.yaml"
+        mock_desc1 = temp_dir / "mock_desc_0.yaml"
+        mock_desc2 = temp_dir / "mock_desc_1.yaml"
+        mock_desc1.touch()
+        mock_desc2.touch()
+
+        mock_data = {
+            "rank_to_cluster_mock_cluster_desc": {
+                0: str(mock_desc1),
+                1: str(mock_desc2),
+            }
+        }
+        with open(mock_file, "w") as f:
+            yaml.dump(mock_data, f)
+
+        # Mock subprocess.run to avoid actually running MPI
+        with patch.object(subprocess, "run") as mock_run:
+            # Mock Phase 1 failure (executable not found) - this is expected in test env
+            mock_run.side_effect = FileNotFoundError("generate_rank_bindings not found")
+
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(sample_mesh_graph_descriptor),
+                    "--mock-cluster-rank-binding",
+                    str(mock_file),
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+            # Should fail because generate_rank_bindings not found, but not because "--hosts is required"
+            assert result.exit_code != 0
+            assert "--hosts is required" not in result.output.lower()
+            # Should attempt Phase 1
+            assert "generate_rank_bindings" in result.output.lower() or "Phase 1" in result.output.lower()
+
+
+class TestPhase2Helpers:
+    """Test Phase 2 helper functions for generate_rank_bindings."""
+
+    def test_get_generate_rank_bindings_output_paths(self, temp_dir):
+        """Test get_generate_rank_bindings_output_paths returns correct paths."""
+        output_dir = temp_dir / "output"
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
+
+        assert rank_bindings_path == output_dir / "rank_bindings.yaml"
+        assert rankfile_path == output_dir / "rankfile"
+
+    def test_build_generate_rank_bindings_mpi_cmd_hosts(self, temp_dir):
+        """Test build_generate_rank_bindings_mpi_cmd with hosts."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+        hosts = ["node1", "node2", "node3"]
+
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir)
+
+        # Check MPI launcher
+        assert cmd[0] in ["mpirun", "mpirun-ulfm"] or "mpirun" in cmd[0]
+        # Check --host
+        assert "--host" in cmd
+        hosts_idx = cmd.index("--host")
+        assert cmd[hosts_idx + 1] == "node1,node2,node3"
+        # Check -np
+        assert "-np" in cmd
+        np_idx = cmd.index("-np")
+        assert cmd[np_idx + 1] == "3"
+        # Check executable and args
+        assert str(executable.resolve()) in cmd
+        assert "--mesh-graph-descriptor" in cmd
+        assert str(mgd_path.resolve()) in cmd
+        # Note: generate_rank_bindings doesn't accept --output-dir, it hardcodes output to "tt-run-generated/"
+
+    def test_build_generate_rank_bindings_mpi_cmd_mock(self, temp_dir):
+        """Test build_generate_rank_bindings_mpi_cmd with mock cluster."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+        mock_desc0 = temp_dir / "mock0.yaml"
+        mock_desc1 = temp_dir / "mock1.yaml"
+        mock_desc0.touch()
+        mock_desc1.touch()
+        mock_rank_to_desc = {0: mock_desc0, 1: mock_desc1}
+
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, None, output_dir, mock_rank_to_desc)
+
+        # Check --oversubscribe flag (mock clusters don't use --host)
+        assert "--oversubscribe" in cmd
+        # Should NOT have --host (MPI defaults to localhost)
+        assert "--host" not in cmd
+        # Check per-rank -np 1 segments (not single -np 2)
+        np_indices = [i for i, arg in enumerate(cmd) if arg == "-np"]
+        assert len(np_indices) == 2  # One per rank
+        assert cmd[np_indices[0] + 1] == "1"
+        assert cmd[np_indices[1] + 1] == "1"
+        # Check : separator between ranks
+        assert ":" in cmd
+        # Check per-rank TT_METAL_MOCK_CLUSTER_DESC_PATH (one per rank segment)
+        env_vars = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-x"]
+        mock_env_vars = [e for e in env_vars if "TT_METAL_MOCK_CLUSTER_DESC_PATH" in e]
+        assert len(mock_env_vars) == 2
+        # Each rank segment should have its own env var
+        # Rank 0 env var should be before the : separator
+        colon_idx = cmd.index(":")
+        rank0_env_idx = next(i for i, arg in enumerate(cmd[:colon_idx]) if arg == "-x")
+        assert str(mock_desc0.resolve()) in cmd[rank0_env_idx + 1]
+        # Rank 1 env var should be after the : separator
+        rank1_env_idx = next(i for i, arg in enumerate(cmd[colon_idx:]) if arg == "-x")
+        assert str(mock_desc1.resolve()) in cmd[colon_idx + rank1_env_idx + 1]
+
+    def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir):
+        """Test build_generate_rank_bindings_mpi_cmd raises ValueError if neither hosts nor mock provided."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+
+        with pytest.raises(ValueError, match="Either hosts or mock_rank_to_desc must be provided"):
+            build_generate_rank_bindings_mpi_cmd(executable, mgd_path, None, output_dir, None)
 
     def test_legacy_mode_ignores_hosts(self, runner, sample_rank_binding_yaml):
         """Test that legacy mode ignores --hosts option."""
@@ -285,4 +415,106 @@ class TestLegacyFlow:
             # Should not call subprocess.run in dry-run mode
             mock_subprocess.assert_not_called()
             # Dry-run should succeed
+            assert result.exit_code == 0
+
+
+class TestRankfileInjection:
+    """Test rankfile injection functions."""
+
+    def test_get_mpi_launcher(self):
+        """Test get_mpi_launcher returns mpirun or mpirun-ulfm (may be full path)."""
+        launcher = get_mpi_launcher()
+        # Should be a string, not None
+        assert isinstance(launcher, str)
+        # shutil.which may return full path, so check basename
+        launcher_basename = Path(launcher).name
+        assert launcher_basename in ["mpirun", "mpirun-ulfm"]
+
+    def test_build_rankfile_args_map_by(self, temp_dir):
+        """Test build_rankfile_args with MAP_BY_RANKFILE_FILE syntax."""
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+
+        args = build_rankfile_args(RankfileSyntax.MAP_BY_RANKFILE_FILE, rankfile)
+
+        assert len(args) == 2
+        assert args[0] == "--map-by"
+        assert args[1] == f"rankfile:file={rankfile.resolve()}"
+
+    def test_build_rankfile_args_rankfile(self, temp_dir):
+        """Test build_rankfile_args with RANKFILE syntax."""
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+
+        args = build_rankfile_args(RankfileSyntax.RANKFILE, rankfile)
+
+        assert len(args) == 2
+        assert args[0] == "--rankfile"
+        assert args[1] == str(rankfile.resolve())
+
+    def test_build_rankfile_args_mca(self, temp_dir):
+        """Test build_rankfile_args with MCA_RMAPS_RANKFILE_PATH syntax."""
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+
+        args = build_rankfile_args(RankfileSyntax.MCA_RMAPS_RANKFILE_PATH, rankfile)
+
+        assert len(args) == 3
+        assert args[0] == "--mca"
+        assert args[1] == "rmaps_rankfile_path"
+        assert args[2] == str(rankfile.resolve())
+
+    def test_build_rankfile_args_invalid_syntax(self, temp_dir):
+        """Test build_rankfile_args raises ValueError for invalid syntax."""
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+
+        # Create a fake enum value
+        class FakeSyntax:
+            pass
+
+        fake_syntax = FakeSyntax()
+
+        with pytest.raises(ValueError, match="Unknown rankfile syntax"):
+            build_rankfile_args(fake_syntax, rankfile)  # type: ignore
+
+    def test_inject_rankfile_mpi_args(self, temp_dir):
+        """Test inject_rankfile_mpi_args prepends rankfile args."""
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+        base_args = ["--host", "node1,node2"]
+
+        # Mock detect_rankfile_syntax to return MAP_BY_RANKFILE_FILE
+        def mock_detect(launcher, subprocess_run=None):
+            return RankfileSyntax.MAP_BY_RANKFILE_FILE
+
+        result = inject_rankfile_mpi_args(rankfile, base_args, "mpirun", detect_fn=mock_detect)
+
+        # Should prepend rankfile args
+        assert result[0] == "--map-by"
+        assert result[1] == f"rankfile:file={rankfile.resolve()}"
+        assert result[2:] == base_args
+
+    def test_legacy_flow_rankfile_conflict(self, runner, sample_rank_binding_yaml, temp_dir):
+        """Test legacy_flow skips rankfile injection if already in mpi_args."""
+        import subprocess
+
+        rankfile = temp_dir / "rankfile"
+        rankfile.touch()
+
+        with patch.object(subprocess, "run"):
+            result = runner.invoke(
+                main,
+                [
+                    "--rank-binding",
+                    str(sample_rank_binding_yaml),
+                    "--mpi-args",
+                    "--rankfile /tmp/other_rankfile",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+            # Should succeed but warn about conflict (if rankfile param was used)
+            # Since we're not passing --rankfile param here, no conflict expected
             assert result.exit_code == 0

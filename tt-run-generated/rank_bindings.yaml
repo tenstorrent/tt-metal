@@ -1,0 +1,22 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 2
+    env_overrides:
+      TT_VISIBLE_DEVICES: 27,19,15,0,3,30,10,20,6,16,9,2,23,4,29,17,14,1,26,5,18,24,8,12,25,11,7,21,13,28,22,31
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 2
+    env_overrides:
+      TT_VISIBLE_DEVICES: 17,0,4,23,3,19,24,5,15,9,11,10,22,2,29,1,14,30,25,16,8,7,18,12,21,26,20,6,28,31,13,27
+  - rank: 2
+    mesh_id: 0
+    mesh_host_rank: 3
+    env_overrides:
+      TT_VISIBLE_DEVICES: 31,13,21,10,3,8,11,7,30,22,5,4,0,25,26,17,23,9,28,19,24,29,18,14,20,6,12,27,2,16,1,15
+  - rank: 3
+    mesh_id: 0
+    mesh_host_rank: 3
+    env_overrides:
+      TT_VISIBLE_DEVICES: 19,2,30,18,31,25,12,26,24,13,15,0,22,3,17,10,27,8,20,1,11,5,28,23,29,6,16,14,4,21,7,9
+mesh_graph_desc_path: /home/rsong/dev/tt-metal/tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
