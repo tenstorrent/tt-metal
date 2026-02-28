@@ -210,7 +210,9 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const bool mask_chunk = false,
+    const std::uint32_t mask_address = 0) {
     volatile uint* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -222,6 +224,11 @@ inline void _llk_unpack_AB_custom_mm_(
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
+
+    if (mask_chunk) {
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = mask_address;
+        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
+    }
 
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
