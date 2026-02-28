@@ -197,7 +197,16 @@ std::vector<Tensor> topk(
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     // Analyze input tensor properties to determine required transformations
-    auto rank = input_tensor.logical_shape().rank();
+    std::size_t rank_st = input_tensor.logical_shape().rank();
+    TT_FATAL(rank_st <= std::numeric_limits<int8_t>::max(), "Rank is too large to convert to int8_t");
+    const int8_t rank = static_cast<int8_t>(rank_st);
+
+    TT_FATAL(
+        (dim >= -rank && dim <= (rank - 1)),
+        "Dimension for topk is out of range (expected to be in range of [{}, {}])",
+        -rank,
+        rank - 1);
+
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
     const bool is_rank_le_4d = rank <= 4;
 
@@ -210,6 +219,55 @@ std::vector<Tensor> topk(
         input_tensor.logical_shape()[adjusted_dim]);
     ttnn::Shape desired_final_shape = original_lshape;
     desired_final_shape[adjusted_dim] = k;
+
+    if (preallocated_output_tensors.has_value()) {
+        TT_FATAL(
+            std::get<0>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
+            std::get<0>(preallocated_output_tensors.value()).logical_shape(),
+            desired_final_shape);
+        TT_FATAL(
+            std::get<1>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
+            std::get<1>(preallocated_output_tensors.value()).logical_shape(),
+            desired_final_shape);
+    }
+
+    // For a zero volume tensor, return a zero volume tensor with the shape adjusted for k.
+    // Same if k is 0 (i.e. top 0 elements were requested).
+    if (input_tensor.logical_volume() == 0 || k == 0) {
+        if (!preallocated_output_tensors.has_value()) {
+            // auto output_value_tensor = ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config,
+            // /*compute_kernel_config=*/std::nullopt); output_value_tensor = ttnn::reshape(output_value_tensor,
+            // desired_final_shape);
+            auto output_value_tensor = ttnn::full(
+                desired_final_shape,
+                0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
+                input_tensor.dtype(),
+                input_tensor.layout(),
+                *input_tensor.device(),
+                memory_config.value_or(input_tensor.memory_config()));
+
+            // auto output_index_tensor = ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config,
+            // /*compute_kernel_config=*/std::nullopt); output_index_tensor = ttnn::reshape(output_index_tensor,
+            // desired_final_shape);
+
+            auto output_index_tensor = ttnn::full(
+                desired_final_shape,
+                0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
+                input_tensor.dtype(),
+                input_tensor.layout(),
+                *input_tensor.device(),
+                memory_config.value_or(input_tensor.memory_config()));
+
+            return {std::move(output_value_tensor), std::move(output_index_tensor)};
+        } else {
+            // If the output tensors were preallocated, they should already have
+            // the correct shapes (validated above), so just return them as is.
+            auto& [values, indices] = preallocated_output_tensors.value();
+            return {values, indices};
+        }
+    }
 
     // Set up memory and execution configurations with defaults if not provided
     const auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -255,16 +313,6 @@ std::vector<Tensor> topk(
     // Preprocess optional output tensors if provided
     std::optional<std::tuple<Tensor, Tensor>> output_tensors = std::nullopt;
     if (preallocated_output_tensors.has_value()) {
-        TT_FATAL(
-            std::get<0>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
-            "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<0>(preallocated_output_tensors.value()).logical_shape(),
-            desired_final_shape);
-        TT_FATAL(
-            std::get<1>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
-            "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<1>(preallocated_output_tensors.value()).logical_shape(),
-            desired_final_shape);
         const auto values_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
             std::get<0>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
         const auto indices_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(

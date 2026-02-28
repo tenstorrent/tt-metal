@@ -93,12 +93,13 @@ def test_reduction_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
-@pytest.mark.parametrize("tensor_shape", [(170,), (3, 6, 40, 63, 20)])
-# @pytest.mark.parametrize("tensor_shape", [(), (17,), (3, 6, 40, 63, 20), (6, 0, 32)])
+# @pytest.mark.parametrize("tensor_shape", [(60, 0, 32)])
+@pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
 @pytest.mark.parametrize("dim", [0, None])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("k", [50])
+# @pytest.mark.parametrize("k", [50])
+@pytest.mark.parametrize("k", [50, 1, 0])
 def test_topk(device, tensor_shape, dim, dtype, layout, k):
     """
     Test the compatibility of the torch and ttnn topk output for different tensor shapes.
@@ -127,6 +128,8 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     except (IndexError, TypeError, RuntimeError):
         ttnn_errored = True
 
+    if torch_errored and ttnn_errored:
+        logger.info(f"Both PyTorch and TTNN errored")
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 
     if torch_errored:
@@ -138,6 +141,17 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=0.1, atol=0.1)
     assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
+
+    if (
+        torch_values.numel() == 0
+        and ttnn_values.numel() == 0
+        and torch_indices.numel() == 0
+        and ttnn_indices.numel() == 0
+    ):
+        logger.info(f"Both PyTorch and TTNN returned 0-volume tensors")
+        # Cosine similarity cannot be computed for empty tensors.
+        # comp_allclose_and_pcc already validated that shapes match, so we can return.
+        return
 
     ttnn_indices = ttnn_indices.to(torch.int32)
     # Indices can come back as negative values from ttnn (stored as unsigned in bfloat16).
