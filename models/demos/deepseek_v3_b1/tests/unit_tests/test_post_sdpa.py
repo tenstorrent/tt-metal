@@ -585,8 +585,8 @@ def test_post_sdpa(
     ],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("fuse_residual_add", [False])
-@pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
+@pytest.mark.parametrize("fuse_residual_add", [False, True])
+@pytest.mark.parametrize("position_id", [127, 1500, 2500, 3500], ids=["pos127", "pos1500", "pos2500", "pos3500"])
 @pytest.mark.requires_grid_size((13, 10))
 def test_post_sdpa_with_sdpa_phase(
     bh_2d_mesh_device,
