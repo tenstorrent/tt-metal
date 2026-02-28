@@ -6,7 +6,6 @@ import torch
 from torch import nn
 from torch.nn import Conv1d
 from torch.nn import functional as F
-from torch.nn.utils.parametrizations import weight_norm
 
 from models.demos.rvc.torch_impl.synthesizer.commons import fused_add_tanh_sigmoid_multiply, get_padding
 
@@ -38,6 +37,7 @@ class WN(nn.Module):
         gin_channels=0,
     ):
         super().__init__()
+
         assert kernel_size % 2 == 1
         self.hidden_channels = hidden_channels
         self.n_layers = n_layers
@@ -46,8 +46,7 @@ class WN(nn.Module):
         self.res_skip_layers = nn.ModuleList()
 
         if gin_channels != 0:
-            cond_layer = torch.nn.Conv1d(gin_channels, 2 * hidden_channels * n_layers, 1)
-            self.cond_layer = torch.nn.utils.parametrizations.weight_norm(cond_layer, name="weight")
+            self.cond_layer = torch.nn.Conv1d(gin_channels, 2 * hidden_channels * n_layers, 1)
 
         for i in range(n_layers):
             dilation = dilation_rate**i
@@ -59,7 +58,6 @@ class WN(nn.Module):
                 dilation=dilation,
                 padding=padding,
             )
-            in_layer = torch.nn.utils.parametrizations.weight_norm(in_layer, name="weight")
             self.in_layers.append(in_layer)
 
             # last one is not necessary
@@ -69,7 +67,6 @@ class WN(nn.Module):
                 res_skip_channels = hidden_channels
 
             res_skip_layer = torch.nn.Conv1d(hidden_channels, res_skip_channels, 1)
-            res_skip_layer = torch.nn.utils.parametrizations.weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
     def forward(self, x: torch.Tensor, g: torch.Tensor | None = None):
@@ -87,7 +84,6 @@ class WN(nn.Module):
                 g_l = torch.zeros_like(x_in)
 
             acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, self.hidden_channels)
-
             res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
                 res_acts = res_skip_acts[:, : self.hidden_channels, :]
@@ -103,15 +99,13 @@ class ResBlock1(nn.Module):
         super().__init__()
         self.convs1 = nn.ModuleList(
             [
-                weight_norm(
-                    Conv1d(
-                        channels,
-                        channels,
-                        kernel_size,
-                        1,
-                        dilation=d_value,
-                        padding=get_padding(kernel_size, d_value),
-                    )
+                Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    1,
+                    dilation=d_value,
+                    padding=get_padding(kernel_size, d_value),
                 )
                 for d_value in dilation
             ]
@@ -119,15 +113,13 @@ class ResBlock1(nn.Module):
 
         self.convs2 = nn.ModuleList(
             [
-                weight_norm(
-                    Conv1d(
-                        channels,
-                        channels,
-                        kernel_size,
-                        1,
-                        dilation=1,
-                        padding=get_padding(kernel_size, 1),
-                    )
+                Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    1,
+                    dilation=1,
+                    padding=get_padding(kernel_size, 1),
                 )
                 for _ in dilation
             ]
@@ -149,15 +141,13 @@ class ResBlock2(nn.Module):
         super().__init__()
         self.convs = nn.ModuleList(
             [
-                weight_norm(
-                    Conv1d(
-                        channels,
-                        channels,
-                        kernel_size,
-                        1,
-                        dilation=d_value,
-                        padding=get_padding(kernel_size, d_value),
-                    )
+                Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    1,
+                    dilation=d_value,
+                    padding=get_padding(kernel_size, d_value),
                 )
                 for d_value in dilation
             ]

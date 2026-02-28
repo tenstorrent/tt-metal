@@ -8,7 +8,6 @@ import torch
 from torch import nn
 from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
-from torch.nn.utils.parametrizations import weight_norm
 
 from models.demos.rvc.torch_impl.synthesizer import attentions, modules
 
@@ -114,14 +113,12 @@ class Generator(nn.Module):
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
             self.ups.append(
-                weight_norm(
-                    ConvTranspose1d(
-                        upsample_initial_channel // (2**i),
-                        upsample_initial_channel // (2 ** (i + 1)),
-                        k,
-                        u,
-                        padding=(k - u) // 2,
-                    )
+                ConvTranspose1d(
+                    upsample_initial_channel // (2**i),
+                    upsample_initial_channel // (2 ** (i + 1)),
+                    k,
+                    u,
+                    padding=(k - u) // 2,
                 )
             )
 
@@ -306,14 +303,12 @@ class GeneratorNSF(nn.Module):
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
             c_cur = upsample_initial_channel // (2 ** (i + 1))
             self.ups.append(
-                weight_norm(
-                    ConvTranspose1d(
-                        upsample_initial_channel // (2**i),
-                        upsample_initial_channel // (2 ** (i + 1)),
-                        k,
-                        u,
-                        padding=(k - u) // 2,
-                    )
+                ConvTranspose1d(
+                    upsample_initial_channel // (2**i),
+                    upsample_initial_channel // (2 ** (i + 1)),
+                    k,
+                    u,
+                    padding=(k - u) // 2,
                 )
             )
             if i + 1 < len(upsample_rates):

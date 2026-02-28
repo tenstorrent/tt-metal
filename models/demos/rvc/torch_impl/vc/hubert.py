@@ -1047,7 +1047,6 @@ def make_conv_pos(e, k, g, is_batch_norm=False):
     nn.init.constant_(pos_conv.bias, 0)
 
     if not is_batch_norm:
-        pos_conv = nn.utils.parametrizations.weight_norm(pos_conv, name="weight", dim=2)
         pos_conv = nn.Sequential(pos_conv, SamePad(k), nn.GELU())
     else:
         batch_norm = nn.BatchNorm1d(e)
