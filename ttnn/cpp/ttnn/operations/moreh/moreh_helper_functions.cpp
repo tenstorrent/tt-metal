@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "moreh_helper_functions.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <numeric>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
