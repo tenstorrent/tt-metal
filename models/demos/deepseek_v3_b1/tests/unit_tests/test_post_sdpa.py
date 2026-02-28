@@ -13,7 +13,7 @@ When SDPA is enabled:
   - SDPA Forwarders (2 cores): Forward fabric packets for SDPA CCL
 
 Post-SDPA phases:
-- Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
+- Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8 grid)
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
@@ -836,12 +836,11 @@ def test_post_sdpa_with_sdpa_phase(
     )
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
-    # Get single device for replicated tensors
+    # ========================================================================
+    # Create weights tensors
+    # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
 
-    # ========================================================================
-    # Create weights tensors (same as non-SDPA test)
-    # ========================================================================
     weights1_shard_shape = (K1, n1_per_core)
     weights1_shard_spec = ttnn.ShardSpec(matmul1_grid, weights1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     weights1_mem_config = ttnn.MemoryConfig(
@@ -1133,7 +1132,6 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_forwarder_scratch_mesh=ttnn_sdpa_forwarder_scratch,
         sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
-        sdpa_forwarder_cores=sdpa_forwarder_cores,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
         sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
         sdpa_per_device_chunk_size=per_device_chunk_size,
