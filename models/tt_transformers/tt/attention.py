@@ -60,14 +60,12 @@ class Attention(LightweightModule):
         self.batch_size_per_device_group = (
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
-        self.configuration = configuration
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
         self.arch_name = configuration.arch_name
-        # import json
-        # open("/tmp/tt_cfg_dump.json","w").write(json.dumps(dir(configuration), indent=2))
+        
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
