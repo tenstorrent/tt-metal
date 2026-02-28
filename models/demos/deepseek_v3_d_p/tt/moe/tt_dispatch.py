@@ -28,6 +28,8 @@ class TtDispatchModule(LightweightModule):
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
         hidden_dim: int = 7 * 1024,
+        num_links: int = 1,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -48,6 +50,8 @@ class TtDispatchModule(LightweightModule):
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
         self.seq_len_per_chip = seq_len_per_chip
+        self.num_links = num_links
+        self.topology = topology
 
         # Oversized buffer to simplify dispatch logic
         self.dispatched_shape = (num_chips, self.experts_per_chip, self.max_dispatched_tokens_per_expert, hidden_dim)
@@ -150,19 +154,23 @@ class TtDispatchModule(LightweightModule):
             dtype=ttnn.int32,
         )
 
-        tt_dispatched_buffer, tt_dispatch_metadata, tt_chip_to_routed_expert_tokens = (
-            ttnn.experimental.deepseek.prefill_dispatch(
-                input_tensor=x,
-                weights_tensor=weights,
-                indices_tensor=indices,
-                chip_to_n_routed_expert_offset_tensor=chip_to_n_routed_expert_offset_ttnn,
-                num_chips=self.num_chips,
-                experts_per_chip=self.experts_per_chip,
-                n_routed_experts=self.n_routed_experts,
-                num_experts_per_tok=self.num_experts_per_tok,
-                metadata_len=self.metadata_len,
-                max_dispatched_tokens_per_expert=self.max_dispatched_tokens_per_expert,
-            )
+        (
+            tt_dispatched_buffer,
+            tt_dispatch_metadata,
+            tt_chip_to_routed_expert_tokens,
+        ) = ttnn.experimental.deepseek.prefill_dispatch(
+            input_tensor=x,
+            weights_tensor=weights,
+            indices_tensor=indices,
+            chip_to_n_routed_expert_offset_tensor=chip_to_n_routed_expert_offset_ttnn,
+            num_chips=self.num_chips,
+            experts_per_chip=self.experts_per_chip,
+            n_routed_experts=self.n_routed_experts,
+            num_experts_per_tok=self.num_experts_per_tok,
+            metadata_len=self.metadata_len,
+            max_dispatched_tokens_per_expert=self.max_dispatched_tokens_per_expert,
+            num_links=self.num_links,
+            topology=self.topology,
         )
 
         torch.set_printoptions(profile="full")

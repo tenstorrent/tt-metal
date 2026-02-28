@@ -29,24 +29,38 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
     ],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device, device_params, num_links, topology",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-        },
-    ],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (2, 1),  # SP=2, TP=1
-        (4, 1),  # SP=4, TP=1
-        (8, 1),  # SP=8, TP=1
+        (
+            (2, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+        ),
+        (
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+        ),
+        (
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+        ),
     ],
     ids=["linear-2", "linear-4", "linear-8"],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 def test_ttnn_dispatch_combine(
@@ -56,6 +70,8 @@ def test_ttnn_dispatch_combine(
     n_routed_experts,
     num_experts_per_tok,
     capacity_factor,
+    num_links,
+    topology,
     use_predictable_data,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
@@ -130,6 +146,8 @@ def test_ttnn_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
+        num_links=num_links,
+        topology=topology,
     )
 
     # Run TTNN dispatch
@@ -165,6 +183,8 @@ def test_ttnn_dispatch_combine(
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
+        num_links=num_links,
+        topology=topology,
     )
 
     # Run TTNN combine
