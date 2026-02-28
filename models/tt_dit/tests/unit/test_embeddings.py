@@ -704,23 +704,29 @@ def test_wan_patch_embed(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [[(4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
     ("B, seq_len, embed_dim"),
     [
         (1, 512, 4096),  # Wan2.2
     ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
+    ids=["t3k", "wh_glx", "bh_glx"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_wan_time_text_image_embedding(
     mesh_device: ttnn.MeshDevice,
     B: int,
     seq_len: int,
     embed_dim: int,
+    num_links: int,
 ) -> None:
-    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 1))
     torch_dtype = torch.float32
     torch.manual_seed(12334)
     # Create Torch model
@@ -739,8 +745,8 @@ def test_wan_time_text_image_embedding(
     mesh_axis = 1
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=4,
-        topology=ttnn.Topology.Ring,
+        num_links=num_links,
+        topology=ttnn.Topology.Linear,
     )
 
     # Create TT model
@@ -797,13 +803,12 @@ def test_wan_time_text_image_embedding(
     )
 
     assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.3%
-    assert_quality(
-        encoder_hidden_states_torch,
-        tt_encoder_hidden_states_torch,
-        pcc=0.9999,
-        relative_rmse=0.01,  # expected RMSE =0.8%
-    )  # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
     assert_quality(timestep_proj_torch, tt_timestep_proj_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.4%
+
+    # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
+    assert_quality(
+        encoder_hidden_states_torch, tt_encoder_hidden_states_torch, pcc=0.9999, relative_rmse=0.01
+    )  # expected RMSE =0.8%
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2)], indirect=["mesh_device"])

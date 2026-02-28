@@ -509,6 +509,9 @@ class CausalUpsampleBlock(Module):
         )
 
         self.reshard_time_map = {
+            80 * 100: 84,
+            160 * 200: 168,
+            320 * 400: 168,
             120 * 212: 84,
             240 * 424: 168,
             480 * 848: 168,
