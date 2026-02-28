@@ -500,6 +500,7 @@ uint32_t per_core_rta_arg_idx = 0;
             .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
             .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
             .cb_q_in = get_named_compile_time_arg_val("mla_q_in_cb"),
+            .cb_mask = get_named_compile_time_arg_val("mla_mask_cb"),
             .cb_out_in = get_named_compile_time_arg_val("mla_out_in_cb"),
             .cb_ms_in = get_named_compile_time_arg_val("mla_ms_in_cb"),
             .cb_out_ms = get_named_compile_time_arg_val("mla_out_ms_cb"),
@@ -723,6 +724,7 @@ uint32_t per_core_rta_arg_idx = 0;
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ComputeCTArgs<
         get_named_compile_time_arg_val("mla_q_in_cb"),
         get_named_compile_time_arg_val("mla_k_in_cb"),
+        get_named_compile_time_arg_val("mla_mask_cb"),
         get_named_compile_time_arg_val("mla_interm_out_cb"),
         get_named_compile_time_arg_val("mla_interm_ms_cb"),
         get_named_compile_time_arg_val("mla_out_in_cb"),

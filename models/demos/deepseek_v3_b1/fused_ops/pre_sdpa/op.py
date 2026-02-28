@@ -574,16 +574,17 @@ class PreSDPA:
         # MLA parameters
         mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
         mla_k_in_cb = 35  # Input CB for MLA
-        mla_interm_out_cb = 36  # Intermediate output CB for MLA
-        mla_interm_ms_cb = 37  # Intermediate MS CB for MLA
-        mla_out_in_cb = 38  # Output input CB for MLA
-        mla_ms_in_cb = 39  # Output MS CB for MLA
-        mla_out_o_cb = 40  # Output O CB for MLA
-        mla_out_ms_cb = 41  # Output MS CB for MLA
-        mla_out_final_cb = 42  # Output final CB for MLA
+        mla_mask_cb = 36  # Mask CB for MLA
+        mla_interm_out_cb = 37  # Intermediate output CB for MLA
+        mla_interm_ms_cb = 38  # Intermediate MS CB for MLA
+        mla_out_in_cb = 39  # Output input CB for MLA
+        mla_ms_in_cb = 40  # Output MS CB for MLA
+        mla_out_o_cb = 41  # Output O CB for MLA
+        mla_out_ms_cb = 42  # Output MS CB for MLA
+        mla_out_final_cb = 43  # Output final CB for MLA
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 43  # Packet buffer for CCL broadcast
+        bcast_pkt_cb = 44  # Packet buffer for CCL broadcast
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -1222,6 +1223,7 @@ class PreSDPA:
             ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_k_in_cb", mla_k_in_cb),
             ("mla_q_in_cb", mla_q_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
             ("mla_out_in_cb", mla_out_in_cb),
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
@@ -1256,6 +1258,7 @@ class PreSDPA:
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
             ("mla_interm_out_cb", mla_interm_out_cb),
             ("mla_interm_ms_cb", mla_interm_ms_cb),
             ("mla_out_in_cb", mla_out_in_cb),
@@ -1935,6 +1938,15 @@ class PreSDPA:
                     )
                 )
                 # V is read directly from K buffer (strided matmul) - no separate V CB needed
+
+                # cb_mask: Mask input
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=q_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[ttnn.CBFormatDescriptor(mla_mask_cb, q_df, q_tile_size)],
+                    )
+                )
 
                 if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
                     # cb_out_in: output input (tiny tile)

@@ -20,9 +20,10 @@ inline void llk_math_sdpa_custom_mm(
     const std::uint32_t operandB,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const bool mask_chunk = false) {
     const std::uint32_t operandB_id = get_operand_id(operandA);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_sdpa_custom_mm_(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_sdpa_custom_mm_(operandB_face_r_dim, dst_index, kt_dim, ct_dim, mask_chunk);
 }
