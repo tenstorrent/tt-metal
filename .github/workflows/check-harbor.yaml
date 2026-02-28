@@ -1,0 +1,30 @@
+name: "[internal] Check Harbor Availability"
+description: "Check if Harbor registry is available and return the appropriate prefix"
+
+on:
+  workflow_call:
+    outputs:
+      harbor-prefix:
+        description: "Harbor prefix to use (empty if Harbor is down)"
+        value: ${{ jobs.check.outputs.harbor-prefix }}
+
+jobs:
+  check:
+    name: "Check Harbor"
+    runs-on: ubuntu-latest
+    outputs:
+      harbor-prefix: ${{ steps.check.outputs.harbor-prefix }}
+    steps:
+      - name: Check Harbor availability
+        id: check
+        run: |
+          # Try to reach Harbor registry API
+          # Check both the health endpoint and the v2 API endpoint
+          if curl -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" > /dev/null 2>&1 || \
+             curl -sf "https://harbor.ci.tenstorrent.net/v2/" > /dev/null 2>&1; then
+            echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
+            echo "✓ Harbor is available"
+          else
+            echo "harbor-prefix=" >> $GITHUB_OUTPUT
+            echo "⚠ Harbor unavailable, falling back to direct GHCR"
+          fi
