@@ -335,10 +335,20 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_bias_cb"), 1);
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_input_indices_cb"), 1);
 #endif
+#ifdef ENABLE_BCAST
+            constexpr bool bcast_use_socket = get_named_compile_time_arg_val("bcast_use_socket") == 1;
+            if constexpr (!bcast_use_socket) {
+                constexpr uint32_t bcast_pkt_cb = get_named_compile_time_arg_val("bcast_pkt_cb");
+                constexpr uint32_t bcast_num_pages = get_named_compile_time_arg_val("bcast_num_pages_to_read");
+                unified_kernels::setup_sharded_buffer(bcast_pkt_cb, bcast_num_pages);
+            }
+#else
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
                 get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"));
+#endif
         }
+
 #ifdef ENABLE_ROUTING
         if constexpr (Core::Routed::is_gate_mm_core) {
             unified_kernels::setup_sharded_buffer(
@@ -916,6 +926,76 @@ void kernel_main() {
         setup_all_sharded_buffers();
 #endif
 #endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
+
+#ifdef ENABLE_BCAST
+        // Step -1: CCL Broadcast — receive data from fabric into intermediate tensor
+        {
+            DeviceZoneScopedN("BCAST");
+#if defined(COMPILE_FOR_NCRISC)
+            using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+                get_named_compile_time_arg_val("bcast_pkt_cb"),
+                get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+                get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+                get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+                get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+                get_named_compile_time_arg_val("bcast_is_sender"),
+                get_named_compile_time_arg_val("bcast_core_noc_x"),
+                get_named_compile_time_arg_val("bcast_core_noc_y"),
+                get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+                get_named_compile_time_arg_val("bcast_has_secondary_target"),
+                get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+                get_named_compile_time_arg_val("bcast_range_hops_forward"),
+                get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+                get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+            deepseek_b1_ops::Broadcast::WriterArgs bcast_args{
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 0),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 2),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 3),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 4),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 5),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 6),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 7),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 8),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 9),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 10),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 11),
+                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("bcast_ncrisc_common_rt_arg_base") + 12),
+            };
+
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
+            bcast_op(bcast_args);
+#elif defined(COMPILE_FOR_BRISC)
+            using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+                get_named_compile_time_arg_val("bcast_pkt_cb"),
+                get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+                get_named_compile_time_arg_val("bcast_is_sender"),
+                get_named_compile_time_arg_val("bcast_use_socket")>;
+            deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+                get_common_arg_val<uint32_t>(0),  // socket_config_addr
+                get_common_arg_val<uint32_t>(1),  // socket_page_size
+                get_common_arg_val<uint32_t>(2),  // socket_num_pages
+            };
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_sender_core> bcast_op;
+            bcast_op(bcast_args);
+#else
+            // TRISC: broadcast is a no-op
+            deepseek_b1_ops::Broadcast::Op<deepseek_b1_ops::Broadcast::ComputeCTArgs, Core::is_sender_core> bcast_op;
+            deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+            bcast_op(bcast_args);
+#endif
+        }
+        // After broadcast, push CB 25 pages so residual mcast + RMSNorm can read
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t bcast_residual_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t bcast_residual_pages =
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+            unified_kernels::setup_sharded_buffer(bcast_residual_cb, bcast_residual_pages);
+        }
+#endif
+#endif
+
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
@@ -951,12 +1031,6 @@ void kernel_main() {
         }
 #endif
 #endif
-
-        // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(moe.routed.mcast_args);
-        }
 
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
@@ -1226,26 +1300,25 @@ void kernel_main() {
         // Sender core NCRISC waits before starting next iteration's bcast.
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
-            constexpr uint32_t sync_sem_id = get_named_compile_time_arg_val("bcast_reduce_sync_sem_id");
+            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
             constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("bcast_reduce_sync_noc_x");
             constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("bcast_reduce_sync_noc_y");
-            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, get_semaphore(sync_sem_id));
+            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
             noc_semaphore_inc(sync_sem_noc_addr, 1);
         }
 #elif defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
-            constexpr uint32_t sync_sem_id = get_named_compile_time_arg_val("bcast_reduce_sync_sem_id");
+            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
             constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("bcast_reduce_sync_num_fabric_cores");
-            volatile tt_l1_ptr uint32_t* sync_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sync_sem_id));
+            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
             noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
             noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
         }
 #endif
+#endif
 
         // Reduce fabric cores signal sender core that fabric sends are done.
         // Sender core NCRISC waits before starting next iteration.
-#ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
