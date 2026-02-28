@@ -22,11 +22,6 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Python venv images even if they exist in registry"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix for image tags (defaults to vars.HARBOR_PREFIX)"
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
@@ -64,16 +59,16 @@ jobs:
 
       - name: Compute Python venv image tags
         id: tags
-        env:
-          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
+          # Tags are always GHCR paths (no harbor prefix) - we push to GHCR
+          # Consumers prepend harbor-prefix when pulling through Harbor
           VERSION="${{ steps.platform.outputs.version }}"
           VERSION_NODOT="${VERSION//.}"
 
           VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
 
-          BASE="${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
           echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
 

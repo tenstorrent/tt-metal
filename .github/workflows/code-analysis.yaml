@@ -156,7 +156,6 @@ jobs:
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
-    needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
@@ -164,7 +163,6 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   # Full scan: single job that analyzes everything
   clang-tidy-full:

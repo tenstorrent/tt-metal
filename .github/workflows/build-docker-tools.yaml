@@ -18,11 +18,6 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all tool images even if they exist in registry"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix for image tags (defaults to vars.HARBOR_PREFIX)"
     outputs:
       # JSON bundle containing all tool tags
       tool-tags:
@@ -55,11 +50,11 @@ jobs:
 
       - name: Compute tool image tags
         id: tags
-        env:
-          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
-          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          # Tags are always GHCR paths (no harbor prefix) - we push to GHCR
+          # Consumers prepend harbor-prefix when pulling through Harbor
+          TOOL_TAGS=$(HARBOR_PREFIX="" .github/scripts/compute-tool-tags.sh "${{ github.repository }}")
           echo "tool-tags<<EOJSON" >> $GITHUB_OUTPUT
           echo "$TOOL_TAGS" >> $GITHUB_OUTPUT
           echo "EOJSON" >> $GITHUB_OUTPUT

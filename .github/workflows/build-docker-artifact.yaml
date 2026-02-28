@@ -68,11 +68,6 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Docker images even if they exist in registry"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix for image tags (defaults to vars.HARBOR_PREFIX)"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -137,8 +132,6 @@ jobs:
     name: "🔧 Tool images"
     if: inputs.tool-tags == ''
     uses: ./.github/workflows/build-docker-tools.yaml
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix }}
     secrets: inherit
 
   # =============================================================================
@@ -150,7 +143,6 @@ jobs:
     with:
       platform: ${{ inputs.platform }}
       force-rebuild: ${{ inputs.force-rebuild }}
-      harbor-prefix: ${{ inputs.harbor-prefix }}
     secrets: inherit
 
   # =============================================================================
@@ -217,10 +209,11 @@ jobs:
 
       - name: Compute tags
         id: tags
-        env:
-          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
+          # Tags are always GHCR paths (no harbor prefix) - we push to GHCR
+          # Consumers prepend harbor-prefix when pulling through Harbor
+
           # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from
           # any Dockerfile passed as extra, so Dockerfile.tools brings in all tool install
           # scripts (install-sfpi.sh, etc.). When a tool is updated, both tool image tag and
@@ -228,24 +221,24 @@ jobs:
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          echo "ci-build-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
           # basic-dev uses tool images (cmake, sfpi, openmpi, ccache), so include tool-related files in hash
           BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
-          echo "basic-dev-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
-          echo "basic-ttnn-runtime-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
           # Manylinux image uses tool images (ccache, mold, sfpi, openmpi). EXTRA_FILES
           # already includes all tool install scripts, so manylinux hash updates when any
           # tool changes (e.g. OpenMPI build method change affecting library SONAMEs).
           MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
-          echo "manylinux-tag=${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist

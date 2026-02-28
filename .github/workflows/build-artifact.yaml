@@ -281,7 +281,6 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
-      harbor-prefix: ${{ inputs.harbor-prefix }}
 
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
