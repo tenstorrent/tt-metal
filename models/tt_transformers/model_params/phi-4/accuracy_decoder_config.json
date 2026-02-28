@@ -1,0 +1,9 @@
+{
+    "decoders": {
+        "0": {
+            "precision_cfg": {
+                "WQKV": "BFP8"
+            }
+        }
+    }
+}

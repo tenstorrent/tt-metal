@@ -1,0 +1,20 @@
+﻿38512	Disable GPTOSS with Prefill32k and above on T3K due to OOM	smanoj/disable_t3k_prefill32k	MERGED	2026-02-25T10:22:10Z
+38239	Remove unnecessary assert in update kv cache	smanoj/remove_update_cache_assert	OPEN	2026-02-20T16:29:46Z
+38021	#36397 [GPT-OSS] low latency enabling prefill up to 32k	smanoj/gpt_oss_enable_4k	MERGED	2026-02-18T13:52:14Z
+35820	Minimal matmul + reduce scatter fusion	smanoj/min_matmul_reduce_scatter	OPEN	2026-01-14T13:39:43Z
+35601	Create programming examples for multi-chip using fabric	smanoj/multi_chip_exp	OPEN	2026-01-11T16:37:25Z
+35212	Config Tensors in DRAM for Pool2D	smanoj/pool_dram_config	MERGED	2025-12-31T17:55:49Z
+35163	Combine Conv2d Prepared Weights with Config	smanoj/conv_weights_prep_info	DRAFT	2025-12-30T07:46:27Z
+35107	Remove Conv2dSliceConfig	smanoj/remove_conv_slice_config	OPEN	2025-12-28T07:09:47Z
+34731	Fix convs	smanoj/fix_conv	MERGED	2025-12-18T17:57:55Z
+34485	Add MobilenetV3 Model to TTNN	smanoj/ign/mobilenetv3	MERGED	2025-12-16T09:08:14Z
+33763	Make auto slicing logic generic	smanoj/enable_auto_slicing	MERGED	2025-12-04T06:41:03Z
+33136	Implement DRAM Slicing for conv_transpose2d	smanoj/convt2d_dram	MERGED	2025-11-25T09:46:55Z
+32888	Chain multiple 2D Ops with a single DRAM Read + Write	smanoj/multi_op_slicing	CLOSED	2025-11-20T11:16:31Z
+32157	Implement support for DRAM Slicing in Pool ops	smanoj/pool_slicing	MERGED	2025-11-10T11:46:29Z
+31658	#0: Remove const on input_tensor as it's not respected	smanoj/remove_const_input	CLOSED	2025-11-03T12:59:38Z
+31642	#0: Remove channel slicing in panoptic unit tests	smanoj/panoptic_wihout_cs	CLOSED	2025-11-03T05:49:21Z
+30505	#0: Update sweep utils codeowner	smanoj/update_sweep_owner	MERGED	2025-10-14T07:27:16Z
+30446	Use exact halo output size when calculate conv2d L1 usage	pjosipovic/halo_precise_output_calculation	MERGED	2025-10-13T10:36:12Z
+30360	#30011: Reduce input_channels_alignment requirement of Conv2D DRAM	smanoj/dram_input_alignment	MERGED	2025-10-10T09:56:28Z
+30104	#30012: [skip ci] Fix failing di/dit tests	smanoj/fix_didt	MERGED	2025-10-07T13:14:29Z
