@@ -56,7 +56,7 @@ TEST(CleanupTest, MoveConstruction) {
 TEST(CleanupTest, ExceptionSafety) {
     bool cleanup_called = false;
     try {
-        auto cleanup = make_cleanup([&cleanup_called]() { cleanup_called = true; });
+        [[maybe_unused]] auto cleanup = make_cleanup([&cleanup_called]() { cleanup_called = true; });
         throw std::runtime_error("test exception");
     } catch (const std::runtime_error& e) {
         // Exception caught, cleanup should still execute
