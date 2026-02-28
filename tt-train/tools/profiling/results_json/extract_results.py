@@ -417,9 +417,9 @@ def extract_timings(csv_path: Path) -> dict | None:
                 if dev_id is not None
                 else between
             )
-            if len(ops) >= 2:
+            if len(ops) >= 1:
                 duration_ms = (
-                    ops["DEVICE FW START CYCLE"].iloc[-1]
+                    ops["DEVICE FW END CYCLE"].iloc[-1]
                     - ops["DEVICE FW START CYCLE"].iloc[0]
                 ) / (DEVICE_CLOCK_GHZ * 1e6)
             else:

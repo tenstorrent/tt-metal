@@ -4,7 +4,7 @@ training_config:
   model_save_interval: 1
   batch_size: 1
   num_epochs: 1
-  max_steps: 5
+  max_steps: 20
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true
@@ -13,7 +13,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_type: "bpe"
   data_path: "data/tokenized_shakespeare_llama8b.yaml"
-  model_config: "configs/model_configs/llama8b.yaml"
+  model_config: "model_configs/llama8b.yaml"
 
 device_config:
   enable_ddp: false
