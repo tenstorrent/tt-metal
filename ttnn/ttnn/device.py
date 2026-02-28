@@ -24,6 +24,11 @@ Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
+get_optimal_dram_bank_to_logical_worker_assignment = (
+    ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
+)
+enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
+disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
@@ -229,6 +234,37 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
         yield device
     finally:
         close_device(device)
+
+
+initialize_fast_dispatch = ttnn._ttnn.device.initialize_fast_dispatch
+terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
+
+
+@contextlib.contextmanager
+def setup_fast_dispatch(device):
+    """
+    Context manager that enables Fast Dispatch for the duration of the block.
+    The device must have been opened in Slow Dispatch mode (e.g. TT_METAL_SLOW_DISPATCH_MODE=1).
+    On exit, Fast Dispatch is terminated and the device returns to Slow Dispatch.
+
+    Args:
+        device: The device to enable Fast Dispatch on.
+
+    Yields:
+        None: Use the device inside the block; it is in Fast Dispatch mode.
+
+    Example:
+        >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        >>> with ttnn.device.setup_fast_dispatch(mesh_device):
+        ...     # issue writes or other FD operations
+        ...     pass
+        >>> # FD terminated; device is back in Slow Dispatch
+    """
+    initialize_fast_dispatch(device)
+    try:
+        yield
+    finally:
+        terminate_fast_dispatch(device)
 
 
 def dump_device_memory_state(device, prefix=""):

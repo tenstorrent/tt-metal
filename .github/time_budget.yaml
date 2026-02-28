@@ -67,6 +67,10 @@ metal_infra:
 # Current time budgets are based on sums of existing tests.
 # No official decision has been made yet for division of budgets per team.
 ttnn:
+  sanity:
+    wh_n300_civ2: 535
+    bh_p100: 535
+    bh_p150b_civ2: 535
   unit:
     wh_llmbox: 50
   e2e:
@@ -91,20 +95,28 @@ scaleout:
   e2e:
     wh_llmbox: 20
   unit:
-    wh_llmbox: 15
+    wh_llmbox: 20
   integration:
     wh_llmbox: 30
 
 models:
   e2e:
-    wh_llmbox: 140
+    wh_llmbox: 180
+    wh_llmbox_perf: 60
+    wh_n150: 30
+    wh_n300: 30
+    wh_galaxy: 30
   unit:
-    wh_llmbox: 295
+    wh_llmbox: 303
+    wh_llmbox_perf: 60
+    wh_n150: 30
+    wh_n300: 30
+    wh_galaxy: 30
   integration:
     wh_llmbox: 422
   perf:
     wh_llmbox_perf: 685
-    wh_galaxy: 260
+    wh_galaxy: 280
   demo:
     wh_llmbox_perf: 1090
-    wh_galaxy: 270
+    wh_galaxy: 287

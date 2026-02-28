@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "hostdev/dev_msgs.h"
+#include "internal/hw_thread.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
@@ -33,20 +34,7 @@ constexpr uint32_t helper(const char (&s)[N]) {
 
 template <uint32_t x>
 inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
-#if defined(ARCH_QUASAR)
-#ifdef COMPILE_FOR_TRISC
-    uint32_t hartid;
-    uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
-    uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    hartid = 8 + 4 * neo_id + trisc_id;  // after 8 DM cores
-#else
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-#endif
-    debug_waypoint[hartid] = x;
-#else
-    debug_waypoint[PROCESSOR_INDEX] = x;
-#endif
+    debug_waypoint[internal_::get_hw_thread_idx()] = x;
 }
 
 #define WATCHER_WAYPOINT_MAILBOX (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint)))

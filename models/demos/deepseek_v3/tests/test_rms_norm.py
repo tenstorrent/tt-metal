@@ -26,16 +26,16 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 32),
         ("prefill", _prefill_seq_len),
     ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
 )
 @pytest.mark.parametrize(
     "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
@@ -103,6 +103,9 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_rms_norm",
+        real_weights=reference_layernorm_path is not None,
+        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(

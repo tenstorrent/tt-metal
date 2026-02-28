@@ -464,7 +464,6 @@ def test_qwen_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-    print_outputs = True
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True
@@ -729,7 +728,9 @@ def test_qwen_demo_text(
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
-        # Save prefill token
+        # Save prefill token (unpack tuple when device sampling returns logprobs)
+        if isinstance(toks, tuple):
+            toks = toks[0]
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -794,7 +795,7 @@ def test_qwen_demo_text(
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward_text(
+                tt_out_tok, read_event = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=is_enable_trace,
@@ -1125,7 +1126,7 @@ def test_qwen_demo_text(
         target_decode_tok_s = target_decode_tok_s_u * batch_size
         assert (
             decode_tok_s_user >= target_decode_tok_s_u
-        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be < {target_decode_tok_s_u}."
+        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be > {target_decode_tok_s_u}."
         assert (
             decode_tok_s >= target_decode_tok_s
         ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."

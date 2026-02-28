@@ -203,16 +203,16 @@ class DRAMStreamingMatmul:
         # Determine subblock_w based on fp32_dest_acc_en and per_core_N
         # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
         # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
-        if fp32_dest_acc_en:
-            if per_core_N <= 8:
-                max_subblock_w = 8
-            else:
-                max_subblock_w = 4
-        else:
-            if per_core_N <= 16:
-                max_subblock_w = 16
-            else:
-                max_subblock_w = 8
+        dst_full_sync_en = False
+        if dst_full_sync_en and fp32_dest_acc_en:
+            max_dest = 8
+        elif dst_full_sync_en and not fp32_dest_acc_en:
+            max_dest = 16
+        elif not dst_full_sync_en and fp32_dest_acc_en:
+            max_dest = 4
+        elif not dst_full_sync_en and not fp32_dest_acc_en:
+            max_dest = 8
+        max_subblock_w = min(max_dest, per_core_N)
 
         # Find largest subblock_w that evenly divides per_core_N
         subblock_w = max_subblock_w
@@ -245,14 +245,8 @@ class DRAMStreamingMatmul:
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: 3 * num_subblocks_k buffers for DRAM read pipelining
-        # Transaction IDs must stay within NOC_MAX_TRANSACTION_ID (0xF = 15)
-        num_in1_buffers = 3 * num_subblocks_k
-        assert num_in1_buffers <= 15, (
-            f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15). "
-            f"Consider reducing subblock_k to satisfy: 3 * (Kt / subblock_k) <= 15 "
-            f"(current: 3 * ({Kt} / {subblock_k}) = {num_in1_buffers})"
-        )
+        # in1: 3 buffers for DRAM read triple-buffering (each buffer holds subblock_k tiles)
+        num_in1_buffers = 3
         in1_CB_tiles = subblock_k * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
