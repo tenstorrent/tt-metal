@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_common_api.h"
+#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -32,15 +33,15 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  *
  * @brief Unpacks a single operand, unpacker0 is used
  *
- * @param operand: The input operand circular buffer
+ * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  *
  * This function unpacks a single operand from the input circular buffer to srcA/dest register.
  */
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    // Use fifo_rd_tile_idx: number of tiles the read pointer has advanced from CB base
-    const std::uint32_t l1_tile_index = get_local_cb_interface(operand_id).fifo_rd_tile_idx + tile_index;
+    // Use fifo_rd_tile_idx: number of tiles the read pointer has advanced from DFB base
+    const std::uint32_t l1_tile_index = g_dfb_interface[operand_id].rd_entry_idx + tile_index;
 
     WAYPOINT("UPAW");
     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index);

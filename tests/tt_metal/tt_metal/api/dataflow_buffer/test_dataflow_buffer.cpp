@@ -95,6 +95,14 @@ void run_single_dfb_program(
     experimental::dfb::DataflowBufferConfig& dfb_config,
     DFBPorCType producer_type,
     DFBPorCType consumer_type) {
+
+    if (dfb_config.num_producers > 1 and producer_type == DFBPorCType::TENSIX) {
+        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
+    }
+    if (dfb_config.num_consumers > 1 and consumer_type == DFBPorCType::TENSIX) {
+        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
+    }
+
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
         "Both producer and consumer cannot be Tensix. At least one must be a DM kernel for NOC transfers.");
