@@ -57,6 +57,8 @@ ARG OMPI_SHA256=119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd
 FROM alpine:3.19 AS ccache-builder
 ARG CCACHE_VERSION
 ARG CCACHE_SHA256
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 COPY dockerfile/scripts/install-ccache.sh /tmp/install-ccache.sh
 RUN apk add --no-cache bash wget && \
     CCACHE_VERSION=${CCACHE_VERSION} \
@@ -75,6 +77,8 @@ COPY --from=ccache-builder /install/ /install/
 FROM alpine:3.19 AS mold-builder
 ARG MOLD_VERSION
 ARG MOLD_SHA256
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 COPY dockerfile/scripts/install-mold.sh /tmp/install-mold.sh
 RUN apk add --no-cache bash wget && \
     MOLD_VERSION=${MOLD_VERSION} \
@@ -95,6 +99,8 @@ ARG DOXYGEN_VERSION
 ARG DOXYGEN_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -118,6 +124,8 @@ ARG CBA_VERSION
 ARG CBA_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates cmake build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -141,6 +149,8 @@ ARG GDB_VERSION
 ARG GDB_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates build-essential texinfo libgmp-dev libmpfr-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -162,6 +172,8 @@ COPY --from=gdb-builder /install/ /install/
 FROM alpine:3.19 AS cmake-builder
 ARG CMAKE_VERSION
 ARG CMAKE_SHA256
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 COPY dockerfile/scripts/install-cmake.sh /tmp/install-cmake.sh
 RUN apk add --no-cache bash wget && \
     CMAKE_VERSION=${CMAKE_VERSION} \
@@ -180,6 +192,8 @@ COPY --from=cmake-builder /install/ /install/
 FROM alpine:3.19 AS yq-builder
 ARG YQ_VERSION
 ARG YQ_SHA256
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 COPY dockerfile/scripts/install-yq.sh /tmp/install-yq.sh
 RUN apk add --no-cache bash wget && \
     YQ_VERSION=${YQ_VERSION} \
@@ -204,6 +218,8 @@ COPY --from=yq-builder /install/ /install/
 FROM ubuntu:22.04 AS sfpi-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates binutils xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -233,6 +249,9 @@ COPY --from=sfpi-builder /install/ /install/
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
 ARG OMPI_TAG
 ARG OMPI_SHA256
+
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
