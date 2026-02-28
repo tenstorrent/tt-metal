@@ -118,8 +118,8 @@ jobs:
   # Prewarm cache by pulling images from GHCR through HARBOR
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
-    needs: [build-tools, build-2204, build-2404]
-    if: always() && !failure() && !cancelled()
+    needs: [check-harbor, build-tools, build-2204, build-2404]
+    if: always() && !failure() && !cancelled() && needs.check-harbor.outputs.harbor-prefix != ''
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Login to GitHub Container Registry
@@ -128,6 +128,13 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Harbor Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: harbor.ci.tenstorrent.net
+          username: ${{ secrets.HARBOR_PUSH_USER }}
+          password: ${{ secrets.HARBOR_PUSH_PASSWORD }}
 
       - name: Prewarm tool images cache
         env:
