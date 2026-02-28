@@ -126,13 +126,6 @@ void kernel_main() {
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         uint32_t end_page = start_page + expert_tokens;
 
-        // protection against corrupted metadata
-        if (expert_tokens > num_experts_per_tok) {
-            DPRINT_COMBINE << "  Warning: expert_tokens (" << expert_tokens << ") exceeds num_experts_per_tok ("
-                           << num_experts_per_tok << "). This may indicate a bug in the dispatch logic." << ENDL();
-            return;
-        }
-
         DPRINT_COMBINE << "  Tokens for expert: " << expert_tokens << " (pages [" << start_page << "," << end_page
                        << "))" << ENDL();
 
