@@ -9,6 +9,16 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 
+// Debug print control - set to 0 to disable combine debug prints, 1 to enable
+#define ENABLE_COMBINE_DEBUG 0
+#if ENABLE_COMBINE_DEBUG
+#define DPRINT_COMBINE DPRINT
+#else
+#define DPRINT_COMBINE \
+    if (0)             \
+    DebugPrinter()
+#endif
+
 void kernel_main() {
     // ===== Compile Time Args =====
     // CB IDs (indices 0-3)
@@ -74,19 +84,19 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args++);
 
     // Print key compile time args for debugging (RISCV_1)
-    DPRINT << "Combine Reader: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
-           << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
-           << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
-           << " seq_len_per_chip=" << seq_len_per_chip
-           << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert << " hidden_size=" << hidden_size
-           << ENDL();
+    DPRINT_COMBINE << "Combine Reader: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
+                   << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
+                   << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
+                   << " seq_len_per_chip=" << seq_len_per_chip
+                   << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert
+                   << " hidden_size=" << hidden_size << ENDL();
 
     // ====
     // read experts token counter (chips/fractured ==1, experts_per_chip)
     const auto experts_tok_counter_addr_gen =
         TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
-        DPRINT << "Fetching experts token counter; page=" << i << ENDL();
+        DPRINT_COMBINE << "Fetching experts token counter; page=" << i << ENDL();
         cb_reserve_back(cb_experts_tok_counter_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_experts_tok_counter_id);
         noc_async_read_page(i, experts_tok_counter_addr_gen, l1_write_addr);
@@ -111,15 +121,23 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(experts_tok_counter_l1_addr);
 
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; local_expert++) {
-        DPRINT << "Local expert=" << local_expert << ENDL();
+        DPRINT_COMBINE << "Local expert=" << local_expert << ENDL();
         uint32_t start_page = local_expert * expert_stride;
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
         uint32_t end_page = start_page + expert_tokens;
-        DPRINT << "  Tokens for expert: " << expert_tokens << " (pages [" << start_page << "," << end_page << "))"
-               << ENDL();
+
+        // protection against corrupted metadata
+        if (expert_tokens > num_experts_per_tok) {
+            DPRINT_COMBINE << "  Warning: expert_tokens (" << expert_tokens << ") exceeds num_experts_per_tok ("
+                           << num_experts_per_tok << "). This may indicate a bug in the dispatch logic." << ENDL();
+            return;
+        }
+
+        DPRINT_COMBINE << "  Tokens for expert: " << expert_tokens << " (pages [" << start_page << "," << end_page
+                       << "))" << ENDL();
 
         for (uint32_t token = start_page; token < end_page; token++) {
-            // DPRINT << "    Fetching token index/page: " << token << ENDL();
+            // DPRINT_COMBINE << "    Fetching token index/page: " << token << ENDL();
             cb_reserve_back(cb_dispatched_buffer_id, 1);
             cb_reserve_back(cb_dispatched_metadata_id, 1);
 
