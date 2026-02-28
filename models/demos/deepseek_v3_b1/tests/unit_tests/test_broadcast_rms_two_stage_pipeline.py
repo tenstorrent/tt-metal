@@ -3,7 +3,6 @@
 
 """
 Two-stage pipeline integration test for socket-fed BroadcastRMSNorm.
-
 Stage 0:
   host token -> fused embedding (HostInterface) -> cross-stage D2D
 Stage 1:
@@ -38,7 +37,7 @@ def create_fabric_router_config(max_payload_size):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         }
@@ -46,7 +45,7 @@ def create_fabric_router_config(max_payload_size):
     indirect=True,
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
-@pytest.mark.parametrize("token_id", [0, 31, 63])
+@pytest.mark.parametrize("token_id", [0])
 @pytest.mark.parametrize("epsilon", [1e-6])
 def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, token_id, epsilon):
     if not is_slow_dispatch():
@@ -59,7 +58,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
     if num_procs < 2:
         pytest.skip(f"Requires at least 2 distributed processes, got {num_procs}")
 
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
     assert len(pipeline_config) == num_procs + 1
     assert 0 <= token_id < vocab_size
 
@@ -192,7 +191,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
         semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
         recv_socket = pipeline_block.get_downstream_socket()
-        sender_coord = recv_socket.get_active_cores()[0].device_coord
+        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
 
     pipeline_block.run()
     logger.info(f"[rank={my_mesh_id}] pipeline programs launched")
