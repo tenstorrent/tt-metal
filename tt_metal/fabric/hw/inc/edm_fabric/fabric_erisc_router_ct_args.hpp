@@ -716,9 +716,20 @@ using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
 
 //-------------------------------- Credit Amortization --------------------------------//
-constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
+constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY_RAW =
     get_named_compile_time_arg_val("SENDER_CREDIT_AMORTIZATION_FREQUENCY");
-constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
+constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY_RAW =
     get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
+// HACK: hardcode amortization frequency to 4 for 2-sender-channel (line) topologies
+constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
+    (NUM_SENDER_CHANNELS == 2) ? 4 : SENDER_CREDIT_AMORTIZATION_FREQUENCY_RAW;
+constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
+    (NUM_SENDER_CHANNELS == 2) ? 4 : RECEIVER_CREDIT_AMORTIZATION_FREQUENCY_RAW;
 constexpr bool super_speedy_mode =
-    SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 && RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0;
+    SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 && RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0 && NUM_SENDER_CHANNELS == 1;
+// Line-topology speedy mode: 2 sender channels with credit epoch array disambiguation
+constexpr bool line_speedy_mode = SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 &&
+                                  RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0 && NUM_SENDER_CHANNELS == 2 &&
+                                  !enable_deadlock_avoidance;
+static_assert(
+    line_speedy_mode || super_speedy_mode, "Either line-topology or neighbor-exchange speedy mode must be enabled");

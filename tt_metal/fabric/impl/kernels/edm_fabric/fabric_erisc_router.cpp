@@ -36,6 +36,7 @@
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
+#include "api/debug/ring_buffer.h"
 
 #include <array>
 #include <cstddef>
@@ -830,12 +831,15 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
 
 #else
 
+// Core implementation that takes a pre-loaded PackedPayloadAndSendType, avoiding
+// redundant uncached L1 reads. Callers should use PackedPayloadAndSendType::load
+// to fetch payload_size_bytes + noc_send_type in a single 4B aligned read.
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, typename DownstreamSenderT>
-FORCE_INLINE void receiver_forward_packet(
-    // TODO: have a separate cached copy of the packet header to save some additional L1 loads
+FORCE_INLINE void receiver_forward_packet_impl(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
+    typename PACKET_HEADER_TYPE::PackedPayloadAndSendType packed,
     DownstreamSenderT& downstream_edm_interface,
     uint8_t transaction_id) {
     constexpr bool ENABLE_STATEFUL_NOC_APIS =
@@ -844,51 +848,74 @@ FORCE_INLINE void receiver_forward_packet(
 #else
         false;
 #endif
-    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
+    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
-        // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
             (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
             tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
-        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
-        // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                packet_start,
+                packed.payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
             channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
         }
         if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip_impl(
+                packet_start, packed.payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
-        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip_impl(
+                    packet_start, packed.payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
                 break;
             case LowLatencyFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-
-                // In 1D, the forwarding sender channel is always sender channel 1
-                // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
+                    packet_start,
+                    packed.payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface,
+                    transaction_id);
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-                // In 1D, the forwarding sender channel is always sender channel 1
-                // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
+                    packet_start,
+                    packed.payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface,
+                    transaction_id);
+                execute_chip_unicast_to_local_chip_impl(
+                    packet_start, packed.payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
             default: {
+                WATCHER_RING_BUFFER_PUSH(0xdead);
+                WATCHER_RING_BUFFER_PUSH(cached_routing_fields.value);
+                WATCHER_RING_BUFFER_PUSH(routing);
                 ASSERT(false);
             }
         }
     }
+}
+
+// Wrapper that resolves payload_size_bytes + noc_send_type from the packet header
+// via a single PackedPayloadAndSendType::load (4B aligned read), then delegates to _impl.
+// !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
+template <uint8_t rx_channel_id, typename DownstreamSenderT>
+FORCE_INLINE void receiver_forward_packet(
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    DownstreamSenderT& downstream_edm_interface,
+    uint8_t transaction_id) {
+    auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+    receiver_forward_packet_impl<rx_channel_id>(
+        packet_start, cached_routing_fields, packed, downstream_edm_interface, transaction_id);
 }
 
 #endif
@@ -2118,6 +2145,22 @@ FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::Termina
     }
 }
 
+// ---------------------------------------------------------------------------
+// Compile-time guards: neighbor-exchange speedy mode
+// ---------------------------------------------------------------------------
+static_assert(
+    !super_speedy_mode || !enable_deadlock_avoidance,
+    "super_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
+static_assert(!super_speedy_mode || NUM_SENDER_CHANNELS == 1, "super_speedy_mode requires exactly 1 sender channel");
+
+// ---------------------------------------------------------------------------
+// Compile-time guards: line-topology speedy mode
+// ---------------------------------------------------------------------------
+static_assert(
+    !(line_speedy_mode && enable_deadlock_avoidance),
+    "line_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
+static_assert(!line_speedy_mode || NUM_SENDER_CHANNELS == 2, "line_speedy_mode requires exactly 2 sender channels");
+
 // Include the speedy path functions (must come after all helper function definitions above)
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp"
 
@@ -2232,7 +2275,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
+            if constexpr ((super_speedy_mode || line_speedy_mode) && is_sender_channel_serviced[0]) {
                 auto check_connection_status =
                     !channel_connection_established[0] ||
                     local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
@@ -2283,6 +2326,62 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_fabric_telemetry);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
+                            0,
+                            to_receiver_packets_sent_streams[0],
+                            ENABLE_FIRST_LEVEL_ACK_VC0,
+                            VC0_DOWNSTREAM_EDM_SIZE,
+                            decltype(receiver_channel_0_trid_tracker)>(
+                            local_receiver_channels.template get<0>(),
+                            downstream_edm_noc_interfaces_vc0,
+                            local_relay_interface,
+                            receiver_channel_pointers_ch0,
+                            receiver_channel_0_trid_tracker,
+                            port_direction_table,
+                            receiver_channel_response_credit_senders[0],
+                            routing_table,
+                            local_fabric_telemetry);
+#endif
+                    }
+                } else if constexpr (line_speedy_mode) {
+                    static_assert(
+                        !line_speedy_mode || (is_sender_channel_serviced[0] == is_sender_channel_serviced[1]),
+                        "Line speedy mode requires both sender channels to be serviced");
+                    if constexpr (is_sender_channel_serviced[0] && is_sender_channel_serviced[1]) {
+                        tx_progress |= run_sender_channels_step_line_speedy<
+                            to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                            ENABLE_FIRST_LEVEL_ACK_VC0>(
+                            local_sender_channels.template get<0>(),
+                            local_sender_channel_worker_interfaces.template get<0>(),
+                            local_sender_channels.template get<1>(),
+                            local_sender_channel_worker_interfaces.template get<1>(),
+                            outbound_to_receiver_channel_pointer_ch0,
+                            remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
+                            channel_connection_established,
+                            local_sender_channel_free_slots_stream_ids,
+                            sender_channel_from_receiver_credits[0],
+                            inner_loop_perf_telemetry_collector,
+                            local_fabric_telemetry);
+                    }
+
+                    if constexpr (is_receiver_channel_serviced[0]) {
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+                        rx_progress |= run_receiver_channel_step_line_speedy<
+                            0,
+                            to_receiver_packets_sent_streams[0],
+                            ENABLE_FIRST_LEVEL_ACK_VC0,
+                            VC1_DOWNSTREAM_EDM_SIZE,
+                            decltype(receiver_channel_0_trid_tracker)>(
+                            local_receiver_channels.template get<0>(),
+                            downstream_edm_noc_interfaces_vc1,
+                            local_relay_interface,
+                            receiver_channel_pointers_ch0,
+                            receiver_channel_0_trid_tracker,
+                            port_direction_table,
+                            receiver_channel_response_credit_senders[0],
+                            routing_table,
+                            local_fabric_telemetry);
+#else
+                        rx_progress |= run_receiver_channel_step_line_speedy<
                             0,
                             to_receiver_packets_sent_streams[0],
                             ENABLE_FIRST_LEVEL_ACK_VC0,
