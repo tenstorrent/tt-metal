@@ -26,7 +26,7 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-def setup_reduce_to_one_test(mesh_device):
+def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     """Common setup for reduce_to_one tests. Returns test configuration."""
     # Log mesh device info
     logger.info(f"mesh_device shape: {mesh_device.shape}")
@@ -40,8 +40,6 @@ def setup_reduce_to_one_test(mesh_device):
 
     # Setup - create 4x2 submesh
     num_devices = 8
-    exit_coord = (0, 1)
-    root_coord = (1, 1)
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh_device.shape}")
@@ -212,11 +210,11 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     return match
 
 
-def run_reduce_to_one(mesh_device, num_iterations=1):
+def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1)):
     """Run reduce_to_one test."""
     print(f"\n=== Testing reduce_to_one (num_iterations={num_iterations}) ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
 
     # Run reduce_to_one with looping inside the kernel
     print(f"Running reduce_to_one with {num_iterations} iterations...")
@@ -244,11 +242,11 @@ def run_reduce_to_one(mesh_device, num_iterations=1):
     print("Test passed!")
 
 
-def run_reduce_to_one_with_trace(mesh_device):
+def run_reduce_to_one_with_trace(mesh_device, root_coord=(1, 1), exit_coord=(0, 1)):
     """Run reduce_to_one test with trace capture and replay."""
     print(f"\n=== Testing reduce_to_one with trace ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
     submesh_device = config["submesh_device"]
     input_tensor = config["input_tensor"]
     intermediate_tensors = config["intermediate_tensors"]

@@ -42,7 +42,7 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
-def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate) -> int:
+def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
         return MESH_ROOT1
@@ -54,8 +54,24 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
-    root3_row = 2 if root_row == 1 else 1
+    # ROOT3 coord
+    if use_torus:
+        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
+        if root_row == 0:
+            root3_row = 3
+        elif root_row == 3:
+            root3_row = 0
+        else:
+            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+    else:
+        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
+        if root_row == 1:
+            root3_row = 2
+        elif root_row == 2:
+            root3_row = 1
+        else:
+            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
+
     if my_row == root3_row:
         return MESH_ROOT3
 
@@ -297,6 +313,7 @@ class ReduceToOneB1:
         enable_d2d0_output: bool = False,  # Enable D2D_0 aggregation output
         d2d0_infrastructure: Optional[dict] = None,
         num_iterations: int = 1,  # Pre-created D2D_0 infrastructure
+        is_torus: bool = False,
     ) -> tuple:
         """
         Execute reduce-to-one operation using generic_op with optional D2D_0 aggregation output.
@@ -333,9 +350,7 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
-        # Validate root_coord
-        if root_coord[0] not in [1, 2]:
-            raise ValueError(f"Root coordinate row must be 1 or 2, got {root_coord[0]}")
+        use_torus = is_torus and root_coord[0] in [0, 3]
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -436,7 +451,7 @@ class ReduceToOneB1:
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                role = get_device_role(coord, root_coord)
+                role = get_device_role(coord, root_coord, use_torus)
                 is_leaf = role == MESH_LEAF
                 is_root3 = role == MESH_ROOT3
                 is_root2 = role == MESH_ROOT2
@@ -508,10 +523,16 @@ class ReduceToOneB1:
 
                 # Determine destination coordinate based on role
                 if is_leaf:
-                    if row == 0:
-                        dest_coord = ttnn.MeshCoordinate(row + 1, col)
-                    else:  # row == 3
-                        dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if use_torus:
+                        if row == 1:
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                        else:  # row == 2
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                    else:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
                 elif is_root3:
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
                 elif is_root2:
@@ -775,11 +796,22 @@ class ReduceToOneB1:
 
                 # Add D2D_0 aggregator kernel to ROOT1 device program if enabled
                 if is_root1 and d2d0_infra is not None:
+                    # Determine if D2D_0 needs fabric to send to downstream
+                    d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
+                    d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
+                        0
+                    ].receiver_core.device_coord
+                    my_fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+                        ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
+                    )
+                    use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+                    # print("use fabric on sender: ", use_fabric_on_sender)
                     d2d0_kernel = ReduceToOneB1.create_d2d0_aggregator_kernel(
                         d2d0_infra,
                         payload_size_bytes,  # Per-worker page size
                         len(shard_cores),  # Number of workers
-                        use_fabric_on_sender=False,  # Fabric usage set by test based on D2D_1 location
+                        use_fabric_on_sender=use_fabric_on_sender,
                     )
                     all_kernels = all_kernels + [d2d0_kernel]
 
@@ -790,7 +822,7 @@ class ReduceToOneB1:
                 )
 
                 # Add fabric connection args for fabric cores (must be done after program creation)
-                # ROOT1 doesn't send via fabric, so skip fabric setup
+                # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
                 if not is_root1:
                     fabric_kernel_idx = fabric_group.brisc_kernel_index
                     for fc_idx, fc in enumerate(fabric_cores):
@@ -805,6 +837,30 @@ class ReduceToOneB1:
                             fc,
                         )
                         fabric_rt_args_ref.extend(fabric_conn_args)
+
+                # Add fabric connection args for D2D_0 aggregator kernel if it needs fabric
+                if is_root1 and d2d0_infra is not None and use_fabric_on_sender:
+                    # print("appending fabric rt for D2D_0\n")
+                    d2d0_kernel_idx = len(all_kernels) - 1  # D2D_0 kernel is the last one added
+                    d2d0_core = d2d0_infra["d2d0_core"]
+
+                    # print("set rt args to []")
+                    # Initialize runtime args to empty list before extending with fabric args
+                    program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y] = []
+                    d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
+                    # print("getting rt args ref\n")
+                    # Set up fabric connections for D2D_0 kernel
+                    # Use same number of links as determined by socket config
+                    num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
+                    for link_idx in range(num_d2d0_links):
+                        d2d0_fabric_args = ttnn.setup_fabric_connection(
+                            my_fabric_node_id,
+                            downstream_fabric_node_id,
+                            link_idx,
+                            program,
+                            d2d0_core,
+                        )
+                        d2d0_rt_args_ref.extend(d2d0_fabric_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
