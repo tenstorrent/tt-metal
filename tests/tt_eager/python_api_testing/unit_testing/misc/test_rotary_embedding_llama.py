@@ -30,6 +30,7 @@ class TtLlamaRotary(torch.nn.Module):
         mode: str,
         datatype=ttnn.bfloat16,
         fuse_qk=False,
+        input_transpose=False,
     ):
         super().__init__()
 
@@ -37,6 +38,7 @@ class TtLlamaRotary(torch.nn.Module):
         self.device = device
         self.mode = mode
         self.fuse_qk = fuse_qk
+        self.input_transpose = input_transpose
 
         self.transformation_mat = ttnn.from_torch(
             get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
@@ -61,6 +63,7 @@ class TtLlamaRotary(torch.nn.Module):
             self.transformation_mat,
             is_decode_mode=self.mode == "decode",
             compute_kernel_config=self.compute_kernel_config,
+            input_transpose=self.input_transpose,
         )
 
         return rotary_output
@@ -129,10 +132,14 @@ def run_test_rotary_embedding_llama(
     max_seq_len,
     datatype=ttnn.bfloat16,
     fuse_qk=False,
+    input_transpose=ttnn.RotaryEmbeddingTranspose.NONE,
 ):
     # Prepare input
     torch.manual_seed(0)
     mode = "decode" if seq_len == 1 else "prefill"
+
+    if mode != "decode" and input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
+        pytest.skip("HC transpose on input is only supported for decode mode")
 
     if mode == "decode":
         max_seq_len = MAX_SEQ_LEN
@@ -173,12 +180,13 @@ def run_test_rotary_embedding_llama(
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
-    tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
+    tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk, input_transpose)
 
     if mode == "decode":
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
-        inp = [x.transpose(1, 2) for x in inp]
-        # inp: [seq_len, batch, n_heads, head_dim]
+        if input_transpose == ttnn.RotaryEmbeddingTranspose.NONE:
+            inp = [x.transpose(1, 2) for x in inp]
+            # inp: [seq_len, batch, n_heads, head_dim]
 
         if fuse_qk:
             # Set up rope with 2 * batch size (for fused qk) (no scaling)
@@ -260,7 +268,7 @@ def run_test_rotary_embedding_llama(
     tt_out = tt_model(*tt_inp)
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
-    if mode == "decode":
+    if mode == "decode" and input_transpose == ttnn.RotaryEmbeddingTranspose.NONE:
         tt_out = [x.transpose(1, 2) for x in tt_out]
         # tt_out: [seq_len, n_heads, batch, head_dim]
 
@@ -466,6 +474,7 @@ def run_test_row_major_rotary_embedding_llama(
         (8, 1, 256),
     ),
 )
+@pytest.mark.parametrize("input_transpose", (ttnn.RotaryEmbeddingTranspose.NONE, ttnn.RotaryEmbeddingTranspose.HC))
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
 def test_rotary_embedding_llama(
@@ -474,6 +483,7 @@ def test_rotary_embedding_llama(
     n_heads,
     n_kv_heads,
     head_dim,
+    input_transpose,
     datatype,
     pcc,
     device,
@@ -488,9 +498,24 @@ def test_rotary_embedding_llama(
     if seq_len == 1 and (n_heads > ttnn.TILE_SIZE or n_kv_heads > ttnn.TILE_SIZE):
         pytest.skip("n_heads or n_kv_heads cannot be greater than ttnn.TILE_SIZE for decode mode")
 
+    if seq_len != 1 and input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
+        pytest.skip("HC transpose on input is only supported for decode mode (seq_len=1) and non-fused qk")
+
     max_seq_len = max(4096, seq_len)
 
-    run_test_rotary_embedding_llama(device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
+    run_test_rotary_embedding_llama(
+        device,
+        batch,
+        seq_len,
+        pcc,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        max_seq_len,
+        datatype,
+        fuse_qk=False,
+        input_transpose=input_transpose,
+    )
 
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.randn(1, 1, 32, 32)
@@ -669,151 +694,3 @@ def test_rotary_embedding_llama_per_head(
     passing, out_pcc = comp_pcc(gt, out, pcc)
     logger.info(out_pcc)
     assert passing
-
-
-def run_test_rotary_embedding_llama_with_input_transpose(
-    device,
-    batch,
-    seq_len,
-    pcc,
-    n_heads,
-    n_kv_heads,
-    head_dim,
-    max_seq_len,
-    datatype=ttnn.bfloat16,
-):
-    """
-    Validates that calling rotary_embedding_llama with input_transpose=HC on a
-    tensor whose dims 1 and 2 are swapped produces the same result as the
-    manual transpose -> RoPE -> transpose sequence.
-
-    Uses prefill (interleaved) mode. Decode mode with sharded tensors requires
-    additional memory config management and is left for the optimized fused kernel.
-    """
-    torch.manual_seed(0)
-
-    # Input shape: [batch, n_heads, seq_len, head_dim]
-    inp_q = (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1
-    inp_k = (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1
-
-    freqs_cis = precompute_freqs_cis(head_dim, max_seq_len * 2)
-    freqs_cis = freqs_cis[slice(0, seq_len)]
-
-    # PyTorch ground truth: standard RoPE on [batch, n_heads, seq_len, head_dim]
-    torch_xq = inp_q.transpose(1, 2)
-    torch_xk = inp_k.transpose(1, 2)
-    torch_xq, torch_xk = apply_rotary_emb(torch_xq, torch_xk, freqs_cis=freqs_cis)
-    torch_xq = torch_xq.transpose(1, 2)
-    torch_xk = torch_xk.transpose(1, 2)
-    pytorch_out = (torch_xq, torch_xk)
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=True,
-        fp32_dest_acc_en=(True if head_dim <= 128 else False),
-        packer_l1_acc=True,
-    )
-    transformation_mat = ttnn.from_torch(
-        get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
-    )
-
-    cos_pt, sin_pt = compute_gather_cos_sin(
-        dhead=head_dim,
-        end=max_seq_len * 2,
-        position_ids=torch.arange(0, seq_len),
-    )
-
-    # HC-transpose: swap dims 1 and 2 → [batch, seq_len, n_heads, head_dim]
-    inp_hc = [inp_q.transpose(1, 2), inp_k.transpose(1, 2)]
-
-    tt_results = []
-    for x_hc in inp_hc:
-        x_tt = ttnn.from_torch(x_hc, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
-        cos_tt = ttnn.from_torch(cos_pt, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
-        sin_tt = ttnn.from_torch(sin_pt, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
-        out_tt = ttnn.experimental.rotary_embedding_llama(
-            x_tt,
-            cos_tt,
-            sin_tt,
-            transformation_mat,
-            is_decode_mode=False,
-            compute_kernel_config=compute_kernel_config,
-            input_transpose=ttnn.RotaryEmbeddingTranspose.HC,
-        )
-        tt_results.append(ttnn.to_torch(out_tt))
-
-    # Output is HC-transposed [batch, seq_len, n_heads, head_dim], transpose back
-    tt_out = [x.transpose(1, 2) for x in tt_results]
-
-    assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
-    does_pass = True
-    for i in range(len(pytorch_out)):
-        out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
-        assert (
-            pytorch_out[i].shape == tt_out[i].shape
-        ), f"Shape mismatch: pytorch={pytorch_out[i].shape}, tt={tt_out[i].shape}"
-        logger.info(f"PCC value: {output_pcc}")
-        does_pass = does_pass and out_pass
-
-        mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"MAE: {mae}")
-
-        max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"Max incorrect: {max_incorrect}")
-
-    if does_pass:
-        logger.info("Llama rotary_embedding_llama with input_transpose=HC Passed!")
-    else:
-        logger.warning("Llama rotary_embedding_llama with input_transpose=HC Failed!")
-        assert does_pass, f"PCC value is lower than {pcc}"
-
-
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@pytest.mark.parametrize(
-    "batch, seq_len",
-    (
-        (1, 2048),
-        (1, 4096),
-        (1, 8192),
-        (2, 1024),
-    ),
-    ids=(
-        "prefill_2k",
-        "prefill_4k",
-        "prefill_8k",
-        "batch2_1024",
-    ),
-)
-@pytest.mark.parametrize(
-    "n_heads, n_kv_heads, head_dim",
-    (
-        (8, 1, 128),
-        (8, 1, 64),
-    ),
-)
-@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
-@pytest.mark.parametrize("pcc", (0.9997,))
-def test_rotary_embedding_llama_input_transpose(
-    batch,
-    seq_len,
-    n_heads,
-    n_kv_heads,
-    head_dim,
-    datatype,
-    pcc,
-    device,
-):
-    """
-    Tests that rotary_embedding_llama with input_transpose=RotaryEmbeddingTranspose.HC
-    produces the same result as manually transposing dims 1 and 2 around the call.
-    Tests prefill mode with interleaved tensors.
-    """
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
-        pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
-
-    max_seq_len = max(4096, seq_len)
-
-    run_test_rotary_embedding_llama_with_input_transpose(
-        device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
-    )

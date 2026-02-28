@@ -18,6 +18,7 @@ enum class RotaryEmbeddingTranspose : uint8_t {
 
 struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
+    RotaryEmbeddingTranspose input_transpose{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };

@@ -83,48 +83,60 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             "rotary_embedding_llama currently only supports sharded inputs in decode mode, and therefore, seq_len (in "
             "dim 0) must be 1.");
 
-        TT_FATAL(
-            (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-            "Sharded inputs for RoPE must be HEIGHT_SHARDED.");
-        TT_FATAL(
-            (cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-            "cos tensor for RoPE must be HEIGHT_SHARDED.");
-        TT_FATAL(
-            (sin.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-            "sin tensor for RoPE must be HEIGHT_SHARDED.");
-        TT_FATAL(
-            (trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-            "transformation matrix for RoPE must be HEIGHT_SHARDED.");
+        if (operation_attributes.input_transpose == RotaryEmbeddingTranspose::NONE) {
+            TT_FATAL(
+                (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
+                "Sharded inputs for RoPE must be HEIGHT_SHARDED.");
+            TT_FATAL(
+                (cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
+                "cos tensor for RoPE must be HEIGHT_SHARDED.");
+            TT_FATAL(
+                (sin.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
+                "sin tensor for RoPE must be HEIGHT_SHARDED.");
+            TT_FATAL(
+                (trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
+                "transformation matrix for RoPE must be HEIGHT_SHARDED.");
 
-        uint32_t num_cores = input_tensor.device()->compute_with_storage_grid_size().x *
-                             input_tensor.device()->compute_with_storage_grid_size().y;
-        uint32_t batch = input_tensor.logical_shape()[1];
-        TT_FATAL(
-            batch <= num_cores,
-            "In decode mode, RoPE is parallelized over batch dimension, and therefore, batch size must be less than or "
-            "equal to the number of cores");
+            uint32_t num_cores = input_tensor.device()->compute_with_storage_grid_size().x *
+                                 input_tensor.device()->compute_with_storage_grid_size().y;
+            uint32_t batch = input_tensor.logical_shape()[1];
+            TT_FATAL(
+                batch <= num_cores,
+                "In decode mode, RoPE is parallelized over batch dimension, and therefore, batch size must be less "
+                "than or "
+                "equal to the number of cores");
 
-        // Checks for cos and sin
-        TT_FATAL(batch == cos.logical_shape()[1], "Cos and Sin must have the same batch size as the input");
-        // TODO: might be supported by kernel currently, but need to check with pytest
-        TT_FATAL(
-            cos.shard_spec()->shape[0] == TILE_HEIGHT,
-            "In decode mode, RoPE only supports n_heads (shard_shape[0]) less than equal to TILE_HEIGHT");
+            // Checks for cos and sin
+            TT_FATAL(batch == cos.logical_shape()[1], "Cos and Sin must have the same batch size as the input");
+            // TODO: might be supported by kernel currently, but need to check with pytest
+            TT_FATAL(
+                cos.shard_spec()->shape[0] == TILE_HEIGHT,
+                "In decode mode, RoPE only supports n_heads (shard_shape[0]) less than equal to TILE_HEIGHT");
 
-        // Checks for transformation matrix
-        TT_FATAL(
-            trans_mat.logical_shape()[0] == 1 && trans_mat.logical_shape()[1] == 1,
-            "Transformation matrix must have 1st & 2nd dim equal to 1");
-        TT_FATAL(
-            trans_mat.shard_spec()->shape[0] == TILE_HEIGHT,
-            "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
-        TT_FATAL(
-            trans_mat.shard_spec()->shape[1] == TILE_WIDTH,
-            "Transformation matrix must have 4th dim equal to TILE_WIDTH");
+            // Checks for transformation matrix
+            TT_FATAL(
+                trans_mat.logical_shape()[0] == 1 && trans_mat.logical_shape()[1] == 1,
+                "Transformation matrix must have 1st & 2nd dim equal to 1");
+            TT_FATAL(
+                trans_mat.shard_spec()->shape[0] == TILE_HEIGHT,
+                "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
+            TT_FATAL(
+                trans_mat.shard_spec()->shape[1] == TILE_WIDTH,
+                "Transformation matrix must have 4th dim equal to TILE_WIDTH");
+
+        } else if (operation_attributes.input_transpose == RotaryEmbeddingTranspose::HC) {
+            TT_FATAL(
+                (false),
+                "In decode mode, optional input_transpose = RotaryEmbeddingTranspose::HC is currently not supported.");
+        }
     } else {  // Prefill mode validation
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor must be interleaved in prefill mode");
+
+        TT_FATAL(
+            (operation_attributes.input_transpose == RotaryEmbeddingTranspose::NONE),
+            "In prefill mode, input_transpose must currently be RotaryEmbeddingTranspose::NONE.");
 
         // Checks for cos and sin
         TT_FATAL(
@@ -195,7 +207,6 @@ tt::tt_metal::Tensor rotary_embedding_llama(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::prim::RotaryEmbeddingTranspose input_transpose) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
-    using RotaryTranspose = ttnn::experimental::prim::RotaryEmbeddingTranspose;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -207,28 +218,15 @@ tt::tt_metal::Tensor rotary_embedding_llama(
         default_memory_config = input_tensor.memory_config();
     }
 
-    auto resolved_memory_config = memory_config.value_or(default_memory_config);
-
-    // When HC transpose is requested, transpose dims 1 and 2 before and after the RoPE kernel
-    auto effective_input = input_tensor;
-    if (input_transpose == RotaryTranspose::HC) {
-        effective_input = ttnn::transpose(input_tensor, 1, 2, resolved_memory_config);
-    }
-
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
-        .output_mem_config = resolved_memory_config,
+        .input_transpose = input_transpose,
+        .output_mem_config = memory_config.value_or(default_memory_config),
         .compute_kernel_config = kernel_config_val};
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = effective_input, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
+        .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 
-    auto result = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-
-    if (input_transpose == RotaryTranspose::HC) {
-        result = ttnn::transpose(result, 1, 2, resolved_memory_config);
-    }
-
-    return result;
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
