@@ -8,7 +8,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -20,8 +19,6 @@
 #include <vector>
 
 #include "noc_debugging_fixture.hpp"
-#include "impl/program/program_impl.hpp"
-#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -223,18 +220,21 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
 
         constexpr uint8_t cb_buffer_index = 0;
-        uint32_t num_elements = 8;
-        uint32_t cb_page_size = num_elements * sizeof(uint32_t);
+        uint32_t cb_page_size = 32;
         uint32_t cb_total_size = cb_page_size * 2;
         CircularBufferConfig cb_config =
             CircularBufferConfig(cb_total_size, {{cb_buffer_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_buffer_index, cb_page_size);
-        CBHandle cb_handle = CreateCircularBuffer(program, locker_core, cb_config);
+        CreateCircularBuffer(program, locker_core, cb_config);
 
         auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
         auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
         uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
         uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        uint32_t write_size = alignment;
+        uint32_t l1_size = mesh_device->l1_size_per_core();
+        uint32_t stride = alignment * 64;
 
         KernelHandle locker_kernel = CreateKernel(
             program,
@@ -243,12 +243,9 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
         KernelHandle writer_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel.cpp",
             writer_core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        uint32_t cb_addr = program.impl().get_circular_buffer(cb_handle)->address();
-        log_info(tt::LogMetal, "CB address: {}", cb_addr);
 
         SetRuntimeArgs(
             program,
@@ -264,10 +261,12 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
             writer_kernel,
             writer_core,
             {writer_buffer_addr,
-             num_elements,
+             write_size,
              locker_virtual_core.x,
              locker_virtual_core.y,
-             cb_addr,
+             unreserved_addr,
+             l1_size,
+             stride,
              writer_sem_id,
              locker_sem_id,
              locker_virtual_core.x,
@@ -312,18 +311,21 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
 
         constexpr uint8_t cb_buffer_index = 0;
-        uint32_t num_elements = 8;
-        uint32_t cb_page_size = num_elements * sizeof(uint32_t);
+        uint32_t cb_page_size = 32;
         uint32_t cb_total_size = cb_page_size * 2;
         CircularBufferConfig cb_config =
             CircularBufferConfig(cb_total_size, {{cb_buffer_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_buffer_index, cb_page_size);
-        CBHandle cb_handle = CreateCircularBuffer(program, locker_core, cb_config);
+        CreateCircularBuffer(program, locker_core, cb_config);
 
         auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
         auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
         uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
         uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        uint32_t write_size = alignment;
+        uint32_t l1_size = mesh_device->l1_size_per_core();
+        uint32_t stride = alignment * 64;
 
         KernelHandle locker_kernel = CreateKernel(
             program,
@@ -332,7 +334,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
         KernelHandle writer_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_no_issue.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel_no_issue.cpp",
             writer_core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
 
@@ -345,17 +347,17 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
              writer_sem_id,
              writer_virtual_core.x,
              writer_virtual_core.y});
-
-        uint32_t cb_addr = program.impl().get_circular_buffer(cb_handle)->address();
         SetRuntimeArgs(
             program,
             writer_kernel,
             writer_core,
             {writer_buffer_addr,
-             num_elements,
+             write_size,
              locker_virtual_core.x,
              locker_virtual_core.y,
-             cb_addr,
+             unreserved_addr,
+             l1_size,
+             stride,
              writer_sem_id,
              locker_sem_id,
              locker_virtual_core.x,

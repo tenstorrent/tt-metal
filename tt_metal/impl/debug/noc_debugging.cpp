@@ -257,7 +257,7 @@ std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_
     if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM ||
         issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) {
         const char* locked_type =
-            (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) ? "CB" : "core local mem";
+            (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) ? "circular buffer" : "core local mem";
         return fmt::format(
             "from ({},{}) to ({},{}) addr 0x{:08X} size {} locked {}",
             static_cast<int>(issue_type.src_x),
