@@ -237,7 +237,6 @@ ARG OMPI_SHA256
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
-RUN dnf remove -y epel-release || true
 # Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
 # Note: slurm-devel is required for --with-slurm in install-openmpi.sh
 RUN dnf install -y \
