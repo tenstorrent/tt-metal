@@ -87,6 +87,11 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
+    if constexpr (use_streaming_compute) {
+        // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
+        cb_wait_front(cb_identity_scale_in, 1);
+    }
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;

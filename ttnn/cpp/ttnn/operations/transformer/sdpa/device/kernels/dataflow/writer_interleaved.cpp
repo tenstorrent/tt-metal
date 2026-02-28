@@ -28,8 +28,9 @@ void kernel_main() {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
+    constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<21>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -73,6 +74,17 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
+    // Lightweight mask: generate a single -inf tile once, leave permanently fronted.
+    if constexpr (use_lightweight_mask && use_padded_mask) {
+        const uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+        cb_reserve_back(cb_mask_in, 1);
+        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
+        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
+            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
+        }
+        cb_push_back(cb_mask_in, 1);
+    }
+
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
             cb_wait_front(cb_chunk_start_idx, 1);
@@ -114,9 +126,9 @@ void kernel_main() {
                     q_chunk = local_q_start + q_iter;
 #endif
 
-                    // Generate mask only when user didn't provide one
-                    // When use_provided_mask, reader handles mask reading (and padding if needed)
-                    if constexpr (!use_provided_mask) {
+                    // Generate mask only when user didn't provide one.
+                    // Lightweight path already has a single -inf tile fronted — skip generate_mask.
+                    if constexpr (!use_provided_mask && !use_lightweight_mask) {
                         generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
                             Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
                     }
