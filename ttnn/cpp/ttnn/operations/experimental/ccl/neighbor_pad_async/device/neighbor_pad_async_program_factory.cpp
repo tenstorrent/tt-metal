@@ -139,17 +139,24 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 // Input: [B,T,H,W,C] fractured across 2D mesh (H across rows, W across columns)
 // Output: [B,T,H+2pH,W+2pW,C]
 //
+// Phase 0 — H writer startup barrier (skipped when using persistent output buffers):
+//   H fabric writers do a pairwise semaphore exchange with their H neighbor via fabric
+//   to ensure both sides have allocated their output buffers before any fabric data is sent.
+//
 // Phase 1 — Interior copy + H halo exchange (all ~120 cores active):
 //   Local copy cores: read input sticks → write to output DRAM at (h+pH, w+pW) offset.
-//   H fabric writer (BRISC): self-pad zeros/replicate to output DRAM for H pad rows.
+//   H fabric writer (BRISC): self-pad zeros/replicate to output DRAM for H pad rows,
+//     send H boundary data to neighbor via fabric.
 //   H fabric reader (NCRISC): receive H halo from fabric → L1 → output DRAM.
-//   All Phase 1 cores signal Phase 2 barrier on completion.
+//   All Phase 1 cores (local copy writers, H fabric writers, and H fabric readers)
+//     signal Phase 2 barrier on completion.
 //
-// Phase 2 — W halo exchange (2-4 W fabric cores only):
-//   W reader: reads W boundary sticks from output DRAM (safe because Phase 1 calls
-//     noc_async_write_barrier() before signaling the barrier semaphore).
-//     Sends to neighbor via fabric or self-pads. Receives from neighbor → L1 → output DRAM.
-//   W writer: writes self-pad to output DRAM, sends W boundary data via fabric.
+// Phase 2 — W halo exchange (2–8 W fabric cores, i.e. 2 × pad2_num_links):
+//   W reader: waits on Phase 2 barrier, then reads W boundary sticks from output DRAM
+//     (safe because Phase 1 calls noc_async_write_barrier() before signaling the barrier).
+//     Sends to neighbor via fabric or self-pads. Receives from neighbor → L1 → CB.
+//   W writer: pops from CB, writes self-pad and incoming W padding to output DRAM,
+//     sends W boundary data to neighbor via fabric.
 NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorkloadFactory::create_at(
     const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
