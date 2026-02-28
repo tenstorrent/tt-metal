@@ -233,34 +233,21 @@ std::vector<Tensor> topk(
             desired_final_shape);
     }
 
-    // For a zero volume tensor, return a zero volume tensor with the shape adjusted for k.
+    // For a zero volume input tensor, return a zero volume tensor with the shape adjusted for k.
     // Same if k is 0 (i.e. top 0 elements were requested).
     if (input_tensor.logical_volume() == 0 || k == 0) {
         if (!preallocated_output_tensors.has_value()) {
-            // auto output_value_tensor = ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config,
-            // /*compute_kernel_config=*/std::nullopt); output_value_tensor = ttnn::reshape(output_value_tensor,
-            // desired_final_shape);
-            auto output_value_tensor = ttnn::full(
-                desired_final_shape,
-                0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
-                input_tensor.dtype(),
-                input_tensor.layout(),
-                *input_tensor.device(),
-                memory_config.value_or(input_tensor.memory_config()));
+            auto make_zero_volume_tensor = [&] {
+                return ttnn::full(
+                    desired_final_shape,
+                    0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
+                    input_tensor.dtype(),
+                    input_tensor.layout(),
+                    *input_tensor.device(),
+                    memory_config.value_or(input_tensor.memory_config()));
+            };
 
-            // auto output_index_tensor = ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config,
-            // /*compute_kernel_config=*/std::nullopt); output_index_tensor = ttnn::reshape(output_index_tensor,
-            // desired_final_shape);
-
-            auto output_index_tensor = ttnn::full(
-                desired_final_shape,
-                0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
-                input_tensor.dtype(),
-                input_tensor.layout(),
-                *input_tensor.device(),
-                memory_config.value_or(input_tensor.memory_config()));
-
-            return {std::move(output_value_tensor), std::move(output_index_tensor)};
+            return {make_zero_volume_tensor(), make_zero_volume_tensor()};
         } else {
             // If the output tensors were preallocated, they should already have
             // the correct shapes (validated above), so just return them as is.
