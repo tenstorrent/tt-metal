@@ -2297,7 +2297,7 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     out_tt = ttnn.add(a_tt, b_tt, use_legacy=None)
     out_pt = golden_fn(a_pt, b_pt)
 
-    assert compare_pcc([out_tt], [out_pt])
+    assert_with_pcc(out_pt, out_tt)
 
 
 def test_add_1m(device):
