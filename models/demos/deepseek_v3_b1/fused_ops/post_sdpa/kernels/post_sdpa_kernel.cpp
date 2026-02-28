@@ -478,7 +478,7 @@ void kernel_main() {
     // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL1");
+        DeviceZoneScopedN("MATMUL4");
         deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
         matmul4(matmul4_args);
     }
@@ -516,7 +516,7 @@ void kernel_main() {
     // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL2");
+        DeviceZoneScopedN("MATMUL5");
         // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
         deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
         matmul5(matmul5_args);
