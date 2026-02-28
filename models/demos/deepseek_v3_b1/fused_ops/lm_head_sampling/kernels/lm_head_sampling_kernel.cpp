@@ -226,7 +226,6 @@ void kernel_main() {
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
         Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
-        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         get_write_ptr(mcast_dst_cb),
     };
 
