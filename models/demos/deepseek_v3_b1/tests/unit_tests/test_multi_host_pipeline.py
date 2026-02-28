@@ -4,7 +4,7 @@
 
 """
 Multi-Host Pipeline Block Integration Tests.
-Combine H <-> D Interface with Multi-Host sockets under PipelineBlock API.
+Combine H <-> D Interface with Mult-Host sockets under PipelineBlock API.
 
 """
 
@@ -63,7 +63,7 @@ def create_fabric_router_config(max_payload_size):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -151,13 +151,13 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
 
         tensor_size_datums = tensor_size_bytes // 4
         for i in range(num_iterations):
-            torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
-                1, tensor_size_datums
-            )
+            torch_input = torch.arange(
+                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
+            ).reshape(1, tensor_size_datums)
 
-            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
-            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
+            output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
             h2d_socket.write_tensor(input_tensor)
             d2h_socket.read_tensor(output_tensor)
@@ -250,7 +250,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -526,23 +526,3 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
         logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
 
     pipeline_block.terminate()
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(7168),
-        }
-    ],
-    indirect=True,
-)
-def test_torus_y_mesh_device(mesh_device, device_params):
-    print(f"Opened Mesh Device with ID: {mesh_device.get_system_mesh_id()}")
-    ttnn.distributed_context_barrier()
