@@ -400,7 +400,8 @@ struct FlashMLADecode {
             if (k_chunk_start == k_chunk_end) {
                 return;
             }
-            // Mask logic could be overlapped with the noc txns above, but currently DRAM reading
+            // Mask logic could be overlapped with the noc txns above, but currently DRAM reading fully overlaps with
+            // the mask logic
             bool mask_last_chunk = k_chunk_end == k_num_chunks;
             if (mask_last_chunk) {
                 DeviceZoneScopedN("mask-last-chunk");
