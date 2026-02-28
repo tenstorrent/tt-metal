@@ -8,24 +8,23 @@ PyTorch reference implementation when dispatching tokens to experts.
 import pytest
 import torch
 from loguru import logger
-
-import ttnn
 from tracy import signpost
 
+import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
-    initialize_test_inputs,
-    initialize_predictable_test_inputs,
     create_fabric_router_config,
+    initialize_predictable_test_inputs,
+    initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor",
+    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (512, 7168, 16, 4, 2, 2),
+        (512, 7168, 16, 4, 2),
     ],
 )
 @pytest.mark.parametrize(
@@ -42,7 +41,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
     "mesh_device",
     [
         (2, 1),  # SP=2, TP=1
+        (4, 1),  # SP=4, TP=1
+        (8, 1),  # SP=8, TP=1
     ],
+    ids=["linear-2", "linear-4", "linear-8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -53,12 +55,15 @@ def test_ttnn_dispatch(
     hidden_dim,
     n_routed_experts,
     num_experts_per_tok,
-    num_chips,
     capacity_factor,
     use_predictable_data,
     verbose,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
+    num_devices = num_chips = mesh_device.get_num_devices()
+    logger.info(f"Testing with mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    ttnn.visualize_mesh_device(mesh_device)
+
     signpost(
         f"Dispatch {mesh_device=} {seq_len_per_chip=} {hidden_dim=} {n_routed_experts=} {num_experts_per_tok=} {num_chips=} {capacity_factor=} {use_predictable_data=}"
     )
@@ -68,12 +73,6 @@ def test_ttnn_dispatch(
         seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
-
-    num_devices = mesh_device.get_num_devices()
-    assert num_chips == num_devices, f"num_chips {num_chips} must match number of devices in mesh {num_devices}"
-    mesh_shape = mesh_device.shape
-    logger.info(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    ttnn.visualize_mesh_device(mesh_device)
 
     # Initialize inputs using helper function
     if use_predictable_data:
