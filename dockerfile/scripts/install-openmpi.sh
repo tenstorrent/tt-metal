@@ -54,6 +54,16 @@ make install
 cd /
 rm -rf "${WORKDIR}"
 
+# Create mpirun-ulfm symlink for compatibility with scripts expecting this name
+if [ -e "${OMPI_PREFIX}/bin/mpirun-ulfm" ]; then
+    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping symlink creation"
+elif [ ! -x "${OMPI_PREFIX}/bin/mpirun" ]; then
+    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm symlink" >&2
+    exit 1
+else
+    cd "${OMPI_PREFIX}/bin" && ln -s mpirun mpirun-ulfm
+fi
+
 echo "OpenMPI ${OMPI_TAG} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
     "${OMPI_PREFIX}/bin/mpicc" --version || true
