@@ -166,7 +166,8 @@ Tensor neighbor_pad_async(
     uint32_t pad2_left,
     uint32_t pad2_right,
     std::optional<uint32_t> pad2_cluster_axis,
-    std::optional<size_t> pad2_num_links) {
+    std::optional<size_t> pad2_num_links,
+    const std::optional<Tensor>& persistent_output_buffer) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -196,9 +197,11 @@ Tensor neighbor_pad_async(
         pad2_left,
         pad2_right,
         pad2_cluster_axis,
-        pad2_num_links.value_or(0));
+        pad2_num_links.value_or(0),
+        persistent_output_buffer.has_value());
 
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::nullopt};
+    auto tensor_args =
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = persistent_output_buffer};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

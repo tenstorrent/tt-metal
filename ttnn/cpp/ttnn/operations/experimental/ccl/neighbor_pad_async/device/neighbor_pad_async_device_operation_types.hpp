@@ -36,6 +36,7 @@ struct NeighborPadAsyncParams {
     uint32_t pad2_right = 0;
     std::optional<uint32_t> pad2_cluster_axis;
     uint32_t pad2_num_links = 0;
+    bool using_persistent_buffers = false;
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
@@ -57,7 +58,8 @@ struct NeighborPadAsyncParams {
         uint32_t pad2_left = 0,
         uint32_t pad2_right = 0,
         std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
-        uint32_t pad2_num_links = 0) :
+        uint32_t pad2_num_links = 0,
+        bool using_persistent_buffers = false) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -76,7 +78,8 @@ struct NeighborPadAsyncParams {
         pad2_left(pad2_left),
         pad2_right(pad2_right),
         pad2_cluster_axis(pad2_cluster_axis),
-        pad2_num_links(pad2_num_links) {}
+        pad2_num_links(pad2_num_links),
+        using_persistent_buffers(using_persistent_buffers) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -100,6 +103,7 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("pad2_right", pad2_right);
         attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
         attrs.emplace_back("pad2_num_links", pad2_num_links);
+        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         return attrs;
     }
 };

@@ -20,7 +20,8 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer) {
     TT_FATAL(dim.size() >= 1 && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
 
     std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(dim.size(), 1));
@@ -65,7 +66,8 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         pad2_left,
         pad2_right,
         pad2_cluster_axis,
-        pad2_num_links);
+        pad2_num_links,
+        persistent_output_buffer);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

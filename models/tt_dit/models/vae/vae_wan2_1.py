@@ -350,7 +350,6 @@ class WanCausalConv3d(Module):
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            barrier_sem = self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
             if h_pad_needed:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
@@ -370,20 +369,16 @@ class WanCausalConv3d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            ttnn.synchronize_device(x_BTHWC.device())
-            x_BTHWC = ttnn.experimental.neighbor_pad_async(
+            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
-                dims,
-                pad_left,
-                pad_right,
-                "zeros",
-                axes,
-                neighbor_sems,
-                [barrier_sem],
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                padding_mode="zeros",
+                axes=axes,
+                neighbor_sems=neighbor_sems,
                 num_links=links,
-                topology=self.ccl_manager.topology,
             )
-            ttnn.synchronize_device(x_BTHWC.device())
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -728,7 +723,6 @@ class WanConv2d(Module):
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            barrier_sem = self.ccl_manager.get_barrier_semaphore(self.parallel_config.height_parallel.mesh_axis)
             if h_pad_needed:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
@@ -747,20 +741,17 @@ class WanConv2d(Module):
                     self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)[0]
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
-            ttnn.synchronize_device(x_BTHWC.device())
-            x_BTHWC = ttnn.experimental.neighbor_pad_async(
+
+            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
                 x_BTHWC,
-                dims,
-                pad_left,
-                pad_right,
-                "zeros",
-                axes,
-                neighbor_sems,
-                [barrier_sem],
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                padding_mode="zeros",
+                axes=axes,
+                neighbor_sems=neighbor_sems,
                 num_links=links,
-                topology=self.ccl_manager.topology,
             )
-            ttnn.synchronize_device(x_BTHWC.device())
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
