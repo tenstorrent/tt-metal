@@ -73,9 +73,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
     // Wait for idle here to ensure that a previous program potentially using this address space
     // is complete.
-    //
     wait_for_cores_idle();
-    //
+
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);
@@ -103,9 +102,7 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;  // Skip hardware read for mock devices
     }
     // Wait for idle here to ensure that programs emitting this data are complete.
-    //
     wait_for_cores_idle();
-    //
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
@@ -149,7 +146,6 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             if (!mesh_device_->impl().is_local(coord)) {
                 continue;
             }
-
             auto* device = mesh_device_->impl().get_device(coord);
             if (asynchronous_slow_dispatch_enabled_) {
                 auto it = logical_cores_for_previous_workload_.find(device->id());
@@ -158,7 +154,6 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                     // Only block before launching the current program if the previous program used the same cores
                     if (logical_cores_intersect(previous_cores, program_cores)) {
                         tt::llrt::internal_::wait_for_idle(device->id(), previous_cores);
-
                         // Clear the active cores in use for this device, since we blocked
                         // on them
                         logical_cores_for_previous_workload_.erase(device->id());
