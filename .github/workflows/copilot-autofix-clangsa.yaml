@@ -112,6 +112,48 @@ jobs:
           path: attempted_hashes.txt
           key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
 
+      - name: Extract justification for selected issue
+        if: steps.select-issue.outputs.has-issue == 'true'
+        id: extract-justification
+        uses: ./.github/actions/extract-codechecker-justification
+        with:
+          json-path: clangsa-results/codechecker_issues.json
+          output-path: /tmp/all_justification.txt
+          repo-root: ${{ github.workspace }}
+          strip-prefix: "/work/"
+
+      - name: Extract single finding block and print to terminal
+        if: steps.select-issue.outputs.has-issue == 'true'
+        id: extract-excerpt
+        run: |
+          set -euo pipefail
+          HASH="${{ steps.select-issue.outputs.hash }}"
+
+          # Extract only the block for the selected issue (by report_hash)
+          if [ -f /tmp/all_justification.txt ]; then
+            awk -v hash="$HASH" '
+              /^={70,}$/ {
+                if (found && block != "") { print block; exit }
+                block = $0 "\n"
+                next
+              }
+              { block = block $0 "\n" }
+              $0 ~ "Report hash: " hash { found = 1 }
+              END { if (found) print block }
+            ' /tmp/all_justification.txt > /tmp/justification_excerpt.txt || true
+          fi
+
+          if [ -s /tmp/justification_excerpt.txt ]; then
+            echo "has-excerpt=true" >> "$GITHUB_OUTPUT"
+            echo ""
+            echo "--- Justification excerpt for Copilot (report_hash=$HASH) ---"
+            cat /tmp/justification_excerpt.txt
+            echo "--- end excerpt ---"
+          else
+            echo "has-excerpt=false" >> "$GITHUB_OUTPUT"
+            echo "No excerpt extracted for hash $HASH; Copilot will use short summary."
+          fi
+
       - name: Run Copilot fix
         if: steps.select-issue.outputs.has-issue == 'true'
         id: copilot-fix
@@ -129,21 +171,20 @@ jobs:
           fi
           echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
 
-          # Build prompt
-          CHECKER="${{ steps.select-issue.outputs.checker }}"
-          FILE="${{ steps.select-issue.outputs.file }}"
-          LINE="${{ steps.select-issue.outputs.line }}"
-          MSG="${{ steps.select-issue.outputs.message }}"
-
+          # Build prompt: use justification excerpt (bug path + code) when available
           {
-            echo "Fix this Clang Static Analyzer issue:"
+            echo "Fix this Clang Static Analyzer issue. Verify it's a real issue, apply minimal fix, follow coding standards."
             echo ""
-            echo "- $CHECKER in $FILE:$LINE — $MSG"
-            echo ""
-            echo "Verify it's a real issue, apply minimal fix, follow coding standards."
+            if [ -s /tmp/justification_excerpt.txt ]; then
+              cat /tmp/justification_excerpt.txt
+            else
+              CHECKER="${{ steps.select-issue.outputs.checker }}"
+              FILE="${{ steps.select-issue.outputs.file }}"
+              LINE="${{ steps.select-issue.outputs.line }}"
+              MSG="${{ steps.select-issue.outputs.message }}"
+              echo "- $CHECKER in $FILE:$LINE — $MSG"
+            fi
           } > /tmp/prompt.txt
-
-          cat /tmp/prompt.txt
 
           # Run Copilot
           BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
