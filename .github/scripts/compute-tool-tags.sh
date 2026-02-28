@@ -7,9 +7,15 @@
 #   REPOSITORY defaults to $GITHUB_REPOSITORY (e.g. tenstorrent/tt-metal)
 #
 # Outputs: JSON object to stdout with keys ccache-tag, mold-tag, etc.
-# Example: {"ccache-tag":"ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/ccache:4.10.2-abc12345",...}
+# Example: {"ccache-tag":"ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/ccache:4.10.2-abc123456789ab",...}
+#
+# Environment variables:
+#   HARBOR_PREFIX - Optional prefix for Harbor pull-through cache (e.g., "harbor.ci.tenstorrent.net/")
 
 set -euo pipefail
+
+# Optional Harbor pull-through cache prefix (default: empty string)
+HARBOR_PREFIX="${HARBOR_PREFIX:-}"
 
 REPO="${1:-${GITHUB_REPOSITORY:?GITHUB_REPOSITORY or repository argument required}}"
 
@@ -25,18 +31,19 @@ OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | head -1 | cut 
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
 # Compute hashes for each tool (version + install script)
-CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-MOLD_HASH=$(cat dockerfile/scripts/install-mold.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-DOXYGEN_HASH=$(cat dockerfile/scripts/install-doxygen.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-CBA_HASH=$(cat dockerfile/scripts/install-clangbuildanalyzer.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
-OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+for tool in ccache mold doxygen cba gdb cmake yq; do
+    script_name="install-${tool}.sh"
+    [[ "$tool" == "cba" ]] && script_name="install-clangbuildanalyzer.sh"
+    hash_var="${tool^^}_HASH"
+    declare "$hash_var=$(cat "dockerfile/scripts/${script_name}" | sha1sum | cut -d' ' -f1 | head -c 12)"
+done
 
-# Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
-BASE="ghcr.io/${REPO}/tt-metalium/tools"
+# Handle special cases (sfpi and openmpi) separately
+SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
+OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 12)
+
+# Generate tags: <harbor-prefix>ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
+BASE="${HARBOR_PREFIX}ghcr.io/${REPO}/tt-metalium/tools"
 
 jq -n \
   --arg ccache "${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" \

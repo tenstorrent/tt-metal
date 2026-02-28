@@ -30,6 +30,7 @@ ARG UBUNTU_VERSION=22.04
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
 ARG PYTHON_VERSION=""
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
 # Tool and venv layers (resolved by docker-bake.hcl contexts)
@@ -58,7 +59,7 @@ FROM scratch AS ci-test-venv-layer
 # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
 #############################################################
 
-FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+FROM ${UV_IMAGE} AS uv-layer
 
 #############################################################
 # Base Ubuntu image with system dependencies
@@ -92,6 +93,7 @@ RUN set -e; \
     echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
     umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"
 
+# IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
 ARG OMPI_TAG=v5.0.7

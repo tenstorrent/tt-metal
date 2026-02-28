@@ -54,6 +54,8 @@ jobs:
 
       - name: Compute Python venv image tags
         id: tags
+        env:
+          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.platform.outputs.version }}"
@@ -61,7 +63,7 @@ jobs:
 
           VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
 
-          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
+          BASE="${HARBOR_PREFIX}ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
           echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
 

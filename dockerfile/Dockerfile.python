@@ -19,6 +19,7 @@
 
 # Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
 ARG UBUNTU_VERSION=22.04
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
 # uv layer - copy from official distroless image
@@ -27,7 +28,7 @@ ARG UBUNTU_VERSION=22.04
 # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
 #############################################################
 
-FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+FROM ${UV_IMAGE} AS uv-layer
 
 #############################################################
 # ci-build-venv

@@ -74,6 +74,12 @@ add_dockerfile_and_copy_sources() {
             [[ "$src" =~ \$\{ ]] && continue
             src="${src#/}"
 
+            # Prevent path traversal attacks (e.g., COPY ../../../etc/passwd /tmp/)
+            if [[ "$src" == *".."* ]]; then
+                echo "Error: Path contains .. which is not allowed: $src" >&2
+                exit 1
+            fi
+
             [[ -f "$src" ]] && FILES+=("$src")
         fi
     done < "$df"
