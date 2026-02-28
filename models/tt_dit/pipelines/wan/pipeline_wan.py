@@ -259,8 +259,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self.transformer.set_unload_set(self.transformer_2)
             self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
 
-        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
-        # Cache warmup: Load in reverse order of use to ensure the first models stay loaded before call.
+        # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
         self._prepare_transformer1()
         self._prepare_text_encoder()
@@ -1005,12 +1004,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = ttnn.to_torch(
-                tt_video_BCTHW,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
-                ),
-            )
+            video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             video = self.video_processor.postprocess_video(video_torch, output_type=output_type)

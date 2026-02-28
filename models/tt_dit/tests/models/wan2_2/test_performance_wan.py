@@ -40,16 +40,16 @@ def t2v_metrics(mesh_device, height):
         if is_blackhole():
             expected_metrics = {
                 "encoder": 0.1,
-                "denoising": 185.0,
-                "vae": 8.0,
-                "total": 208.0,
+                "denoising": 162.0,
+                "vae": 7.0,
+                "total": 168.0,
             }
         else:
             expected_metrics = {
                 "encoder": 0.1,
-                "denoising": 440.0,
-                "vae": 8.0,
-                "total": 463.0,
+                "denoising": 370.0,
+                "vae": 7.0,
+                "total": 375.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
