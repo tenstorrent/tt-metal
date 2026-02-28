@@ -28,8 +28,11 @@ public:
     bool is_initialized() const;
 
 private:
-    // Verify the firmware version and create the base objects according to the descriptor
-    void verify_fw_initialize_base_objects(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor);
+    // Create the base objects according to the descriptor
+    void initialize_base_objects(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor);
+
+    // Verify the firmware version and enable the appropriate features
+    void verify_fw_capabilities();
 
     bool initialized_ = false;
 
