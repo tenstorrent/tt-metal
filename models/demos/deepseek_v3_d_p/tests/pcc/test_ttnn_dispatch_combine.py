@@ -9,24 +9,23 @@ validating the full round-trip through TTNN dispatch and combine operations.
 import pytest
 import torch
 from loguru import logger
-
-import ttnn
 from tracy import signpost
 
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
-    initialize_test_inputs,
-    initialize_predictable_test_inputs,
     create_fabric_router_config,
+    initialize_predictable_test_inputs,
+    initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor",
+    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (512, 7168, 16, 4, 2, 2),
+        (512, 7168, 16, 4, 2),
     ],
 )
 @pytest.mark.parametrize(
@@ -43,7 +42,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
     "mesh_device",
     [
         (2, 1),  # SP=2, TP=1
+        (4, 1),  # SP=4, TP=1
+        (8, 1),  # SP=8, TP=1
     ],
+    ids=["linear-2", "linear-4", "linear-8"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -53,11 +55,15 @@ def test_ttnn_dispatch_combine(
     hidden_dim,
     n_routed_experts,
     num_experts_per_tok,
-    num_chips,
     capacity_factor,
     use_predictable_data,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+
+    num_devices = num_chips = mesh_device.get_num_devices()
+    logger.info(f"Testing with mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    ttnn.visualize_mesh_device(mesh_device)
+
     signpost(
         f"TTNN Dispatch+Combine {mesh_device=} {seq_len_per_chip=} {hidden_dim=} "
         f"{n_routed_experts=} {num_experts_per_tok=} {num_chips=} "
@@ -65,20 +71,13 @@ def test_ttnn_dispatch_combine(
     )
     print("\n")
 
-    # Step 1: Compute configuration constants
+    # Compute configuration constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
-    # Step 2: Verify mesh device configuration
-    num_devices = mesh_device.get_num_devices()
-    assert num_chips == num_devices, f"num_chips {num_chips} must match number of devices in mesh {num_devices}"
-    mesh_shape = mesh_device.shape
-    logger.info(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    ttnn.visualize_mesh_device(mesh_device)
-
-    # Step 3: Generate test inputs
+    # Generate test inputs
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             num_chips=num_chips,
@@ -103,7 +102,7 @@ def test_ttnn_dispatch_combine(
 
     logger.info(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # Step 4: Convert torch tensors to TTNN tensors
+    # Convert torch tensors to TTNN tensors
     mesh_mapper = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
@@ -120,7 +119,7 @@ def test_ttnn_dispatch_combine(
         indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
 
-    # Step 5: Initialize TTNN dispatch module
+    # Initialize TTNN dispatch module
     tt_dispatch_module = TtDispatchModule(
         mesh_device=mesh_device,
         num_chips=num_chips,
@@ -133,7 +132,7 @@ def test_ttnn_dispatch_combine(
         hidden_dim=hidden_dim,
     )
 
-    # Step 6: Run TTNN dispatch
+    # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
     tt_dispatched_buffer, tt_metadata, experts_tok_counter, offsets, cum_sum = tt_dispatch_module(
         tt_x, tt_weights, tt_indices
@@ -146,7 +145,7 @@ def test_ttnn_dispatch_combine(
     logger.info(f"  {offsets.shape=}, {offsets=}")
     logger.info(f"  {cum_sum.shape=}, {cum_sum=}")
 
-    # Step 6b: Convert counter to TTNN tensor for combine module
+    # Convert counter to TTNN tensor for combine module
     logger.info(f"Converting counter to TTNN: {experts_tok_counter.shape=}, {experts_tok_counter.dtype=}")
     logger.info(f"  Counter values: {experts_tok_counter=}")
     tt_experts_tok_counter = ttnn.from_torch(
@@ -157,9 +156,9 @@ def test_ttnn_dispatch_combine(
         dtype=ttnn.int32,
     )
     logger.info(f"  TTNN counter shape: {tt_experts_tok_counter.shape}")
-    ttnn.visualize_tensor(tt_experts_tok_counter, header="Experts Token Counter")
+    ttnn.visualize_tensor(tt_experts_tok_counter)  # , header="Experts Token Counter")
 
-    # Step 7: Initialize TTNN combine module
+    # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
         num_chips=num_chips,
@@ -168,14 +167,14 @@ def test_ttnn_dispatch_combine(
         seq_len_per_chip=seq_len_per_chip,
     )
 
-    # Step 8: Run TTNN combine
+    # Run TTNN combine
     logger.info("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_experts_tok_counter)
     logger.info("Combine complete!")
 
     logger.info(f"Combine output shape: {tt_output.shape}")
 
-    # Step 9: Convert TTNN output back to torch
+    # Convert TTNN output back to torch
     mesh_composer = ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
@@ -185,13 +184,13 @@ def test_ttnn_dispatch_combine(
 
     y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
 
-    # Step 10: Host-side reduction
+    # Host-side reduction
     logger.info(f"Before reduction: {y.shape=}")
     y = y / num_experts_per_tok  # Average contributions from multiple experts
     y = y.sum(dim=2)  # Sum across expert dimension
     logger.info(f"After reduction: {y.shape=}")
 
-    # Step 11: Verify round-trip correctness
+    # Verify round-trip correctness
     logger.info("Verifying round-trip correctness...")
     logger.info(f"Sample input x[0, 0, :5]: {x[0, 0, :5]}")
     logger.info(f"Sample output y[0, 0, :5]: {y[0, 0, :5]}")
@@ -202,8 +201,6 @@ def test_ttnn_dispatch_combine(
     max_diff = torch.max(torch.abs(x - y)).item()
     logger.info(f"Maximum absolute difference: {max_diff}")
 
-    assert torch.allclose(
-        x, y, atol=1e-6
-    ), f"Expected output to match input, but got max diff {max_diff}"
+    assert torch.allclose(x, y, atol=1e-6), f"Expected output to match input, but got max diff {max_diff}"
 
     logger.info("✅ TTNN dispatch→combine round-trip matches input!")
