@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"

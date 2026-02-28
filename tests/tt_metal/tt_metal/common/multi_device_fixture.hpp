@@ -9,6 +9,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt_stl/reflection.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>

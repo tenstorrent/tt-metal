@@ -556,6 +556,7 @@ target_sources(
             api/ttnn/global_circular_buffer.hpp
             api/ttnn/global_semaphore.hpp
             api/ttnn/graph/graph_consts.hpp
+            api/ttnn/graph/graph_serialization.hpp
             api/ttnn/graph/graph_operation_queries.hpp
             api/ttnn/graph/graph_processor.hpp
             api/ttnn/graph/graph_nanobind.hpp

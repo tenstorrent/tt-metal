@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"

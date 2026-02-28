@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::experimental::udm {

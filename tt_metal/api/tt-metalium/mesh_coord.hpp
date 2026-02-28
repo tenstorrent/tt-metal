@@ -447,8 +447,8 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
     shape_(shape), coord_range_(shape), values_(std::move(values)) {
     TT_FATAL(
         shape.mesh_size() == values_.size(),
-        "Shape and values size mismatch; shape: {}, values: {}",
-        shape,
+        "Shape and values size mismatch; shape mesh_size: {}, values size: {}",
+        shape.mesh_size(),
         values_.size());
 }
 

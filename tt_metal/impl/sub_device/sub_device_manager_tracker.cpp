@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <allocator.hpp>
 #include <buffer_types.hpp>
 #include <device.hpp>

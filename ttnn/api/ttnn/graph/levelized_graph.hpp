@@ -10,6 +10,7 @@
 
 #include <string>
 #include <vector>
+#include <ranges>
 
 namespace ttnn::graph {
 

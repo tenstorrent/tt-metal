@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
+#include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
 #include <algorithm>
