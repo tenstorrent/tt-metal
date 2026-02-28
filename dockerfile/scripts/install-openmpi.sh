@@ -24,12 +24,18 @@ OMPI_TARBALL="openmpi-${OMPI_VERSION}.tar.bz2"
 OMPI_URL="https://download.open-mpi.org/release/open-mpi/${OMPI_SERIES}/${OMPI_TARBALL}"
 
 echo "Building OpenMPI ${OMPI_TAG} (from tarball) with ULFM to ${OMPI_PREFIX}..."
+echo "Download URL: ${OMPI_URL}"
+echo "Expected SHA256: ${OMPI_SHA256}"
 
 WORKDIR="/tmp/ompi-src"
 rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
 cd "${WORKDIR}"
-wget -q -O "${OMPI_TARBALL}" "${OMPI_URL}"
+echo "Downloading ${OMPI_TARBALL} from ${OMPI_URL}..."
+wget -O "${OMPI_TARBALL}" "${OMPI_URL}" || {
+    echo "[ERROR] Failed to download ${OMPI_TARBALL} from ${OMPI_URL}" >&2
+    exit 1
+}
 if ! echo "${OMPI_SHA256}  ${OMPI_TARBALL}" | sha256sum -c - ; then
     echo "[ERROR] SHA256 checksum verification failed for ${OMPI_TARBALL}. Aborting." >&2
     exit 1
