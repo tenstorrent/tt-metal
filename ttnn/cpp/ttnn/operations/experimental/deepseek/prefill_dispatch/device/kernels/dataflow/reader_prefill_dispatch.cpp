@@ -9,6 +9,17 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
+// Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
+#define ENABLE_DISPATCH_DEBUG 0
+
+#if ENABLE_DISPATCH_DEBUG
+#define DPRINT_DISPATCH DPRINT
+#else
+#define DPRINT_DISPATCH \
+    if (0)              \
+    DebugPrinter()
+#endif
+
 void kernel_main() {
     // ===== Compile Time Args =====
     // CB IDs (indices 0-5)
@@ -93,10 +104,10 @@ void kernel_main() {
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
 
     // Print key compile time args for debugging (using DPRINT_DATA1 - reader runs on RISCV_1)
-    DPRINT << "Reader kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
-           << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
-           << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip
-           << " token_start_idx=" << token_start_idx << " token_end_idx=" << token_end_idx << ENDL();
+    DPRINT_DISPATCH << "Reader kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
+                    << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
+                    << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip
+                    << " token_start_idx=" << token_start_idx << " token_end_idx=" << token_end_idx << ENDL();
 
     // =====
     // input (chips/fractured ==1, seq_len_per_chip, hidden_size)
@@ -110,11 +121,11 @@ void kernel_main() {
 
     // =====
     // read offsets
-    DPRINT << "Fetching offset tensor offsets_pages=" << offsets_pages << " offset_page_size=" << offsets_page_size
-           << ENDL();
+    DPRINT_DISPATCH << "Fetching offset tensor offsets_pages=" << offsets_pages
+                    << " offset_page_size=" << offsets_page_size << ENDL();
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
     for (uint32_t i = 0; i < offsets_pages; i++) {
-        DPRINT << "Fetching offsets tensor index: " << i << ENDL();
+        DPRINT_DISPATCH << "Fetching offsets tensor index: " << i << ENDL();
         cb_reserve_back(cb_offsets_id, 1);
 
         uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
@@ -129,7 +140,7 @@ void kernel_main() {
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
     const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
     for (uint32_t token = token_start_idx; token < token_end_idx; token++) {
-        DPRINT << "Fetching token index: " << token << ENDL();
+        DPRINT_DISPATCH << "Fetching token index: " << token << ENDL();
         cb_reserve_back(cb_indices_id, 1);
         cb_reserve_back(cb_weights_id, 1);
         cb_reserve_back(cb_input_id, 1);

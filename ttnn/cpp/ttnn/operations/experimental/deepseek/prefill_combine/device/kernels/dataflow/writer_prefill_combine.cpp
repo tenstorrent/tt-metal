@@ -12,6 +12,17 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
+// Debug print control - set to 0 to disable combine debug prints, 1 to enable
+#define ENABLE_COMBINE_DEBUG 0
+
+#if ENABLE_COMBINE_DEBUG
+#define DPRINT_COMBINE DPRINT
+#else
+#define DPRINT_COMBINE \
+    if (0)             \
+    DebugPrinter()
+#endif
+
 void kernel_main() {
     // ===== Compile Time Args =====
     // CB IDs (indices 0-3)
@@ -81,25 +92,26 @@ void kernel_main() {
     // Fabric connection args follow (appended by append_fabric_connection_rt_args)
 
     // Print key compile time args for debugging (RISCV_0)
-    DPRINT << "Combine Writer: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
-           << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
-           << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
-           << " seq_len_per_chip=" << seq_len_per_chip
-           << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert << " hidden_size=" << hidden_size
-           << " linearized_mesh_coord" << linearized_mesh_coord << " src_mesh_id=" << src_mesh_id
-           << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols << ENDL();
+    DPRINT_COMBINE << "Combine Writer: CBs=" << cb_dispatched_buffer_id << "," << cb_dispatched_metadata_id << ","
+                   << cb_experts_tok_counter_id << "," << cb_output_id << " num_chips=" << num_chips
+                   << " experts_per_chip=" << experts_per_chip << " num_experts_per_tok=" << num_experts_per_tok
+                   << " seq_len_per_chip=" << seq_len_per_chip
+                   << " max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert
+                   << " hidden_size=" << hidden_size << " linearized_mesh_coord" << linearized_mesh_coord
+                   << " src_mesh_id=" << src_mesh_id << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows
+                   << " mesh_cols=" << mesh_cols << ENDL();
 
 #ifdef DEST_CHIP_ID
     // Fabric is enabled - set up connections
     using namespace ttnn::operations::ccl::common;
 
-    DPRINT << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
+    DPRINT_COMBINE << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
 
     constexpr uint8_t dest_chip_ids[num_chips] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_chips] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    DPRINT << "Opening fabric connections async..." << ENDL();
+    DPRINT_COMBINE << "Opening fabric connections async..." << ENDL();
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
@@ -109,12 +121,12 @@ void kernel_main() {
     auto* unicast_packet_header =
         reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
 
-    DPRINT << "Waiting for fabric connections barrier..." << ENDL();
+    DPRINT_COMBINE << "Waiting for fabric connections barrier..." << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
 
     // Send init semaphore to all devices
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    DPRINT << "Sending init semaphore to configured targets..." << ENDL();
+    DPRINT_COMBINE << "Sending init semaphore to configured targets..." << ENDL();
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -125,14 +137,15 @@ void kernel_main() {
         num_chips>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization
-    DPRINT << "Waiting for all devices to complete fabric init..." << ENDL();
+    DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
     noc_semaphore_wait((uint32_t*)init_semaphore_address, num_chips - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
-    DPRINT << "Fabric setup complete" << ENDL();
+    DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
 
     cb_wait_front(cb_experts_tok_counter_id, 1);
+    DPRINT_COMBINE << "cb_experts_tok_counter_id: " << cb_experts_tok_counter_id << ENDL();
     uint32_t experts_tok_counter_cb_addr = get_read_ptr(cb_experts_tok_counter_id);
     volatile tt_l1_ptr uint32_t* experts_tok_counter =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(experts_tok_counter_cb_addr);
@@ -140,6 +153,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
     for (uint32_t expert_idx = 0; expert_idx < experts_per_chip; ++expert_idx) {
+        DPRINT_COMBINE << "Processing expert " << expert_idx << "/" << experts_per_chip << ENDL();
         for (uint32_t tok_idx = 0; tok_idx < experts_tok_counter[expert_idx]; ++tok_idx) {
             cb_wait_front(cb_dispatched_buffer_id, 1);
             cb_wait_front(cb_dispatched_metadata_id, 1);
@@ -152,20 +166,24 @@ void kernel_main() {
             auto dst_token_idx = metadata[1];
             auto dst_topk_indice = metadata[2];
 
+            DPRINT_COMBINE << "  Token " << tok_idx << "/" << experts_tok_counter[expert_idx]
+                           << ": dst_chip=" << dst_chip << " dst_token_idx=" << dst_token_idx
+                           << " dst_topk_indice=" << dst_topk_indice << ENDL();
+
             // Calculate output page index
             // Output shape: (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
             // Pages are laid out as: token * num_experts_per_tok + topk_indice
             uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
 
             if (dst_chip == linearized_mesh_coord) {
-                // DPRINT << "    Token" << dst_token_idx << " is local to this chip." << ENDL();
+                // DPRINT_COMBINE << "    Token" << dst_token_idx << " is local to this chip." << ENDL();
                 // Local write - direct NOC write to DRAM
                 noc_async_write_page(output_page_idx, output_addr_gen, buffer_cb_addr);
                 noc_async_write_barrier();
             } else {
                 // Remote write via fabric
-                // DPRINT << "    Token" << dst_token_idx << " is remote to this chip. Destination chip: " << dst_chip
-                //        << ENDL();
+                // DPRINT_COMBINE << "    Token" << dst_token_idx << " is remote to this chip. Destination chip: "
+                //                << dst_chip << ENDL();
 #ifdef DEST_CHIP_ID
                 if constexpr (is_1d_topology<topology>()) {
                     fabric_send_chip_unicast_noc_unicast_1d<
@@ -190,4 +208,9 @@ void kernel_main() {
             cb_pop_front(cb_dispatched_metadata_id, 1);
         }
     }
+
+#ifdef DEST_CHIP_ID
+    // Close fabric connections to prevent resource conflicts with subsequent operations
+    close_direction_connections(directions, fabric_connections);
+#endif
 }

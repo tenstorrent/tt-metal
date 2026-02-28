@@ -12,6 +12,17 @@
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 // #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
+// Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
+#define ENABLE_DISPATCH_DEBUG 0
+
+#if ENABLE_DISPATCH_DEBUG
+#define DPRINT_DISPATCH DPRINT
+#else
+#define DPRINT_DISPATCH \
+    if (0)              \
+    DebugPrinter()
+#endif
+
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
@@ -101,12 +112,13 @@ void kernel_main() {
     // These will be read by fabric API calls
 
     // Print key compile time args for debugging (using DPRINT_DATA0 - writer runs on RISCV_0)
-    DPRINT << "linearized_mesh_coord=" << linearized_mesh_coord << " src_mesh_id=" << src_mesh_id
-           << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols << ENDL();
+    DPRINT_DISPATCH << "linearized_mesh_coord=" << linearized_mesh_coord << " src_mesh_id=" << src_mesh_id
+                    << " src_chip_id=" << src_chip_id << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols
+                    << ENDL();
 
-    DPRINT << "Writer kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
-           << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
-           << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
+    DPRINT_DISPATCH << "Writer kernel: CBs=" << cb_input_id << "," << cb_indices_id << "," << cb_weights_id << ","
+                    << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
+                    << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
 
 #ifndef DEST_CHIP_ID
 #define DEST_CHIP_ID  // TODO
@@ -114,34 +126,34 @@ void kernel_main() {
 
 #ifdef DEST_CHIP_ID
     // Fabric is enabled - set up connections
-    DPRINT << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
-    DPRINT << "DEBUG: Before creating dest arrays, rt_args_idx=" << rt_args_idx << ENDL();
+    DPRINT_DISPATCH << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before creating dest arrays, rt_args_idx=" << rt_args_idx << ENDL();
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    DPRINT << "dst_chip_ids: ";
+    DPRINT_DISPATCH << "dst_chip_ids: ";
     for (uint32_t i = 0; i < num_devices; ++i) {
-        DPRINT << (uint32_t)dest_chip_ids[i] << " ";
+        DPRINT_DISPATCH << (uint32_t)dest_chip_ids[i] << " ";
     }
-    DPRINT << ENDL();
-    DPRINT << "dst_mesh_ids: ";
+    DPRINT_DISPATCH << ENDL();
+    DPRINT_DISPATCH << "dst_mesh_ids: ";
     for (uint32_t i = 0; i < num_devices; ++i) {
-        DPRINT << (uint32_t)dest_mesh_ids[i] << " ";
+        DPRINT_DISPATCH << (uint32_t)dest_mesh_ids[i] << " ";
     }
-    DPRINT << ENDL();
-    DPRINT << "directions: ";
+    DPRINT_DISPATCH << ENDL();
+    DPRINT_DISPATCH << "directions: ";
     for (uint32_t i = 0; i < directions.size(); ++i) {
-        DPRINT << (int)directions[i] << " ";
+        DPRINT_DISPATCH << (int)directions[i] << " ";
     }
-    DPRINT << ENDL();
+    DPRINT_DISPATCH << ENDL();
     //
 
-    DPRINT << "DEBUG: Before open_direction_connections_async" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_async" << ENDL();
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
-    DPRINT << "DEBUG: After open_direction_connections_async" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: After open_direction_connections_async" << ENDL();
 
     // Set up packet headers from CB (cb_packet_header_id from compile-time args)
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
@@ -150,14 +162,14 @@ void kernel_main() {
     auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
         packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
 
-    DPRINT << "DEBUG: Before open_direction_connections_barrier" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_barrier" << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
-    DPRINT << "DEBUG: After open_direction_connections_barrier" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: After open_direction_connections_barrier" << ENDL();
 
     // CRITICAL: Send init semaphore increments to other devices BEFORE waiting
     // Each device sends to configured targets, then waits for (num_devices - 1) increments
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    DPRINT << "DEBUG: Before send_init_semaphore_to_configured_targets" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before send_init_semaphore_to_configured_targets" << ENDL();
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -166,7 +178,7 @@ void kernel_main() {
         mesh_cols,
         ReplicateGroup::NONE,  // Send to all devices
         num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-    DPRINT << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -199,7 +211,7 @@ void kernel_main() {
     noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
 
-    DPRINT << "Fabric setup complete" << ENDL();
+    DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
 
     // ====
@@ -208,25 +220,25 @@ void kernel_main() {
     int32_t* offsets = (int32_t*)(get_read_ptr(cb_offsets_id));
 
     for (uint32_t o = 0; o < n_routed_experts; ++o) {
-        DPRINT << "Offset for expert " << o << " is " << offsets[o] << ENDL();
+        DPRINT_DISPATCH << "Offset for expert " << o << " is " << offsets[o] << ENDL();
     }
 
-    DPRINT << "aligned_metadata_page_size=" << aligned_metadata_page_size
-           << " metadata_page_size=" << metadata_page_size << ENDL();
+    DPRINT_DISPATCH << "aligned_metadata_page_size=" << aligned_metadata_page_size
+                    << " metadata_page_size=" << metadata_page_size << ENDL();
 
     // ====
     // process tokens/indices/weights one by one as they arrive to CB
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, aligned_output_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, aligned_metadata_page_size);
 
-    DPRINT << "metadata_tensor_address=" << HEX() << metadata_tensor_address << DEC()
-           << " aligned_metadata_page_size=" << aligned_metadata_page_size << ENDL();
+    DPRINT_DISPATCH << "metadata_tensor_address=" << HEX() << metadata_tensor_address << DEC()
+                    << " aligned_metadata_page_size=" << aligned_metadata_page_size << ENDL();
 
     // Reserve CB for metadata buffer (using L1 memory accessible by NOC)
     cb_reserve_back(cb_metadata_temp_id, 1);
 
     for (uint32_t token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
-        DPRINT << "Processing token_idx: " << token_idx << ENDL();
+        DPRINT_DISPATCH << "Processing token_idx: " << token_idx << ENDL();
 
         cb_wait_front(cb_indices_id, 1);
         cb_wait_front(cb_weights_id, 1);
@@ -240,7 +252,7 @@ void kernel_main() {
             auto expert_chip = routed_expert / experts_per_chip;
             auto expert_index_within_chip = routed_expert % experts_per_chip;
 
-            DPRINT << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
+            DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
 
             auto& offset = offsets[routed_expert];
 
@@ -253,7 +265,7 @@ void kernel_main() {
                 metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;  // int32 = 4 bytes
 
             if (expert_chip == linearized_mesh_coord) {
-                DPRINT << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
+                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
                 // For local dispatch, we can directly write to the output buffer without going through the fabric
                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
                 noc_async_writes_flushed();  // is it formally needed?
@@ -273,8 +285,8 @@ void kernel_main() {
                 noc_async_writes_flushed();
 
             } else {
-                DPRINT << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip << " chip."
-                       << ENDL();
+                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
+                                << " chip." << ENDL();
                 if constexpr (is_1d_topology<topology>()) {
                     fabric_send_chip_unicast_noc_unicast_1d<
                         linearized_mesh_coord,
@@ -369,4 +381,9 @@ void kernel_main() {
 
     // Release CB for next use
     cb_push_back(cb_metadata_temp_id, 1);
+
+#ifdef DEST_CHIP_ID
+    // Close fabric connections to prevent resource conflicts with subsequent operations
+    close_direction_connections(directions, fabric_connections);
+#endif
 }
