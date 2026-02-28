@@ -169,73 +169,27 @@ namespace ttnn::prim {
 // Slice Tile Program Factory implementation
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    // Create program from descriptor (all kernels, CBs, and runtime args set up in create_descriptor)
+    ProgramDescriptor descriptor = create_descriptor(args, tensor_args, output);
+    tt::tt_metal::Program program{descriptor};
+
+    // Kernel handles are assigned sequentially in descriptor order: reader=0, writer=1
+    constexpr tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
+    constexpr tt::tt_metal::KernelHandle unary_writer_kernel_id = 1;
+
     const auto& input = tensor_args.input;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
-
-    uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
-
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        args.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
-
-    // Reader compile-time args (CB index via named arg, positional starts at num_dims)
-    std::vector<uint32_t> reader_compile_time_args = {num_dims};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    std::unordered_map<std::string, uint32_t> reader_named_args = {{"cb_in", src0_cb_index}};
-
-    // Writer compile-time args (CB index via named arg, positional starts at TensorAccessorArgs)
-    std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    std::unordered_map<std::string, uint32_t> writer_named_args = {{"cb_out", src0_cb_index}};
-
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "reader_unary_unpad_dims_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_args));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_args));
-
+    // Compute accumulated_total_per_dim for override_runtime_arguments
+    const auto& input_shape = input.padded_shape();
+    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    ttnn::operations::data_movement::set_slice_runtime_args_tile<true>(
-        input,
-        output,
-        args.slice_start,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        num_tiles_per_core_group_1,
-        num_tiles_per_core_group_2,
-        program,
-        unary_reader_kernel_id,
-        unary_writer_kernel_id,
-        accumulated_total_per_dim);
+    accumulated_total_per_dim[0] = input_shape[-1] / TILE_WIDTH;
+    accumulated_total_per_dim[1] = (input_shape[-2] / TILE_HEIGHT) * accumulated_total_per_dim[0];
+    for (int32_t i = 2; i < static_cast<int32_t>(num_dims); ++i) {
+        accumulated_total_per_dim[i] = input_shape[-(i + 1)] * accumulated_total_per_dim[i - 1];
+    }
 
     return {
         std::move(program),
