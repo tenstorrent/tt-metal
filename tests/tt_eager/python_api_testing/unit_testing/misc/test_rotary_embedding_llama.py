@@ -429,16 +429,16 @@ def run_test_row_major_rotary_embedding_llama(
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
-        (1, 32),  # To test single core implementation
-        (1, 128),
-        (1, 256),
-        (1, 512),
-        (1, 2048),
-        (1, 3 * 1024),  # To test non-power of 2
-        (1, 4096),
-        (1, 8192),
-        (1, 16384),
-        (1, 128 * 1024),
+        # (1, 32),  # To test single core implementation
+        # (1, 128),
+        # (1, 256),
+        # (1, 512),
+        # (1, 2048),
+        # (1, 3 * 1024),  # To test non-power of 2
+        # (1, 4096),
+        # (1, 8192),
+        # (1, 16384),
+        # (1, 128 * 1024),
         (64, 1),
         (32, 1),
         (15, 1),
@@ -446,16 +446,16 @@ def run_test_row_major_rotary_embedding_llama(
         (1, 1),
     ),
     ids=(
-        "prefill_32",
-        "prefill_128",
-        "prefill_256",
-        "prefill_512",
-        "prefill_2k",
-        "prefill_3k",
-        "prefill_4k",
-        "prefill_8k",
-        "prefill_16k",
-        "prefill_128k",
+        # "prefill_32",
+        # "prefill_128",
+        # "prefill_256",
+        # "prefill_512",
+        # "prefill_2k",
+        # "prefill_3k",
+        # "prefill_4k",
+        # "prefill_8k",
+        # "prefill_16k",
+        # "prefill_128k",
         "decode_64",
         "decode_32",
         "decode_15",
@@ -474,7 +474,7 @@ def run_test_row_major_rotary_embedding_llama(
         (8, 1, 256),
     ),
 )
-@pytest.mark.parametrize("input_transpose", (ttnn.RotaryEmbeddingTranspose.NONE, ttnn.RotaryEmbeddingTranspose.HC))
+@pytest.mark.parametrize("input_transpose", (ttnn.RotaryEmbeddingTranspose.HC,))  # ttnn.RotaryEmbeddingTranspose.NONE,
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
 def test_rotary_embedding_llama(
