@@ -168,33 +168,52 @@ FORCE_INLINE void fill_tile_with_first_row_bfp4(uint32_t cb_id) {
     auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
     auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
-    // 1. In each top face, replicate row 0 exponent and data across rows 1-15
-    for (uint32_t face = 0; face < 2; ++face) {
-        uint32_t exp_base = face * 16;             // byte 0 or 16
-        uint32_t data_base_word = 16 + face * 32;  // word 16 or 48
+    // Pack row-0 exponents into words and write all 4 faces at once
+    uint32_t packed_exp0 = static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u;
+    uint32_t packed_exp1 = static_cast<uint32_t>(byte_ptr[16]) * 0x01010101u;
+    word_ptr[0] = packed_exp0;
+    word_ptr[1] = packed_exp0;
+    word_ptr[2] = packed_exp0;
+    word_ptr[3] = packed_exp0;
+    word_ptr[4] = packed_exp1;
+    word_ptr[5] = packed_exp1;
+    word_ptr[6] = packed_exp1;
+    word_ptr[7] = packed_exp1;
+    word_ptr[8] = packed_exp0;
+    word_ptr[9] = packed_exp0;
+    word_ptr[10] = packed_exp0;
+    word_ptr[11] = packed_exp0;
+    word_ptr[12] = packed_exp1;
+    word_ptr[13] = packed_exp1;
+    word_ptr[14] = packed_exp1;
+    word_ptr[15] = packed_exp1;
 
-        // Replicate row 0 exponent to rows 1-15
-        uint8_t row0_exp = byte_ptr[exp_base];
-        for (uint32_t row = 1; row < 16; ++row) {
-            byte_ptr[exp_base + row] = row0_exp;
-        }
+    // Cache row-0 data into registers to avoid repeated volatile reads
+    uint32_t f0_w0 = word_ptr[16], f0_w1 = word_ptr[17];
+    uint32_t f1_w0 = word_ptr[48], f1_w1 = word_ptr[49];
 
-        // Replicate row 0 data (2 words = 8 bytes) to rows 1-15
-        for (uint32_t row = 1; row < 16; ++row) {
-            uint32_t dst_word = data_base_word + row * 2;
-            word_ptr[dst_word] = word_ptr[data_base_word];
-            word_ptr[dst_word + 1] = word_ptr[data_base_word + 1];
-        }
+    // Fill face 0 rows 1-15, then face 2 all 16 rows (both from face 0's row 0)
+    uint32_t dst = 18;
+    for (uint32_t row = 1; row < 16; ++row, dst += 2) {
+        word_ptr[dst] = f0_w0;
+        word_ptr[dst + 1] = f0_w1;
+    }
+    dst = 80;
+    for (uint32_t row = 0; row < 16; ++row, dst += 2) {
+        word_ptr[dst] = f0_w0;
+        word_ptr[dst + 1] = f0_w1;
     }
 
-    // 2. Copy top face pair to bottom face pair
-    // Exponents: top (words 0-7) -> bottom (words 8-15)
-    for (uint32_t i = 0; i < 8; ++i) {
-        word_ptr[8 + i] = word_ptr[i];
+    // Fill face 1 rows 1-15, then face 3 all 16 rows (both from face 1's row 0)
+    dst = 50;
+    for (uint32_t row = 1; row < 16; ++row, dst += 2) {
+        word_ptr[dst] = f1_w0;
+        word_ptr[dst + 1] = f1_w1;
     }
-    // Data: top (words 16-79) -> bottom (words 80-143)
-    for (uint32_t i = 0; i < 64; ++i) {
-        word_ptr[80 + i] = word_ptr[16 + i];
+    dst = 112;
+    for (uint32_t row = 0; row < 16; ++row, dst += 2) {
+        word_ptr[dst] = f1_w0;
+        word_ptr[dst + 1] = f1_w1;
     }
 }
 
@@ -263,34 +282,62 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t cb_id) {
     auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
     auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
-    // 1. In each top face, replicate row 0 exponent and data across rows 1-15
-    for (uint32_t face = 0; face < 2; ++face) {
-        uint32_t exp_base = face * 16;             // byte 0 or 16
-        uint32_t data_base_word = 16 + face * 64;  // word 16 or 80
+    // Pack row-0 exponents into words and write all 4 faces at once
+    uint32_t packed_exp0 = static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u;
+    uint32_t packed_exp1 = static_cast<uint32_t>(byte_ptr[16]) * 0x01010101u;
+    word_ptr[0] = packed_exp0;
+    word_ptr[1] = packed_exp0;
+    word_ptr[2] = packed_exp0;
+    word_ptr[3] = packed_exp0;
+    word_ptr[4] = packed_exp1;
+    word_ptr[5] = packed_exp1;
+    word_ptr[6] = packed_exp1;
+    word_ptr[7] = packed_exp1;
+    word_ptr[8] = packed_exp0;
+    word_ptr[9] = packed_exp0;
+    word_ptr[10] = packed_exp0;
+    word_ptr[11] = packed_exp0;
+    word_ptr[12] = packed_exp1;
+    word_ptr[13] = packed_exp1;
+    word_ptr[14] = packed_exp1;
+    word_ptr[15] = packed_exp1;
 
-        // Replicate row 0 exponent to rows 1-15
-        uint8_t row0_exp = byte_ptr[exp_base];
-        for (uint32_t row = 1; row < 16; ++row) {
-            byte_ptr[exp_base + row] = row0_exp;
-        }
+    // Cache row-0 data into registers to avoid repeated volatile reads
+    uint32_t f0_w0 = word_ptr[16], f0_w1 = word_ptr[17];
+    uint32_t f0_w2 = word_ptr[18], f0_w3 = word_ptr[19];
+    uint32_t f1_w0 = word_ptr[80], f1_w1 = word_ptr[81];
+    uint32_t f1_w2 = word_ptr[82], f1_w3 = word_ptr[83];
 
-        // Replicate row 0 data (4 words = 16 bytes) to rows 1-15
-        for (uint32_t row = 1; row < 16; ++row) {
-            uint32_t dst_word = data_base_word + row * 4;
-            for (uint32_t w = 0; w < 4; ++w) {
-                word_ptr[dst_word + w] = word_ptr[data_base_word + w];
-            }
-        }
+    // Fill face 0 rows 1-15, then face 2 all 16 rows (both from face 0's row 0)
+    uint32_t dst = 20;
+    for (uint32_t row = 1; row < 16; ++row, dst += 4) {
+        word_ptr[dst] = f0_w0;
+        word_ptr[dst + 1] = f0_w1;
+        word_ptr[dst + 2] = f0_w2;
+        word_ptr[dst + 3] = f0_w3;
+    }
+    dst = 144;
+    for (uint32_t row = 0; row < 16; ++row, dst += 4) {
+        word_ptr[dst] = f0_w0;
+        word_ptr[dst + 1] = f0_w1;
+        word_ptr[dst + 2] = f0_w2;
+        word_ptr[dst + 3] = f0_w3;
     }
 
-    // 2. Copy top face pair to bottom face pair
-    // Exponents: top (words 0-7) -> bottom (words 8-15)
-    for (uint32_t i = 0; i < 8; ++i) {
-        word_ptr[8 + i] = word_ptr[i];
+    // Fill face 1 rows 1-15, then face 3 all 16 rows (both from face 1's row 0)
+    dst = 84;
+    for (uint32_t row = 1; row < 16; ++row, dst += 4) {
+        word_ptr[dst] = f1_w0;
+        word_ptr[dst + 1] = f1_w1;
+        word_ptr[dst + 2] = f1_w2;
+        word_ptr[dst + 3] = f1_w3;
     }
-    // Data: top (words 16-143) -> bottom (words 144-271)
-    for (uint32_t i = 0; i < 128; ++i) {
-        word_ptr[144 + i] = word_ptr[16 + i];
+    dst = 208;
+    for (uint32_t row = 0; row < 16; ++row, dst += 4) {
+        word_ptr[dst] = f1_w0;
+        word_ptr[dst + 1] = f1_w1;
+        word_ptr[dst + 2] = f1_w2;
+        word_ptr[dst + 3] = f1_w3;
     }
 }
 

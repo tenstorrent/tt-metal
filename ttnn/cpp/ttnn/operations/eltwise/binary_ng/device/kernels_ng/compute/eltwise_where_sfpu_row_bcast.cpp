@@ -55,6 +55,8 @@ void kernel_main() {
         tile_regs_release();
 
         cb_pop_front(cb_bcast, num_tiles_per_cycle);
+        // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
+        pack_reconfig_data_format(cb_llk_post, cb_out);
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
