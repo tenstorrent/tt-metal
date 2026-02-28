@@ -4,12 +4,40 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 from loguru import logger
+
+
+def _canonical_host_sort_key(hostname):
+    """
+    Return a sort key for hostnames so they order as:
+    (lowest host number, u08), (lowest host number, u02), (higher host number, u02), (higher host number, u08).
+    Example: c09u08, c09u02, c10u02, c10u08.
+    Hostname format: ...<digit+>u<2-digit unit>, e.g. bh-glx-c09u08, bh-glx-b04u02.
+    """
+    match = re.search(r"(\d+)u(\d{2})$", hostname)
+    if not match:
+        logger.warning(
+            f"Hostname '{hostname}' does not match pattern '<digits>u<2 digits>'; placing last in canonical order"
+        )
+        return (99999, 0)
+    host_num = int(match.group(1))
+    u_num = int(match.group(2))
+    # Primary: host number ascending. Secondary: u08 before u02 (8 before 2), so use -u_num.
+    return (host_num, -u_num)
+
+
+def sort_hosts_canonical(hosts):
+    """
+    Sort hostnames into canonical pipeline order:
+    lowest host u08, lowest host u02, higher host u02, higher host u08.
+    """
+    return sorted(hosts, key=_canonical_host_sort_key)
 
 
 def generate_slice_to_pcie_device_mapping(
@@ -157,6 +185,9 @@ def generate_pipeline_config_files(
                 f"Hostfile has {len(allocated_hosts)} hosts but pipeline config has {len(config_hosts)} unique hosts"
             )
             sys.exit(1)
+        # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
+        # so that they match config_hosts order regardless of hostfile ordering.
+        allocated_hosts = sort_hosts_canonical(allocated_hosts)
         host_map = dict(zip(config_hosts, allocated_hosts))
         logger.info(f"Remapping hosts: {host_map}")
         for entry in config["stage_to_slice_mapping"].values():
@@ -189,7 +220,8 @@ if __name__ == "__main__":
         "--hostfile",
         type=str,
         default=None,
-        help="File with one hostname per line. Overrides hosts in pipeline config (matched by order of appearance).",
+        help="File with one hostname per line. Overrides hosts in pipeline config. "
+        "Hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) before matching.",
     )
     parser.add_argument(
         "--worker-tt-metal-home",
