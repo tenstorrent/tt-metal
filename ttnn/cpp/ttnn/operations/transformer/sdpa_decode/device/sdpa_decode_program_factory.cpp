@@ -265,7 +265,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
         uint32_t group_row = row_major_idx / num_groups_per_row;
         uint32_t group_col = row_major_idx % num_groups_per_row;
-        return group_col * num_group_rows + group_row;
+        return (group_col * num_group_rows) + group_row;
     };
 
     // Reducer cores (one per KV head group)
@@ -552,7 +552,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
-    const uint32_t reuse_k = (tensor_args.v.has_value() ? 0 : 1) | (q_heads_parallel_factor > 1 ? 1 : 0);
+    const uint32_t reuse_k = (tensor_args.v.has_value() ? 0 : 1);
+
     // ========== Compile Time Arguments ==========
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
@@ -901,7 +902,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             // Base args (9) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
             // (2*num_cores_per_head)
             // + reducer coords + output coords
-            std::vector<uint32_t> writer_rt_args(9 + 6 + MAX_TREE_REDUCTION_ROUNDS + 2 * num_cores_per_head, 0);
+            std::vector<uint32_t> writer_rt_args(10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
 
             // Compute runtime args - 65 indicates idle core
             // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
