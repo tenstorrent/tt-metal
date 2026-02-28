@@ -886,11 +886,11 @@ def run_reduce_scatter_impl(
                 mm_cores_y=7,
                 mm_block_ht=8,
                 mm_block_wt=8,
-                mm_N_full_block_wt=20,
+                mm_N_full_block_wt=22,
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=4,
             ),
-            id="experimental_strided_large_7_cores_non_divisible_Ht_multi_worker",
+            id="experimental_strided_large_7_cores_non_divisible_Ht_and_Wt_multi_worker",
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -972,6 +972,60 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_non_divisible_slice_Ht_and_slice_Ht_per_core",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Wt=3 is not divisible by mm_N_full_block_wt=2 (3 % 2 = 1).
+                # Fallback: mm_N_full_block_wt_val overridden to slice_Wt=3, 1 chunk covering all
+                # 3 tiles; mm_blocks_sem_override = div_up(2,1) = 2.
+                # slice_Ht=8, mm_cores_y=1, single M-block covers all rows.
+                rs_input_shape=[8, 1, 256, 768],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=1,
+                mm_block_ht=8,
+                mm_block_wt=1,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_divisible_slice_Wt",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # slice_Wt=3 is not divisible by mm_N_full_block_wt=2 (3 % 2 = 1) AND
+                # slice_Ht=7 is not divisible by mm_cores_y=2; padded_slice_Ht=8,
+                # slice_Ht_per_core=4, mm_block_ht=3 → partial last M-block on both cores.
+                # Both the non-div Wt fallback and the ghost-row path are active together.
+                rs_input_shape=[8, 1, 224, 768],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=3,
+                mm_block_wt=1,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_divisible_slice_Wt_and_slice_Ht",
         ),
     ],
 )
@@ -1121,6 +1175,12 @@ def test_strided_reduce_scatter_async(
         (5, 3, 2, 4, 1),
         # Non-divisible: padded=18, per_core=3; core 5: 1 real + 2 ghost; exact M-block (3%3=0)
         (6, 3, 2, 4, 1),
+        # Non-div Wt: slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0); fallback: whole 8-tile row
+        # as 1 chunk; mm_blocks_sem_override = div_up(3,2) = 2
+        (1, 4, 2, 3, 1),
+        # Non-div Wt + non-div Ht: slice_Wt=8, mm_N_full_block_wt=5 (8%5=3≠0) AND
+        # slice_Ht=16, mm_cores_y=4; padded_Ht=16 (exact); mm_blocks_sem_override = div_up(5,2) = 3
+        (4, 4, 2, 5, 1),
     ],
     ids=[
         "finest_granularity",
@@ -1140,6 +1200,8 @@ def test_strided_reduce_scatter_async(
         "non_div_Ht_3cores_partial_Mblock",
         "non_div_Ht_5cores_all_ghost_last",
         "non_div_Ht_6cores_exact_Mblock_ghost_tail",
+        "non_div_Wt_N3_into_8",
+        "non_div_Wt_N5_into_8_multi_cores",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep(
@@ -1329,6 +1391,13 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         # padded=16, per_core=4, block_ht=2 → 2 M-blocks per core;
         # core 3: row 12 real + rows 13-15 ghost → M-block 0 mixed, M-block 1 all ghost
         (4, 2, 2, 4, 1),
+        # Non-div Ht + non-div Wt: slice_Ht=13, mm_cores_y=2 (padded=14, per_core=7, ghost=1);
+        # slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0); both fallback paths active;
+        # mm_blocks_sem_override = div_up(3,2) = 2
+        (2, 3, 2, 3, 1),
+        # Non-div Ht + non-div Wt: padded=16, per_core=4, ghost=3; core 3 mostly ghost;
+        # slice_Wt=8, mm_N_full_block_wt=5 (8%5=3≠0); mm_blocks_sem_override = div_up(5,2) = 3
+        (4, 3, 2, 5, 1),
     ],
     ids=[
         "2cores_partial_last_Mblock",
@@ -1338,6 +1407,8 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         "8cores_ghost_bleed_across_cores",
         "2cores_exact_block_ghost_tail",
         "4cores_ghost_spans_Mblocks",
+        "non_div_Ht_and_Wt_N3_into_8",
+        "non_div_Ht_and_Wt_N5_into_8",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(

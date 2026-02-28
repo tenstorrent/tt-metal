@@ -40,8 +40,11 @@ constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
 constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
 constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
-// [24+] sharding args
+// [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
+// 0 = use computed formula (divisible case); >0 = wait for exactly this many mm blocks per chunk
+// (used when slice_Wt % mm_N_full_block_wt != 0 and the whole row is one chunk)
+constexpr uint32_t mm_blocks_sem_override = get_compile_time_arg_val(25);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -57,7 +60,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 24;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=slice_Ht, [24+]=sharding args
+    constexpr uint32_t ct_idx = 26;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [24]=slice_Ht, [25]=mm_blocks_sem_override
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -190,23 +194,21 @@ void kernel_main() {
                                     chunk_idx,
                                     mm_N_full_block_wt,
                                     tiles_ht_per_core,
-                                    mm_block_ht,  // full stride between blocks for absolute row calculation
+                                    mm_block_ht,
                                     chunk_width_in_tiles);
-                                const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
-                                    slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                const uint32_t input_tile_id = global_tile_idx + batch_offset;
 
-                                // slice_row increases monotonically, so once out-of-bounds all
-                                // subsequent tiles in this loop are ghost rows too.
                                 if (slice_row < slice_Ht) {
-                                    const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                                    const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                    const uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    noc_async_read(
+                                        get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
                                     l1_write_addr += page_size;
                                     if (do_reduce) {
-                                        const uint64_t intermediate_noc_read_addr =
-                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
                                         noc_async_read(
-                                            intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen),
+                                            intermediate_l1_write_addr,
+                                            page_size);
                                         intermediate_l1_write_addr += page_size;
                                     }
                                 }
