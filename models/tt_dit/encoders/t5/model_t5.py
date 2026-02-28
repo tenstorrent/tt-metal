@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 
+from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
@@ -89,7 +90,7 @@ class T5Encoder(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.token_embeddings = TokenEmbeddings(config, self.mesh_device)
+        self.token_embeddings = Embedding(config.vocab_size, config.embed_dim, device=self.mesh_device)
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.final_layer_norm = T5RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
@@ -458,20 +459,6 @@ def _relative_position_bucket(relative_position: torch.Tensor, num_buckets: int,
 
     relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
     return relative_buckets
-
-
-# TODO: Replace with Embedding layer from embeddings.py
-class TokenEmbeddings(Module):
-    def __init__(self, config: T5Config, mesh_device: ttnn.Device):
-        super().__init__()
-        self.config = config
-        self.mesh_device = mesh_device
-        self.weight = Parameter(
-            total_shape=[config.vocab_size, config.embed_dim], layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
-        )
-
-    def forward(self, prompt: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.embedding(prompt, self.weight.data, layout=ttnn.TILE_LAYOUT)
 
 
 class RelativePositionEmbeddings(Module):
