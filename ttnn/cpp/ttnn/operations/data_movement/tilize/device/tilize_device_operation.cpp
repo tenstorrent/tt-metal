@@ -24,7 +24,7 @@ bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    if (input_tensor.memory_layout_type() == MemoryLayoutType::ND_SHARDED) {
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         return false;
     }
 
@@ -86,16 +86,17 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
 
-        const uint32_t element_size_in_bytes = input_tensor_a.element_size();
         const uint32_t shard_width =
             (input_tensor_a.shard_spec().has_value() ? input_tensor_a.shard_spec().value().shape[1]
                                                      : input_tensor_a.nd_shard_spec().value().shard_shape[-1]);
-        const uint32_t page_size_bytes = shard_width * element_size_in_bytes;
+        const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes % alignment_requirement == 0,
-            "Input row-major shard page size {} bytes must be aligned to {} bytes L1 SRAM buffer alignment "
+            page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
+            "Input row-major shard width {} bytes gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
+            "buffer alignment "
             "requirement",
+            shard_width,
             page_size_bytes,
             alignment_requirement);  // The shard width must be an aligned size, or we will face alignment issues
                                      // when the reader tries to write to the CB.

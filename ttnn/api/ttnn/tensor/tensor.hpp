@@ -31,13 +31,6 @@ class MeshDevice;
 class MeshCommandQueue;
 }  // namespace distributed
 
-enum class MemoryLayoutType {
-    INTERLEAVED = 0,
-    SHARDED = 1,
-    ND_SHARDED = 2,
-    HOST_TENSOR = 3,
-};
-
 class Tensor {
 public:
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
@@ -252,7 +245,6 @@ public:
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
-    MemoryLayoutType memory_layout_type() const;
 
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;

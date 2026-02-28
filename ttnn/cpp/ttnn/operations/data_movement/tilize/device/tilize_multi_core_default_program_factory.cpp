@@ -55,13 +55,12 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     /** reader
      */
-    uint32_t page_size = a.padded_shape()[-1] * a.element_size();
+    uint32_t page_size = a.buffer()->page_size();
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
-        page_size = shard_width * a.element_size();  // For sharding, a page is a row of the shard.
         num_pages_in_row = tt::div_up(logical_width,
                                       shard_width);  // Compute number of pages in one tensor row.
         uint32_t padding_size =

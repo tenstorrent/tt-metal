@@ -13,6 +13,7 @@ enum class TensorMemoryLayout {
     HEIGHT_SHARDED = 2,
     WIDTH_SHARDED = 3,
     BLOCK_SHARDED = 4,
+    ND_SHARDED = 5,
 };
 
 enum class ShardOrientation {
