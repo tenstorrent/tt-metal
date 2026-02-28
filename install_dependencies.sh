@@ -5,6 +5,9 @@
 
 set -e
 
+# Valid --compiler flag values (same as build_metal.sh)
+COMPILER_FLAGS=(clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14)
+
 usage()
 {
     echo "Usage: sudo ./install_dependencies.sh [options]"
@@ -15,6 +18,7 @@ usage()
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
     echo "[--sfpi]                    Install only SFPI package (minimal installation)"
+    echo "[--compiler name]           Select compiler: ${COMPILER_FLAGS[*]}."
     echo "[--source-only]             Loads functions into shell"
     exit 1
 }
@@ -308,34 +312,56 @@ prep_ubuntu_system() {
 
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
-    # TODO: Implement Red Hat family system preparation
+
+    # Fedora has all packages in default repos
+    if [[ "$OS_ID" == "fedora" ]]; then
+        return
+    fi
+
+    # RHEL/Rocky/Alma: enable EPEL and CRB for devel packages
+    echo "[INFO] Installing EPEL repository..."
+    dnf install -y epel-release
+
+    echo "[INFO] Enabling CRB repository for development packages..."
+    dnf config-manager --set-enabled crb 2>/dev/null || \
+        dnf config-manager --set-enabled powertools 2>/dev/null || \
+        echo "[WARNING] Could not enable CRB/PowerTools repository"
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
 # However g++-12 and later should also work
 
 install_llvm() {
-    # Only install LLVM on debian-based systems
-    if ! is_debian_based; then
-        echo "[WARNING] Skipping LLVM installation for non-debian distribution ($OS_ID)"
+    # Skip LLVM installation when user selected a GCC compiler
+    if [[ "$compiler" == gcc* ]]; then
+        echo "[INFO] Skipping LLVM installation (--compiler $compiler)"
         return
     fi
 
-    # Install LLVM 20:
-    # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-    chmod u+x $TEMP_DIR/llvm.sh
+    if is_debian_based; then
+        # Install LLVM 20:
+        # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
+        TEMP_DIR=$(mktemp -d)
+        wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
+        chmod u+x $TEMP_DIR/llvm.sh
 
-    echo "[INFO] Checking if LLVM 20 is already installed..."
-    if command -v clang-20 &> /dev/null; then
-        echo "[INFO] LLVM 20 is already installed. Skipping installation."
-    else
-        echo "[INFO] Installing LLVM 20..."
-        $TEMP_DIR/llvm.sh 20
+        echo "[INFO] Checking if LLVM 20 is already installed..."
+        if command -v clang-20 &> /dev/null; then
+            echo "[INFO] LLVM 20 is already installed. Skipping installation."
+        else
+            echo "[INFO] Installing LLVM 20..."
+            $TEMP_DIR/llvm.sh 20
+        fi
+
+        rm -rf "$TEMP_DIR"
+    elif is_redhat_based; then
+        # LLVM/Clang is installed via the package list (llvm, clang, clang-tools-extra).
+        # Unlike Debian where we install a specific version (clang-20) from llvm.org,
+        # RedHat uses the distro-provided version.
+        local clang_version
+        clang_version=$(clang --version 2>/dev/null | head -1 || echo "not found")
+        echo "[INFO] Using distro-provided LLVM/Clang for $OS_ID: $clang_version"
     fi
-
-    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {
@@ -396,8 +422,7 @@ install_mpi_ulfm() {
 
     # Check if OS is Ubuntu/Debian-based
     if ! is_debian_based; then
-        echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian-based distributions"
-        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        echo "[INFO] MPI ULFM is only available as a .deb package; skipping on $OS_ID"
         return
     fi
 
@@ -432,8 +457,7 @@ install_mpi_ulfm() {
 configure_hugepages() {
     # Check if OS is Ubuntu/Debian-based
     if ! is_debian_based; then
-        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
-        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        echo "[INFO] Hugepages package is only available as a .deb package; skipping on $OS_ID"
         return
     fi
 
@@ -503,6 +527,7 @@ main() {
     distributed=1
     hugepages=0
     sfpi_only=0
+    compiler=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -529,12 +554,33 @@ main() {
                 sfpi_only=1
                 shift
                 ;;
+            --compiler)
+                compiler="$2"
+                shift 2
+                continue
+                ;;
             *)
                 echo "Unknown option: $1"
                 usage
                 ;;
         esac
     done
+
+    # Validate --compiler flag
+    if [ -n "$compiler" ]; then
+        local valid=0
+        for flag in "${COMPILER_FLAGS[@]}"; do
+            if [ "$flag" = "$compiler" ]; then
+                valid=1
+                break
+            fi
+        done
+        if [ "$valid" -eq 0 ]; then
+            echo "[ERROR] Unknown compiler '$compiler'. Allowed: ${COMPILER_FLAGS[*]}."
+            exit 1
+        fi
+        echo "[INFO] Compiler selection: $compiler"
+    fi
 
     init_packages
 
