@@ -556,7 +556,7 @@ main() {
                 ;;
             --compiler)
                 compiler="$2"
-                shift
+                shift 2
                 ;;
             *)
                 echo "Unknown option: $1"
