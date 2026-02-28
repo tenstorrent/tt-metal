@@ -1,13 +1,17 @@
-# Test Plan: `--compiler` flag and auto-detection in `build_metal.sh`
+# Test Plan: `--compiler` flag for `build_metal.sh` and `install_dependencies.sh`
 
 Issue: [#37907](https://github.com/tenstorrent/tt-metal/issues/37907)
 Branch: `ivoitovych/issue-37907-fix-fedora-toolchain-selection`
 
 ## Overview
 
-This test plan achieves 100% branch coverage for all code paths introduced by the
-`--compiler` flag, compiler-to-toolchain mapping, and auto-detection fallback in
-`build_metal.sh`.
+This test plan covers all code paths introduced by the `--compiler` flag,
+compiler-to-toolchain mapping, and auto-detection fallback in `build_metal.sh`
+(tests 1–37), and the `--compiler` flag, `prep_redhat_system()`, `install_llvm()`
+rewrite, and warning fixes in `install_dependencies.sh` (tests 38–55).
+
+`build_metal.sh` tests use `--configure-only` and PATH manipulation.
+`install_dependencies.sh` tests run in Docker containers (require root).
 
 All tests use `--configure-only` to avoid actual builds. Compiler visibility is
 controlled via `PATH` manipulation using temporary directories with fake compiler
@@ -145,7 +149,65 @@ if the guard didn't prevent it.
 | 36 | `--toolchain-path` sets explicit flag | `--toolchain-path cmake/x86_64-linux-gcc-toolchain.cmake --configure-only` (no clang++-20) | Uses `gcc-toolchain`, NO auto-detect override | `toolchain_path_explicitly_set=true` (line 272) |
 | 37 | Default has explicit flag false | `--configure-only` (with clang++-20) | Uses default `clang-20-libstdcpp` | `toolchain_path_explicitly_set=false` (line 150) |
 
+---
+
+# `install_dependencies.sh` tests
+
+All tests below run as root in Docker containers. Use `--docker` flag to avoid
+systemd-dependent steps. Verify behavior via output messages (grep for INFO,
+WARNING, ERROR).
+
+## Section 12: `--compiler` flag — validation (install_dependencies.sh)
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 38 | Valid `--compiler clang` | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler clang` | `[INFO] Compiler selection: clang`, LLVM 20 installed |
+| 39 | Valid `--compiler gcc` | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler gcc` | `[INFO] Compiler selection: gcc`, `[INFO] Skipping LLVM installation (--compiler gcc)` |
+| 40 | Valid `--compiler clang-20` | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler clang-20` | `[INFO] Compiler selection: clang-20`, LLVM 20 installed |
+| 41 | Valid `--compiler gcc-14` | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler gcc-14` | `[INFO] Compiler selection: gcc-14`, `[INFO] Skipping LLVM installation (--compiler gcc-14)` |
+| 42 | Invalid `--compiler foobar` | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler foobar` | `[ERROR] Unknown compiler 'foobar'. Allowed: clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14.`, exit 1 |
+| 43 | Default (no --compiler) | Ubuntu 22.04 | `./install_dependencies.sh --docker` | LLVM 20 installed, no `[INFO] Compiler selection` |
+
+## Section 13: `--compiler` flag — LLVM skip on GCC variants
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 44 | `--compiler gcc` skips LLVM | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler gcc` | `[INFO] Skipping LLVM installation (--compiler gcc)` |
+| 45 | `--compiler gcc-12` skips LLVM | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler gcc-12` | `[INFO] Skipping LLVM installation (--compiler gcc-12)` |
+| 46 | `--compiler gcc-14` skips LLVM | Ubuntu 24.04 | `./install_dependencies.sh --docker --compiler gcc-14` | `[INFO] Skipping LLVM installation (--compiler gcc-14)` |
+| 47 | `--compiler clang-20-libcpp` installs LLVM | Ubuntu 22.04 | `./install_dependencies.sh --docker --compiler clang-20-libcpp` | LLVM 20 installed (no skip message) |
+
+## Section 14: `install_llvm()` — RedHat messaging
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 48 | Default on Fedora: distro clang | Fedora 40 | `./install_dependencies.sh --docker` | `[INFO] Using distro-provided LLVM/Clang for fedora:` (no WARNING) |
+| 49 | `--compiler gcc` on Fedora | Fedora 40 | `./install_dependencies.sh --docker --compiler gcc` | `[INFO] Skipping LLVM installation (--compiler gcc)` |
+| 50 | `--compiler clang` on Fedora | Fedora 40 | `./install_dependencies.sh --docker --compiler clang` | `[INFO] Using distro-provided LLVM/Clang for fedora:` |
+
+## Section 15: `prep_redhat_system()` — repo setup
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 51 | Fedora: no extra repos | Fedora 40 | `./install_dependencies.sh --docker` | `[INFO] Preparing Red Hat family system...` then proceeds (no EPEL) |
+| 52 | Rocky: EPEL + CRB | Rocky 9 | `./install_dependencies.sh --docker` | `[INFO] Installing EPEL repository...`, `[INFO] Enabling CRB repository` |
+
+## Section 16: Warning fixes — MPI ULFM and hugepages
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 53 | MPI ULFM on Fedora: INFO not WARNING | Fedora 40 | `./install_dependencies.sh --docker` | `[INFO] MPI ULFM is only available as a .deb package; skipping on fedora` |
+| 54 | Hugepages on Fedora: INFO not WARNING | Fedora 40 | `./install_dependencies.sh --docker --hugepages` | `[INFO] Hugepages package is only available as a .deb package; skipping on fedora` |
+
+## Section 17: Help text (install_dependencies.sh)
+
+| # | Test | Command | Expected output |
+|---|------|---------|-----------------|
+| 55 | `--help` shows `--compiler` | `./install_dependencies.sh --help` | Output contains `[--compiler name]` and lists `clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14` |
+
 ## Coverage Summary
+
+**`build_metal.sh`:**
 
 | Code section | Lines | Tests |
 |-------------|-------|-------|
@@ -167,4 +229,24 @@ if the guard didn't prevent it.
 | `--toolchain-path` explicit flag | 150, 272 | 28–29, 36–37 |
 | Help text | 109 | 34 |
 | CMakePresets.json | — | 35 |
-| **Total** | | **37 tests** |
+
+**`install_dependencies.sh`:**
+
+| Code section | Tests |
+|-------------|-------|
+| `COMPILER_FLAGS` array + validation | 38–43, 55 |
+| `--compiler gcc*` skips `install_llvm()` | 39, 41, 44–46 |
+| `--compiler clang*` installs LLVM | 38, 40, 47 |
+| `install_llvm()` RedHat: distro clang INFO | 48, 50 |
+| `install_llvm()` RedHat: skip on gcc | 49 |
+| `prep_redhat_system()` Fedora: no-op | 51 |
+| `prep_redhat_system()` RHEL/Rocky: EPEL+CRB | 52 |
+| MPI ULFM warning → INFO | 53 |
+| Hugepages warning → INFO | 54 |
+| Help text | 55 |
+
+| Script | Tests |
+|--------|-------|
+| `build_metal.sh` | 37 |
+| `install_dependencies.sh` | 18 |
+| **Total** | **55 tests** |
