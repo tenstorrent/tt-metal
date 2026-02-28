@@ -29,13 +29,11 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
-    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    "mesh_rows, mesh_cols, output_shape, input_shard_shape, tensor_mem_layout",
     [
         (
             4,
             2,
-            1,
-            0,
             [1, 7168],
             (1, 7168),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -46,21 +44,21 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         }
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("sender_row, sender_col", [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)])
 def test_ccl_broadcast_dual_axis(
-    mesh_device,
+    bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,
     sender_row,
@@ -78,11 +76,11 @@ def test_ccl_broadcast_dual_axis(
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
