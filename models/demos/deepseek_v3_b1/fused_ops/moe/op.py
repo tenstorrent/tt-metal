@@ -4722,12 +4722,12 @@ class MoeOp:
                 print("after getting kernel descriptors")
 
                 kernels = kernel_result.kernels
-                print(f"  kernels accessed, count={len(kernels)}")
                 cb_descs = moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs
-                print(f"  cb_descs accessed, count={len(cb_descs)}")
                 sem_descs = moe.device_sem_descs
-                print(f"  sem_descs accessed, count={len(sem_descs)}")
-                print("  calling ProgramDescriptor now...")
+
+                print(
+                    f"  creating ProgramDescriptor (kernels={len(kernels)}, cbs={len(cb_descs)}, sems={len(sem_descs)})..."
+                )
                 program = ttnn.ProgramDescriptor(
                     kernels=kernels,
                     cbs=cb_descs,
