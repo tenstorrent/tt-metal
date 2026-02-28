@@ -569,7 +569,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     }
     const uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
 
-
     // Pad slice_Ht to the next multiple of mm_cores_y_val so every core gets an equal number of
     // tile rows. The last core may receive ghost tiles (slice_row >= slice_Ht) which are skipped
     // by the reader/writer kernels via bounds checks.

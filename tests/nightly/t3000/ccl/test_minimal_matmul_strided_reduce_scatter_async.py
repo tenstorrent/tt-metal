@@ -552,6 +552,21 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             ),
             id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
         ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(7, 7),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,
+            ),
+            id="xlarge_9472_3456_5120_x7_y7_cwimb1_rs3_fullgrid",
+        ),
     ],
 )
 @pytest.mark.parametrize(

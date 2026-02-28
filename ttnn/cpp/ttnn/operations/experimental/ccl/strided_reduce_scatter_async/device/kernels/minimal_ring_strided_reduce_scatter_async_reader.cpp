@@ -141,12 +141,18 @@ void kernel_main() {
 
 #ifdef FUSE_MM_OP_SIGNALER
                 // Wait for matmul to finish writing the output blocks for this chunk.
-                // The last chunk may be narrower than one mm_block (when mm_N_full_block_wt is not
-                // divisible by mm_block_wt). Use ceiling division so a partial chunk still waits
-                // for the 1 MM signal that covers it, rather than truncating to 0 and racing.
-                uint32_t effective_chunk_width_in_mm_blocks =
-                    (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
-                mm_sem_target += effective_chunk_width_in_mm_blocks;
+                // Normal case: the matmul signals once per mm_block_wt column-tiles within each
+                // N-full-block, so wait for ceil(effective_chunk_width / mm_block_wt) signals.
+                // Fallback case (mm_blocks_sem_override > 0): slice_Wt was not divisible by the
+                // original mm_N_full_block_wt so the whole row became one chunk.  The matmul still
+                // signals in units of mm_block_wt strided across all N-full-blocks; after
+                // mm_blocks_sem_override signals the entire row (including any partial block) is
+                // guaranteed to be written.  We cannot derive this from effective_chunk_width_in_tiles
+                // because that now spans the full slice_Wt which is larger than one N-full-block.
+                const uint32_t sem_increment = (mm_blocks_sem_override != 0)
+                                                   ? mm_blocks_sem_override
+                                                   : (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
+                mm_sem_target += sem_increment;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
                 // Run a full ring reduce-scatter for the current chunk.
