@@ -1,19 +1,19 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-# SPDX-License-Identifier: Apache-2.0
-
+SPDX-License-Identifier: Apache-2.0
+"""
 import math
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
-from models.tt_transformers.tt.model_config import is_phi1
-
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, is_phi1, num_to_corerange
 
 
 class Attention(LightweightModule):
@@ -42,7 +42,7 @@ class Attention(LightweightModule):
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
-        self.is_phi1 = is_phi1()      
+        self.is_phi1 = is_phi1()
         # Phi-1 uses partial rotary: rotary_dim = head_dim * partial_rotary_factor (0.5 => 32 when head_dim=64)
         if self.is_phi1:
             self.rotary_dim = self.head_dim // 2
@@ -66,8 +66,8 @@ class Attention(LightweightModule):
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
         self.arch_name = configuration.arch_name
-        #import json
-        #open("/tmp/tt_cfg_dump.json","w").write(json.dumps(dir(configuration), indent=2))
+        # import json
+        # open("/tmp/tt_cfg_dump.json","w").write(json.dumps(dir(configuration), indent=2))
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -184,9 +184,9 @@ class Attention(LightweightModule):
                 dim=-1,
             )
             if self.is_phi1:
-               # Keep CPU copy so we can expand per seq_len during traced prefill
-               self._qkv_bias_cpu = qkv_bias
-               
+                # Keep CPU copy so we can expand per seq_len during traced prefill
+                self._qkv_bias_cpu = qkv_bias
+
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
@@ -438,7 +438,6 @@ class Attention(LightweightModule):
             )
             for k_or_v in [cache_k, cache_v]
         ]
-    
 
     def _apply_partial_rope(
         self,
@@ -450,49 +449,45 @@ class Attention(LightweightModule):
     ):
         """
         Phi-1 partial RoPE (HF-compatible) using pairwise rotate_every_two.
-    
+
         Applies RoPE only to the first rotary_dim (R) of head_dim (D):
             out_rot = x_rot * cos + rotate_every_two(x_rot) * sin
         where rotate_every_two rotates each (x0,x1) pair as (-x1, x0).
-    
+
         Expected conventions in this repo:
           - Prefill: x shape [1, H, S, D], cos/sin shape [1, 1, >=S, >=R]
           - Decode:  x shape [1, H, B, D], and either:
               (a) cos/sin tables: [1, 1, max_seq, R]  -> gather by current_pos
               (b) cos/sin already gathered for this step: [1, 1, 1, R]
         """
-    
+
         D = self.head_dim
         R = self.rotary_dim
         assert D % 2 == 0, f"head_dim must be even, got {D}"
         assert R % 2 == 0, f"rotary_dim must be even, got {R}"
         assert R <= D, f"rotary_dim {R} must be <= head_dim {D}"
         rot_pairs = R // 2
-    
+
         restore_memcfg = x.memory_config()
         restore_layout = x.layout
         restore_dtype = x.dtype
-    
+
         def ensure_interleaved(t):
-            return (
-                ttnn.sharded_to_interleaved(t, ttnn.DRAM_MEMORY_CONFIG, t.dtype)
-                if t.is_sharded()
-                else t
-            )
+            return ttnn.sharded_to_interleaved(t, ttnn.DRAM_MEMORY_CONFIG, t.dtype) if t.is_sharded() else t
 
         # Work interleaved for correctness
         x_i = ensure_interleaved(x)
-    
+
         # Pull cos/sin, interleaved
         cos = ensure_interleaved(rot_mats[0])
         sin = ensure_interleaved(rot_mats[1])
-    
+
         # Trim last-dim to R (Phi-1 partial rotary)
         if cos.shape[3] != R:
             cos = ttnn.slice(cos, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], R))
         if sin.shape[3] != R:
             sin = ttnn.slice(sin, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], R))
-    
+
         if not is_decode_mode:
             # Prefill: slice seq dim to match x's S (x convention uses dim=2 as sequence)
             S = x_i.shape[2]
@@ -504,7 +499,7 @@ class Attention(LightweightModule):
             # Decode: need cos/sin aligned to batch axis (dim=2 in x_i)
             assert current_pos is not None, "decode mode needs current_pos"
             B = x_i.shape[2]
-    
+
             # Case (b): already gathered single-step mats: [1,1,1,R]
             # Just broadcast over batch (B) and heads will broadcast from dim=1.
             if cos.shape[2] == 1 and sin.shape[2] == 1:
@@ -520,11 +515,11 @@ class Attention(LightweightModule):
                 # Case (a): table lookup expected: [1,1,max_seq,R]
                 assert cos.shape[0] == 1 and cos.shape[1] == 1, f"expected cos table [1,1,max_seq,R], got {cos.shape}"
                 assert sin.shape[0] == 1 and sin.shape[1] == 1, f"expected sin table [1,1,max_seq,R], got {sin.shape}"
-    
+
                 # flatten tables to [max_seq, R]
                 cos_tbl = ttnn.reshape(cos, (cos.shape[2], cos.shape[3]))
                 sin_tbl = ttnn.reshape(sin, (sin.shape[2], sin.shape[3]))
-    
+
                 pos = current_pos
                 if pos.is_sharded():
                     pos = ttnn.sharded_to_interleaved(pos, ttnn.DRAM_MEMORY_CONFIG, pos.dtype)
@@ -532,48 +527,47 @@ class Attention(LightweightModule):
                     pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
                 if pos.dtype != ttnn.uint32:
                     pos = ttnn.typecast(pos, ttnn.uint32)
-    
+
                 # gather -> [B, R]
                 cos_bd = ttnn.embedding(pos, cos_tbl)
                 sin_bd = ttnn.embedding(pos, sin_tbl)
-    
+
                 # reshape for broadcast with x_i [1,H,B,D] -> [1,1,B,R]
                 cos = ttnn.reshape(cos_bd, (1, 1, cos_bd.shape[0], cos_bd.shape[1]))
                 sin = ttnn.reshape(sin_bd, (1, 1, sin_bd.shape[0], sin_bd.shape[1]))
-    
+
         # Split x into rotary prefix and passthrough tail
         x_rot = ttnn.slice(x_i, (0, 0, 0, 0), (x_i.shape[0], x_i.shape[1], x_i.shape[2], R))
         x_tail = ttnn.slice(x_i, (0, 0, 0, R), (x_i.shape[0], x_i.shape[1], x_i.shape[2], D))
-    
+
         # Pairwise rotate_every_two:
         # reshape [..., R] -> [..., R/2, 2]
         x2 = ttnn.reshape(x_rot, (*tuple(x_rot.shape)[:-1], rot_pairs, 2))
         a = ttnn.slice(x2, (0, 0, 0, 0, 0), (x2.shape[0], x2.shape[1], x2.shape[2], x2.shape[3], 1))
         b = ttnn.slice(x2, (0, 0, 0, 0, 1), (x2.shape[0], x2.shape[1], x2.shape[2], x2.shape[3], 2))
-    
+
         # (-b, a)
         neg_b = ttnn.neg(b)
         rot2 = ttnn.concat([neg_b, a], dim=-1)  # [..., R/2, 2]
         rot = ttnn.reshape(rot2, (*tuple(x_rot.shape)[:-1], R))  # back to [..., R]
-    
+
         # out_rot = x_rot*cos + rot*sin
         out_rot = ttnn.add(ttnn.mul(x_rot, cos), ttnn.mul(rot, sin))
-    
+
         # Stitch back
         y = ttnn.concat([out_rot, x_tail], dim=-1)
-    
+
         # Restore layout/dtype
         if y.layout != restore_layout:
             y = ttnn.to_layout(y, restore_layout)
         if y.dtype != restore_dtype:
             y = ttnn.typecast(y, restore_dtype)
-    
+
         # Reshard if needed
         if x.is_sharded():
             y = ttnn.interleaved_to_sharded(y, restore_memcfg)
-    
-        return y
 
+        return y
 
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
         """
@@ -945,7 +939,6 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -968,10 +961,9 @@ class Attention(LightweightModule):
         )
 
         # FIXME: surely ttnn.linear bias should work?
-        
+
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
-
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
@@ -1039,7 +1031,7 @@ class Attention(LightweightModule):
                 self.transformation_mats["prefill"],
                 is_decode_mode=False,
             )
-            
+
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache

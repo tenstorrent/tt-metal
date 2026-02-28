@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
-from models.tt_transformers.tt.model_config import is_phi1
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, is_phi1
 
 
 class MLP(LightweightModule):
@@ -109,9 +107,7 @@ class MLP(LightweightModule):
             self.activation_type = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
         else:
             self.activation_type = (
-                args.mlp_activation_type
-                if hasattr(args, "mlp_activation_type")
-                else ttnn.UnaryOpType.SILU
+                args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
             )
 
         # Insert the tensors into the prefetcher if it is used

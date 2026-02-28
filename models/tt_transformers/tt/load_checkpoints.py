@@ -12,7 +12,8 @@ from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
-from models.tt_transformers.tt.model_config import get_hf_model, is_phi1
+
+from models.tt_transformers.tt.model_config import is_phi1
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -355,6 +356,7 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
             converted_weights[key] = tensor
     return converted_weights
 
+
 def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace Q/K weights to Meta format for RoPE compatibility."""
 
@@ -371,7 +373,7 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
-        elif "q_norm.weight" in key or "k_norm.weight" in key:            
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
             converted_weights[key] = reverse_permute_1d(tensor)
         else:
             # Keep all other weights unchanged
@@ -703,19 +705,15 @@ def map_hf_to_meta_keys(loaded_weights):
         replacements = [
             ("model.", ""),
             ("model.layers.", "layers."),
-
             ("embed_tokens", "tok_embeddings"),
             ("lm_head", "output"),
-
             # norms
             ("input_layernorm", "attention_norm"),
-
             # attention
             ("self_attn.q_proj", "attention.wq"),
             ("self_attn.k_proj", "attention.wk"),
             ("self_attn.v_proj", "attention.wv"),
             ("self_attn.dense", "attention.wo"),
-
             # mlp
             ("mlp.fc1", "feed_forward.w1"),
             ("mlp.fc2", "feed_forward.w2"),

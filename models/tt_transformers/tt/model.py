@@ -6,9 +6,9 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.layernorm import LayerNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
@@ -16,10 +16,8 @@ from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.model_config import TensorGroup, is_phi1
 from models.tt_transformers.tt.rope import RotarySetup
-from models.tt_transformers.tt.model_config import is_phi1
-
 
 
 class Transformer(LightweightModule):
@@ -177,7 +175,7 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):                
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,
@@ -258,7 +256,7 @@ class Transformer(LightweightModule):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )        
+        )
 
         # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
@@ -446,16 +444,14 @@ class Transformer(LightweightModule):
 
         return torch.cat(row_concatenated, dim=row_dim)
 
-
     def process_output_prefill(self, tt_out, last_token_idx, tokenizer=None, debug=True):
         """
         Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
-    
+
         return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
-    
 
     def process_output_prefill_hidden_states(self, tt_out, last_token_idx):
         """

@@ -5,6 +5,7 @@ from models.common.lightweightmodule import LightweightModule
 TILE = 32
 SHARD_HEIGHT = TILE  # keep same convention as RMSNorm
 
+
 class LayerNorm(LightweightModule):
     """
     LayerNorm that matches RMSNorm's call signature so it can be wrapped by DistributedNorm.
@@ -49,7 +50,6 @@ class LayerNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.is_final_norm = (weight_key == "norm") and (layer_num is None)
 
-
         # Resolve parameter names
         if state_dict_prefix:
             w_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -62,12 +62,11 @@ class LayerNorm(LightweightModule):
                 w_name = f"layers.{layer_num}.{weight_key}.weight"
                 b_name = f"layers.{layer_num}.{weight_key}.bias"
 
-        
         # Reshape like RMSNorm does: [1,1,dim//32,32]
         # This tends to work well with TT kernels expecting tile-shaped last dim.
         torch_gamma = state_dict[w_name].view(1, 1, dim // 32, 32)
-        torch_beta  = state_dict[b_name].view(1, 1, dim // 32, 32)
-        
+        torch_beta = state_dict[b_name].view(1, 1, dim // 32, 32)
+
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
         self.gamma = ttnn.as_tensor(
@@ -88,7 +87,6 @@ class LayerNorm(LightweightModule):
             cache_file_name=None if weight_cache_path is None else weight_cache_path / b_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
-        
 
     def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         """
@@ -104,7 +102,7 @@ class LayerNorm(LightweightModule):
         # - If input isn't sharded, we shouldn't be asked to output sharded (unless you explicitly support that)
         if not in_sharded:
             assert not out_sharded, "Non-sharded LayerNorm cannot output a sharded tensor"
-        
+
         y = ttnn.layer_norm(
             x,
             epsilon=self.eps,
@@ -113,8 +111,7 @@ class LayerNorm(LightweightModule):
             program_config=program_config,
             memory_config=memory_config,
         )
-        
-        
+
         # Match RMSNorm behavior: if we normalized sharded but caller wants interleaved, de-shard
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(y)

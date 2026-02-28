@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-# SPDX-License-Identifier: Apache-2.0
-
+SPDX-License-Identifier: Apache-2.0
+"""
 import inspect
 import json
 import math
@@ -3411,8 +3412,8 @@ class ModelArgs:
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
 
         if self.is_phi1 and tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token  
-                  
+            tokenizer.pad_token = tokenizer.eos_token
+
         return tokenizer
 
     def create_processor(self):

@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
-from models.tt_transformers.tt.model_config import is_phi1
+
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
 
@@ -204,7 +204,7 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
-    
+
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
@@ -222,7 +222,6 @@ def preprocess_inputs_prefill(
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
         for idx, prompt in enumerate(input_prompts)
     ]
-
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -286,6 +285,8 @@ def preprocess_inputs_prefill(
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Initial prefill tensors full of pad tokens
+        from models.tt_transformers.tt.model_config import is_phi1
+
         if is_phi1():
             pad_id = getattr(tokenizer, "pad_token_id", None)
             if pad_id is None:
@@ -842,7 +843,7 @@ def create_tt_model(
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
-        state_dict = tt_model_args.load_state_dict()        
+        state_dict = tt_model_args.load_state_dict()
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,
