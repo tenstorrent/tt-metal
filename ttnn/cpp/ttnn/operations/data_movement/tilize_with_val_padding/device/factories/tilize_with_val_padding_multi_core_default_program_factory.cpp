@@ -72,13 +72,12 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
-    uint32_t page_size = unpadded_row_size_bytes;
-    uint32_t size_of_valid_data_in_last_page_in_row = unpadded_row_size_bytes;
+    uint32_t page_size = a.buffer()->page_size();
+    uint32_t size_of_valid_data_in_last_page_in_row = a.buffer()->page_size();
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
-        page_size = a.element_size() * shard_width;
         size_of_valid_data_in_last_page_in_row = unpadded_row_size_bytes - (num_pages_in_row - 1) * page_size;
     }
 

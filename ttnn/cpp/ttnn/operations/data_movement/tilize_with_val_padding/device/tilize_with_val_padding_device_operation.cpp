@@ -125,15 +125,14 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
-        uint32_t element_size_in_bytes = input_tensor.element_size();
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
-        const uint32_t page_size_bytes = shard_width * element_size_in_bytes;
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes % alignment_requirement == 0,
+            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
             "buffer alignment "
             "requirement",
