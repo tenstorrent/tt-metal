@@ -56,6 +56,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     /** reader
      */
     uint32_t page_size = a.buffer()->page_size();
+    uint32_t aligned_page_size = a.buffer()->aligned_page_size();
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
@@ -68,7 +69,8 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
             (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last page in the row.
         size_of_valid_data_in_last_page_in_row = page_size - padding_size;
     }
-    std::vector<uint32_t> reader_ct_args = {page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
+    std::vector<uint32_t> reader_ct_args = {
+        aligned_page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
