@@ -68,6 +68,25 @@ def _compute(fp32=False, math_approx_mode=True):
     )
 
 
+def _make_padding_op(device):
+    """Large matmul for pipeline padding (~300-500 us device time)."""
+    from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+    A = _tt(torch.randn(1, 1, 2048, 512, dtype=torch.bfloat16), device)
+    B = _tt(torch.randn(1, 1, 512, 512, dtype=torch.bfloat16), device)
+    cores = _cores(0, 0, 7, 7)
+    cfg = _mm_config(grid_x=8, grid_y=8, in0_block_w=4, per_core_M=1, per_core_N=16)
+    op = matmul_desc(A, B, core_range_set=cores, program_config=cfg, compute_kernel_config=_compute())
+
+    def run():
+        ttnn.generic_op(list(op.input_tensors) + list(op.output_tensors), op.descriptor)
+
+    # Warmup to populate JIT cache
+    run()
+    ttnn.synchronize_device(device)
+    return run
+
+
 def _clear_all_caches(device):
     """Clear every cache layer for a truly cold dispatch.
 
@@ -144,6 +163,40 @@ def _time_steady_state(fn, device, num_warmup=5, num_measure=100):
     sync()
     total_ms = 1000 * (time.perf_counter() - t0)
     return total_ms / num_measure
+
+
+def _time_pipelined(fn, padding_fn, device, num_warmup=10, num_measure=500):
+    """Measure incremental device cost of fn in a device-bound pipeline.
+
+    Embeds fn inside a pipeline with padding_fn (a large matmul) to ensure
+    device time dominates host dispatch. The incremental cost approximates
+    the pure device execution time of fn.
+    """
+    sync = lambda: ttnn.synchronize_device(device)
+
+    # Baseline: padding only
+    for _ in range(num_warmup):
+        padding_fn()
+    sync()
+    t0 = time.perf_counter()
+    for _ in range(num_measure):
+        padding_fn()
+    sync()
+    baseline = 1000 * (time.perf_counter() - t0) / num_measure
+
+    # Combined: padding + measured ops
+    for _ in range(num_warmup):
+        padding_fn()
+        fn()
+    sync()
+    t0 = time.perf_counter()
+    for _ in range(num_measure):
+        padding_fn()
+        fn()
+    sync()
+    combined = 1000 * (time.perf_counter() - t0) / num_measure
+
+    return combined - baseline
 
 
 # =============================================================================
@@ -454,6 +507,13 @@ class TestFusedDemo:
     # Set to True for Tracy profiling: skips timing loops, runs once only.
     _SINGLE_RUN_ONLY = False
 
+    _padding_op_cache = {}
+
+    def _get_padding_op(self, device):
+        if id(device) not in self._padding_op_cache:
+            self._padding_op_cache[id(device)] = _make_padding_op(device)
+        return self._padding_op_cache[id(device)]
+
     # -----------------------------------------------------------------
     # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
     # Input [256, H], matmul [H, H], 4x2 = 8 cores
@@ -516,7 +576,11 @@ class TestFusedDemo:
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
             passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
-            print(f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(fused.launch, padding_fn, device)
+            print(
+                f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC={pcc:.6f}"
+            )
             assert passing, f"PCC: {pcc}"
 
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
@@ -536,7 +600,9 @@ class TestFusedDemo:
         else:
             cold, warm = _time_cold_warm(unfused, device)
             e2e = _time_steady_state(unfused, device)
-            print(f"\n  Demo 1 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(unfused, padding_fn, device)
+            print(f"\n  Demo 1 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
 
     # -----------------------------------------------------------------
     # Demo 2: RMS -> LN (block-sharded, 4x4 grid)
@@ -644,7 +710,11 @@ class TestFusedDemo:
             )
 
             passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
-            print(f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(fused.launch, padding_fn, device)
+            print(
+                f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC={pcc:.6f}"
+            )
             assert passing, f"PCC: {pcc}"
 
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
@@ -676,7 +746,9 @@ class TestFusedDemo:
         else:
             cold, warm = _time_cold_warm(unfused, device)
             e2e = _time_steady_state(unfused, device)
-            print(f"\n  Demo 2 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(unfused, padding_fn, device)
+            print(f"\n  Demo 2 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
 
     # -----------------------------------------------------------------
     # Demo 3: All-matmul symmetric branching on full 8x8 grid
@@ -1051,7 +1123,11 @@ class TestFusedDemo:
             p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
             p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
 
-            print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(fused.launch, padding_fn, device)
+            print(
+                f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}"
+            )
             assert p_a, f"Chain A PCC: {pcc_a}"
             assert p_b, f"Chain B PCC: {pcc_b}"
 
@@ -1090,7 +1166,9 @@ class TestFusedDemo:
         else:
             cold, warm = _time_cold_warm(unfused, device)
             e2e = _time_steady_state(unfused, device)
-            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(unfused, padding_fn, device)
+            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
 
     # -----------------------------------------------------------------
     # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
@@ -1446,7 +1524,11 @@ class TestFusedDemo:
 
             p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
             p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
-            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(fused.launch, padding_fn, device)
+            print(
+                f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}"
+            )
             assert p_ll, f"Left-left PCC: {pcc_ll}"
             assert p_rl, f"Right-left PCC: {pcc_rl}"
 
@@ -1497,4 +1579,6 @@ class TestFusedDemo:
             # Steady-state e2e
             e2e = _time_steady_state(unfused, device)
 
-            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            padding_fn = self._get_padding_op(device)
+            pipelined = _time_pipelined(unfused, padding_fn, device)
+            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")

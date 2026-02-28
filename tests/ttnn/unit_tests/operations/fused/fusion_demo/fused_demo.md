@@ -535,7 +535,7 @@ The **2x device speedup** comes from branch parallelism — the fused kernel run
 
 Critical path (fused): `31 + 17 + 13 + 5 + 18` = **84 us** ≈ observed 85 us. The theoretical max is achieved within ~1 us of barrier overhead.
 
-The **E2E speedup (1.16x)** is modest because the descriptor path (`generic_op`) has minimal host overhead per dispatch — no Python framework layering, no op decomposition, no autoformat. With the standard `ttnn` API (which adds 30-60 us host gaps per dispatch), the E2E unfused time would be ~3-4x higher.
+The **E2E speedup (1.16x)** is modest because the unfused path also uses `generic_op` (not the `ttnn.*` Python API), so dispatch gaps between ops are already small (~2-5 us each). With 13 ops, the total host gap overhead is only ~30-50 us — a fraction of the ~170 us device time. Fusion eliminates these gaps but the absolute savings are small relative to compute.
 
 The **cold start speedup (4.8x)** reflects that fusion JIT-compiles 1 kernel program instead of 13 separate ones.
 
