@@ -153,7 +153,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             !operation_attributes.share_cache.value_or(false), "Share cache feature not supported for paged attention");
         TT_FATAL(tensor_args.page_table_tensor.has_value(), "Must have page_table tensor for paged attention");
         const auto& page_table_tensor = tensor_args.page_table_tensor.value();
-        const auto B = page_table_tensor.padded_shape()[0];
+        const auto B = page_table_tensor.is_sharded() ? q_shape[1] : page_table_tensor.padded_shape()[0];
 
         if (operation_attributes.is_causal) {
             // Check cur pos tensor for causal mode
