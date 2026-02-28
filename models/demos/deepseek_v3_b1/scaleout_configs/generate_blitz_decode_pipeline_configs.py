@@ -13,31 +13,45 @@ import yaml
 from loguru import logger
 
 
-def _canonical_host_sort_key(hostname):
-    """
-    Return a sort key for hostnames so they order as:
-    (lowest host number, u08), (lowest host number, u02), (higher host number, u02), (higher host number, u08).
-    Example: c09u08, c09u02, c10u02, c10u08.
-    Hostname format: ...<digit+>u<2-digit unit>, e.g. bh-glx-c09u08, bh-glx-b04u02.
-    """
+def _parse_host(hostname):
+    """Parse hostname into (host_num, u_num) or None if unrecognised."""
     match = re.search(r"(\d+)u(\d{2})$", hostname)
     if not match:
         logger.warning(
             f"Hostname '{hostname}' does not match pattern '<digits>u<2 digits>'; placing last in canonical order"
         )
-        return (99999, 0)
-    host_num = int(match.group(1))
-    u_num = int(match.group(2))
-    # Primary: host number ascending. Secondary: u08 before u02 (8 before 2), so use -u_num.
-    return (host_num, -u_num)
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 def sort_hosts_canonical(hosts):
     """
-    Sort hostnames into canonical pipeline order:
-    lowest host u08, lowest host u02, higher host u02, higher host u08.
+    Sort hostnames into canonical pipeline order (snake/zigzag):
+    low_host u08, low_host u02, high_host u02, high_host u08.
+    Example: c09u08, c09u02, c10u02, c10u08.
+
+    Within even-indexed host-number groups (0th, 2nd, …) u is descending (08 before 02).
+    Within odd-indexed host-number groups (1st, 3rd, …) u is ascending (02 before 08).
     """
-    return sorted(hosts, key=_canonical_host_sort_key)
+    parsed = [(h, _parse_host(h)) for h in hosts]
+    unrecognised = [h for h, p in parsed if p is None]
+    recognised = [(h, p) for h, p in parsed if p is not None]
+
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for h, (host_num, u_num) in recognised:
+        groups[host_num].append((u_num, h))
+
+    result = []
+    for group_idx, host_num in enumerate(sorted(groups)):
+        entries = groups[host_num]
+        reverse = group_idx % 2 == 0
+        entries.sort(key=lambda e: e[0], reverse=reverse)
+        result.extend(h for _, h in entries)
+
+    result.extend(unrecognised)
+    return result
 
 
 def generate_slice_to_pcie_device_mapping(
