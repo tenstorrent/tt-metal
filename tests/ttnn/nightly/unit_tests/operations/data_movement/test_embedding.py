@@ -32,16 +32,9 @@ def test_embedding_dram_sharded_output(
     DRAM sharding only supports cores with y=0 (single row); input can be ND-sharded on any grid."""
     torch.manual_seed(1234)
 
-    compute_grid_size = device.compute_with_storage_grid_size()
-    compute_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-    )
-
     # DRAM sharding only supports a single row of cores (y=0)
     num_cores_x = num_cores
     num_cores_y = 1
-    if num_cores_x > compute_grid_size.x:
-        pytest.skip(f"Need {num_cores_x} cores along x but device grid x is {compute_grid_size.x}")
 
     input_shape = (batch_size, sentence_size)
     for dim in range(len(input_shape)):
@@ -56,8 +49,6 @@ def test_embedding_dram_sharded_output(
     input_shard_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
     )
-    if not compute_grid.contains(input_shard_core_grid):
-        pytest.skip(f"Core grid {input_shard_core_grid} does not fit in device grid {compute_grid}")
 
     # ND-sharded input (L1)
     in_mem_config = ttnn.MemoryConfig(
@@ -69,7 +60,7 @@ def test_embedding_dram_sharded_output(
         ),
     )
 
-    # Output: DRAM height-sharded (must use y=0 only; logical_grid_size for DRAM is (num_dram_views, 1))
+    # Output: DRAM height-sharded
     fused_height = batch_size * sentence_size
     if fused_height % num_cores != 0:
         pytest.skip(f"Fused height {fused_height} must be divisible by num_cores {num_cores}")
@@ -166,10 +157,10 @@ def test_embedding_dram_sharded_output(
     "output_layout",
     [
         ttnn.ROW_MAJOR_LAYOUT,
-        # ttnn.TILE_LAYOUT,
+        ttnn.TILE_LAYOUT,
     ],
 )
-@pytest.mark.parametrize("tensors_nd_sharded", ["input_only"])  # , "output_only", "input_and_output"
+@pytest.mark.parametrize("tensors_nd_sharded", ["input_only", "output_only", "input_and_output"])
 def test_nd_sharded_embedding(
     device,
     input_shape,
@@ -284,12 +275,6 @@ def test_nd_sharded_embedding_uneven_work_split(
     torch.manual_seed(1234)
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    compute_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-    )
-    if not compute_grid.contains(shard_core_grid):
-        pytest.skip(f"Need {shard_core_grid} grid size to run this test but core grid is {compute_grid}")
-
     max_compute_cores = compute_grid_size.x * compute_grid_size.y
     index_elems_per_page = input_shard_shape[-1]
     num_input_pages = int(math.prod(input_shape)) // index_elems_per_page
