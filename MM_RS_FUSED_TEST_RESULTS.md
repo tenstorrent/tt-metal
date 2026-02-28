@@ -46,6 +46,19 @@ python tools/tracy/profile_this.py -c 'pytest tests/nightly/t3000/ccl/default_bi
 
 ---
 
+## Llama 70B 128K ISL - Baseline
+
+Source: `teja/Allgather+matmul_fused_perf_results/baseline_128k/128k/prefill.csv`
+
+| Layer | M | K | N | Baseline MM (us) | Baseline RS (us) | Baseline Total (us) |
+|-------|---|---|---|------------------|------------------|---------------------|
+| FF1 | 131072 | 2048 | 3584 | 12516.40 | 10677.96 | 23194.36 |
+| FF3 | 131072 | 2048 | 3584 | 12650.25 | 10649.37 | 23299.62 |
+| FF2 | 131072 | 3584 | 2048 | 19622.12 | 6605.80 | 26227.92 |
+| Attn Out | 131072 | 1024 | 2048 | 6487.70 | 6531.59 | 13019.29 |
+
+---
+
 ## Llama 70B 8K ISL - FF1/FF3 (M=8192, K=2048, N=3584)
 
 **Test File:** `tests/nightly/t3000/ccl/llama_size_8k_ISL_test.py`
@@ -98,6 +111,7 @@ python tools/tracy/profile_this.py -c 'pytest tests/nightly/t3000/ccl/llama_ff2_
 
 **Test File:** `tests/nightly/t3000/ccl/llama_size_128k_ISL_test.py`
 **Blocks:** 256/256/256
+**Baseline:** MM=12516 us + RS=10678 us = 23194 us
 
 | Core Grid | Total Cores | Test ID | Status | Min (us) | Avg (us) | Max (us) | Error/PCC |
 |-----------|-------------|---------|--------|----------|----------|----------|-----------|
