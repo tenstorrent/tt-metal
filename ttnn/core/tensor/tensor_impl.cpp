@@ -1752,8 +1752,11 @@ template HostTensor from_borrowed_data<uint32_t>(
 //                                  HostTensor to_vector()
 // ======================================================================================
 
-template <>
-std::vector<float> to_vector<float>(const HostTensor& tensor) {
+/*
+ * Special case of to_vector for float,
+ * This handles the conversion from bfloat16, bfloat8_b, bfloat4_b, and float32 to float.
+ */
+std::vector<float> to_vector_float(const HostTensor& tensor) {
     switch (tensor.dtype()) {
         case DataType::BFLOAT16: {
             auto buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(tensor);
@@ -1789,6 +1792,9 @@ std::vector<float> to_vector<float>(const HostTensor& tensor) {
 
 template <typename T>
 std::vector<T> to_vector(const HostTensor& tensor) {
+    if constexpr (std::is_same_v<T, float>) {
+        return to_vector_float(tensor);
+    }
     TT_FATAL(
         tensor.dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
@@ -1801,6 +1807,7 @@ std::vector<T> to_vector(const HostTensor& tensor) {
     return tensor_impl::decode_tensor_data(data, tensor.tensor_spec());
 }
 
+template std::vector<float> to_vector<float>(const HostTensor& tensor);
 template std::vector<bfloat16> to_vector<bfloat16>(const HostTensor& tensor);
 template std::vector<int32_t> to_vector<int32_t>(const HostTensor& tensor);
 template std::vector<uint8_t> to_vector<uint8_t>(const HostTensor& tensor);
