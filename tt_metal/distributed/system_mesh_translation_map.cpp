@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"
 
 #include <unordered_set>

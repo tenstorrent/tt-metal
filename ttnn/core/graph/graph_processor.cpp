@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"

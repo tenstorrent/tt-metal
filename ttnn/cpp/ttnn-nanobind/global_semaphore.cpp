@@ -4,6 +4,7 @@
 
 #include "global_semaphore.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 
 #include <nanobind/nanobind.h>

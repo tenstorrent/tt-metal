@@ -4,6 +4,7 @@
 
 #include <cerrno>
 #include <fmt/base.h>
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/constants.hpp>
 #include <cstring>
 #include <exception>

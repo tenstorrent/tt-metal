@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>

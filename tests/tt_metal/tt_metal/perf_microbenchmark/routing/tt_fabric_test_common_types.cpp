@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
+#include <enchantum/enchantum.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common_types.hpp"
 
 namespace tt::tt_fabric::fabric_tests {

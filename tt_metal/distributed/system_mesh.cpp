@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>

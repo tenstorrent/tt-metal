@@ -5,6 +5,7 @@
 #include "shape.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
