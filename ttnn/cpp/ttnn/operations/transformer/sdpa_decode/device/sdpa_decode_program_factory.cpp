@@ -259,7 +259,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // ========== Physical Core Coordinate Maps ==========
     // Col-major group index for reducer/output cores
-    const uint32_t num_groups_per_row = grid_size.x / num_cores_per_head;  // groups that fit in one row
+    // Guard: if num_cores_per_head > grid_size.x, groups don't fit in a row, so clamp to 1
+    const uint32_t num_groups_per_row = std::max(1u, (uint32_t)(grid_size.x / num_cores_per_head));
     const uint32_t num_group_rows = (num_output_cores + num_groups_per_row - 1) / num_groups_per_row;
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
         uint32_t group_row = row_major_idx / num_groups_per_row;
@@ -731,7 +732,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // ========== Runtime Arguments ==========
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t cur_batch, cur_head, core_num_in_reduce, core_num_in_output;
+        bool do_k_mcast = false;
+        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
+        uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
         if (use_col_major_group_indexing) {
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
             uint32_t group_row = group_idx / num_groups_per_row;  // which row of groups (0 to grid_size.y-1)
@@ -741,6 +744,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             core_num_in_reduce =
                 i % num_cores_per_head;               // position within the reduction group (0 to num_cores_per_head-1)
             core_num_in_output = core_num_in_reduce;  // same as reduce for single head
+            do_k_mcast = (core.y % q_heads_parallel_factor == 0);
+            num_dests = q_heads_parallel_factor - 1;
+            if (do_k_mcast && num_dests > 0) {
+                auto phys_start = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
+                auto phys_end = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
+                mcast_x = phys_start.x;
+                mcast_y0 = phys_start.y;
+                mcast_y1 = phys_end.y;
+            }
         } else {
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
             cur_batch = i / num_cores_per_batch;
@@ -751,19 +763,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
         bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
         bool do_output = (worker_id_for_output == UINT32_MAX);
-        bool do_k_mcast = false;
-        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
-        if (q_heads_parallel_factor > 1) {
-            do_k_mcast = (core.y == 0 || core.y == 4);
-            num_dests = q_heads_parallel_factor - 1;
-            if (do_k_mcast && num_dests > 0) {
-                auto phys_start = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
-                auto phys_end = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
-                mcast_x = phys_start.x;
-                mcast_y0 = phys_start.y;
-                mcast_y1 = phys_end.y;
-            }
-        }
         uint32_t cur_pos =
             (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
 
@@ -1009,10 +1008,12 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t cur_batch, cur_head, core_num_in_reduce, core_num_in_output;
+        bool do_k_mcast = false;
+        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
+        uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
 
         if (use_col_major_group_indexing) {
-            uint32_t num_groups_per_row = grid_size.x / num_cores_per_head;
+            uint32_t num_groups_per_row = std::max(1u, (uint32_t)(grid_size.x / num_cores_per_head));
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
             uint32_t group_row = group_idx / num_groups_per_row;  // which row of groups (0 to grid_size.y-1)
             uint32_t group_col = group_idx % num_groups_per_row;  // which column of groups
@@ -1020,6 +1021,15 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
             cur_head = 0;                                         // single KV head when using this indexing
             core_num_in_reduce = i % num_cores_per_head;          // position within the reduction group
             core_num_in_output = core_num_in_reduce;              // same as reduce for single head
+            do_k_mcast = (core.y % q_heads_parallel_factor == 0);
+            num_dests = q_heads_parallel_factor - 1;
+            if (do_k_mcast && num_dests > 0) {
+                auto phys_start = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
+                auto phys_end = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
+                mcast_x = phys_start.x;
+                mcast_y0 = phys_start.y;
+                mcast_y1 = phys_end.y;
+            }
         } else {
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
             cur_batch = i / num_cores_per_batch;
@@ -1031,19 +1041,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
         bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
         bool do_output = (worker_id_for_output == UINT32_MAX);
-        bool do_k_mcast = false;
-        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
-        if (use_col_major_group_indexing) {
-            do_k_mcast = (core.y % q_heads_parallel_factor == 0);
-            num_dests = q_heads_parallel_factor - 1;
-            if (do_k_mcast && num_dests > 0) {
-                auto phys_start = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
-                auto phys_end = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
-                mcast_x = phys_start.x;
-                mcast_y0 = phys_start.y;
-                mcast_y1 = phys_end.y;
-            }
-        }
+
         uint32_t cur_pos =
             (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
         uint32_t reduction_group_base_idx;
