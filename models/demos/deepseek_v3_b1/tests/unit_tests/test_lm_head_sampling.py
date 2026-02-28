@@ -1840,7 +1840,7 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
     assert len(pipeline_config) == num_procs + 1
 
     # Payload contracts
@@ -2166,7 +2166,7 @@ def test_persistent_mode(mesh_device, use_fp32):
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
     assert len(pipeline_config) == num_procs + 1
 
     # Payload contracts
@@ -2508,7 +2508,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
     if num_procs != 16:
         pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
-    pipeline_config = ttnn._ttnn.operations.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
     assert len(pipeline_config) == num_procs + 1
 
     LMHEAD_STAGE = 14
