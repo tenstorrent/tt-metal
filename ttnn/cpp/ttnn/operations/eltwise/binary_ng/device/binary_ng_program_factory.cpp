@@ -477,12 +477,8 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    const DataType c_dtype) {
-    // All three formats must match: cb_llk_post uses the input format, but the
-    // compute kernel's pack configuration targets cb_out (output format).  A
-    // mismatch between input and output format causes pack_tile to write with
-    // the wrong format, corrupting data.
-    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt && c_dtype == dt; };
+    [[maybe_unused]] const DataType c_dtype) {
+    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
