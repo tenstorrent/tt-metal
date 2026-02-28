@@ -113,18 +113,53 @@ runs:
           echo ""
           echo "Validating built images..."
           for target in "${CLEAN_TARGETS[@]}"; do
-            # Get the image name from the bake file's local tags
-            local_tag=$(docker buildx bake -f "${INPUT_BAKE_FILE}" --print "$target" 2>/dev/null | jq -r '.target["'$target'"].tags[0]' 2>/dev/null || echo "")
-            if [ -z "$local_tag" ] || [ "$local_tag" = "null" ]; then
-              local_tag="tt-metalium-${target}:local"
+            # Check if there's a tag override in the set-lines for this target
+            target_tag=""
+            target_output=""
+            for s in "${SET_LINES[@]}"; do
+              # Extract tag override: target.tags=xxx
+              if [[ "$s" =~ ^${target}\.tags=(.+)$ ]]; then
+                target_tag="${BASH_REMATCH[1]}"
+              fi
+              # Extract output override: target.output=xxx
+              if [[ "$s" =~ ^${target}\.output=(.+)$ ]]; then
+                target_output="${BASH_REMATCH[1]}"
+              fi
+            done
+
+            # Determine how to validate based on output configuration
+            # If output contains 'push=true' without 'type=docker', image is registry-only
+            if [[ "$target_output" =~ push=true ]] && [[ ! "$target_output" =~ type=docker ]]; then
+              # Registry-only image - validate by checking manifest
+              if [ -n "$target_tag" ]; then
+                echo "Checking registry image for target '$target' (tag: $target_tag)..."
+                if ! docker manifest inspect "$target_tag" > /dev/null 2>&1; then
+                  echo "ERROR: Registry image validation failed for target '$target' (tag: $target_tag)"
+                  echo "The build reported success but the image is not available in the registry."
+                  exit 1
+                fi
+                echo "  Registry image validated: $target_tag"
+              else
+                echo "  Skipping validation for target '$target' (no tag specified for registry check)"
+              fi
+            else
+              # Local image validation
+              local_tag="$target_tag"
+              if [ -z "$local_tag" ]; then
+                # Get the default image name from the bake file
+                local_tag=$(docker buildx bake -f "${INPUT_BAKE_FILE}" --print "$target" 2>/dev/null | jq -r '.target["'$target'"].tags[0]' 2>/dev/null || echo "")
+                if [ -z "$local_tag" ] || [ "$local_tag" = "null" ]; then
+                  local_tag="tt-metalium-${target}:local"
+                fi
+              fi
+              echo "Checking local image for target '$target' (tag: $local_tag)..."
+              if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
+                echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
+                echo "The build reported success but the image is not inspectable."
+                exit 1
+              fi
+              echo "  Local image validated: $local_tag"
             fi
-            echo "Checking image for target '$target' (tag: $local_tag)..."
-            if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
-              echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
-              echo "The build reported success but the image is not inspectable."
-              exit 1
-            fi
-            echo "  Image validated: $local_tag"
           done
           echo "All images validated successfully."
         fi
