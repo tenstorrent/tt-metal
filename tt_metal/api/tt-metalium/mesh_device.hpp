@@ -148,7 +148,6 @@ public:
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
-    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
@@ -258,21 +257,9 @@ public:
     uint32_t get_system_mesh_id() const;
 
     std::string to_string() const;
-    bool is_parent_mesh() const;
 
     const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
-
-    /**
-     * @brief Synchronize with all devices derived from this mesh (including submeshes).
-     *
-     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed. Use this to
-     * insert a barrier between phases that use overlapping submeshes on the same physical devices. After this call
-     * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
-     * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
-     * called.
-     */
-    void quiesce_devices();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
@@ -284,9 +271,6 @@ public:
     // If cq_id is not provided, the current command queue is returned from the current thread
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
-    // Currently expose users to the dispatch thread pool through the MeshDevice
-    void enqueue_to_thread_pool(std::function<void()>&& f);
-    void wait_for_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
