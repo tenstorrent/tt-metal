@@ -4,6 +4,7 @@
 ///
 #include <algorithm>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -219,34 +220,38 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t chunks_per_mm_N_full_block,
     const uint32_t mm_block_wt,
     const uint32_t slice_Ht_per_core,
-    const uint32_t slice_Ht) {
+    const bool fuse_mm_op,
+    const uint32_t slice_Ht,
+    const uint32_t mm_blocks_sem_override) {
     // Strided reader compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     return {
-        ring_index,                  // [0]  my_chip_id
-        ring_size,                   // [1]  ring_size
-        input_cb_index,              // [2]  cb_input_id
-        intermediate_cb_index,       // [3]  cb_intermediate_id
-        reader_output_cb_index,      // [4]  cb_reader_output_id
-        tile_granularity,            // [5]  tile_granularity
-        page_size,                   // [6]  page_size
-        input_batch_num_pages,       // [7]  input_batch_num_pages
-        input_channel_num_pages,     // [8]  input_channel_num_pages
-        input_tensor_B,              // [9]  input_tensor_B
-        input_tensor_Wt,             // [10] input_tensor_Wt
-        slice_C,                     // [11] slice_C
-        slice_Wt,                    // [12] slice_Wt
-        normalized_dim,              // [13] dim normalized to 4D
-        mm_M_unit_blocks_per_core,   // [14] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,  // [15] mm_N_full_blocks_per_slice
-        mm_block_ht,                 // [16] mm_block_ht
-        mm_cores_y,                  // [17] mm_cores_y
-        N_full_block_wt,             // [18] N_full_block_wt
-        chunk_width_in_tiles,        // [19] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,  // [20] chunks_per_mm_N_full_block
-        mm_block_wt,                 // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
-        slice_Ht_per_core,  // [22] slice_Ht_per_core (actual M rows per core, may not be a multiple of mm_block_ht)
-        slice_Ht,           // [23] slice_Ht (total height in tiles across all MM cores)
+        ring_index,                         // [0]  my_chip_id
+        ring_size,                          // [1]  ring_size
+        input_cb_index,                     // [2]  cb_input_id
+        intermediate_cb_index,              // [3]  cb_intermediate_id
+        reader_output_cb_index,             // [4]  cb_reader_output_id
+        tile_granularity,                   // [5]  tile_granularity
+        page_size,                          // [6]  page_size
+        input_batch_num_pages,              // [7]  input_batch_num_pages
+        input_channel_num_pages,            // [8]  input_channel_num_pages
+        input_tensor_B,                     // [9]  input_tensor_B
+        input_tensor_Wt,                    // [10] input_tensor_Wt
+        slice_C,                            // [11] slice_C
+        slice_Wt,                           // [12] slice_Wt
+        normalized_dim,                     // [13] dim normalized to 4D
+        mm_M_unit_blocks_per_core,          // [14] mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,         // [15] mm_N_full_blocks_per_slice
+        mm_block_ht,                        // [16] mm_block_ht
+        mm_cores_y,                         // [17] mm_cores_y
+        N_full_block_wt,                    // [18] N_full_block_wt
+        chunk_width_in_tiles,               // [19] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,         // [20] chunks_per_mm_N_full_block
+        mm_block_wt,                        // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        slice_Ht_per_core,                  // [22] slice_Ht_per_core
+        static_cast<uint32_t>(fuse_mm_op),  // [23] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
+        slice_Ht,                           // [24] slice_Ht (total height in tiles across all MM cores)
+        mm_blocks_sem_override,             // [25] mm_blocks_sem_override (used by FUSE_MM_OP_SIGNALER)
     };
 }
 
@@ -534,23 +539,40 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
     const uint32_t mm_block_ht_val = mm_block_ht;
     const uint32_t mm_block_wt_val = mm_block_wt;
-    const uint32_t mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
     const uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(1);
-    const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
-    const uint32_t chunks_per_mm_N_full_block_val = tt::div_up(mm_N_full_block_wt_val, chunk_width_in_tiles_val);
 
-    // Pad slice_Ht up to the next multiple of mm_cores_y_val so the division is exact.
-    // The last core may receive up to (padded_slice_Ht - slice_Ht) ghost rows; the
-    // kernels skip those via the slice_row < slice_Ht bounds check.
+    // When slice_Wt is not divisible by the requested mm_N_full_block_wt the matmul's strided
+    // signaling no longer aligns with chunk boundaries, so we cannot chunk the N-dimension.
+    // Fall back to treating the entire slice width as one chunk.  The matmul signals once per
+    // mm_block_wt columns across ALL N-full-blocks (including the partial one), so after
+    // div_up(requested_mm_N_full_block_wt, mm_block_wt) signals the whole row is ready.
+    // mm_blocks_sem_override captures that count (0 = use normal computed formula).
+    const uint32_t requested_mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
+    const bool has_partial_N_block = (slice_Wt % requested_mm_N_full_block_wt_val != 0);
+    const uint32_t mm_N_full_block_wt_val = has_partial_N_block ? slice_Wt : requested_mm_N_full_block_wt_val;
+    const uint32_t chunk_width_in_tiles_val =
+        has_partial_N_block ? slice_Wt : chunk_width_in_mm_blocks_val * mm_block_wt_val;
+    const uint32_t chunks_per_mm_N_full_block_val =
+        has_partial_N_block ? 1 : tt::div_up(mm_N_full_block_wt_val, chunk_width_in_tiles_val);
+    const uint32_t mm_blocks_sem_override =
+        has_partial_N_block ? tt::div_up(requested_mm_N_full_block_wt_val, mm_block_wt_val) : 0;
+    if (has_partial_N_block) {
+        log_warning(
+            tt::LogOp,
+            "strided_reduce_scatter: slice_Wt={} is not divisible by mm_N_full_block_wt={}. "
+            "Falling back to a single N-chunk covering the entire slice width. "
+            "Performance may be suboptimal; consider choosing mm_N_full_block_wt that divides slice_Wt.",
+            slice_Wt,
+            requested_mm_N_full_block_wt_val);
+    }
+    const uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
+
+    // Pad slice_Ht to the next multiple of mm_cores_y_val so every core gets an equal number of
+    // tile rows. The last core may receive ghost tiles (slice_row >= slice_Ht) which are skipped
+    // by the reader/writer kernels via bounds checks.
     const uint32_t padded_slice_Ht = tt::round_up(slice_Ht, mm_cores_y_val);
-    uint32_t slice_Ht_per_core = padded_slice_Ht / mm_cores_y_val;
-    uint32_t mm_M_unit_blocks_per_core = tt::div_up(slice_Ht_per_core, mm_block_ht_val);
-    TT_FATAL(
-        slice_Wt % mm_N_full_block_wt_val == 0,
-        "slice_Wt ({}) must be divisible by mm_N_full_block_wt_val ({})",
-        slice_Wt,
-        mm_N_full_block_wt_val);
-    uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
+    const uint32_t slice_Ht_per_core = padded_slice_Ht / mm_cores_y_val;
+    const uint32_t mm_M_unit_blocks_per_core = tt::div_up(slice_Ht_per_core, mm_block_ht_val);
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
@@ -668,7 +690,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             chunks_per_mm_N_full_block_val,
             mm_block_wt_val,
             slice_Ht_per_core,
-            slice_Ht);
+            false,
+            slice_Ht,
+            mm_blocks_sem_override);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
