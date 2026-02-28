@@ -56,7 +56,7 @@ def create_fabric_router_config(max_payload_size):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(7168),
+            "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
     indirect=True,
@@ -241,7 +241,7 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(7168),
+            "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
     indirect=True,
@@ -450,7 +450,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(7168),
+            "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
     indirect=True,
