@@ -76,7 +76,9 @@ Tensor prod_impl(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const int old_rank = static_cast<int>(input_a.logical_shape().rank());
+    std::size_t rank_st = input_a.logical_shape().rank();
+    TT_FATAL(rank_st <= std::numeric_limits<int>::max(), "Rank is too large to convert to int");
+    const int old_rank = static_cast<int>(rank_st);
 
     TT_FATAL(
         !dim.has_value() || (*dim >= -old_rank && *dim <= old_rank - 1),
