@@ -68,6 +68,9 @@ RUN CCACHE_VERSION=${CCACHE_VERSION} \
     /bin/bash /tmp/install-ccache.sh
 
 FROM scratch AS ccache
+LABEL org.opencontainers.image.source="https://github.com/ccache/ccache"
+LABEL org.opencontainers.image.description="ccache - fast C/C++ compiler cache"
+LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 COPY --from=ccache-builder /install/ /install/
 
 #############################################################
@@ -89,6 +92,9 @@ RUN MOLD_VERSION=${MOLD_VERSION} \
     /bin/bash /tmp/install-mold.sh
 
 FROM scratch AS mold
+LABEL org.opencontainers.image.source="https://github.com/rui314/mold"
+LABEL org.opencontainers.image.description="mold - a modern high-performance linker"
+LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=mold-builder /install/ /install/
 
 #############################################################
@@ -114,6 +120,9 @@ RUN DOXYGEN_VERSION=${DOXYGEN_VERSION} \
     /bin/bash /tmp/install-doxygen.sh
 
 FROM scratch AS doxygen
+LABEL org.opencontainers.image.source="https://github.com/doxygen/doxygen"
+LABEL org.opencontainers.image.description="Doxygen - documentation generator for C/C++ and other languages"
+LABEL org.opencontainers.image.licenses="GPL-2.0-only"
 COPY --from=doxygen-builder /install/ /install/
 
 #############################################################
@@ -139,6 +148,9 @@ RUN CBA_VERSION=${CBA_VERSION} \
     /bin/bash /tmp/install-clangbuildanalyzer.sh
 
 FROM scratch AS cba
+LABEL org.opencontainers.image.source="https://github.com/aras-p/ClangBuildAnalyzer"
+LABEL org.opencontainers.image.description="ClangBuildAnalyzer - Clang build time analysis tool"
+LABEL org.opencontainers.image.licenses="Unlicense"
 COPY --from=cba-builder /install/ /install/
 
 #############################################################
@@ -164,6 +176,9 @@ RUN GDB_VERSION=${GDB_VERSION} \
     /bin/bash /tmp/install-gdb.sh
 
 FROM scratch AS gdb
+LABEL org.opencontainers.image.source="https://sourceware.org/git/binutils-gdb.git"
+LABEL org.opencontainers.image.description="GDB - the GNU Project debugger"
+LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 COPY --from=gdb-builder /install/ /install/
 
 #############################################################
@@ -185,6 +200,9 @@ RUN CMAKE_VERSION=${CMAKE_VERSION} \
     /bin/bash /tmp/install-cmake.sh
 
 FROM scratch AS cmake
+LABEL org.opencontainers.image.source="https://github.com/Kitware/CMake"
+LABEL org.opencontainers.image.description="CMake - cross-platform build system generator"
+LABEL org.opencontainers.image.licenses="BSD-3-Clause"
 COPY --from=cmake-builder /install/ /install/
 
 #############################################################
@@ -206,6 +224,9 @@ RUN YQ_VERSION=${YQ_VERSION} \
     /bin/bash /tmp/install-yq.sh
 
 FROM scratch AS yq
+LABEL org.opencontainers.image.source="https://github.com/mikefarah/yq"
+LABEL org.opencontainers.image.description="yq - portable command-line YAML/JSON/XML processor"
+LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=yq-builder /install/ /install/
 
 #############################################################
@@ -240,6 +261,9 @@ RUN SFPI_INFO_SCRIPT=/tmp/sfpi-info.sh \
     /bin/bash /tmp/install-sfpi.sh
 
 FROM scratch AS sfpi
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/sfpi"
+LABEL org.opencontainers.image.description="SFPI - Tenstorrent SFPU intrinsics compiler"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=sfpi-builder /install/ /install/
 
 #############################################################
@@ -296,4 +320,7 @@ RUN OMPI_TAG=${OMPI_TAG} \
 # Destination path must match consumers: Dockerfile copies /install/ to /opt/, yielding /opt/openmpi-<tag>-ulfm/
 FROM scratch AS openmpi
 ARG OMPI_TAG
+LABEL org.opencontainers.image.source="https://github.com/open-mpi/ompi"
+LABEL org.opencontainers.image.description="OpenMPI - high-performance Message Passing Interface with ULFM fault tolerance"
+LABEL org.opencontainers.image.licenses="BSD-3-Clause"
 COPY --from=openmpi-builder /opt/openmpi-${OMPI_TAG}-ulfm/ /install/openmpi-${OMPI_TAG}-ulfm/
