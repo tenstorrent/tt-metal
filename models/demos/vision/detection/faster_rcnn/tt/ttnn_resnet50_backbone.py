@@ -36,6 +36,7 @@ class TtConv2D:
         deallocate_activation=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
         reshard_if_not_optimal=True,
         output_layout=ttnn.TILE_LAYOUT,
     ):
@@ -59,7 +60,7 @@ class TtConv2D:
             output_layout=output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=reshard_if_not_optimal,
-            enable_weights_double_buffer=True,
+            enable_weights_double_buffer=enable_weights_double_buffer,
         )
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
