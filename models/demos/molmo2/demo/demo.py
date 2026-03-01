@@ -12,6 +12,7 @@ Features:
 - Vision-language multimodal inference
 - KV cache for efficient autoregressive generation
 - Optional tracing for improved performance
+- Proper warm-up and timing (TTFT, decode throughput)
 
 Usage:
     # Run with default image and prompt
@@ -30,7 +31,10 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+import einops
+import numpy as np
 import torch
+import torchvision.transforms
 from loguru import logger
 from PIL import Image
 
@@ -40,6 +44,19 @@ import ttnn
 DEMO_DIR = Path(__file__).parent
 DEFAULT_IMAGE = DEMO_DIR / "dog.jpg"
 MODEL_ID = "allenai/Molmo2-8B"
+
+# Molmo2 image tokens
+IMAGE_PATCH_TOKEN = "<im_patch>"
+IM_START_TOKEN = "<im_start>"
+IM_END_TOKEN = "<im_end>"
+IM_COL_TOKEN = "<im_col>"
+LOW_RES_IMAGE_START_TOKEN = "<low_res_im_start>"
+IMAGE_PROMPT = "<|image|>"
+
+# Molmo2 normalization constants (from HuggingFace Molmo2ImageProcessor)
+# These differ from standard ImageNet normalization
+IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
+IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
 
 def load_processor():
@@ -65,36 +82,273 @@ def load_model_weights():
     return state_dict
 
 
-def preprocess_image(image_path: str, target_size: int = 378):
+# =============================================================================
+# Molmo2 Image Preprocessing (standalone, no video dependencies)
+# =============================================================================
+
+
+def resize_image(image: np.ndarray, target_size: list, resample=None) -> np.ndarray:
+    """Resize image using PIL to match HuggingFace preprocessing."""
+    # Convert numpy to PIL
+    pil_image = Image.fromarray(image.astype(np.uint8))
+    # Resize using PIL BILINEAR (same as HuggingFace)
+    resized_pil = pil_image.resize((target_size[1], target_size[0]), Image.BILINEAR)
+    # Convert back to numpy and normalize to [0, 1]
+    resized = np.array(resized_pil, dtype=np.float32) / 255.0
+    return resized
+
+
+def normalize_image(image: np.ndarray, mean: list, std: list) -> np.ndarray:
+    """Normalize image with ImageNet mean/std."""
+    image = image - np.array(mean, dtype=np.float32)[None, None, :]
+    image = image / np.array(std, dtype=np.float32)[None, None, :]
+    return image
+
+
+def select_tiling(h: int, w: int, patch_size: int, max_crops: int) -> tuple:
+    """Select optimal tiling for image crops."""
+    tilings = []
+    for i in range(1, max_crops + 1):
+        for j in range(1, max_crops + 1):
+            if i * j <= max_crops:
+                tilings.append((i, j))
+    tilings.sort(key=lambda x: (x[0] * x[1], x[0]))
+
+    candidate_tilings = np.array(tilings, dtype=np.int32)
+    candidate_resolutions = candidate_tilings * patch_size
+    original_size = np.array([h, w], dtype=np.float32)
+
+    with np.errstate(divide="ignore"):
+        required_scale = np.min(candidate_resolutions.astype(np.float32) / original_size, axis=-1, keepdims=True)
+
+    if np.all(required_scale < 1):
+        ix = np.argmax(required_scale)
+    else:
+        required_scale = np.where(required_scale < 1.0, 10e9, required_scale)
+        ix = np.argmin(required_scale)
+
+    return tuple(candidate_tilings[ix])
+
+
+def build_overlapping_crops(
+    image: np.ndarray,
+    max_crops: int,
+    overlap_margins: list,
+    base_size: int,
+    patch_size: int,
+) -> tuple:
+    """Build overlapping crops from image."""
+    left_margin, right_margin = overlap_margins
+    total_margin = patch_size * (left_margin + right_margin)
+    crop_patches = base_size // patch_size
+    crop_window_patches = crop_patches - (left_margin + right_margin)
+    crop_window_size = crop_window_patches * patch_size
+
+    h, w = image.shape[:2]
+    tiling = select_tiling(h - total_margin, w - total_margin, crop_window_size, max_crops)
+
+    # Resize to fit tiling
+    target_h = tiling[0] * crop_window_size + total_margin
+    target_w = tiling[1] * crop_window_size + total_margin
+    src = resize_image(image, [target_h, target_w], torchvision.transforms.InterpolationMode.BILINEAR)
+    src = normalize_image(src, IMAGENET_MEAN, IMAGENET_STD)
+
+    # Extract crops
+    n_crops = tiling[0] * tiling[1]
+    crop_arr = np.zeros([n_crops, base_size, base_size, 3], dtype=src.dtype)
+    patch_idx_arr = np.zeros([n_crops, crop_patches, crop_patches], dtype=np.int32)
+
+    on_crop = 0
+    for i in range(tiling[0]):
+        y0 = i * crop_window_size
+        for j in range(tiling[1]):
+            x0 = j * crop_window_size
+            crop_arr[on_crop] = src[y0 : y0 + base_size, x0 : x0 + base_size]
+
+            patch_idx = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+            patch_idx = patch_idx + on_crop * crop_patches * crop_patches
+
+            # Mask overlap regions
+            if i != 0:
+                patch_idx[:left_margin, :] = -1
+            if j != 0:
+                patch_idx[:, :left_margin] = -1
+            if i != tiling[0] - 1:
+                patch_idx[-right_margin:, :] = -1
+            if j != tiling[1] - 1:
+                patch_idx[:, -right_margin:] = -1
+
+            patch_idx_arr[on_crop] = patch_idx
+            on_crop += 1
+
+    # Reorder patch indices
+    patch_idx_arr = patch_idx_arr.reshape(tiling[0], tiling[1], crop_patches, crop_patches)
+    patch_idx_arr = np.transpose(patch_idx_arr, [0, 2, 1, 3]).reshape(-1)
+    patch_idx_arr = patch_idx_arr[patch_idx_arr >= 0].reshape(src.shape[0] // patch_size, src.shape[1] // patch_size)
+
+    return crop_arr, patch_idx_arr, tiling
+
+
+def arange_for_pooling(idx_arr: np.ndarray, pool_h: int, pool_w: int) -> np.ndarray:
+    """Arrange indices for pooling."""
+    h_pad = pool_h * ((idx_arr.shape[0] + pool_h - 1) // pool_h) - idx_arr.shape[0]
+    w_pad = pool_w * ((idx_arr.shape[1] + pool_w - 1) // pool_w) - idx_arr.shape[1]
+    idx_arr = np.pad(idx_arr, [[h_pad // 2, (h_pad + 1) // 2], [w_pad // 2, (w_pad + 1) // 2]], constant_values=-1)
+    return einops.rearrange(idx_arr, "(h dh) (w dw) -> h w (dh dw)", dh=pool_h, dw=pool_w)
+
+
+def preprocess_image_molmo2_simple(
+    image_path: str,
+    base_size: int = 378,
+    patch_size: int = 14,
+    pooling_size: list = None,
+) -> dict:
+    """
+    Simple image preprocessing for Molmo2 - just resize to base_size.
+
+    This is a simplified version that skips multi-crop processing.
+    Just resizes the image to 378x378 and computes pooling indices.
+
+    Returns:
+        Dict with pixel_values, image_token_pooling, image_grids, and image_num_crops
+    """
+    if pooling_size is None:
+        pooling_size = [2, 2]
+
+    pool_h, pool_w = pooling_size
+    crop_patches = base_size // patch_size  # 27
+
+    # Load and convert image
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.array(image)
+
+    # Resize to base_size
+    resized = resize_image(image_np, [base_size, base_size], torchvision.transforms.InterpolationMode.BILINEAR)
+    resized = normalize_image(resized, IMAGENET_MEAN, IMAGENET_STD)
+
+    # Create pooling indices for 2x2 pooling
+    # Original patch grid: 27x27 = 729 patches
+    # After 2x2 pooling: 14x14 = 196 output positions (with some padding)
+    resize_idx = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+    resize_idx = arange_for_pooling(resize_idx, pool_h, pool_w)
+    resized_h, resized_w = resize_idx.shape[:2]
+    resize_idx = resize_idx.reshape(-1, pool_h * pool_w)
+
+    # Convert to tensors
+    # pixel_values: [1, C, H, W] for single image
+    pixel_values = torch.from_numpy(resized).permute(2, 0, 1).unsqueeze(0).float()
+
+    image_token_pooling = torch.from_numpy(resize_idx).long()
+    # For simple single-image mode, high-res grid is same as low-res (no extra crops)
+    image_grids = torch.tensor([[resized_h, resized_w, 0, 0]])
+    image_num_crops = torch.tensor([1])
+
+    return {
+        "pixel_values": pixel_values,  # [1, 3, H, W] for ViT
+        "image_token_pooling": image_token_pooling,
+        "image_grids": image_grids,
+        "image_num_crops": image_num_crops,
+    }
+
+
+def preprocess_image_molmo2(
+    image_path: str,
+    base_size: int = 378,
+    patch_size: int = 14,
+    max_crops: int = 8,
+    overlap_margins: list = None,
+    pooling_size: list = None,
+    use_simple: bool = True,  # Default to simple mode for now
+) -> dict:
     """
     Preprocess image for Molmo2.
 
     Args:
-        image_path: Path to image file
-        target_size: Target image size (378 for Molmo2)
+        use_simple: If True, use simple resize-only preprocessing (faster, works with current implementation).
+                   If False, use full multi-crop preprocessing (requires batch processing in ViT).
 
     Returns:
-        Tuple of (PIL Image, pixel_values tensor)
+        Dict with pixel_values, image_token_pooling, image_grids, and image_num_crops
     """
-    import numpy as np
+    if use_simple:
+        return preprocess_image_molmo2_simple(image_path, base_size, patch_size, pooling_size)
 
-    logger.info(f"Loading image from {image_path}")
+    # Full multi-crop preprocessing (for reference)
+    if overlap_margins is None:
+        overlap_margins = [4, 4]
+    if pooling_size is None:
+        pooling_size = [2, 2]
+
+    pool_h, pool_w = pooling_size
+    crop_patches = base_size // patch_size
+
+    # Load and convert image
     image = Image.open(image_path).convert("RGB")
+    image_np = np.array(image)
 
-    # Resize to model's expected size
-    image = image.resize((target_size, target_size), Image.Resampling.LANCZOS)
-    logger.info(f"Image resized to {target_size}x{target_size}")
+    # Build overlapping crops
+    crop_arr, patch_idx_arr, tiling = build_overlapping_crops(
+        image_np, max_crops, overlap_margins, base_size, patch_size
+    )
 
-    # Convert to tensor and normalize (ImageNet normalization)
-    img_array = np.array(image).astype(np.float32) / 255.0
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    img_array = (img_array - mean) / std
+    # Pooling indices for high-res crops
+    pooling_idx = arange_for_pooling(patch_idx_arr, pool_h, pool_w)
+    h, w = pooling_idx.shape[:2]
+    pooling_idx = pooling_idx.reshape(-1, pool_h * pool_w)
 
-    # Convert to [1, 3, H, W] tensor
-    pixel_values = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0).float()
+    # Build low-res (global) image
+    resized = resize_image(image_np, [base_size, base_size], torchvision.transforms.InterpolationMode.BILINEAR)
+    resized = normalize_image(resized, IMAGENET_MEAN, IMAGENET_STD)
+    resized = np.expand_dims(resized, 0)
 
-    return image, pixel_values
+    resize_idx = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+    resize_idx = arange_for_pooling(resize_idx, pool_h, pool_w)
+    resized_h, resized_w = resize_idx.shape[:2]
+    resize_idx = resize_idx.reshape(-1, pool_h * pool_w)
+
+    # Combine: global image first, then crops
+    # all_crops shape: [n_crops, H, W, C] (H, W = base_size)
+    all_crops = np.concatenate([resized, crop_arr], axis=0)
+
+    # Adjust pooling indices (global image patches come first)
+    pooling_idx = np.where(pooling_idx >= 0, pooling_idx + crop_patches * crop_patches, -1)
+    pooling_idx = np.concatenate([resize_idx, pooling_idx], axis=0)
+
+    # Convert crops to [n_crops, C, H, W] format for ViT
+    # all_crops is [n_crops, H, W, C] -> [n_crops, C, H, W]
+    pixel_values = torch.from_numpy(all_crops).permute(0, 3, 1, 2).float()
+
+    image_token_pooling = torch.from_numpy(pooling_idx).long()
+    image_grids = torch.tensor([[resized_h, resized_w, h, w]])
+    image_num_crops = torch.tensor([all_crops.shape[0]])
+
+    return {
+        "pixel_values": pixel_values,  # [n_crops, 3, H, W] for ViT
+        "image_token_pooling": image_token_pooling,
+        "image_grids": image_grids,
+        "image_num_crops": image_num_crops,
+    }
+
+
+def get_image_tokens(image_grid: torch.Tensor, use_col_tokens: bool = True) -> str:
+    """Generate image token string from grid dimensions."""
+    resized_h, resized_w, h, w = image_grid.tolist()
+
+    # Low-res tokens (always present)
+    per_row_low = IMAGE_PATCH_TOKEN * resized_w
+    if use_col_tokens:
+        per_row_low += IM_COL_TOKEN
+    low_res_tokens = LOW_RES_IMAGE_START_TOKEN + (per_row_low * resized_h) + IM_END_TOKEN
+
+    # High-res tokens (only if present)
+    if h > 0 and w > 0:
+        per_row = IMAGE_PATCH_TOKEN * w
+        if use_col_tokens:
+            per_row += IM_COL_TOKEN
+        high_res_tokens = IM_START_TOKEN + (per_row * h) + IM_END_TOKEN
+        return low_res_tokens + high_res_tokens
+    else:
+        return low_res_tokens
 
 
 def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
@@ -157,6 +411,12 @@ class Molmo2Generator:
     Tracing captures the computation graph and replays it for improved performance.
     - Prefill trace: processes the full input sequence
     - Decode trace: processes one token at a time with KV cache
+
+    Timing follows simple_text_demo.py pattern:
+    - compile_prefill: First prefill run (warm-up)
+    - inference_prefill: Actual prefill (TTFT)
+    - compile_decode: First decode run (warm-up)
+    - inference_decode: Subsequent decode iterations
     """
 
     def __init__(
@@ -202,7 +462,7 @@ class Molmo2Generator:
                 num_kv_heads=8,
                 max_seq_len=self.max_seq_len,
                 head_dim=128,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,  # Use bfloat16 to match RoPE output dtype
             )
             self.current_pos = init_decode_position(
                 mesh_device=self.mesh_device,
@@ -259,7 +519,11 @@ class Molmo2Generator:
                 mesh_mapper=self.mesh_mapper,
             )
             hidden_states = self.model.text_model.embed_tokens(input_ids_ttnn)
-            hidden_states = ttnn.to_torch(hidden_states).squeeze(0).squeeze(0)
+            hidden_states = (
+                ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
+                .squeeze(0)
+                .squeeze(0)
+            )
 
         # Keep torch version for later use
         hidden_states_torch = hidden_states.unsqueeze(0).unsqueeze(0).clone()
@@ -281,16 +545,7 @@ class Molmo2Generator:
         seq_len: int,
         hidden_dim: int = 4096,
     ) -> dict:
-        """
-        Pre-allocate all tensors needed for traced prefill.
-
-        Args:
-            seq_len: Sequence length
-            hidden_dim: Hidden dimension
-
-        Returns:
-            Dict with pre-allocated tensors
-        """
+        """Pre-allocate all tensors needed for traced prefill."""
         # Allocate hidden states input tensor
         hidden_states_shape = [1, 1, seq_len, hidden_dim]
         trace_hidden_states = ttnn.allocate_tensor_on_device(
@@ -339,39 +594,17 @@ class Molmo2Generator:
         self,
         trace_tensors: dict,
     ) -> Tuple[int, ttnn.Tensor]:
-        """
-        Capture trace for text model prefill phase.
-
-        Uses pre-allocated tensors for all inputs.
-
-        Args:
-            trace_tensors: Dict with pre-allocated tensors
-
-        Returns:
-            Tuple of (trace_id, trace_output)
-        """
-        logger.info("Compiling text model prefill (first run)...")
-
-        # First run to compile (using pre-allocated tensors)
-        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
-        logits, _ = self.model.text_model.forward(
-            hidden_states=trace_tensors["hidden_states"],
-            start_pos=0,
-            attn_mask=None,
-            kv_caches=None,
-            rot_mats=rot_mats,
-        )
-        logger.info("Text model prefill compiled")
-
-        # Capture trace
+        """Capture trace for text model prefill phase."""
         logger.info("Capturing text model prefill trace...")
+        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         logits_trace, _ = self.model.text_model.forward(
             hidden_states=trace_tensors["hidden_states"],
             start_pos=0,
             attn_mask=None,
-            kv_caches=None,
+            kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
             rot_mats=rot_mats,
         )
 
@@ -387,18 +620,7 @@ class Molmo2Generator:
         trace_output: ttnn.Tensor,
         hidden_states_torch: torch.Tensor,
     ) -> ttnn.Tensor:
-        """
-        Execute captured prefill trace with new inputs.
-
-        Args:
-            trace_id: Captured trace ID
-            trace_tensors: Pre-allocated trace tensors
-            trace_output: Trace output tensor
-            hidden_states_torch: New hidden states (torch tensor)
-
-        Returns:
-            Output logits tensor
-        """
+        """Execute captured prefill trace with new inputs."""
         # Copy new hidden states to trace input location
         new_hidden = ttnn.from_torch(
             hidden_states_torch,
@@ -417,15 +639,7 @@ class Molmo2Generator:
         return trace_output
 
     def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
-        """
-        Allocate tensors needed for traced decode.
-
-        Args:
-            hidden_dim: Hidden dimension for embeddings
-
-        Returns:
-            Dict with pre-allocated tensors
-        """
+        """Allocate tensors needed for traced decode."""
         # Allocate hidden states tensor [1, 1, 1, hidden_dim]
         trace_hidden_states = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, 1, hidden_dim]),
@@ -435,67 +649,29 @@ class Molmo2Generator:
             ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Get initial rot_mats for position 0 to get the shape/config
-        initial_pos = torch.tensor([0], dtype=torch.int32)
-        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(initial_pos)
-
-        # Allocate rot_mats tensors (HEIGHT_SHARDED)
-        trace_cos = ttnn.allocate_tensor_on_device(
-            rot_mats[0].shape,
-            rot_mats[0].dtype,
-            rot_mats[0].layout,
-            self.mesh_device,
-            rot_mats[0].memory_config(),
-        )
-        trace_sin = ttnn.allocate_tensor_on_device(
-            rot_mats[1].shape,
-            rot_mats[1].dtype,
-            rot_mats[1].layout,
-            self.mesh_device,
-            rot_mats[1].memory_config(),
-        )
-
-        # Copy initial values
-        ttnn.copy(rot_mats[0], trace_cos)
-        ttnn.copy(rot_mats[1], trace_sin)
-
-        # Clean up temporary rot_mats
-        ttnn.deallocate(rot_mats[0])
-        ttnn.deallocate(rot_mats[1])
+        # Allocate position index tensor for traced embedding lookup
+        # Allocate position index tensor for embedding lookup
+        # This will be updated before each trace execution
+        trace_rot_idxs = self.model.text_model.rotary_setup.allocate_decode_rot_idxs(initial_pos=0)
 
         return {
             "hidden_states": trace_hidden_states,
-            "cos": trace_cos,
-            "sin": trace_sin,
+            "rot_idxs": trace_rot_idxs,
         }
 
     def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """Capture trace for decode phase (single token generation).
+
+        The embedding lookup for rot_mats is included in the trace so that
+        on execution, we only need to update the rot_idxs tensor.
         """
-        Capture trace for decode phase (single token generation).
-
-        Args:
-            trace_tensors: Dict with pre-allocated tensors
-
-        Returns:
-            Tuple of (trace_id, trace_output)
-        """
-        logger.info("Compiling decode (first run)...")
-
-        # Get rot_mats from trace tensors
-        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
-
-        # First run to compile decode
-        logits = self.model.text_model.forward_decode(
-            hidden_states=trace_tensors["hidden_states"],
-            kv_caches=self.kv_caches,
-            current_pos=self.current_pos,
-            rot_mats=rot_mats,
-        )
-        logger.info("Decode compiled")
-
-        # Capture trace
         logger.info("Capturing decode trace...")
+
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        # Embedding lookup for rot_mats - this is part of the traced operations
+        # On trace execution, updating rot_idxs will cause this to produce new rot_mats
+        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(trace_tensors["rot_idxs"])
 
         logits_trace = self.model.text_model.forward_decode(
             hidden_states=trace_tensors["hidden_states"],
@@ -517,44 +693,127 @@ class Molmo2Generator:
         hidden_states: ttnn.Tensor,
         position: int,
     ) -> ttnn.Tensor:
-        """
-        Execute captured decode trace with new inputs.
+        """Execute captured decode trace with new inputs.
 
-        Args:
-            trace_id: Captured trace ID
-            trace_tensors: Pre-allocated trace tensors
-            trace_output: Trace output tensor
-            hidden_states: New hidden states tensor
-            position: Current decode position
+        Uses host tensors and copy_host_to_device_tensor to avoid allocations
+        which would be unsafe with an active trace.
 
-        Returns:
-            Output logits tensor
+        The embedding lookup for rot_mats is part of the trace, so we only
+        need to update the rot_idxs tensor here.
         """
         # Copy new hidden states to trace input
         ttnn.copy(hidden_states, trace_tensors["hidden_states"])
 
-        # Update current_pos tensor (used by paged_update_cache in the trace)
-        new_pos_ttnn = ttnn.from_torch(
+        # Update current_pos tensor using HOST tensor pattern (no device allocation)
+        # Create host tensor with device=None
+        new_pos_host = ttnn.from_torch(
             torch.tensor([position], dtype=torch.int32),
             dtype=ttnn.int32,
-            device=self.mesh_device,
+            device=None,  # HOST tensor - no device allocation
             mesh_mapper=self.mesh_mapper,
         )
-        ttnn.copy(new_pos_ttnn, self.current_pos)
-        ttnn.deallocate(new_pos_ttnn)
+        # Copy from host to pre-allocated device tensor
+        ttnn.copy_host_to_device_tensor(new_pos_host, self.current_pos)
 
-        # Update rotation matrices for current position
-        pos_tensor = torch.tensor([position], dtype=torch.int32)
-        new_rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(pos_tensor)
-        ttnn.copy(new_rot_mats[0], trace_tensors["cos"])
-        ttnn.copy(new_rot_mats[1], trace_tensors["sin"])
-        ttnn.deallocate(new_rot_mats[0])
-        ttnn.deallocate(new_rot_mats[1])
+        # Update rot_idxs tensor (position index for embedding lookup in the trace)
+        # The embedding lookup is part of the traced operations, so updating
+        # rot_idxs will cause the trace to produce correct rot_mats
+        batch = self.batch_size
+        pad_size = ((batch + 31) // 32) * 32 - batch
+        position_idxs = torch.full((1, batch + pad_size), position, dtype=torch.int32)
+        rot_idxs_host = ttnn.from_torch(
+            position_idxs,
+            dtype=ttnn.uint32,
+            device=None,  # HOST tensor - no device allocation
+            mesh_mapper=self.mesh_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(rot_idxs_host, trace_tensors["rot_idxs"])
 
-        # Execute trace
+        # Execute trace - rot_mats embedding lookup happens inside the trace
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return trace_output
+
+    def warmup_prefill(
+        self,
+        hidden_states_ttnn: ttnn.Tensor,
+        trace_tensors: dict,
+        use_trace: bool,
+    ):
+        """Run prefill warm-up (compile) pass."""
+        logger.info("Running prefill warm-up (compile)...")
+        start = time.perf_counter()
+
+        if use_trace:
+            # Copy hidden states to trace tensor
+            ttnn.copy(hidden_states_ttnn, trace_tensors["hidden_states"])
+
+            # Run forward to compile - MUST pass kv_caches to compile fill_cache ops
+            # This matches the tt_transformers pattern where compilation happens with kv_cache
+            rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+            logits, _ = self.model.text_model.forward(
+                hidden_states=trace_tensors["hidden_states"],
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
+                rot_mats=rot_mats,
+            )
+        else:
+            logits, _ = self.model.text_model.forward(
+                hidden_states=hidden_states_ttnn,
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
+            )
+
+        compile_time = (time.perf_counter() - start) * 1000
+        logger.info(f"Prefill compile completed in {compile_time:.2f}ms")
+        return compile_time
+
+    def warmup_decode(
+        self,
+        hidden_states: ttnn.Tensor,
+        trace_tensors: dict,
+        use_trace: bool,
+    ):
+        """Run decode warm-up (compile) pass."""
+        logger.info("Running decode warm-up (compile)...")
+        start = time.perf_counter()
+
+        if use_trace:
+            # Copy hidden states to trace tensor
+            ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+
+            # Update rot_idxs for current position (matches trace capture pattern)
+            batch = self.batch_size
+            pad_size = ((batch + 31) // 32) * 32 - batch
+            position_idxs = torch.full((1, batch + pad_size), self.decode_position, dtype=torch.int32)
+            rot_idxs_host = ttnn.from_torch(
+                position_idxs,
+                dtype=ttnn.uint32,
+                device=None,  # HOST tensor
+                mesh_mapper=self.mesh_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(rot_idxs_host, trace_tensors["rot_idxs"])
+
+            # Run forward to compile with embedding lookup (same as trace capture)
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(trace_tensors["rot_idxs"])
+            logits = self.model.text_model.forward_decode(
+                hidden_states=trace_tensors["hidden_states"],
+                kv_caches=self.kv_caches,
+                current_pos=self.current_pos,
+                rot_mats=rot_mats,
+            )
+        else:
+            logits = self.model.text_model.forward_decode(
+                hidden_states=hidden_states,
+                kv_caches=self.kv_caches,
+                current_pos=self.current_pos,
+            )
+
+        compile_time = (time.perf_counter() - start) * 1000
+        logger.info(f"Decode compile completed in {compile_time:.2f}ms")
+        return compile_time
 
     def run_prefill(
         self,
@@ -562,87 +821,75 @@ class Molmo2Generator:
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
         use_trace: bool = False,
-    ) -> Tuple[ttnn.Tensor, float]:
+    ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
 
-        Args:
-            input_ids: Input token IDs
-            pixel_values: Preprocessed image tensor
-            pooled_patches_idx: Indices for vision pooling
-            use_trace: Whether to use tracing
-
         Returns:
-            Tuple of (logits, prefill_time_ms)
+            Tuple of (logits, timing_dict)
         """
         # Initialize KV cache if needed
         self.init_kv_cache()
 
         seq_len = input_ids.shape[1]
+        timing = {}
+
+        # Prepare inputs (vision processing) - outside trace
+        logger.info("Preparing inputs (vision processing)...")
+        vision_start = time.perf_counter()
+        hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
+        timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
+        logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
 
         if use_trace:
-            # Prepare inputs (vision processing) - this happens OUTSIDE trace
-            logger.info("Preparing inputs (vision processing)...")
-            vision_start = time.perf_counter()
-            hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs(
-                input_ids, pixel_values, pooled_patches_idx
-            )
-            vision_time = (time.perf_counter() - vision_start) * 1000
-            logger.info(f"Vision processing completed in {vision_time:.2f}ms")
-
-            # Text model forward with tracing
-            start_time = time.perf_counter()
-
-            # Check if we have a trace for this sequence length
+            # Allocate trace tensors if needed
             if seq_len not in self.prefill_traces:
-                # Allocate trace tensors
-                logger.info("Allocating trace tensors...")
+                logger.info("Allocating prefill trace tensors...")
                 trace_tensors = self._allocate_prefill_trace_tensors(seq_len, hidden_dim=4096)
 
-                # Copy initial hidden states to trace tensor
-                ttnn.copy(hidden_states_ttnn, trace_tensors["hidden_states"])
+                # Warm-up (compile)
+                timing["compile_prefill_ms"] = self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=True)
 
                 # Capture trace
                 trace_id, trace_output = self._capture_prefill_trace(trace_tensors)
                 self.prefill_traces[seq_len] = (trace_id, trace_tensors, trace_output)
-                logits = trace_output
-            else:
-                trace_id, trace_tensors, trace_output = self.prefill_traces[seq_len]
-                logits = self._execute_prefill_trace(trace_id, trace_tensors, trace_output, hidden_states_torch)
 
-            # Clean up intermediate tensor
+            trace_id, trace_tensors, trace_output = self.prefill_traces[seq_len]
+
+            # Execute trace (actual TTFT measurement)
+            ttft_start = time.perf_counter()
+            logits = self._execute_prefill_trace(trace_id, trace_tensors, trace_output, hidden_states_torch)
+            ttnn.synchronize_device(self.mesh_device)
+            timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
+
             ttnn.deallocate(hidden_states_ttnn)
-
-            end_time = time.perf_counter()
-            text_time = (end_time - start_time) * 1000
-            prefill_time = vision_time + text_time
-
-            logger.info(f"Text model prefill completed in {text_time:.2f}ms")
-            logger.info(f"Total prefill completed in {prefill_time:.2f}ms")
         else:
-            # Run without tracing
-            start_time = time.perf_counter()
+            # Warm-up (compile)
+            timing["compile_prefill_ms"] = self.warmup_prefill(hidden_states_ttnn, None, use_trace=False)
 
-            logits, _ = self.model.forward(
-                input_ids=input_ids,
-                pixel_values=pixel_values,
-                pooled_patches_idx=pooled_patches_idx,
+            # Actual prefill (TTFT) - pass KV cache to fill during forward
+            ttft_start = time.perf_counter()
+            logits, _ = self.model.text_model.forward(
+                hidden_states=hidden_states_ttnn,
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
             )
+            ttnn.synchronize_device(self.mesh_device)
+            timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
-            end_time = time.perf_counter()
-            prefill_time = (end_time - start_time) * 1000
-
-            logger.info(f"Prefill completed in {prefill_time:.2f}ms")
+        logger.info(f"TTFT: {timing['ttft_ms']:.2f}ms")
 
         # Update position for decode
         self.reset_kv_cache(seq_len)
 
-        return logits, prefill_time
+        return logits, timing
 
     def run_decode_step(
         self,
         token_id: int,
         use_trace: bool = False,
+        is_first: bool = False,
     ) -> Tuple[ttnn.Tensor, float]:
         """
         Run single decode step.
@@ -650,12 +897,11 @@ class Molmo2Generator:
         Args:
             token_id: Token ID to decode
             use_trace: Whether to use tracing
+            is_first: Whether this is the first decode step (for warm-up)
 
         Returns:
             Tuple of (logits, decode_time_ms)
         """
-        start_time = time.perf_counter()
-
         # Get current position
         current_pos_value = self.decode_position
 
@@ -673,49 +919,47 @@ class Molmo2Generator:
 
         if use_trace:
             if self.decode_trace_id is None:
-                # Allocate trace tensors and capture trace
+                # Allocate trace tensors
                 logger.info("Allocating decode trace tensors...")
                 self.decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim=4096)
 
-                # Copy initial hidden states
-                ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
-
-                # Update rot_mats for current position (not position 0 from allocation)
-                pos_tensor = torch.tensor([current_pos_value], dtype=torch.int32)
-                rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode(pos_tensor)
-                ttnn.copy(rot_mats[0], self.decode_trace_tensors["cos"])
-                ttnn.copy(rot_mats[1], self.decode_trace_tensors["sin"])
-                ttnn.deallocate(rot_mats[0])
-                ttnn.deallocate(rot_mats[1])
+                # Warm-up (compile)
+                compile_time = self.warmup_decode(hidden_states, self.decode_trace_tensors, use_trace=True)
 
                 # Capture trace
                 trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors)
                 self.decode_trace_id = trace_id
                 self.decode_trace_output = trace_output
-                logits = trace_output
-            else:
-                # Execute trace with new inputs
-                logits = self._execute_decode_trace(
-                    self.decode_trace_id,
-                    self.decode_trace_tensors,
-                    self.decode_trace_output,
-                    hidden_states,
-                    current_pos_value,
-                )
+
+            # Execute trace (actual decode)
+            start_time = time.perf_counter()
+            logits = self._execute_decode_trace(
+                self.decode_trace_id,
+                self.decode_trace_tensors,
+                self.decode_trace_output,
+                hidden_states,
+                current_pos_value,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            decode_time = (time.perf_counter() - start_time) * 1000
         else:
-            # Run without tracing
+            if is_first:
+                # Warm-up (compile)
+                compile_time = self.warmup_decode(hidden_states, None, use_trace=False)
+
+            # Actual decode
+            start_time = time.perf_counter()
             logits = self.model.text_model.forward_decode(
                 hidden_states=hidden_states,
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
             )
+            ttnn.synchronize_device(self.mesh_device)
+            decode_time = (time.perf_counter() - start_time) * 1000
 
         ttnn.deallocate(hidden_states)
 
-        end_time = time.perf_counter()
-        decode_time = (end_time - start_time) * 1000
-
-        # Increment position (track on host for simplicity)
+        # Increment position
         self.decode_position += 1
 
         # Update device position tensor
@@ -732,36 +976,44 @@ class Molmo2Generator:
 
     def run_inference(
         self,
-        pixel_values: torch.Tensor,
+        image_inputs: dict,
         prompt: str,
         max_new_tokens: int = 100,
         use_trace: bool = False,
+        use_decode_trace: bool = False,
     ) -> Tuple[str, dict]:
         """
         Run full inference with autoregressive generation.
 
         Args:
-            pixel_values: Preprocessed image tensor
-            prompt: Text prompt
+            image_inputs: Dict from preprocess_image_molmo2
+            prompt: Text prompt (should include <|image|> token)
             max_new_tokens: Maximum tokens to generate
-            use_trace: Whether to use tracing
+            use_trace: Whether to use tracing for prefill
+            use_decode_trace: Whether to use tracing for decode (disabled by default
+                              to avoid memory corruption from tensor allocation during trace)
 
         Returns:
             Tuple of (output_text, perf_metrics)
         """
-        # Tokenize input
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
+        # Build prompt with image tokens
+        image_grid = image_inputs["image_grids"][0]
+        image_tokens_str = get_image_tokens(image_grid)
+        full_prompt = prompt.replace(IMAGE_PROMPT, image_tokens_str)
 
-        # Create pooled_patches_idx
-        batch_size = 1
-        num_output_tokens = 64
-        pool_kernel = 11
-        pooled_patches_idx = torch.arange(num_output_tokens * pool_kernel).reshape(
-            batch_size, num_output_tokens, pool_kernel
-        )
+        # Tokenize input
+        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt")
+
+        # Get pooling indices
+        pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
+
+        # Get pixel values (need to reshape for our model)
+        # pixel_values shape: [n_crops, n_patches, patch_pixels]
+        # We need: [B, C, H, W] for vision encoder
+        pixel_values = image_inputs["pixel_values"]
 
         # Run prefill
-        logits, prefill_time = self.run_prefill(
+        logits, prefill_timing = self.run_prefill(
             input_ids=input_ids,
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
@@ -769,11 +1021,12 @@ class Molmo2Generator:
         )
 
         # Get first prediction from prefill
-        logits_torch = ttnn.to_torch(logits).squeeze()
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
         if logits_torch.dim() == 2:
             next_token_logits = logits_torch[-1, :]
         else:
-            next_token_logits = logits_torch[0, -1, :]
+            next_token_logits = logits_torch
 
         next_token = torch.argmax(next_token_logits).item()
         generated_tokens = [next_token]
@@ -787,12 +1040,16 @@ class Molmo2Generator:
             if next_token == eos_token_id:
                 break
 
-            # Run decode step
-            logits, decode_time = self.run_decode_step(next_token, use_trace=use_trace)
+            # Run decode step (use_decode_trace is separate from prefill tracing)
+            logits, decode_time = self.run_decode_step(
+                next_token,
+                use_trace=use_decode_trace,
+                is_first=(i == 0),
+            )
             decode_times.append(decode_time)
 
             # Get next token
-            logits_torch = ttnn.to_torch(logits).squeeze()
+            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
             if logits_torch.dim() >= 2:
                 next_token_logits = logits_torch[-1, :]
             else:
@@ -801,52 +1058,58 @@ class Molmo2Generator:
             next_token = torch.argmax(next_token_logits).item()
             generated_tokens.append(next_token)
 
+            # Log progress
+            if (i + 1) % 10 == 0:
+                logger.debug(f"Generated {i + 1} tokens, last decode: {decode_time:.2f}ms")
+
         # Decode generated tokens
         output_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
         # Calculate metrics
         total_decode_time = sum(decode_times) if decode_times else 0.0
         avg_decode_time = total_decode_time / len(decode_times) if decode_times else 0.0
-        total_time = prefill_time + total_decode_time
-        tokens_per_sec = len(generated_tokens) * 1000.0 / total_time if total_time > 0 else 0
+        tokens_per_sec = len(decode_times) / (total_decode_time / 1000) if total_decode_time > 0 else 0
 
         perf_metrics = {
-            "prefill_time_ms": prefill_time,
-            "avg_decode_time_ms": avg_decode_time,
-            "total_decode_time_ms": total_decode_time,
+            "vision_ms": prefill_timing.get("vision_ms", 0),
+            "compile_prefill_ms": prefill_timing.get("compile_prefill_ms", 0),
+            "ttft_ms": prefill_timing.get("ttft_ms", 0),
+            "avg_decode_ms": avg_decode_time,
+            "total_decode_ms": total_decode_time,
             "input_tokens": input_ids.shape[1],
             "generated_tokens": len(generated_tokens),
+            "num_generated_tokens": len(generated_tokens),  # Alias for compatibility
             "tokens_per_sec": tokens_per_sec,
+            "decode_throughput": tokens_per_sec,  # Alias for compatibility
             "output_text": output_text,
         }
 
         logger.info(f"Input tokens: {input_ids.shape[1]}")
         logger.info(f"Generated {len(generated_tokens)} tokens")
-        logger.info(f"Output: '{output_text}'")
+        logger.info(f"Output: '{output_text[:100]}...' " if len(output_text) > 100 else f"Output: '{output_text}'")
 
         return output_text, perf_metrics
 
 
 def run_demo(
     image_path: Optional[str] = None,
-    prompt: str = "What is in this image?",
+    prompt: str = "<|image|> Describe this image in detail.",
     max_new_tokens: int = 100,
     device_id: int = 0,
     num_layers: Optional[int] = None,
     use_trace: bool = False,
-    iterations: int = 1,
+    use_decode_trace: bool = False,
 ):
     """
     Run the Molmo2 demo.
 
     Args:
         image_path: Path to input image (uses default if None)
-        prompt: Text prompt for the model
+        prompt: Text prompt for the model (must include <|image|>)
         max_new_tokens: Maximum tokens to generate
         device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
         use_trace: Whether to use tracing for performance
-        iterations: Number of inference iterations (to measure trace performance)
     """
     if image_path is None:
         image_path = str(DEFAULT_IMAGE)
@@ -858,15 +1121,21 @@ def run_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess image
-    image, pixel_values = preprocess_image(image_path)
+    # Preprocess image using Molmo2 processor
+    logger.info("Preprocessing image...")
+    image_inputs = preprocess_image_molmo2(image_path)
+    logger.info(f"Image preprocessed: {image_inputs['image_num_crops'].item()} crops")
 
     # Load weights
     state_dict = load_model_weights()
 
-    # Open device
-    logger.info(f"Opening TTNN device {device_id}")
-    device = ttnn.open_device(device_id=device_id)
+    # Open multi-device mesh for T3K (8 devices) to enable bfloat16 weight sharding
+    # This prevents numerical overflow during decode by using higher precision weights
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, 8)
+    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
+    device = ttnn.open_mesh_device(mesh_shape)
+    logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
         # Create model
@@ -886,42 +1155,34 @@ def run_demo(
         # Run inference
         logger.info("\n" + "=" * 60)
         logger.info(f"Prompt: {prompt}")
-        logger.info(f"Running {iterations} iteration(s)")
         logger.info("=" * 60)
 
-        all_prefill_times = []
-        for i in range(iterations):
-            logger.info(f"\n--- Iteration {i + 1}/{iterations} ---")
-            response, perf_metrics = generator.run_inference(
-                pixel_values=pixel_values,
-                prompt=prompt,
-                max_new_tokens=max_new_tokens,
-                use_trace=use_trace,
-            )
-            all_prefill_times.append(perf_metrics["prefill_time_ms"])
+        response, perf_metrics = generator.run_inference(
+            image_inputs=image_inputs,
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            use_trace=use_trace,
+            use_decode_trace=use_decode_trace,
+        )
 
         logger.info("\n" + "=" * 60)
         logger.info("Performance Metrics:")
-        if iterations > 1:
-            logger.info(f"  Iteration 1 (compile + trace capture): {all_prefill_times[0]:.2f}ms")
-            if len(all_prefill_times) > 1:
-                avg_traced = sum(all_prefill_times[1:]) / len(all_prefill_times[1:])
-                logger.info(f"  Avg traced execution (iter 2-{iterations}): {avg_traced:.2f}ms")
-                logger.info(f"  Speedup: {all_prefill_times[0] / avg_traced:.2f}x")
-        else:
-            logger.info(f"  Prefill time: {perf_metrics['prefill_time_ms']:.2f}ms")
-        logger.info(f"  Avg decode time: {perf_metrics.get('avg_decode_time_ms', 0):.2f}ms")
-        logger.info(f"  Total decode time: {perf_metrics.get('total_decode_time_ms', 0):.2f}ms")
+        logger.info(f"  Vision processing: {perf_metrics['vision_ms']:.2f}ms")
+        logger.info(f"  Prefill compile: {perf_metrics['compile_prefill_ms']:.2f}ms")
+        logger.info(f"  TTFT (Time to First Token): {perf_metrics['ttft_ms']:.2f}ms")
+        logger.info(f"  Avg decode time: {perf_metrics['avg_decode_ms']:.2f}ms")
+        logger.info(f"  Total decode time: {perf_metrics['total_decode_ms']:.2f}ms")
         logger.info(f"  Input tokens: {perf_metrics['input_tokens']}")
-        logger.info(f"  Generated tokens: {perf_metrics.get('generated_tokens', 0)}")
-        logger.info(f"  Tokens/sec: {perf_metrics.get('tokens_per_sec', 0):.2f}")
-        logger.info(f"  Output: '{perf_metrics.get('output_text', '')}'")
+        logger.info(f"  Generated tokens: {perf_metrics['generated_tokens']}")
+        logger.info(f"  Decode throughput: {perf_metrics['tokens_per_sec']:.2f} tok/s")
+        logger.info("=" * 60)
+        logger.info(f"Output: {perf_metrics['output_text']}")
         logger.info("=" * 60)
 
         return perf_metrics
 
     finally:
-        ttnn.close_device(device)
+        ttnn.close_mesh_device(device)
         logger.info("Device closed")
 
 
@@ -936,8 +1197,8 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default="Describe this image in detail.",
-        help="Text prompt for the model",
+        default="<|image|> Describe this image in detail.",
+        help="Text prompt for the model (must include <|image|> token)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -960,13 +1221,12 @@ def main():
     parser.add_argument(
         "--use-trace",
         action="store_true",
-        help="Enable tracing for improved performance",
+        help="Enable tracing for prefill (improved compilation)",
     )
     parser.add_argument(
-        "--iterations",
-        type=int,
-        default=1,
-        help="Number of inference iterations (to measure trace performance)",
+        "--use-decode-trace",
+        action="store_true",
+        help="Enable tracing for decode (experimental - may cause memory corruption)",
     )
 
     args = parser.parse_args()
@@ -978,7 +1238,7 @@ def main():
         device_id=args.device,
         num_layers=args.num_layers,
         use_trace=args.use_trace,
-        iterations=args.iterations,
+        use_decode_trace=args.use_decode_trace,
     )
 
 
