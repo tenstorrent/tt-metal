@@ -731,5 +731,3 @@ constexpr bool super_speedy_mode =
 constexpr bool line_speedy_mode = SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 &&
                                   RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0 && NUM_SENDER_CHANNELS == 2 &&
                                   !enable_deadlock_avoidance;
-static_assert(
-    line_speedy_mode || super_speedy_mode, "Either line-topology or neighbor-exchange speedy mode must be enabled");

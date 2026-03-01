@@ -2164,6 +2164,58 @@ static_assert(!line_speedy_mode || NUM_SENDER_CHANNELS == 2, "line_speedy_mode r
 // Include the speedy path functions (must come after all helper function definitions above)
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp"
 
+// Copy persistent speedy state into locals for register promotion at loop entry.
+FORCE_INLINE void speedy_state_copy_in(
+    SpeedySenderState& ss,
+    SpeedyReceiverState& rs,
+    uint32_t (&credit_epoch_array)[NUM_CREDIT_EPOCHS],
+    SpeedySenderState& p_ss_static,
+    SpeedyReceiverState& p_rs_static,
+    uint32_t (&p_credit_epoch_array_static)[NUM_CREDIT_EPOCHS],
+    SpeedySenderState& p_ss_local,
+    SpeedyReceiverState& p_rs_local,
+    uint32_t (&p_credit_epoch_array_local)[NUM_CREDIT_EPOCHS]) {
+    if constexpr (line_speedy_mode) {
+        ss = p_ss_static;
+        rs = p_rs_static;
+        for (uint32_t i = 0; i < NUM_CREDIT_EPOCHS; i++) {
+            credit_epoch_array[i] = p_credit_epoch_array_static[i];
+        }
+    } else if constexpr (super_speedy_mode) {
+        ss = p_ss_local;
+        rs = p_rs_local;
+        for (uint32_t i = 0; i < NUM_CREDIT_EPOCHS; i++) {
+            credit_epoch_array[i] = p_credit_epoch_array_local[i];
+        }
+    }
+}
+
+// Persist local speedy state back for pause/resume at loop exit.
+FORCE_INLINE void speedy_state_copy_out(
+    SpeedySenderState& ss,
+    SpeedyReceiverState& rs,
+    uint32_t (&credit_epoch_array)[NUM_CREDIT_EPOCHS],
+    SpeedySenderState& p_ss_static,
+    SpeedyReceiverState& p_rs_static,
+    uint32_t (&p_credit_epoch_array_static)[NUM_CREDIT_EPOCHS],
+    SpeedySenderState& p_ss_local,
+    SpeedyReceiverState& p_rs_local,
+    uint32_t (&p_credit_epoch_array_local)[NUM_CREDIT_EPOCHS]) {
+    if constexpr (line_speedy_mode) {
+        p_ss_static = ss;
+        p_rs_static = rs;
+        for (uint32_t i = 0; i < NUM_CREDIT_EPOCHS; i++) {
+            p_credit_epoch_array_static[i] = credit_epoch_array[i];
+        }
+    } else if constexpr (super_speedy_mode) {
+        p_ss_local = ss;
+        p_rs_local = rs;
+        for (uint32_t i = 0; i < NUM_CREDIT_EPOCHS; i++) {
+            p_credit_epoch_array_local[i] = credit_epoch_array[i];
+        }
+    }
+}
+
 /*
  * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
  *
@@ -2255,12 +2307,35 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
 
-    // This value defines the number of loop iterations we perform of the main control sequence before exiting
-    // to check for termination and context switch. Removing the these checks from the inner loop can drastically
-    // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
-    auto execute_main_loop = [&]() {
-        uint32_t sender_amort_counter = 0;
-        // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
+    // Persistent state for pause/resume.
+    // For line_speedy_mode: file-scope statics so they are NOT captured by [&],
+    // preventing the compiler from reserving registers for the persistent refs
+    // during the hot loop (+0.5 GB/s vs captured).
+    // For super_speedy_mode: stack-local (captured by [&]) — the structs are small
+    // enough that capture overhead is negligible, and static hurts neighbor exchange.
+    static SpeedySenderState p_ss_static;
+    static SpeedyReceiverState p_rs_static;
+    static uint32_t p_credit_epoch_array_static[NUM_CREDIT_EPOCHS];
+    SpeedySenderState p_ss_local;
+    SpeedyReceiverState p_rs_local;
+    uint32_t p_credit_epoch_array_local[NUM_CREDIT_EPOCHS] = {};
+
+    auto execute_main_loop = [&] {
+        // Copy-in: bring persistent state into locals for register promotion.
+        SpeedySenderState ss;
+        SpeedyReceiverState rs;
+        uint32_t credit_epoch_array[NUM_CREDIT_EPOCHS];
+        speedy_state_copy_in(
+            ss,
+            rs,
+            credit_epoch_array,
+            p_ss_static,
+            p_rs_static,
+            p_credit_epoch_array_static,
+            p_ss_local,
+            p_rs_local,
+            p_credit_epoch_array_local);
+
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
             did_something = false;
 
@@ -2302,9 +2377,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             channel_connection_established[0],
                             local_sender_channel_free_slots_stream_ids[0],
                             sender_channel_from_receiver_credits[0],
+                            ss,
                             inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry,
-                            sender_amort_counter);
+                            local_fabric_telemetry);
                     }
 
                     if constexpr (is_receiver_channel_serviced[0]) {
@@ -2323,6 +2398,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
+                            rs,
                             local_fabric_telemetry);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
@@ -2339,6 +2415,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
+                            rs,
                             local_fabric_telemetry);
 #endif
                     }
@@ -2359,6 +2436,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             channel_connection_established,
                             local_sender_channel_free_slots_stream_ids,
                             sender_channel_from_receiver_credits[0],
+                            ss,
+                            credit_epoch_array,
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                     }
@@ -2379,6 +2458,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
+                            rs,
                             local_fabric_telemetry);
 #else
                         rx_progress |= run_receiver_channel_step_line_speedy<
@@ -2395,6 +2475,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             port_direction_table,
                             receiver_channel_response_credit_senders[0],
                             routing_table,
+                            rs,
                             local_fabric_telemetry);
 #endif
                     }
@@ -2615,6 +2696,18 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
         }
+
+        // Copy-out: persist local state back for pause/resume.
+        speedy_state_copy_out(
+            ss,
+            rs,
+            credit_epoch_array,
+            p_ss_static,
+            p_rs_static,
+            p_credit_epoch_array_static,
+            p_ss_local,
+            p_rs_local,
+            p_credit_epoch_array_local);
     };
 
     uint64_t loop_start_cycles;

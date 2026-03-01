@@ -17,8 +17,6 @@
 // receiver_send_completion_ack, receiver_send_received_ack,
 // can_forward_packet_completely, receiver_forward_packet, etc.
 
-#include "api/debug/ring_buffer.h"
-
 // Watcher ring buffer event tags (upper 4 bits of the uint32_t)
 // Encoding: [tag:4][payload:28]
 //
@@ -35,7 +33,26 @@
 //   0xB = RX_TRID_FLIP:  [tag:4][pending_trid:4][batch:12][new_wr_trid:12]
 //   0xC = RX_FLUSH_DONE: [tag:4][trid:4][batch:12][remaining:12]
 
-static size_t completion_count = 0;
+// Ping-pong TRID constants (must precede struct default initializers)
+static constexpr uint8_t pingpong_trid_a = RX_CH_TRID_STARTS[0];
+static constexpr uint8_t pingpong_trid_b = RX_CH_TRID_STARTS[0] + 1;
+static_assert(
+    !super_speedy_mode || NUM_TRANSACTION_IDS >= 2,
+    "Ping-pong TRID requires at least 2 transaction IDs per receiver channel");
+static_assert(!super_speedy_mode || pingpong_trid_a == 0, "Ping-pong TRID flip uses '1 - trid', requires trid_a == 0");
+
+struct NeighborSenderState {
+    size_t completion_count = 0;
+    uint32_t sender_amort_counter = 0;
+};
+
+struct NeighborReceiverState {
+    uint32_t unacked_sends = 0;
+    uint8_t current_write_trid = pingpong_trid_a;
+    uint8_t pending_flush_trid = pingpong_trid_b;
+    uint32_t pending_flush_batch_count = 0;
+    bool has_pending_flush = false;
+};
 
 /*
  * A fast neighbour exchange only sender channel step impl
@@ -57,9 +74,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
     SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
+    NeighborSenderState& ns,
     PerfTelemetryRecorder& perf_telemetry_recorder,
-    LocalTelemetryT& local_fabric_telemetry,
-    uint32_t& sender_amort_counter) {
+    LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
 
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
@@ -111,7 +128,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
         }
-        sender_amort_counter++;
+        ns.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
@@ -120,7 +137,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
     // since the instructions to actually process each inbound completion from receiver is somewhat costly
-    bool check_completions = sender_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
+    bool check_completions = ns.sender_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
     if (check_completions) {
         int32_t completions = sender_channel_from_receiver_credits
                                   .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -128,18 +145,18 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             outbound_to_receiver_channel_pointers.num_free_slots += completions;
             sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
 
-            completion_count += completions;
+            ns.completion_count += completions;
         }
     }
 
     // Similarly only send back the credit to the worker very infrequently since it's a very
     // expensive operation.
-    bool send_credits = completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY;
+    bool send_credits = ns.completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY;
     if (send_credits) {
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
-            local_sender_channel_worker_interface, completion_count, channel_connection_established);
-        sender_amort_counter -= completion_count;
-        completion_count = 0;
+            local_sender_channel_worker_interface, ns.completion_count, channel_connection_established);
+        ns.sender_amort_counter -= ns.completion_count;
+        ns.completion_count = 0;
     }
     return progress;
 }
@@ -147,18 +164,6 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 /*
  * A fast neighbour exchange only receiver channel step impl
  */
-static uint32_t unacked_sends = 0;
-static constexpr uint8_t pingpong_trid_a = RX_CH_TRID_STARTS[0];
-static constexpr uint8_t pingpong_trid_b = RX_CH_TRID_STARTS[0] + 1;
-static_assert(
-    !super_speedy_mode || NUM_TRANSACTION_IDS >= 2,
-    "Ping-pong TRID requires at least 2 transaction IDs per receiver channel");
-static_assert(!super_speedy_mode || pingpong_trid_a == 0, "Ping-pong TRID flip uses '1 - trid', requires trid_a == 0");
-static uint8_t current_write_trid = pingpong_trid_a;
-static uint8_t pending_flush_trid = pingpong_trid_b;
-static uint32_t pending_flush_batch_count = 0;
-static bool has_pending_flush = false;
-
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -179,6 +184,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    NeighborReceiverState& nr,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -198,7 +204,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
         execute_chip_unicast_to_local_chip_impl(
-            packet_header, packed.payload_size_bytes, packed.noc_send_type, current_write_trid, receiver_channel);
+            packet_header, packed.payload_size_bytes, packed.noc_send_type, nr.current_write_trid, receiver_channel);
 
         did_something = true;
         progress = true;
@@ -209,35 +215,35 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
         wr_sent_counter.increment();
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-        unacked_sends++;
+        nr.unacked_sends++;
     }
 
     // --- Ping-pong TRID flush ---
-    // All packets in a batch share a single TRID (current_write_trid). When the batch
+    // All packets in a batch share a single TRID (nr.current_write_trid). When the batch
     // threshold is hit, we flip to the other TRID and check the previous batch's single
     // TRID for completion — replacing the per-slot loop with a single register read.
     //
     // The pending TRID is checked eagerly (every call) to minimize credit return latency.
     // Only the batch flip requires reaching the threshold.
     // when we pass the threshold of unacked messages,
-    if ((unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) && !has_pending_flush) {
-        pending_flush_trid = current_write_trid;
-        pending_flush_batch_count = unacked_sends;
-        current_write_trid = 1 - current_write_trid;
-        has_pending_flush = true;
+    if ((nr.unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) && !nr.has_pending_flush) {
+        nr.pending_flush_trid = nr.current_write_trid;
+        nr.pending_flush_batch_count = nr.unacked_sends;
+        nr.current_write_trid = 1 - nr.current_write_trid;
+        nr.has_pending_flush = true;
     }
-    if (has_pending_flush) {
+    if (nr.has_pending_flush) {
         bool flushed = ncrisc_noc_nonposted_write_with_transaction_id_sent(
-            tt::tt_fabric::edm_to_local_chip_noc, pending_flush_trid);
+            tt::tt_fabric::edm_to_local_chip_noc, nr.pending_flush_trid);
 
         if (flushed) {
             auto& completion_counter = receiver_channel_pointers.completion_counter;
-            completion_counter.increment_n(pending_flush_batch_count);
+            completion_counter.increment_n(nr.pending_flush_batch_count);
             receiver_send_completion_ack<false /*CHECK_BUSY*/>(
-                receiver_channel_response_credit_sender, 0, pending_flush_batch_count);
+                receiver_channel_response_credit_sender, 0, nr.pending_flush_batch_count);
 
-            unacked_sends -= pending_flush_batch_count;
-            has_pending_flush = false;
+            nr.unacked_sends -= nr.pending_flush_batch_count;
+            nr.has_pending_flush = false;
         }
     }
 
@@ -295,38 +301,16 @@ static constexpr uint32_t EPOCH_MASK = NUM_CREDIT_EPOCHS - 1;
 enum class EpochAdvanceStrategy { BRANCHING, BRANCHLESS, POINTER };
 static constexpr EpochAdvanceStrategy epoch_advance_strategy = EpochAdvanceStrategy::BRANCHING;
 
-// ---------------------------------------------------------------------------
-// Sender-side state for line speedy mode
-// ---------------------------------------------------------------------------
-static uint32_t credit_epoch_array[NUM_CREDIT_EPOCHS] = {};
-static uint32_t write_epoch = 0;
-static uint32_t read_epoch = 0;
-static uint32_t epoch_pkt_count = 0;
+struct LineSenderState {
+    uint32_t write_epoch = 0;
+    uint32_t read_epoch = 0;
+    uint32_t epoch_pkt_count = 0;
+    uint32_t epoch_accumulator = 0;
+    uint32_t unsent_upstream_credits_packed = 0;
+    uint32_t total_unprocessed_completions = 0;
+    uint32_t sender_completion_amort_counter = 0;
+};
 
-// Pointer-mode state (only used when epoch_advance_strategy == POINTER)
-static uint32_t* credit_epoch_write_ptr = &credit_epoch_array[0];
-static uint32_t* credit_epoch_read_ptr = &credit_epoch_array[0];
-// Byte mask for wrapping pointer within the array: (NUM_CREDIT_EPOCHS * 4) - 1
-// Works because the array is power-of-2 entries of 4 bytes each.
-static constexpr uintptr_t EPOCH_PTR_BYTE_MASK = (NUM_CREDIT_EPOCHS * sizeof(uint32_t)) - 1;
-
-// Accumulated per-channel upstream credits not yet sent, packed as bytes:
-//   byte 0 = ch0 count, byte 1 = ch1 count (matches credit_epoch_array packing).
-// Kept packed so epoch decompose is a single add (no per-channel unpacking).
-// Byte extraction only happens in the credit-send path which fires infrequently.
-static uint32_t unsent_upstream_credits_packed = 0;
-
-// Total bulk completions received but not yet decomposed into per-channel credits.
-static uint32_t total_unprocessed_completions = 0;
-
-// Amortization counter for completion checks: incremented per successful send,
-// completion check only fires when this exceeds EPOCH_SIZE (matching neighbor exchange pattern).
-static uint32_t sender_completion_amort_counter = 0;
-
-// ---------------------------------------------------------------------------
-// Receiver-side state for line speedy mode (ping-pong TRID for amortized flush)
-// ---------------------------------------------------------------------------
-static uint32_t line_unacked_sends = 0;
 static constexpr uint8_t line_pingpong_trid_a = RX_CH_TRID_STARTS[0];
 static constexpr uint8_t line_pingpong_trid_b = RX_CH_TRID_STARTS[0] + 1;
 static_assert(
@@ -334,10 +318,29 @@ static_assert(
     "Ping-pong TRID requires at least 2 transaction IDs per receiver channel");
 static_assert(
     !line_speedy_mode || line_pingpong_trid_a == 0, "Ping-pong TRID flip uses '1 - trid', requires trid_a == 0");
-static uint8_t line_current_write_trid = line_pingpong_trid_a;
-static uint8_t line_pending_flush_trid = line_pingpong_trid_b;
-static uint32_t line_pending_flush_batch_count = 0;
-static bool line_has_pending_flush = false;
+
+struct LineReceiverState {
+    uint32_t line_unacked_sends = 0;
+    uint32_t line_pending_flush_batch_count = 0;
+    uint8_t line_current_write_trid = line_pingpong_trid_a;
+    uint8_t line_pending_flush_trid = line_pingpong_trid_b;
+    bool line_has_pending_flush = false;
+};
+
+// Empty state for non-speedy mode — zero-size, no stack cost.
+struct NoOpSpeedyState {};
+
+// Compile-time type aliases that resolve to the active speedy mode's state types.
+// Only one of super_speedy_mode / line_speedy_mode / neither can be active.
+using SpeedySenderState = std::conditional_t<
+    super_speedy_mode,
+    NeighborSenderState,
+    std::conditional_t<line_speedy_mode, LineSenderState, NoOpSpeedyState>>;
+
+using SpeedyReceiverState = std::conditional_t<
+    super_speedy_mode,
+    NeighborReceiverState,
+    std::conditional_t<line_speedy_mode, LineReceiverState, NoOpSpeedyState>>;
 
 // ===========================================================================
 //  LINE SENDER: Inline send helper (shared between both channels)
@@ -357,6 +360,8 @@ FORCE_INLINE bool line_speedy_send_one_packet(
     WorkerInterfaceT& local_sender_channel_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
     uint32_t sender_channel_free_slots_stream_id,
+    LineSenderState& ss,
+    uint32_t* credit_epoch_array,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry) {
     NamedProfiler<
@@ -366,13 +371,17 @@ FORCE_INLINE bool line_speedy_send_one_packet(
         send_one_packet_timer;
     send_one_packet_timer.open();
 
+    bool busy;
+    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+        busy = internal_::eth_txq_is_busy(sender_txq_id);
+    }
     bool receiver_has_space = outbound_to_receiver_channel_pointers.has_space_for_packet();
     uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && !busy;
     }
 
     // No epoch back-pressure check needed: the epoch array is sized to 2x the
@@ -389,9 +398,9 @@ FORCE_INLINE bool line_speedy_send_one_packet(
         {
             auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
             uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
+            bool busy = internal_::eth_txq_is_busy(sender_txq_id);
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
 
-            bool busy = internal_::eth_txq_is_busy(sender_txq_id);
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
             WATCHER_RING_BUFFER_PUSH(0x55555555);
             WATCHER_RING_BUFFER_PUSH(src_addr);
@@ -428,16 +437,18 @@ FORCE_INLINE bool line_speedy_send_one_packet(
 
         // --- Record this send in the credit epoch array ---
         //
-        // Byte (sender_channel_index) of epoch_array[write_epoch] gets incremented.
-        // The shift is resolved at compile time since sender_channel_index is a template param.
+        // Accumulate into a scalar (register) instead of indexing into the array
+        // every packet. Only flush to the array on epoch advance.
         static constexpr uint32_t credit_inc = 1u << (sender_channel_index * 8);
-        credit_epoch_array[write_epoch] += credit_inc;
-        epoch_pkt_count++;
-        sender_completion_amort_counter++;
-        if (epoch_pkt_count == EPOCH_SIZE) {
-            write_epoch = (write_epoch + 1) & EPOCH_MASK;
-            epoch_pkt_count = 0;
-            credit_epoch_array[write_epoch] = 0;
+        ss.epoch_accumulator += credit_inc;
+        ss.epoch_pkt_count++;
+        ss.sender_completion_amort_counter++;
+        if (ss.epoch_pkt_count == EPOCH_SIZE) {
+            credit_epoch_array[ss.write_epoch] = ss.epoch_accumulator;
+            ss.epoch_accumulator = 0;
+            ss.write_epoch = (ss.write_epoch + 1) & EPOCH_MASK;
+            ss.epoch_pkt_count = 0;
+            credit_epoch_array[ss.write_epoch] = 0;
         }
 
         send_one_packet_timer.close();
@@ -471,6 +482,8 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
     // Single shared bulk completion credit (replaces per-channel SenderChannelFromReceiverCredits)
     SenderChannelFromReceiverCredits& shared_completion_credits,
+    LineSenderState& ss,
+    uint32_t* credit_epoch_array,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry) {
     // --- Profiling timers (compile-time disabled when bitfield == 0) ---
@@ -525,6 +538,8 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
         local_sender_channel_worker_interface_0,
         outbound_to_receiver_channel_pointers,
         local_sender_channel_free_slots_stream_ids[0],
+        ss,
+        credit_epoch_array,
         perf_telemetry_recorder,
         local_fabric_telemetry);
 
@@ -533,6 +548,8 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
         local_sender_channel_worker_interface_1,
         outbound_to_receiver_channel_pointers,
         local_sender_channel_free_slots_stream_ids[1],
+        ss,
+        credit_epoch_array,
         perf_telemetry_recorder,
         local_fabric_telemetry);
 
@@ -604,7 +621,7 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     // Amortize completion checks: only check after enough sends have occurred,
     // matching the neighbor exchange pattern. This avoids the ~25 cycle cost of
     // get_num_unprocessed_completions_from_receiver on iterations with no progress.
-    bool check_completions = sender_completion_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
+    bool check_completions = ss.sender_completion_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
 
     sender_check_completions_timer.set_should_dump(check_completions);
     sender_check_completions_timer.open();
@@ -617,19 +634,19 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
                 .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (new_completions) {
             shared_completion_credits.increment_num_processed_completions(new_completions);
-            total_unprocessed_completions += new_completions;
-            sender_completion_amort_counter -= new_completions;
+            ss.total_unprocessed_completions += new_completions;
+            ss.sender_completion_amort_counter -= new_completions;
             had_new_completions = true;
         }
 
         // Process at most one epoch worth of completions per pass.
         // unsent_upstream_credits_packed uses the same byte packing as credit_epoch_array
         // (byte 0 = ch0, byte 1 = ch1), so decompose is a single add — no per-channel unpacking.
-        if (total_unprocessed_completions >= EPOCH_SIZE) {
-            unsent_upstream_credits_packed += credit_epoch_array[read_epoch];
+        if (ss.total_unprocessed_completions >= EPOCH_SIZE) {
+            ss.unsent_upstream_credits_packed += credit_epoch_array[ss.read_epoch];
 
-            read_epoch = (read_epoch + 1) & EPOCH_MASK;
-            total_unprocessed_completions -= EPOCH_SIZE;
+            ss.read_epoch = (ss.read_epoch + 1) & EPOCH_MASK;
+            ss.total_unprocessed_completions -= EPOCH_SIZE;
             outbound_to_receiver_channel_pointers.num_free_slots += EPOCH_SIZE;
             did_epoch_decompose = true;
         }
@@ -643,8 +660,8 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     // We check ch0 first, then ch1.  Only one channel sends per pass to
     // avoid starving the forward/send path with expensive NOC writes.
     // -----------------------------------------------------------------------
-    uint32_t ch0_credits = unsent_upstream_credits_packed & 0xFF;
-    uint32_t ch1_credits = (unsent_upstream_credits_packed >> 8) & 0xFF;
+    uint32_t ch0_credits = ss.unsent_upstream_credits_packed & 0xFF;
+    uint32_t ch1_credits = (ss.unsent_upstream_credits_packed >> 8) & 0xFF;
     sender_credits_upstream_timer.set_should_dump(
         ch0_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY || ch1_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY);
     sender_credits_upstream_timer.open();
@@ -655,14 +672,14 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
         // WATCHER_RING_BUFFER_PUSH(0x50000000u | (0u << 24) | ((ch0_credits & 0xFFF) << 12));
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
             local_sender_channel_worker_interface_0, ch0_credits, channel_connection_established[0]);
-        unsent_upstream_credits_packed &= ~0xFFu;  // clear ch0 byte
+        ss.unsent_upstream_credits_packed &= ~0xFFu;  // clear ch0 byte
         did_send_upstream_credits = true;
     } else if (ch1_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
         // 0x5 = TX_UPSTREAM: [tag:4][ch:4][credits:12][0:12]
         // WATCHER_RING_BUFFER_PUSH(0x50000000u | (1u << 24) | ((ch1_credits & 0xFFF) << 12));
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, true /*SKIP_LIVENESS*/>(
             local_sender_channel_worker_interface_1, ch1_credits, channel_connection_established[1]);
-        unsent_upstream_credits_packed &= ~0xFF00u;  // clear ch1 byte
+        ss.unsent_upstream_credits_packed &= ~0xFF00u;  // clear ch1 byte
         did_send_upstream_credits = true;
     }
 
@@ -708,6 +725,7 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    LineReceiverState& rs,
     LocalTelemetryT& local_fabric_telemetry) {
     // --- Profiling timers (compile-time disabled when bitfield == 0) ---
     NamedProfiler<
@@ -767,7 +785,7 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
             auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
             receiver_forward_packet_impl<receiver_channel>(
-                packet_header, cached_routing_fields, packed, downstream_edm_interfaces[0], line_current_write_trid);
+                packet_header, cached_routing_fields, packed, downstream_edm_interfaces[0], rs.line_current_write_trid);
 
             did_something = true;
             progress = true;
@@ -778,10 +796,10 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
 
             wr_sent_counter.increment();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            line_unacked_sends++;
+            rs.line_unacked_sends++;
             // 0xA = RX_FWD: [tag:4][trid:4][unacked:12][0:12]
             WATCHER_RING_BUFFER_PUSH(
-                0xA0000000u | ((uint32_t)line_current_write_trid << 24) | ((line_unacked_sends & 0xFFF) << 12));
+                0xA0000000u | ((uint32_t)rs.line_current_write_trid << 24) | ((rs.line_unacked_sends & 0xFFF) << 12));
         }
     }
 
@@ -802,46 +820,46 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
     // side's epoch array decomposes them into per-channel credits.
     // -----------------------------------------------------------------------
     receiver_flush_timer.set_should_dump(
-        line_has_pending_flush || (line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY));
+        rs.line_has_pending_flush || (rs.line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY));
     receiver_flush_timer.open();
 
     bool did_flush = false;
-    if ((line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) && !line_has_pending_flush) {
-        line_pending_flush_trid = line_current_write_trid;
-        line_pending_flush_batch_count = line_unacked_sends;
-        line_current_write_trid = 1 - line_current_write_trid;
-        line_has_pending_flush = true;
+    if ((rs.line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) && !rs.line_has_pending_flush) {
+        rs.line_pending_flush_trid = rs.line_current_write_trid;
+        rs.line_pending_flush_batch_count = rs.line_unacked_sends;
+        rs.line_current_write_trid = 1 - rs.line_current_write_trid;
+        rs.line_has_pending_flush = true;
         // 0xB = RX_TRID_FLIP: [tag:4][pending_trid:4][batch:12][new_wr_trid:12]
         WATCHER_RING_BUFFER_PUSH(
-            0xB0000000u | ((uint32_t)line_pending_flush_trid << 24) | ((line_pending_flush_batch_count & 0xFFF) << 12) |
-            ((uint32_t)line_current_write_trid & 0xFFF));
+            0xB0000000u | ((uint32_t)rs.line_pending_flush_trid << 24) |
+            ((rs.line_pending_flush_batch_count & 0xFFF) << 12) | ((uint32_t)rs.line_current_write_trid & 0xFFF));
     }
-    if (line_has_pending_flush) {
+    if (rs.line_has_pending_flush) {
         // Must check both NOCs: local delivery uses edm_to_local_chip_noc,
         // forwarding uses edm_to_downstream_noc. If they differ, both must be flushed
         // before we can safely release the receiver buffer slots.
         bool flushed = ncrisc_noc_nonposted_write_with_transaction_id_sent(
-            tt::tt_fabric::edm_to_local_chip_noc, line_pending_flush_trid);
+            tt::tt_fabric::edm_to_local_chip_noc, rs.line_pending_flush_trid);
         if constexpr (tt::tt_fabric::edm_to_local_chip_noc != tt::tt_fabric::edm_to_downstream_noc) {
             flushed = flushed && ncrisc_noc_nonposted_write_with_transaction_id_sent(
-                                     tt::tt_fabric::edm_to_downstream_noc, line_pending_flush_trid);
+                                     tt::tt_fabric::edm_to_downstream_noc, rs.line_pending_flush_trid);
         }
 
         if (flushed) {
             auto& completion_counter = receiver_channel_pointers.completion_counter;
-            completion_counter.increment_n(line_pending_flush_batch_count);
+            completion_counter.increment_n(rs.line_pending_flush_batch_count);
             // Send bulk completion — src_id=0 is used as the single shared credit channel.
             // The sender side does not use src_id for disambiguation; it uses the epoch array.
             receiver_send_completion_ack<true /*CHECK_BUSY*/>(
-                receiver_channel_response_credit_sender, 0, line_pending_flush_batch_count);
+                receiver_channel_response_credit_sender, 0, rs.line_pending_flush_batch_count);
 
             // 0xC = RX_FLUSH_DONE: [tag:4][trid:4][batch:12][remaining:12]
             WATCHER_RING_BUFFER_PUSH(
-                0xC0000000u | ((uint32_t)line_pending_flush_trid << 24) |
-                ((line_pending_flush_batch_count & 0xFFF) << 12) |
-                ((line_unacked_sends - line_pending_flush_batch_count) & 0xFFF));
-            line_unacked_sends -= line_pending_flush_batch_count;
-            line_has_pending_flush = false;
+                0xC0000000u | ((uint32_t)rs.line_pending_flush_trid << 24) |
+                ((rs.line_pending_flush_batch_count & 0xFFF) << 12) |
+                ((rs.line_unacked_sends - rs.line_pending_flush_batch_count) & 0xFFF));
+            rs.line_unacked_sends -= rs.line_pending_flush_batch_count;
+            rs.line_has_pending_flush = false;
             did_flush = true;
         }
     }
