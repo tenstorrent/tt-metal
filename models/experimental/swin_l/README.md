@@ -70,6 +70,18 @@ pytest models/experimental/swin_l/tests/pcc/test_ttnn_swin_block.py -v
 pytest models/experimental/swin_l/tests/pcc/test_ttnn_swin_patch_merge.py -v
 ```
 
+### 5. Run Performance Tests
+
+Requires a DINO-5scale Swin-L checkpoint (see §2). Runs on Wormhole B0 bare metal.
+
+```bash
+# E2E perf (trace + 2CQ)
+pytest models/experimental/swin_l/tests/perf/test_e2e_perf_swin_l.py -v -s
+
+# Device perf
+pytest models/experimental/swin_l/tests/perf/test_swin_l_device_perf.py -v -s
+```
+
 ## PCC Results (bfloat16, DRAM)
 
 ### Backbone E2E
@@ -84,7 +96,7 @@ pytest models/experimental/swin_l/tests/pcc/test_ttnn_swin_patch_merge.py -v
 ### Submodules
 
 | Module       | Test Case         | PCC   |
-|-------------|-------------------|-------|
+|--------------|-------------------|-------|
 | Attention    | no shift          | 0.998 |
 | Attention    | with shift        | 0.999 |
 | MLP (FFN)    | stage 0 block 0   | 0.999 |
@@ -93,6 +105,13 @@ pytest models/experimental/swin_l/tests/pcc/test_ttnn_swin_patch_merge.py -v
 | Block        | s2 b0 (deep)      | 0.999 |
 | PatchMerge   | stage 0           | 1.000 |
 | PatchMerge   | stage 1           | 1.000 |
+
+## Performance Results (Wormhole B0, 800×1333, batch=1)
+
+| Test                    | Throughput (FPS) |
+|-------------------------|------------------|
+| E2E trace + 2CQ         | ~1.9             |
+| Device perf             | ~2.04            |
 
 ## File Structure
 
@@ -116,6 +135,9 @@ models/experimental/swin_l/
 │   ├── test_ttnn_swin_mlp.py          # MLP PCC test
 │   ├── test_ttnn_swin_block.py        # Block PCC test
 │   └── test_ttnn_swin_patch_merge.py  # PatchMerge PCC test
+├── tests/perf/
+│   ├── test_swin_l_device_perf.py     # Device perf
+│   └── test_e2e_perf_swin_l.py        # E2E perf (trace + 2CQ)
 └── README.md
 ```
 
