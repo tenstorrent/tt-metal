@@ -45,7 +45,7 @@ class Molmo2Model(LightweightModule):
         vit_head_dim: int = 72,
         patch_size: int = 14,
         image_size: int = 378,
-        feature_layers: Tuple[int, int] = (18, 24),
+        feature_layers: Tuple[int, int] = (24, 18),  # HF order: [-3, -9]
         # Adapter config
         adapter_hidden_dim: int = 1152,
         adapter_intermediate_dim: int = 12288,
@@ -174,9 +174,14 @@ class Molmo2Model(LightweightModule):
             visual_embeddings: Visual embeddings from vision backbone [num_visual_tokens, hidden_dim]
 
         Returns:
-            Fused embeddings [batch, seq_len, hidden_dim]
+            Fused embeddings [seq_len, hidden_dim]
         """
         batch_size, seq_len = input_ids.shape
+        assert batch_size == 1, "Only batch_size=1 is currently supported"
+
+        # Check if mesh device
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
         # Get text embeddings
         input_ids_ttnn = ttnn.from_torch(
@@ -185,22 +190,33 @@ class Molmo2Model(LightweightModule):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
         text_embeddings = self.text_model.embed_tokens(input_ids_ttnn)
-        text_embeddings_torch = ttnn.to_torch(text_embeddings).squeeze(0).squeeze(0)
+        # Shape: [1, 1, seq_len, hidden_dim] -> [seq_len, hidden_dim]
+        if is_mesh_device:
+            text_embeddings_torch = (
+                ttnn.to_torch(text_embeddings, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
+                .squeeze(0)
+                .squeeze(0)
+            )
+        else:
+            text_embeddings_torch = ttnn.to_torch(text_embeddings).squeeze(0).squeeze(0)
 
-        # Find image patch positions
-        image_positions = (input_ids == self.image_patch_id).nonzero(as_tuple=True)
+        # Find image patch positions (flatten for batch_size=1)
+        image_positions = (input_ids[0] == self.image_patch_id).nonzero(as_tuple=True)[0]
 
-        # Replace image patch tokens with visual embeddings
-        if len(image_positions[0]) > 0:
+        # Add visual embeddings to image patch token positions
+        # This matches HuggingFace: x[is_image_patch] += image_features
+        # The image_patch_id tokens have learned embeddings that are added to visual features
+        if len(image_positions) > 0:
             num_visual_tokens = visual_embeddings.shape[0]
             assert (
-                len(image_positions[0]) == num_visual_tokens
-            ), f"Mismatch: {len(image_positions[0])} placeholders vs {num_visual_tokens} visual tokens"
+                len(image_positions) == num_visual_tokens
+            ), f"Mismatch: {len(image_positions)} placeholders vs {num_visual_tokens} visual tokens"
 
-            for i, (batch_idx, seq_idx) in enumerate(zip(image_positions[0], image_positions[1])):
-                text_embeddings_torch[batch_idx, seq_idx] = visual_embeddings[i]
+            for i, seq_idx in enumerate(image_positions):
+                text_embeddings_torch[seq_idx] += visual_embeddings[i]
 
         return text_embeddings_torch
 
@@ -233,26 +249,43 @@ class Molmo2Model(LightweightModule):
             hidden_states = self.prepare_inputs_for_multimodal(input_ids, visual_embeddings)
         else:
             # Text-only forward
+            is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
             input_ids_ttnn = ttnn.from_torch(
                 input_ids,
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             hidden_states = self.text_model.embed_tokens(input_ids_ttnn)
-            hidden_states = ttnn.to_torch(hidden_states).squeeze(0).squeeze(0)
+
+            # Convert to torch for shape manipulation
+            if is_mesh_device:
+                # Take first device's output (they're all replicated)
+                hidden_states = ttnn.to_torch(
+                    hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[0]
+            else:
+                hidden_states = ttnn.to_torch(hidden_states)
+            hidden_states = hidden_states.squeeze(0).squeeze(0)
 
         # Convert to TTNN
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
         hidden_states_ttnn = ttnn.from_torch(
             hidden_states.unsqueeze(0).unsqueeze(0),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
 
-        # Forward through text model
+        # Forward through text model (handles both prefill and decode via KV cache)
         logits, new_kv_caches = self.text_model(
             hidden_states=hidden_states_ttnn,
             start_pos=start_pos,

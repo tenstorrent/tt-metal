@@ -5,7 +5,7 @@
 """
 Weight loading utilities for Molmo2 model.
 
-The HuggingFace Molmo2 state dict uses the following key structure:
+The Molmo2 safetensors checkpoint uses the following key structure:
 
 Vision Transformer (ViT):
 - model.vision_backbone.image_vit.patch_embedding.{weight,bias}
@@ -20,12 +20,16 @@ Vision Adapter:
 - model.vision_backbone.image_projector.{w1,w2,w3}.weight (no bias)
 
 Text Model:
-- model.model.wte.weight
-- model.model.ln_f.weight
-- model.model.blocks.{N}.attention_norm.weight
-- model.model.blocks.{N}.self_attn.{att_proj,attn_out,q_norm,k_norm}.weight
-- model.model.blocks.{N}.ffn_norm.weight
-- model.model.blocks.{N}.mlp.{ff_proj,ff_out}.weight
+- model.transformer.wte.embedding (base vocabulary, 151936 tokens)
+- model.transformer.wte.new_embedding (extended vocabulary, 128 tokens)
+- model.transformer.ln_f.weight
+- model.transformer.blocks.{N}.attn_norm.weight
+- model.transformer.blocks.{N}.self_attn.att_proj.weight (fused QKV)
+- model.transformer.blocks.{N}.self_attn.attn_out.weight
+- model.transformer.blocks.{N}.self_attn.{q_norm,k_norm}.weight
+- model.transformer.blocks.{N}.ff_norm.weight
+- model.transformer.blocks.{N}.mlp.ff_proj.weight (fused gate+up)
+- model.transformer.blocks.{N}.mlp.ff_out.weight
 - lm_head.weight
 """
 

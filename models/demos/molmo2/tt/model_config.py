@@ -41,7 +41,7 @@ class Molmo2VisionConfig:
     num_patches: int = 729  # (378 / 14)^2 = 27^2 = 729
     layer_norm_eps: float = 1e-6
     # Layers to extract features from (for multi-scale concat)
-    feature_layers: Tuple[int, int] = (18, 24)  # 0-indexed: layers 18 and 24
+    feature_layers: Tuple[int, int] = (24, 18)  # Match HF order: vit_layers=[-3, -9] -> [24, 18]
 
 
 @dataclass
