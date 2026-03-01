@@ -19,15 +19,13 @@ void kernel_main() {
         .data_format = get_dataformat(cb_id_out0)
     };
 
+    cb_wait_front(cb_id_out0, num_tiles);
+    uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
+    
     for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
-        
-        // The compute kernel packed a valid tile (copying in0). We just write it to DRAM.
-        // DO NOT manually zero it out, as that destroys the 16-byte tile header!
-
         noc_async_write_tile(i, s0, l1_read_addr_out0);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, 1);
+        l1_read_addr_out0 += out0_tile_bytes;
     }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id_out0, num_tiles);
 }
