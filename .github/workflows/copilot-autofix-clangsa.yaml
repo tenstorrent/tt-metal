@@ -210,10 +210,14 @@ jobs:
           # Run Copilot
           BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
 
+          # Note: --follow streams session logs but may exit non-zero due to
+          # a gh CLI v2.87.x regression (cli/cli#12729). The agent task itself
+          # still completes successfully, so we tolerate follow failures.
           gh agent-task create -F /tmp/prompt.txt \
             --base "$BASE_BRANCH" \
             --repo "${{ github.repository }}" \
-            --follow
+            --follow \
+          || echo "::warning::--follow exited with $? (known gh CLI issue); checking task result..."
 
           # Get the PR that was created
           PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
