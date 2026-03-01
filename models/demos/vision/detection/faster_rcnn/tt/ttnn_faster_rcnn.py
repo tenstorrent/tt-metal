@@ -22,6 +22,7 @@ import math
 from collections import OrderedDict
 
 import torch
+from torchvision.models.detection.rpn import concat_box_prediction_layers
 
 import ttnn
 
@@ -73,11 +74,11 @@ class TtRPNHead:
             activation=activation,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=False,
-            enable_act_double_buffer=True,
+            enable_act_double_buffer=False,
             output_layout=ttnn.TILE_LAYOUT,
             reallocate_halo_output=False,
             reshard_if_not_optimal=True,
-            enable_weights_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         [out, [h_out, w_out], [weight, bias]] = ttnn.conv2d(
@@ -189,17 +190,17 @@ class TtFasterRCNN:
         self.torch_roi_heads = torch_model.roi_heads
         self.torch_transform = torch_model.transform
 
-    def _run_rpn_proposals(self, features_torch, image_sizes, objectness_torch, pred_bbox_deltas_torch):
+    def _run_rpn_proposals(self, features_torch, image_list, image_sizes, objectness_torch, pred_bbox_deltas_torch):
         """Generate proposals using PyTorch RPN infrastructure (CPU)."""
         rpn = self.torch_rpn
 
         feature_list = list(features_torch.values())
-        anchors = rpn.anchor_generator(None, feature_list)
+        anchors = rpn.anchor_generator(image_list, feature_list)
 
         num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness_torch]
         num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
 
-        objectness_flat, pred_bbox_deltas_flat = rpn.concat_box_prediction_layers(
+        objectness_flat, pred_bbox_deltas_flat = concat_box_prediction_layers(
             objectness_torch, pred_bbox_deltas_torch
         )
 
@@ -272,7 +273,7 @@ class TtFasterRCNN:
                 pred_bbox_deltas_torch.append(bbox_torch)
 
             proposals, _ = self._run_rpn_proposals(
-                features_torch, image_sizes, objectness_torch, pred_bbox_deltas_torch
+                features_torch, image_list, image_sizes, objectness_torch, pred_bbox_deltas_torch
             )
 
             detections = self._run_roi_heads(features_torch, proposals, image_sizes)
