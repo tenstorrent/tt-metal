@@ -337,9 +337,11 @@ class OpGraphBuilder:
         # Allocate shared per-core monotonic semaphores on union range.
         sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
+        sem_reset_done = ttnn.create_global_semaphore(device, union_range, 0)
         compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
         writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
-        all_sem_refs = [sem_compute_done, sem_writer_done]
+        reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
+        all_sem_refs = [sem_compute_done, sem_writer_done, sem_reset_done]
 
         # Pre-allocate barrier configs for each unique barrier scope across
         # all groups.  Groups sharing a scope MUST use the same arrive/release
@@ -395,6 +397,7 @@ class OpGraphBuilder:
                 group,
                 compute_done_addr,
                 writer_done_addr,
+                reset_done_addr,
                 all_sem_refs,
                 segment_cache,
                 needs_target_core_range=multi_group,
@@ -494,6 +497,7 @@ class OpGraphBuilder:
         group: CoreGroup,
         compute_done_addr: int,
         writer_done_addr: int,
+        reset_done_addr: int,
         shared_sem_refs: List[Any],
         segment_cache: Dict[frozenset, BarrierConfig],
         needs_target_core_range: bool = False,
@@ -526,6 +530,7 @@ class OpGraphBuilder:
             segments=segments,
             compute_done_addr=compute_done_addr,
             writer_done_addr=writer_done_addr,
+            reset_done_addr=reset_done_addr,
             transition_map=transition_map,
             _sem_refs=list(shared_sem_refs),
         )
