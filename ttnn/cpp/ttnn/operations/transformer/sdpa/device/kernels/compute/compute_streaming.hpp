@@ -870,8 +870,8 @@ void sdpa_inner_loop_step(
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
-            uint32_t w_salad = salad_row - pushed_rows;
-            uint32_t w_q = q_subblock - pushed_rows;
+            uint32_t w_salad = salad_row;
+            uint32_t w_q = q_subblock;
 
             cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
@@ -918,7 +918,7 @@ void sdpa_inner_loop_step(
         // Pipeline drain: SALAD for last row
         {
             constexpr uint32_t salad_row = qktv_q_num_subblocks - 1;
-            uint32_t w_salad = salad_row - pushed_rows;
+            uint32_t w_salad = salad_row;
 
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
