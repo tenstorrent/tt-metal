@@ -290,6 +290,7 @@ class TtResNet50Backbone:
             kernel_size=[3, 3],
             stride=[2, 2],
             padding=[1, 1],
+            dilation=[1, 1],
             dtype=ttnn.bfloat16,
             deallocate_input=True,
         )
