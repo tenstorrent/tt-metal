@@ -127,8 +127,16 @@ __attribute__((noinline)) void rebind_cbs(
 # =============================================================================
 
 _PHASE_STATE = {
-    "riscv_1": ("    uint32_t done;\n" "    volatile tt_l1_ptr uint32_t* writer_done;"),
-    "compute": ("    uint32_t done;\n" "    volatile tt_l1_ptr uint32_t* compute_done;"),
+    "riscv_1": (
+        "    uint32_t done;\n"
+        "    volatile tt_l1_ptr uint32_t* writer_done;\n"
+        "    volatile tt_l1_ptr uint32_t* reset_done;"
+    ),
+    "compute": (
+        "    uint32_t done;\n"
+        "    volatile tt_l1_ptr uint32_t* compute_done;\n"
+        "    volatile tt_l1_ptr uint32_t* reset_done;"
+    ),
 }
 
 
@@ -144,6 +152,11 @@ def _phase_wait_follower(risc_type: str) -> str:
             "            noc_async_write_barrier();\n"
             "        }\n"
             "        *writer_done = done;\n"
+            "        // Wait for BRISC to complete reset (op sem + CB) before\n"
+            "        // proceeding.  Without this, a fast core can start the next\n"
+            "        // phase's multicast while a slow core's BRISC hasn't reset\n"
+            "        // op semaphores yet, clobbering in-flight noc_semaphore_inc.\n"
+            "        while (*reset_done < done) {}\n"
             "    }"
         )
     return (
@@ -151,6 +164,7 @@ def _phase_wait_follower(risc_type: str) -> str:
         f'        DeviceZoneScopedN("barrier-wait-{s}");\n'
         "        done++;\n"
         "        *compute_done = done;\n"
+        "        while (*reset_done < done) {}\n"
         "    }"
     )
 
@@ -160,13 +174,17 @@ _INIT_BODY = {
         "    phase::done = 0;\n"
         "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         "        get_arg_val<uint32_t>(rt_offset));\n"
-        "    *phase::writer_done = 0;"
+        "    *phase::writer_done = 0;\n"
+        "    phase::reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+        "        get_arg_val<uint32_t>(rt_offset + 1));"
     ),
     "compute": (
         "    phase::done = 0;\n"
         "    phase::compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         "        get_arg_val<uint32_t>(rt_offset));\n"
-        "    *phase::compute_done = 0;"
+        "    *phase::compute_done = 0;\n"
+        "    phase::reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+        "        get_arg_val<uint32_t>(rt_offset + 1));"
     ),
 }
 
@@ -337,7 +355,11 @@ def _emit_coordinator_reset(
 ) -> List[str]:
     """Emit ``phase::reset()`` body for BRISC (coordinator).
 
-    Order: op semaphore reset -> reset_cbs -> rebind -> segment sync.
+    Order: op semaphore reset -> reset_cbs -> rebind -> segment sync -> signal reset_done.
+    The reset_done signal at the end ensures followers (compute/writer) don't
+    start the next phase until all housekeeping (op sem reset, CB reset, segment
+    sync) is complete on this core.  Without it, a fast follower can begin a
+    multicast phase while a slow core's BRISC hasn't reset op semaphores yet.
     """
     lines: List[str] = []
     lines.append("    __attribute__((noinline)) void reset() {")
@@ -366,6 +388,8 @@ def _emit_coordinator_reset(
         lines.append(f"                segment_{seg_idx}::sync();")
         lines.append(f"            }}")
         lines.append(f"        }}")
+    lines.append("        // Signal followers that reset is complete on this core.")
+    lines.append("        *reset_done = done;")
     lines.append("    }")
     return lines
 
@@ -415,6 +439,7 @@ def _coordinator_phase_state(has_compute: bool) -> str:
     if has_compute:
         lines.append("    volatile tt_l1_ptr uint32_t* compute_done;")
     lines.append("    volatile tt_l1_ptr uint32_t* writer_done;")
+    lines.append("    volatile tt_l1_ptr uint32_t* reset_done;")
     return "\n".join(lines)
 
 
@@ -460,6 +485,9 @@ def _coordinator_init_body(has_compute: bool) -> str:
         [
             "    phase::writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(",
             f"        get_arg_val<uint32_t>(rt_offset + {offset}));",
+            "    phase::reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(",
+            f"        get_arg_val<uint32_t>(rt_offset + {offset + 1}));",
+            "    *phase::reset_done = 0;",
             "    // NOTE: Do NOT reset *compute_done or *writer_done here.",
             "    // Each RISC resets its own semaphore in its own init().",
             "    // Resetting here races with fast compute/writer signaling",
@@ -517,8 +545,8 @@ def _generate_barrier_namespace(
         lines.extend(_emit_rebind_slot_arrays(dispatch))
 
     # Segment namespaces
-    # Barrier RT args = [compute_done? writer_done, seg0_arrive, seg0_release, ...]
-    num_phase_sems = int(has_compute) + 1  # [compute_done?] + writer_done
+    # Barrier RT args = [compute_done? writer_done, reset_done, seg0_arrive, seg0_release, ...]
+    num_phase_sems = int(has_compute) + 2  # [compute_done?] + writer_done + reset_done
     seg_base_offset = num_phase_sems
     if is_coordinator:
         for seg_idx in range(num_segments):
@@ -536,7 +564,7 @@ def _generate_barrier_namespace(
             lines.extend(
                 _SPINWAIT_SEGMENT_TEMPLATE.format(
                     seg_idx=seg_idx,
-                    release_offset=1 + seg_idx,
+                    release_offset=2 + seg_idx,  # +2: done_signal + reset_done
                 ).split("\n")
             )
             lines.append("")
@@ -564,6 +592,13 @@ def _generate_barrier_namespace(
     lines.append("__attribute__((noinline)) void init() {")
     if is_coordinator:
         lines.extend(_coordinator_init_body(has_compute).split("\n"))
+        # Reset op semaphores so phase 0 doesn't see stale values
+        # from the previous execution's last phase.
+        if op_semaphore_info:
+            for sem_id, initial_value in op_semaphore_info:
+                lines.append(
+                    f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
+                )
     else:
         lines.extend(_INIT_BODY[risc_type].split("\n"))
     for seg_idx in range(num_segments):
