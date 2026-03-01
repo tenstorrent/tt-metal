@@ -890,6 +890,7 @@ def test_optimized_moe_decode_block(
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor
         # allacote before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
+        # TODO: (GR) some issue with hangs using moreh_full on multiple iters
         tt_preallocated_combine_output = ttnn.moreh_full(
             shape=[select_experts_k, tokens_per_device, hidden_size],
             fill_value=0,
@@ -897,6 +898,15 @@ def test_optimized_moe_decode_block(
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        tt_preallocated_combine_output = ttnn.from_torch(
+            torch.zeros([select_experts_k, tokens_per_device, hidden_size], dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         logger.info("CCCCC")
