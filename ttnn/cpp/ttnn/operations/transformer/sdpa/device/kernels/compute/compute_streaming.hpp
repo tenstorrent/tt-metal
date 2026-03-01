@@ -68,8 +68,6 @@ void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
-    mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
-
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -106,7 +104,8 @@ void reduce_c_row_group(
     const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * cols;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
-    cb_wait_front(scale_cb, 1);
+    // scale_cb assumed ready (waited once at kernel init)
+    // cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, cumulative_input_tiles);
 
     tile_regs_acquire();
@@ -166,13 +165,13 @@ void sub_exp_block_bcast_cols(
         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     }
 
-    // Cumulative wait on full CB up through this q_subblock's row
-    cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
+    // inout_cb assumed ready (max_cb was already computed from it)
+    // cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
     cb_wait_front(max_cb, (q_subblock + 1) * tiles_per_row);
 
+    tile_regs_acquire();
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB");
-        tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
@@ -181,12 +180,12 @@ void sub_exp_block_bcast_cols(
                 sub_tiles_bcast_cols(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index++);
             }
         }
-        tile_regs_commit();
     }
+    tile_regs_commit();
 
+    tile_regs_wait();
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "EXP");
-        tile_regs_wait();
         uint32_t dst_index = 0;
         constexpr int iterations = (vector_mode == (int)VectorMode::RC) ? 32 : 8;
         constexpr int vector_mode_exp = (vector_mode == (int)VectorMode::RC) ? (int)VectorMode::None : vector_mode;
@@ -229,9 +228,10 @@ void sub_exp_block_bcast_cols(
         }
     }
 
-    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-
     tile_regs_release();
+
+    // Restore packer ReLU config after all exp operations complete
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
     if constexpr (do_reduce) {
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
@@ -248,7 +248,6 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_packthread_tile_init<EXP_APPROX_MODE, false>();
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
@@ -347,44 +346,39 @@ void mul_block_bcast_cols_acc(
 }
 
 /**
- * L1-accumulate only the padded K-position tiles from mask_cb onto cb_qkt_im.
- * Only copies -inf tiles (padded columns), skipping zero tiles entirely to avoid
- * Bfp4_b→Float16_b round-trip artifacts in L1 accumulate.
+ * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
+ * tile positions in cb_qkt_im. No full mask matrix needed — just 1 tile in neginf_cb.
  *
- * @tparam padded_k_tiles  Number of padded K tiles per row (must be > 0)
- * @tparam Sk_chunk_t      Total K tiles per row
- * @tparam SBH             Sub-rows per row group (subblock_h)
+ * Ported from sdpa_benchmark branch's apply_padded_mask.
  *
- * Caller must cb_wait_front(mask_cb, Sq_chunk_t * Sk_chunk_t) before calling.
- * Caller must cb_pop_front(mask_cb, Sq_chunk_t * Sk_chunk_t) after all row groups.
+ * @tparam num_padded  Number of padded K tiles per row (must be > 0)
+ * @tparam num_cols    Total K tiles per row (Sk_chunk_t)
+ * @tparam SBH         Sub-rows per row group (subblock_h)
+ * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
  */
-template <bool PROFILING_ENABLED, uint32_t padded_k_tiles, uint32_t Sk_chunk_t, uint32_t SBH, uint32_t Sq_chunk_t>
-void apply_mask_padded_k(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subblock) {
+template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
+void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
-    static_assert(padded_k_tiles > 0, "padded_k_tiles must be > 0");
-    static_assert(padded_k_tiles < Sk_chunk_t, "padded_k_tiles must be less than Sk_chunk_t");
-    constexpr uint32_t start = Sk_chunk_t - padded_k_tiles;  // First padded column
-    constexpr uint32_t row_tiles = SBH * Sk_chunk_t;
-    const uint32_t mask_offset = q_subblock * row_tiles;
+    static_assert(num_padded > 0, "num_padded must be > 0");
+    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
+    constexpr uint32_t start = num_cols - num_padded;
 
-    // Read -inf tiles from mask_cb and L1-accumulate onto padded positions in out_cb
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_tile_to_dst_init_short(neginf_cb);
+    cb_wait_front(neginf_cb, 1);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
-    constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t out_row_offset = (q_subblock * SBH + row) * Sk_chunk_t;
-        uint32_t mask_row_offset = mask_offset + row * Sk_chunk_t;
-        for (uint32_t base = start; base < Sk_chunk_t; base += DST_BATCH) {
-            uint32_t batch = (Sk_chunk_t - base < DST_BATCH) ? (Sk_chunk_t - base) : DST_BATCH;
+        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
+        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
+            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
             tile_regs_acquire();
             for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(mask_cb, mask_row_offset + base + i, i);
+                copy_tile(neginf_cb, 0, i);  // Always tile 0 — single -inf tile
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, out_row_offset + base + i);
+                pack_tile<true>(i, out_cb, row_offset + base + i);
             }
             tile_regs_release();
         }
@@ -555,13 +549,6 @@ void sdpa_inner_loop_step(
     cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
-    // Wait for mask tiles if writer generates them (Q or K padding)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
-    }
-
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
@@ -579,6 +566,7 @@ void sdpa_inner_loop_step(
 
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
+                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                 blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                     cb_q_in,
                     cb_kt_in,
@@ -591,11 +579,10 @@ void sdpa_inner_loop_step(
             kt_index_offset += qkt_subblock_w;
         }
 
-        // Apply mask on last K chunk: only accumulate -inf onto padded K positions.
-        // Skips zero-valued tiles to avoid Bfp4_b→Float16_b L1 acc round-trip artifacts.
+        // Apply mask on last K chunk: L1-accumulate single -inf tile onto padded K positions.
         if constexpr (padded_k_tiles > 0) {
             if (is_last_iter) {
-                apply_mask_padded_k<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh, Sq_chunk_t>(
+                apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock);
             }
         }
@@ -634,13 +621,6 @@ void sdpa_inner_loop_step(
     // reader can start fetching the next Q chunk during Phase 2.
     if (is_last_iter) {
         cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
-    }
-
-    // Pop mask after all rows processed (must match writer's generate_mask push)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
     }
 
     // Pop ring mask after all row groups processed
@@ -692,9 +672,10 @@ void sdpa_inner_loop_step(
 
                     // Matmul — FPU overlaps with SFPU EXP
                     {
+                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
+                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -721,9 +702,10 @@ void sdpa_inner_loop_step(
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
@@ -767,6 +749,7 @@ void sdpa_inner_loop_step(
         };
 
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
+        exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
@@ -784,9 +767,10 @@ void sdpa_inner_loop_step(
 
             // Full matmul for current row
             {
+                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
+                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
@@ -872,6 +856,7 @@ void sdpa_standard_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B) {
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
+        // DeviceZoneScopedN("Q chunk");
         uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
         uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
         uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
@@ -929,6 +914,7 @@ void sdpa_standard_v2(
         };
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
+            // DeviceZoneScopedN("K chunk");
             bool is_first = (k_chunk == 0);
             bool is_last = (k_chunk == k_num_chunks - 1);
 

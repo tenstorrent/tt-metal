@@ -112,6 +112,9 @@ void kernel_main() {
         // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
         constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
 
+        // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
+        cb_wait_front(cb_identity_scale_in, 1);
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
                 for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
