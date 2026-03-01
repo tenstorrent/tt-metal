@@ -133,8 +133,8 @@ void reduce_c_row_group(
     const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * cols;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    // scale_cb assumed ready (waited once at kernel init)
+    // cb_wait_front(scale_cb, 1);
 
     tile_regs_acquire();
 
@@ -145,6 +145,11 @@ void reduce_c_row_group(
             copy_tile(prev_cb, row_start + i, i);
         }
     }
+
+    // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
+    // When do_eltwise_max=true, the prev_cb wait + copy_tile work above can overlap
+    // with in0_cb data arrival.
+    cb_wait_front(in0_cb, cumulative_input_tiles);
 
     reduce_block_max_row_init<cols>();
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
@@ -193,8 +198,8 @@ void sub_exp_block_bcast_cols(
         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     }
 
-    // Cumulative wait on full CB up through this q_subblock's row
-    cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
+    // inout_cb assumed ready (max_cb was already computed from it)
+    // cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
     cb_wait_front(max_cb, (q_subblock + 1) * tiles_per_row);
 
     {
@@ -275,7 +280,6 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_packthread_tile_init<EXP_APPROX_MODE, false>();
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
@@ -579,7 +583,6 @@ void sdpa_inner_loop_step(
     reconfig_data_format(cb_kt_in, cb_q_in);
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
-    cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
     // Wait for mask tiles if writer generates them (Q or K padding)
@@ -595,6 +598,11 @@ void sdpa_inner_loop_step(
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
+        // Deferred KT wait: reader pushes Q before KT, so waiting for Q first
+        // allows reserves + init + Q wait to overlap with KT DMA.
+        if (q_subblock == 0) {
+            cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
+        }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
@@ -701,7 +709,8 @@ void sdpa_inner_loop_step(
         uint32_t qktv_in0_index_offset = 0;
         uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
 
-        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+        // V wait deferred: don't block here. The sub_exp drain loop below
+        // doesn't touch V, so the reader's V DMA can overlap with the drain.
         cb_reserve_back(cur_out, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
@@ -719,8 +728,12 @@ void sdpa_inner_loop_step(
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                         cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
 
+                    // Before first matmul: wait for softmax'd QKT tiles and V tiles.
+                    // V wait deferred from Phase 2 start — the drain loop above
+                    // doesn't touch V, so the reader's V DMA overlaps with it.
                     if (kt_sub == 0) {
                         cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                     }
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
@@ -761,6 +774,9 @@ void sdpa_inner_loop_step(
                 }
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                // V wait deferred from Phase 2 start — the drain loop above
+                // doesn't touch V, so the reader's V DMA overlaps with it.
+                cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                 {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
@@ -814,6 +830,7 @@ void sdpa_inner_loop_step(
         };
 
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
+        exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
