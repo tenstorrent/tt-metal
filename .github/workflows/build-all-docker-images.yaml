@@ -168,6 +168,8 @@ jobs:
             "${{ needs.build-2204.outputs.basic-dev-tag }}"
             "${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}"
             "${{ needs.build-2204.outputs.manylinux-tag }}"
+            "${{ needs.build-2204.outputs.python-ci-build-venv-tag }}"
+            "${{ needs.build-2204.outputs.python-ci-test-venv-tag }}"
           )
           for ghcr_tag in "${images[@]}"; do
             if [ -n "$ghcr_tag" ]; then
@@ -198,6 +200,8 @@ jobs:
             "${{ needs.build-2404.outputs.dev-tag }}"
             "${{ needs.build-2404.outputs.basic-dev-tag }}"
             "${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}"
+            "${{ needs.build-2404.outputs.python-ci-build-venv-tag }}"
+            "${{ needs.build-2404.outputs.python-ci-test-venv-tag }}"
           )
           for ghcr_tag in "${images[@]}"; do
             if [ -n "$ghcr_tag" ]; then
