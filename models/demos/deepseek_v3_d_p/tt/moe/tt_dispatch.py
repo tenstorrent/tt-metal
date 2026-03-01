@@ -28,6 +28,7 @@ class TtDispatchModule(LightweightModule):
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
         hidden_dim: int = 7 * 1024,
+        cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
     ):
@@ -50,6 +51,7 @@ class TtDispatchModule(LightweightModule):
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
         self.seq_len_per_chip = seq_len_per_chip
+        self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
 
@@ -169,6 +171,7 @@ class TtDispatchModule(LightweightModule):
             num_experts_per_tok=self.num_experts_per_tok,
             metadata_len=self.metadata_len,
             max_dispatched_tokens_per_expert=self.max_dispatched_tokens_per_expert,
+            cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
         )
