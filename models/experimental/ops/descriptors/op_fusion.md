@@ -1,5 +1,30 @@
 # Sequential Fusion Architecture
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Public API](#public-api)
+  - [`Sequential`](#sequential) | [`Parallel`](#parallel)
+- [Glossary](#glossary)
+  - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment)
+- [Representing Fused Op Structure](#representing-fused-op-structure)
+  - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
+- [Synchronization Protocol](#synchronization-protocol)
+  - [Key Concepts](#key-concepts) | [MultiBarrierSpec](#multibarrierspec) | [Segment Cache](#segment-cache) | [Two-Level Barrier](#two-level-barrier) | [Cross-Core NOC Barrier](#cross-core-noc-barrier)
+- [CB Pool Allocator](#cb-pool-allocator)
+  - [The Problem](#the-problem) | [Compatibility Key (`CBPoolKey`)](#compatibility-key-cbpoolkey) | [Phantom CBs](#phantom-cbs) | [Allocation Algorithm](#allocation-algorithm) | [Alias Groups](#alias-groups) | [GlobalCB Remote Indices](#globalcb-remote-indices) | [Global Pool + Projection](#global-pool--projection-cross-group-consistency) | [Merged CB Descriptors](#merged-cb-descriptors) | [CB Address Rebinding](#cb-address-rebinding) | [CB State Save/Restore](#cb-state-saverestore)
+- [Circular Buffer Management](#circular-buffer-management)
+  - [CB State Reset Between Phases](#cb-state-reset-between-phases) | [CB Rebinding Between Phases](#cb-rebinding-between-phases)
+- [Code Generation](#code-generation)
+  - [Namespace Isolation](#approach-namespace-isolation) | [Source Parsing](#source-parsing-cpp_parser-module) | [Preprocessor Define Handling](#preprocessor-define-handling) | [CT Arg Redirection](#compile-time-arg-redirection) | [RT Arg Redirection](#runtime-arg-redirection) | [Generated File Structure](#generated-file-structure) | [Barrier Namespace](#barrier-namespace-namespace-barrier) | [Pipeline Summary](#code-generation-pipeline-summary)
+- [Argument Concatenation](#argument-concatenation)
+  - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
+- [Build Cache](#build-cache)
+  - [Cache Key](#cache-key) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [What Gets Cached](#what-gets-cached) | [Cache Invalidation](#cache-invalidation)
+- [Constraints and Limitations](#constraints-and-limitations)
+- [File Map](#file-map)
+
+
 ## Overview
 
 Sequential fusion combines multiple operations into a single fused kernel that
@@ -12,6 +37,59 @@ The fusion tree is a standard tree of `OpNode` objects. Each node holds one
 operation (`OpDescriptor`). Parent-to-child edges encode sequential ordering
 (parent runs before child). Sibling nodes run in parallel on disjoint core
 subsets. A linear chain is a tree with branching factor 1.
+
+
+## Public API
+
+### `Sequential`
+
+Chains ops in temporal order. Items can be `OpDescriptor`, `Sequential`, or
+`Parallel` objects. Nested `Sequential` items are flattened.
+
+`build()` returns a `FusedOp`. Call `fused.launch()` to dispatch. Device is
+auto-extracted from input tensors (or pass explicitly to `build(device=...)`).
+
+```python
+# Linear chain
+fused = Sequential(op0, op1, op2).build()
+fused.launch()
+
+# Incremental construction
+s = Sequential(op0)
+s.add(op1).add(op2)
+fused = s.build()
+
+# Composition via nesting (flattened automatically)
+stem = Sequential(op0, op1)
+full = Sequential(stem, op2).build()  # equivalent to op0 -> op1 -> op2
+```
+
+### `Parallel`
+
+Groups items that run concurrently on disjoint core subsets. Requires at least
+2 items. Items can be `OpDescriptor`, `Sequential`, or `Parallel`.
+
+```python
+# Branching tree: stem runs first, then two branches in parallel
+fused = Sequential(stem_op, Parallel(branch_a, branch_b)).build()
+fused.launch()
+
+# Standalone: independent ops merged into one dispatch
+fused = Parallel(op_a, op_b).build()
+fused.launch()
+
+# Nested: Parallel items can contain Sequential chains with further splits
+fused = Sequential(
+    stem,
+    Parallel(
+        Sequential(op_a, Parallel(op_a1, op_a2)),
+        op_b,
+    ),
+).build()
+```
+
+Items after a `Parallel` in a `Sequential` are not allowed — the tree
+diverges and cannot rejoin. Place trailing items inside each branch instead.
 
 
 ## Glossary
@@ -52,26 +130,72 @@ segment 0 covers cores 0-7 (root + intermediate phases), segment 1 covers
 cores 0-3 (leaf phase).
 
 
-## Tree Model
+## Representing Fused Op Structure
+
+The fusion system has two layers: a user-facing composition API (`Sequential`,
+`Parallel`) and an internal graph representation (`OpNode` tree). Users compose
+operations; `_resolve()` converts the composition into an `OpNode` tree that
+the builder processes. This section covers how that conversion works and how
+the builder partitions the tree into independently-built kernel binaries.
+
+### Composing with Sequential and Parallel
+
+`Sequential` chains ops in temporal order — each op runs after the previous one
+finishes. `Parallel` groups ops that run concurrently on disjoint cores. They
+nest freely to express any tree topology:
+
+```python
+# Linear chain: LN → GeLU → RMS  (all on same 4×4 grid)
+fused = Sequential(ln, gelu, rms).build()
+
+# Branching: LN on 4×4, then split into two 4×2 branches
+fused = Sequential(ln, Parallel(gelu_a, gelu_b)).build()
+
+# Deep branching: LN → [GeLU_A → RMS_A | GeLU_B → RMS_B]
+fused = Sequential(
+    ln,
+    Parallel(
+        Sequential(gelu_a, rms_a),
+        Sequential(gelu_b, rms_b),
+    ),
+).build()
+```
+
+`Sequential` auto-flattens nested `Sequential` items, so
+`Sequential(Sequential(a, b), c)` is equivalent to `Sequential(a, b, c)`.
+
+### Conversion to OpNode Tree
+
+`_resolve()` (`fusion.py`) recursively converts composition objects into an
+`OpNode` tree (see Glossary for `OpNode` definition):
+
+- `OpDescriptor` → `OpNode(op)` (single node)
+- `Sequential(a, b, c)` → chain:
+  `OpNode(a, children=[OpNode(b, children=[OpNode(c)])])`
+- `Parallel(x, y)` → flat list `[OpNode(x), OpNode(y)]`, attached as sibling
+  children of the preceding node in the enclosing `Sequential`
+
+The deep branching example above produces:
 
 ```
-root: op0 (cores 0-7)
-  node A: op1 (cores 0-3)
-    leaf A1: op2 (cores 0-1)
-    leaf A2: op3 (cores 2-3)
-  leaf B: op4 (cores 4-7)
+OpNode(ln)
+├── OpNode(gelu_a)
+│   └── OpNode(rms_a)
+└── OpNode(gelu_b)
+    └── OpNode(rms_b)
 ```
 
-A linear chain is simply a tree with branching factor 1:
-
-```
-root: op0 (cores 0-3)
-  node: op1 (cores 0-3)
-    leaf: op2 (cores 0-3)
-```
+`Sequential._build_internal()` calls `_resolve()`, then passes the root to
+`OpGraphBuilder`, which handles all topologies uniformly — a linear chain is
+just a tree with branching factor 1.
 
 ### Topology Rules
 
+- **Fan-out only**: The tree can only diverge, never reconverge. Once
+  execution splits into parallel branches, those branches run independently
+  to completion. There is no way to merge branches back into a single
+  stream. `_resolve()` enforces this — items after a `Parallel` in a
+  `Sequential` raise an error at build time.
 - **Sibling disjointness**: Children of the same parent must have
   non-overlapping core ranges. Each core runs exactly one kernel binary.
 - **Child subset of parent**: A child's core range must be a subset of its
@@ -81,63 +205,379 @@ root: op0 (cores 0-3)
 
 Topology is validated by `_validate_topology()` before any device allocation.
 
+### Spatial Independence
 
-## Path Tracing and Kernel Generation
+Each node's core range comes from its op's `ProgramDescriptor` kernels. The
+topology rules above require children to occupy disjoint subsets of their
+parent's cores. This spatial disjointness is what makes parallel execution
+safe — sibling branches never share a core.
 
-### One Kernel Binary Per Root-to-Leaf Path
+`allowed_core_range` (`OpNode.allowed_core_range`) extends this model. An op's
+*actual* core range (from its kernels) may be smaller than the region it is
+*allowed* to occupy. `_propagate_allowed_ranges()` computes allowed ranges
+bottom-up: a parent's allowed range is the union of its actual range and its
+children's allowed ranges. `_validate_topology()` uses allowed ranges for
+sibling disjointness and child-subset-of-parent checks. This lets a parent
+partially cover its children — uncovered cores simply skip the parent's phase.
 
-Each root-to-leaf path through the tree produces one fused kernel binary. The
-binary contains all phases from root to leaf, concatenated. It runs on the
-leaf's core range for the entire execution.
+### Core Groups
 
-For the example tree above, three paths are traced:
+`_compute_core_groups()` walks the tree and records each core's **phase
+sequence** — the root-to-leaf ops that core executes. Cores with identical
+phase sequences are grouped into a `CoreGroup`. Each group becomes one fused
+kernel binary.
 
-```
-Path 1: [(cores 0-7, [op0]), (cores 0-3, [op1]), (cores 0-1, [op2])]
-Path 2: [(cores 0-7, [op0]), (cores 0-3, [op1]), (cores 2-3, [op3])]
-Path 3: [(cores 0-7, [op0]), (cores 4-7, [op4])]
-```
+**Kernel variant keying.**  Some ops produce multiple kernels for the same
+RISC type on disjoint core subsets — e.g., a block-sharded LayerNorm has a
+multicast *sender* on row 0 and a *receiver* on row 1, both on riscv_0.
+`_kernel_variant_key(node, coord)` returns the tuple of kernel indices whose
+core ranges contain `coord`, distinguishing sender cores from receiver cores.
+The grouping key includes both the op identity *and* its variant key, so cores
+seeing different kernel subsets never land in the same group.
 
-Consecutive nodes with the same core range are grouped into a single segment.
-Internal nodes use their *effective leaf range* (union of descendant leaf core
-ranges) as the barrier scope, not the node's own declared range. This ensures
-barrier scope matches the cores that actually participate.
+In the deep branching example (assuming LN runs on a 4×4 grid, each branch
+on a 4×2 half):
+
+| Group | Cores | Phase Sequence |
+|-------|-------|---------------|
+| A | left 4×2 (8 cores) | `[LN, GeLU_A, RMS_A]` |
+| B | right 4×2 (8 cores) | `[LN, GeLU_B, RMS_B]` |
+
+Each group also records its **barrier scopes** — the `_effective_leaf_range()`
+at each phase transition.  This function walks from a node down to all
+descendant leaves and unions their core coordinates.  The result determines
+which cores must synchronize at that transition — only cores with remaining
+work below the transition participate.  For Group A:
+
+- Transition 0 (after LN): `_effective_leaf_range(LN)` = all 16 cores —
+  both branches must finish LN before either can proceed.
+- Transition 1 (after GeLU_A): `_effective_leaf_range(GeLU_A)` = left 8 cores —
+  only the left branch participates.
+
+These barrier scopes feed directly into the synchronization protocol's segment
+model (see next section).
 
 ### Fused Kernel Structure
 
-Each path's fused kernel binary contains three RISC-specific kernels:
+**Role keys.**  The builder identifies each kernel by its **role key** —
+a `(risc_type, core_ranges_key)` pair.  When building for a specific group,
+`target_core_range` is set and all kernels are mapped to that range regardless
+of their native core ranges.  This collapses a stem kernel (16 cores) and a
+branch kernel (8 cores) into the same role for the group's fused binary.
+
+**Core-range filtering.**  When a phase's op has multiple kernels for the same
+RISC type (e.g., block-sharded sender + receiver), only kernels whose native
+core ranges overlap the group's `target_core_range` are included.  This
+prevents a receiver kernel on row 1 from overwriting the sender when building
+the row-0 group.
+
+Each group's fused kernel binary contains three RISC-specific source files:
 
 - **RISCV_0 (Reader/BRISC)**: Reads data from DRAM/L1 into input CBs.
-  Coordinates all inter-phase cleanup. Runs the cross-core NOC barrier.
+  Coordinates all inter-phase barrier logic (CB reset, rebind, cross-core
+  sync).
 - **Compute (TRISC)**: Processes tiles from input CBs, writes to output CBs.
 - **RISCV_1 (Writer/NCRISC)**: Writes output CB data to DRAM/L1.
 
 All three run concurrently on each core. Each contains all phases for the
-path, with barrier synchronization code between phases.
+group, with barrier synchronization between phases:
 
 ```c++
-// Example: fused reader kernel for a 2-phase path
+// Example: fused reader kernel for a 2-phase group
 void kernel_main() {
-    phase0_reader();          // root op
+    barrier::init();
 
-    // === inter-phase barrier ===
-    noc_async_full_barrier();
-    noc_semaphore_wait_min(__compute_done, 1);
-    noc_semaphore_wait_min(__writer_done, 1);
-    __cb_reset_to_empty();
-    __barrier_seg0(0, arrive, release);
+    phase_0::run();           // first op
 
-    phase1_reader();          // child op
+    barrier::phase::wait();   // local RISC sync
+    barrier::phase::reset();  // CB reset + rebind + cross-core barrier
+
+    phase_1::run();           // second op
 }
 ```
 
-### Self-Contained Build Output
+The builder merges all groups' `ProgramDescriptor`s internally via
+`merge_program_descriptors()` and returns a single self-contained `FusedOp`.
+Calling `fused.launch()` dispatches all groups as one program — there is no
+way to accidentally dispatch a subset.
 
-All paths from a tree share barrier semaphore addresses. The builder merges
-all path ProgramDescriptors internally via `merge_program_descriptors()` and
-returns a single `OpDescriptor`. This makes the result self-contained --
-dispatching it via `composite.launch([result])` dispatches all paths as one
-program. There is no way to accidentally dispatch a subset.
+
+## Synchronization Protocol
+
+A fused kernel executes multiple ops (phases) sequentially within a single
+kernel launch. Between phases, all cores must synchronize so that no core
+begins phase N+1 while another is still finishing phase N. The barrier
+infrastructure manages this.
+
+### Key Concepts
+
+A **phase** is one op's execution within the fused kernel. A 3-op linear chain
+has phases 0, 1, 2.
+
+A **segment** is a group of consecutive phases that share the same set of
+participating cores. The barrier scope of a segment is the set of cores that
+must synchronize at each phase transition within it. In a linear chain (all
+ops on the same core range), there is a single segment covering all
+transitions. In a branching tree, different parts of the tree may run on
+different core subsets, creating multiple segments.
+
+Example — a tree with a stem op on a 4×4 grid that branches into two leaf ops
+on disjoint 4×2 halves:
+
+```
+        stem (4×4)
+       /          \
+  leaf_a (4×2)   leaf_b (4×2)
+```
+
+This produces three segments:
+- **segment 0** (16 cores): the transition after the stem, before branching.
+  All 16 cores must synchronize here.
+- **segment 1** (8 cores): transitions within the left branch. Only the left
+  8 cores participate.
+- **segment 2** (8 cores): transitions within the right branch. Only the right
+  8 cores participate.
+
+Each segment has its own `arrive`/`release` GlobalSemaphore pair.
+
+The simple stem/leaf example above only has one transition per group (stem →
+leaf), so each kernel binary has just one segment. A deeper tree creates
+multiple segments per kernel.
+
+Continuing the deep branching example from Core Groups — Groups A and B each
+have two transitions with barrier scopes derived from `_effective_leaf_range()`:
+
+| Group | Transition | After | Barrier Scope | Cores |
+|-------|-----------|-------|---------------|-------|
+| A | 0 | LN | all leaves | 16 |
+| A | 1 | GeLU_A | left leaves | 8 |
+| B | 0 | LN | all leaves | 16 |
+| B | 1 | GeLU_B | right leaves | 8 |
+
+Three distinct scopes → three barrier segments (16-core, 8-left, 8-right).
+Each group's kernel binary has two `segment_N` namespaces — one per distinct
+scope in its transition sequence.
+
+### MultiBarrierSpec
+
+`MultiBarrierSpec` (`common.py`) packages the segment list and transition
+routing for one fused kernel binary:
+
+```python
+@dataclass
+class MultiBarrierSpec:
+    segments: List[BarrierSegment]       # ordered segment list for this kernel
+    compute_done_addr: int               # shared GlobalSemaphore L1 address
+    writer_done_addr: int                # shared GlobalSemaphore L1 address
+    transition_map: Dict[int, Tuple[int, int]]  # transition_idx → (seg_idx, call_idx)
+    _sem_refs: List[Any]                 # prevent GC of GlobalSemaphore objects
+```
+
+Each `BarrierSegment` holds a `BarrierConfig` with the physical core geometry
+(`core0_phys_x/y`, `mcast_start/end`, `num_cores`) and the `arrive`/`release`
+GlobalSemaphore L1 addresses for that scope.
+
+`_build_group_barriers()` (`graph.py`) converts a group's barrier scopes into
+the `MultiBarrierSpec`. It walks the scopes in order, creating a new segment
+each time the scope changes, and maps each transition to its segment index:
+
+For **Group A** (barrier scopes = `[16-core, 8-left]`):
+- Transition 0: scope = 16 cores → new segment (seg_idx=0).
+  `transition_map[0] = (0, 0)`
+- Transition 1: scope = 8-left cores → new segment (seg_idx=1).
+  `transition_map[1] = (1, 0)`
+
+```python
+MultiBarrierSpec(
+    segments=[
+        BarrierSegment(config=cfg_16, arrive_addr=0x1000, release_addr=0x1004),
+        BarrierSegment(config=cfg_8L, arrive_addr=0x2000, release_addr=0x2004),
+    ],
+    transition_map={0: (0, 0), 1: (1, 0)},
+    ...
+)
+```
+
+The generated C++ for Group A's kernel has two `segment_N` namespaces:
+
+```c++
+namespace barrier {
+    namespace segment_0 { /* 16 cores, arrive=0x1000, release=0x1004 */ }
+    namespace segment_1 { /* 8 left cores, arrive=0x2000, release=0x2004 */ }
+    namespace phase {
+        void reset() {
+            if (done == 1) { reset_cbs(phase_0_cbs); segment_0::sync(); }  // LN→GeLU
+            if (done == 2) { reset_cbs(phase_1_cbs); segment_1::sync(); }  // GeLU→RMS
+        }
+    }
+}
+```
+
+Each `segment_N` namespace contains its own `num_cores`, `core0_phys_x/y`,
+`mcast_start/end` (all `constexpr` from named compile-time args), plus mutable
+`call_count`, `arrive`, and `release` pointers. The namespace provides
+compile-time isolation — the segment geometry is resolved to constants, not
+looked up from arrays at runtime.
+
+### Segment Cache
+
+Groups A and B both need a 16-core barrier at transition 0. If each group
+independently allocated its own 16-core GlobalSemaphores, they would get
+different L1 addresses and never synchronize — group A's cores would wait on
+one semaphore while group B's cores signal a different one.
+
+`OpGraphBuilder._build_internal()` solves this with a `segment_cache` keyed
+on `frozenset(core_ranges)`. Before building any group, it pre-scans all
+barrier scopes across all groups and allocates one `BarrierConfig` per unique
+scope:
+
+```python
+segment_cache: Dict[frozenset, BarrierConfig] = {}
+for group in groups:
+    for scope in group.barrier_scopes:
+        key = _core_ranges_key(scope)       # frozenset of (start_x, start_y, end_x, end_y)
+        if key not in segment_cache:
+            segment_cache[key] = _create_barrier_segment_config(device, scope)
+```
+
+`_create_barrier_segment_config()` (`builder.py`) allocates a pair of
+GlobalSemaphores (`arrive`, `release`) on the given core range and computes
+the physical core coordinates for NOC multicast.
+
+For the example tree, the cache ends up with three entries:
+
+| Cache Key | Scope | Semaphores |
+|-----------|-------|------------|
+| `frozenset(16 cores)` | All cores | arrive=0x1000, release=0x1004 |
+| `frozenset(8-left)` | Left branch | arrive=0x2000, release=0x2004 |
+| `frozenset(8-right)` | Right branch | arrive=0x3000, release=0x3004 |
+
+When `_build_group_barriers()` runs for each group, it looks up the cache
+rather than allocating new semaphores. Both groups' segment_0 resolves to the
+same `BarrierConfig` (the 16-core entry), so both kernel binaries emit
+`segment_0::sync()` calls that target the same L1 addresses. The 16 cores
+converge on a single barrier despite running two different kernel binaries.
+
+### Two-Level Barrier
+
+Phase synchronization uses a two-level protocol:
+
+1. **Local RISC sync** (per-core, L1 flags): Reader waits for compute and
+   writer to finish the current phase before resetting CBs.
+2. **Cross-core NOC barrier** (across cores, GlobalSemaphore): All cores in the
+   barrier scope must complete before any core proceeds to the next phase.
+
+Both levels use monotonically increasing counters — never reset during kernel
+execution.
+
+**BRISC (reader/coordinator)** — owns `done`, waits on `compute_done` and
+`writer_done`, then resets CBs and runs the cross-core barrier:
+
+```c++
+// barrier::phase — BRISC side
+namespace phase {
+    uint32_t done;                                  // local counter, incremented each phase
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore)
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore)
+
+    void wait() {
+        done++;
+        noc_async_full_barrier();                   // drain all outstanding NOC writes
+        noc_semaphore_wait_min(compute_done, done); // spin until compute signals
+        noc_semaphore_wait_min(writer_done, done);  // spin until writer signals
+    }
+
+    void reset() {
+        // Per-transition: reset CBs, rebind sharded addresses, cross-core sync
+        reset_cbs(phase_K_cbs);                     // equalize stream registers + FIFO ptrs
+        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+        segment_N::sync();                          // cross-core NOC barrier
+    }
+}
+```
+
+**Compute** — signals `compute_done` after each phase, then waits on the
+cross-core barrier before resyncing local CB state:
+
+```c++
+// barrier::phase — compute side
+namespace phase {
+    uint32_t done;                                  // local counter
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (same address BRISC reads)
+
+    void wait() {
+        done++;
+        *compute_done = done;                       // signal BRISC
+    }
+
+    void reset() {
+        segment_N::sync();                          // wait for cross-core barrier
+        resync_cbs(phase_K_cbs);                    // TRISC0: sync tiles_acked via reg_read
+                                                    // TRISC2: sync tiles_received via reg_read
+        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+    }
+}
+```
+
+**Writer (NCRISC)** — same pattern as compute but signals `writer_done` and
+drains NOC writes before signaling:
+
+```c++
+// barrier::phase — writer side
+namespace phase {
+    uint32_t done;                                  // local counter
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (same address BRISC reads)
+
+    void wait() {
+        done++;
+        noc_async_write_barrier();                  // drain outstanding writes first
+        *writer_done = done;                        // signal BRISC
+    }
+
+    void reset() {
+        segment_N::sync();                          // wait for cross-core barrier
+        resync_cbs(phase_K_cbs);                    // reset FIFO pointers to CB start
+        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+    }
+}
+```
+
+### Cross-Core NOC Barrier
+
+After local RISC sync and CB reset, the reader executes a cross-core barrier.
+One designated core ("core 0") acts as the coordinator. `arrive` and `release`
+are `GlobalSemaphore` L1 words. `arrive` accumulates on core 0 via NOC atomic
+increments. `release` is multicast from core 0 to all cores in the bounding
+box. Both are **monotonic** — `call_count` tracks invocations so each `sync()`
+waits for a strictly increasing threshold, preventing stale semaphore values
+from a previous dispatch from being mistaken for the current one.
+
+```c++
+// barrier::segment_N — BRISC side (coordinator)
+namespace segment_N {
+    uint32_t call_count;
+    volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
+    volatile tt_l1_ptr uint32_t* release;   // L1, multicast to all cores
+
+    void sync() {
+        noc_semaphore_inc(core0_arrive_noc_addr, 1);        // all cores increment arrive
+        if (is_core_0) {
+            noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
+            *release = call_count + 1;
+            // Loopback: core 0 must receive its own multicast write,
+            // otherwise it would never see the release value it just set.
+            noc_semaphore_set_multicast_loopback_src(release, mcast_addr, num_cores);
+            noc_async_write_barrier();
+        } else {
+            noc_semaphore_wait_min(release, call_count + 1); // spin until released
+        }
+        call_count++;
+    }
+}
+```
+
+Writer and compute RISCs see only the `release` semaphore — they spin on it
+in `segment_N::sync()` without participating in the arrive/multicast protocol.
 
 
 ## CB Pool Allocator
@@ -531,32 +971,159 @@ Stem: LN (cores 0-3)      CBs: {0, 1, 2, 3, 4, 5}
   Branch B: RMS (cores 2-3)  CBs: {0, 1, 2, 3, 7}
 ```
 
-**Global pool** allocates all three ops as phases 0, 1, 2:
+All CBs are BF16/2048 except CB 5 in LN which is FP32/4096, and CB 7 in
+RMS_B which is BF16/2048 with a different purpose than CBs 0-3. No phantoms,
+no aliases, no GlobalCBs in this example.
 
-| Global Phase | Op    | Remap (orig → slot)            |
-|-------------|-------|-------------------------------|
-| 0           | LN    | `{0:0, 1:1, 2:2, 3:3, 4:4, 5:5}` |
-| 1           | RMS_A | `{0:0, 1:1, 2:2, 3:3}`       |
-| 2           | RMS_B | `{0:0, 1:1, 2:2, 3:3, 7:7}`  |
+**Step 1: `extract_cb_info()` for each op**
 
-Global pool has 7 slots: {0, 1, 2, 3, 4, 5, 7}.
+```python
+# LN
+cb_info_LN = {
+    0: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    1: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    2: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    3: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    4: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    5: CBInfo(pool_key=CBPoolKey(FP32, 4096, False, Fp32),    total_size=8192),
+}
+# RMS_A
+cb_info_A = {
+    0: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    1: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    2: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    3: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+}
+# RMS_B
+cb_info_B = {
+    0: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    1: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    2: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    3: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    7: CBInfo(pool_key=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+}
+```
 
-**Groups and shared slots**:
+**Step 2: `_build_global_cb_pool()` — allocate all ops into one pool**
 
-- Group A (cores 0-1): phases [0, 1] → referenced slots {0,1,2,3,4,5}
-- Group B (cores 2-3): phases [0, 2] → referenced slots {0,1,2,3,4,5,7}
-- Shared slots: {0,1,2,3,4,5} (from LN stem). `M = 5`.
-- Padding: all global slots with index ≤ 5 = {0,1,2,3,4,5}.
+The tree walk produces `unique_ops = [LN, RMS_A, RMS_B]`. The global pool
+calls `allocate_phase()` for each in order.
 
-**Projected pools**:
+*Phase 0 (LN)*: Pool is empty. `_partition_by_identity()` returns no
+identity matches (no prior slots), all go to remaining. `_find_reusable_slot()`
+returns None for each (empty pool). `_allocate_new_slot()` uses identity
+mapping (orig_idx == slot_idx) for all six:
 
-- Group A: slots {0,1,2,3,4,5} (referenced ∪ padding). 6 slots ≤ 32.
-- Group B: slots {0,1,2,3,4,5,7} (referenced ∪ padding). 7 slots ≤ 32.
+```python
+# After phase 0:
+pool._slots = {
+    0: CBSlot(config=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    1: CBSlot(config=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    2: CBSlot(config=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    3: CBSlot(config=CBPoolKey(BF16, 2048, False, Default), total_size=2048),
+    4: CBSlot(config=CBPoolKey(BF16, 2048, False, Default), total_size=4096),
+    5: CBSlot(config=CBPoolKey(FP32, 4096, False, Fp32),    total_size=8192),
+}
+pool.phase_remaps[0] = {0:0, 1:1, 2:2, 3:3, 4:4, 5:5}
+```
 
-Both groups have slots 0-5 with the same `total_size` (from the global pool's
-max across all phases). L1 layout is identical for indices 0..5. Slot 7
-only exists in Group B and sits *above* M, so it doesn't affect shared-slot
-L1 addresses.
+*Phase 1 (RMS_A)*: `_partition_by_identity()` finds identity matches for
+CBs 0, 1, 2, 3 (each has a prior slot at the same index with matching key).
+`_find_reusable_slot()` returns the identity-matched slot for each.
+`_reuse_slot()` updates `total_size = max(existing, new)` (no change here —
+sizes match):
+
+```python
+pool.phase_remaps[1] = {0:0, 1:1, 2:2, 3:3}
+# pool._slots unchanged (sizes already at max)
+```
+
+*Phase 2 (RMS_B)*: Same as RMS_A for CBs 0-3 (identity reuse). CB 7 is new:
+`_find_reusable_slot()` finds compatible slots (BF16/2048/Default) at
+indices 0-4, but 0-3 are already `slots_used_this_phase`. Slot 4 is free
+and compatible — but `_find_reusable_slot()` tries identity match first
+(slot 7 doesn't exist), then tries any compatible slot: **slot 4 is reused**:
+
+```python
+pool.phase_remaps[2] = {0:0, 1:1, 2:2, 3:3, 7:4}
+#                                              ↑ CB 7 → slot 4 (reused from LN's CB 4)
+# pool._slots unchanged (slot 4 total_size stays 4096 ≥ 2048)
+```
+
+Final global pool state:
+
+```python
+pool._slots = {0, 1, 2, 3, 4, 5}   # 6 slots
+pool.phase_remaps = [
+    {0:0, 1:1, 2:2, 3:3, 4:4, 5:5},  # LN
+    {0:0, 1:1, 2:2, 3:3},              # RMS_A
+    {0:0, 1:1, 2:2, 3:3, 7:4},         # RMS_B (CB 7 → slot 4)
+]
+```
+
+**Step 3: `_project_pools_for_groups()` — compute padding + project**
+
+Groups are determined by the tree's leaf core ranges:
+- Group A (cores 0-1): runs global phases [0, 1] (LN, RMS_A)
+- Group B (cores 2-3): runs global phases [0, 2] (LN, RMS_B)
+
+```python
+# Compute per-group referenced slots
+per_group_slots = [
+    {0,1,2,3,4,5},    # Group A: union of remaps[0].values() ∪ remaps[1].values()
+    {0,1,2,3,4,5},    # Group B: union of remaps[0].values() ∪ remaps[2].values()
+]
+
+# Identify shared slots (in ≥2 groups)
+shared_slots = {0, 1, 2, 3, 4, 5}   # all slots appear in both groups
+M = max(shared_slots)                # M = 5
+
+# Padding = all global slots with index ≤ M
+padding_slots = {0, 1, 2, 3, 4, 5}  # same as all slots (slot 5 ≤ 5)
+```
+
+**Step 4: `project_to_group()` — create per-group pools**
+
+```python
+# Group A: project_to_group(group_global_indices=[0, 1], padding_slots={0..5})
+group_a_pool.phase_remaps = [
+    {0:0, 1:1, 2:2, 3:3, 4:4, 5:5},  # local phase 0 = global phase 0 (LN)
+    {0:0, 1:1, 2:2, 3:3},              # local phase 1 = global phase 1 (RMS_A)
+]
+group_a_pool._slots = {0, 1, 2, 3, 4, 5}  # referenced ∪ padding = 6 slots
+
+# Group B: project_to_group(group_global_indices=[0, 2], padding_slots={0..5})
+group_b_pool.phase_remaps = [
+    {0:0, 1:1, 2:2, 3:3, 4:4, 5:5},  # local phase 0 = global phase 0 (LN)
+    {0:0, 1:1, 2:2, 3:3, 7:4},         # local phase 1 = global phase 2 (RMS_B)
+]
+group_b_pool._slots = {0, 1, 2, 3, 4, 5}  # referenced ∪ padding = 6 slots
+```
+
+Both groups have identical slot sets {0..5} with the same `total_size` per
+slot. L1 layout is identical through index 5.
+
+**Step 5: `build_merged_cb_descriptors()` — create hardware CB config**
+
+For each group, emits one `CBDescriptor` per slot (no alias groups here),
+sorted by slot index. Both groups produce 6 CBDescriptors at indices 0-5
+with the same sizes, ensuring identical L1 layout.
+
+**Step 6: `_compute_rebind_info()` — determine per-phase address updates**
+
+For Group B, slot 4 was LN's CB 4 in phase 0 and becomes RMS_B's CB 7 in
+phase 1. If either has a buffer-backed allocation (sharded tensor), the
+buffer address at slot 4 changes between phases:
+
+```python
+# Group B rebind_info
+rebind_info = {
+    1: [(4, new_addr, new_size)]  # slot 4 needs rebinding at phase 1
+}
+```
+
+This tells the barrier's `rebind_cbs()` to update slot 4's FIFO pointers
+between phases.
 
 #### Walk-Through: Why Padding Matters
 
@@ -752,887 +1319,632 @@ that hang the device. Only `acked` is written toward `received` (not the
 reverse), because after a completed phase the consumer has acked all tiles the
 producer pushed.
 
-## Synchronization Protocol
+### CB Rebinding Between Phases
 
-A fused kernel executes multiple ops (phases) sequentially within a single
-kernel launch. Between phases, all cores must synchronize so that no core
-begins phase N+1 while another is still finishing phase N. The barrier
-infrastructure manages this.
+When consecutive phases use sharded tensors at different L1 addresses, the CB's
+FIFO pointers must be redirected to the new buffer location before the next
+phase starts. This is **rebinding** — updating a CB slot's `fifo_rd_ptr`,
+`fifo_wr_ptr`, `fifo_size`, and `fifo_limit` to point at a different L1
+region. DRAM-interleaved CBs don't need rebinding (no L1 buffer).
 
-### Key Concepts
+`_compute_rebind_info()` (see CB Address Rebinding in CB Pool Allocator)
+determines which slots need rebinding at each transition by comparing buffer
+addresses between consecutive phases. The actual L1 addresses are passed as
+runtime args because they depend on tensor allocation.
 
-A **phase** is one op's execution within the fused kernel. A 3-op linear chain
-has phases 0, 1, 2.
+Every RISC that accesses CB memory must rebind — each maintains its own local
+copy of the CB interface. Rebinding always runs **last** in the reset sequence,
+after CB state reset/resync, so it overwrites the pointers that reset just
+set to the old CB start. The per-RISC ordering within `barrier::phase::reset()`
+is:
 
-A **segment** is a group of consecutive phases that share the same set of
-participating cores. The barrier scope of a segment is the set of cores that
-must synchronize at each phase transition within it. In a linear chain (all
-ops on the same core range), there is a single segment covering all
-transitions. In a branching tree, different parts of the tree may run on
-different core subsets, creating multiple segments.
+| Step | BRISC (coordinator) | Compute / Writer (followers) |
+|------|--------------------|-----------------------------|
+| 1 | `reset_cbs()` — equalize stream registers, reset FIFO ptrs | `segment_N::sync()` — wait for cross-core barrier |
+| 2 | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address | `resync_cbs()` — sync local copies from stream registers |
+| 3 | `segment_N::sync()` — cross-core barrier | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address |
 
-Example — a tree with a stem op on a 4×4 grid that branches into two leaf ops
-on disjoint 4×2 halves:
-
-```
-        stem (4×4)
-       /          \
-  leaf_a (4×2)   leaf_b (4×2)
-```
-
-This produces three segments:
-- **segment 0** (16 cores): the transition after the stem, before branching.
-  All 16 cores must synchronize here.
-- **segment 1** (8 cores): transitions within the left branch. Only the left
-  8 cores participate.
-- **segment 2** (8 cores): transitions within the right branch. Only the right
-  8 cores participate.
-
-Each segment has its own `arrive`/`release` GlobalSemaphore pair. A
-`MultiBarrierSpec` maps each phase transition to its segment. Paths that share
-a segment reuse the same semaphore L1 addresses (ensured by a `segment_cache`
-keyed on `frozenset(core_ranges)`).
-
-### Two-Level Barrier
-
-Phase synchronization uses a two-level protocol:
-
-1. **Local RISC sync** (per-core, L1 flags): Reader waits for compute and
-   writer to finish the current phase before resetting CBs.
-2. **Cross-core NOC barrier** (across cores, GlobalSemaphore): All cores in the
-   barrier scope must complete before any core proceeds to the next phase.
-
-Both levels use monotonically increasing counters — never reset during kernel
-execution.
-
-**BRISC (reader/coordinator)** — owns `done`, waits on `compute_done` and
-`writer_done`, then resets CBs and runs the cross-core barrier:
-
-```c++
-// barrier::phase — BRISC side
-namespace phase {
-    uint32_t done;                                  // local counter, incremented each phase
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore)
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore)
-
-    void wait() {
-        done++;
-        noc_async_full_barrier();                   // drain all outstanding NOC writes
-        noc_semaphore_wait_min(compute_done, done); // spin until compute signals
-        noc_semaphore_wait_min(writer_done, done);  // spin until writer signals
-    }
-
-    void reset() {
-        // Per-transition: reset CBs, rebind sharded addresses, cross-core sync
-        reset_cbs(phase_K_cbs);                     // equalize stream registers + FIFO ptrs
-        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
-        segment_N::sync();                          // cross-core NOC barrier
-    }
-}
-```
-
-**Compute** — signals `compute_done` after each phase, then waits on the
-cross-core barrier before resyncing local CB state:
-
-```c++
-// barrier::phase — compute side
-namespace phase {
-    uint32_t done;                                  // local counter
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (same address BRISC reads)
-
-    void wait() {
-        done++;
-        *compute_done = done;                       // signal BRISC
-    }
-
-    void reset() {
-        segment_N::sync();                          // wait for cross-core barrier
-        resync_cbs(phase_K_cbs);                    // TRISC0: sync tiles_acked via reg_read
-                                                    // TRISC2: sync tiles_received via reg_read
-    }
-}
-```
-
-**Writer (NCRISC)** — same pattern as compute but signals `writer_done` and
-drains NOC writes before signaling:
-
-```c++
-// barrier::phase — writer side
-namespace phase {
-    uint32_t done;                                  // local counter
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (same address BRISC reads)
-
-    void wait() {
-        done++;
-        noc_async_write_barrier();                  // drain outstanding writes first
-        *writer_done = done;                        // signal BRISC
-    }
-
-    void reset() {
-        segment_N::sync();                          // wait for cross-core barrier
-        resync_cbs(phase_K_cbs);                    // reset FIFO pointers to CB start
-    }
-}
-```
-
-### Cross-Core NOC Barrier
-
-After local RISC sync and CB reset, the reader executes a cross-core barrier.
-One designated core ("core 0") acts as the coordinator. `arrive` and `release`
-are `GlobalSemaphore` L1 words. `arrive` accumulates on core 0 via NOC atomic
-increments. `release` is multicast from core 0 to all cores in the bounding
-box. Both are monotonic.
-
-```c++
-// barrier::segment_N — BRISC side (coordinator)
-namespace segment_N {
-    uint32_t call_count;
-    volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
-    volatile tt_l1_ptr uint32_t* release;   // L1, multicast to all cores
-
-    void sync() {
-        noc_semaphore_inc(core0_arrive_noc_addr, 1);        // all cores increment arrive
-        if (is_core_0) {
-            noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
-            *release = call_count + 1;
-            noc_semaphore_set_multicast_loopback_src(release, mcast_addr, num_cores);
-            noc_async_write_barrier();
-        } else {
-            noc_semaphore_wait_min(release, call_count + 1); // spin until released
-        }
-        call_count++;
-    }
-}
-```
-
-Writer and compute RISCs see only the `release` semaphore — they spin on it
-in `segment_N::sync()` without participating in the arrive/multicast protocol.
+BRISC prepares everything (reset + rebind) before signaling the barrier.
+Followers wait for the barrier, resync their local CB state, then rebind.
+On compute, rebinding is guarded by `#ifndef TRISC_MATH` — only TRISC0
+(unpack) and TRISC2 (pack) access CB memory; TRISC1 (math) does not.
 
 
 ## Code Generation
 
-Fusion generates a single C++ source file per RISC type (reader, compute,
-writer) per fused kernel binary. Each generated file follows the same
-structure and is compiled by the JIT build system. This section defines every
-part of the generated file and describes how original kernel sources are
-decomposed, transformed, and reassembled.
+Fusion generates one C++ source file per RISC type (reader, compute, writer)
+per fused kernel binary. A unified generator (`_generate_fused_source`) handles
+all three RISC types. Each generated file has the same overall structure: file
+preamble, per-phase namespace blocks, barrier infrastructure, and a dispatcher
+`kernel_main()`.
 
 
-### Terminology
+### Approach: Namespace Isolation
 
-**Original kernel source**: The `.cpp` file from a single unfused op (e.g.
-`dataflow/reader_unary_interleaved.cpp`). These files follow a standard
-layout:
+Each phase's **entire original source** is pasted into a C++ namespace
+(`namespace phase_N { ... }`) with minimal transformations:
 
-```c++
-#include <header.h>             // ← includes
-#define SOME_MACRO 42           // ← source defines
+1. `#include` lines stripped (collected separately at file scope)
+2. `kernel_main()` renamed to `run()` (simple regex)
+3. `run()` marked `__attribute__((noinline))` (reduces binary size)
+4. Compile-time arg indices offset (regex on literal integers)
 
-namespace N { ... }             // ← pre-main: shared block
-void helper() { ... }           // ← pre-main: phase-specific block
-constexpr int X = 1;            // ← pre-main: phase-specific block
-
-void kernel_main() {            // ← kernel body
-    uint32_t addr = get_arg_val<uint32_t>(0);
-    helper();
-}
-```
-
-**Includes**: `#include` directives at the top of the file. Collected,
-deduplicated, and emitted once in the fused output.
-
-**Source defines**: `#define` directives that appear in the source file before
-`kernel_main()` (distinct from the per-kernel defines injected by the C++
-build system via command-line flags). Collected, deduplicated, and emitted once
-in the fused output.
-
-**Pre-main code**: All top-level declarations and definitions between the
-includes/defines and `kernel_main()`. This is where helper functions, global
-variables, namespace blocks, `using` declarations, `typedef`s, struct
-definitions, and preprocessor conditional blocks (`#ifdef`/`#if`/`#ifndef`)
-live. Pre-main code is categorized into **shared** blocks (deduplicated) and
-**phase-specific** blocks (prefixed per-phase).
-
-**Kernel body**: The contents of `kernel_main()` — everything between its
-opening and closing braces, not including the braces themselves.
-
-**Phase function**: A `FORCE_INLINE` wrapper that contains one phase's
-transformed kernel body. Named `phaseN_reader()`, `phaseN_writer()`, or
-`phaseN_compute()`.
-
-**Generated `kernel_main()`**: The outer dispatch function that calls phase
-functions in sequence with inter-phase barrier code between them.
+**No body extraction or name prefixing is needed.** C++ namespaces provide
+complete symbol isolation — helper functions, globals, `constexpr` values,
+and inner namespaces defined in one phase cannot collide with another phase's
+identifiers.
 
 
 ### Source Parsing (`cpp_parser` Module)
 
-All C++ source decomposition uses tree-sitter AST parsing via the
-`cpp_parser` module. No regex-based parsing is used for structural
-decomposition (regex is only used for targeted compile-time arg rewriting).
+The `cpp_parser` module uses **regex and brace-matching** (no tree-sitter).
 
 #### `extract_kernel_body(source)`
 
-Finds the `kernel_main` function definition in the AST, extracts the body
-node, and returns its inner text (without outer braces).
-
-#### `categorize_pre_main(source)`
-
-Walks all top-level AST children before `kernel_main()` and classifies each
-into a `PreMainBlock` with a semantic `kind`:
-
-| Kind | AST Node Type | Examples |
-|------|--------------|---------|
-| `"function"` | `function_definition`, `template_declaration` containing function | `FORCE_INLINE void helper() { ... }`, `template<typename T> void f() { ... }` |
-| `"variable"` | `declaration` (non-function) | `constexpr uint32_t X = 1;`, `static int buf[4];` |
-| `"namespace"` | `namespace_definition` | `namespace MATH { ... }` |
-| `"using"` | `using_declaration`, `alias_declaration`, `type_alias_declaration` | `using uint32_t = ...;` |
-| `"namespace_alias"` | `namespace_alias_definition` | `namespace ckernel = ...;` |
-| `"struct"` | `struct_specifier`, `class_specifier`, `enum_specifier` | `struct Foo { ... };` |
-| `"preproc_block"` | `preproc_ifdef`, `preproc_if`, `preproc_ifndef` | `#ifdef FP32 ... #endif` |
-| `"other"` | everything else | Rare: forward declarations, etc. |
-
-For `preproc_block`, it also extracts `inner_names`: the function and variable
-names defined inside the conditional block, so they can be prefixed.
+Finds `kernel_main()` via regex, then uses `_find_matching_brace()` (a
+brace-counting scanner that skips comments, strings, raw strings, and char
+literals) to extract the body text between the opening and closing braces.
 
 #### `inline_local_includes(source, kernel_dir)`
 
 Resolves `#include "local.h"` (quoted, not angle-bracket) by reading the
-referenced file relative to `kernel_dir` and inlining its contents in place.
-Strips `#pragma once` from inlined content. Recursive for nested local
-includes.
+referenced file relative to `kernel_dir`. Returns
+`([(resolved_path, content), ...], remaining_source)` — header content is
+separated for file-scope placement, and the `#include` line is removed from
+the remaining source. Strips `#pragma once` from inlined content. Nested
+local includes that resolve to local files are also removed (their content
+is already inlined by the parent).
 
-This is necessary because fused kernels are emitted as `SOURCE_CODE` type
-(source string, not file path). The JIT compiler doesn't know the original
-op's kernel directory, so local includes would fail to resolve.
-
-#### `replace_in_code_only(source, old_name, new_name)`
-
-Word-boundary replacement that skips string literals, comments, and other
-non-code tokens. Uses tree-sitter to identify non-code byte ranges, then
-applies regex replacement only in code regions. This prevents false matches
-like renaming `helper` inside a string `"helper"`.
+This separation is necessary because fused kernels are emitted as
+`SOURCE_CODE` type (source string, not file path). The JIT compiler doesn't
+know the original op's kernel directory, so local includes would fail to
+resolve.
 
 #### `collect_includes(sources)` / `collect_defines(sources)`
 
 Collect and deduplicate `#include` and `#define` lines across multiple source
-files. `collect_defines` uses tree-sitter to find the `kernel_main` line
-number and only collects defines before that point.
-
-#### `normalize_block(block)`
-
-Collapses whitespace and removes blank lines for content comparison during
-deduplication.
-
-
-### Pre-Main Categorization and Isolation
-
-`_collect_all_pre_main_code()` takes all phases' parsed sources and sorts
-every pre-main block into either **shared** or **phase-specific**:
-
-**Shared** (deduplicated, emitted once at file scope):
-- Namespace blocks: deduplicated by signature (text before `{`). First
-  occurrence wins.
-- Everything else that isn't a function, variable, or preproc block:
-  `using`, `namespace_alias`, `struct`, `typedef`, `template` (non-function).
-  Deduplicated by normalized content.
-
-**Phase-specific** (prefixed, emitted per-phase):
-- Free function definitions: the function name is prefixed with `phaseN_`.
-  Example: `void helper()` becomes `void phase0_helper()`.
-- Global/static variables: the variable name is prefixed.
-  Example: `constexpr uint32_t X = 1;` becomes
-  `constexpr uint32_t phase0_X = 1;`.
-- Preprocessor conditional blocks: the block text is preserved as-is, but
-  all inner function/variable names are prefixed.
-
-ALL phases get prefixed, including phase 0. This prevents:
-- Silent first-wins drops when two phases define the same function with
-  different bodies (C++ one-definition rule).
-- Redefinition errors between inlined header code and phase code.
-
-The returned `phase_names` dict records which original names were prefixed
-per phase. These same names are then prefixed in the kernel body (see
-Phase Body Transformation below).
+strings. `collect_defines` only collects defines that appear before
+`kernel_main()`.
 
 
 ### Preprocessor Define Handling
 
 Preprocessor defines injected by the C++ build system (not from source files)
-are classified by `_categorize_phase_defines()`:
-
-**Uniform defines**: Same `(name, value)` pair in ALL phases. Emitted once
-as `#define` at the top of the generated file. Example: `#define REDUCE_OP 0`
-when all phases use the same reduction operation.
-
-**Varying defines**: Present in only some phases, or with different values
-across phases. Emitted as `#define`/`#undef` pairs scoped to each phase's
-pre-main code and phase function body. The C++ preprocessor resolves `#ifdef`
-blocks within each phase's scope according to that phase's define state.
+are classified by `_collect_phase_defines()`:
 
 **MUST_MATCH defines**: `REDUCE_OP`, `REDUCE_DIM`, `BCAST_LLKOP`,
-`BCAST_DIM`. These are consumed by LLK headers at include time and must be
-identical across all phases. Validated at fusion time; mismatches raise an
-error. Treated as uniform after validation.
+`BCAST_DIM`. The LLK system headers read these at `#include` time to select
+template specializations and inline code paths. Because `#include` lines are
+deduplicated and emitted once at file scope (before any phase namespace), the
+headers are parsed exactly once — so these defines can only have one value.
+If two phases disagree on `REDUCE_OP`, there is no way to give the header
+both values. `_collect_phase_defines()` validates that all phases agree and
+raises an error on mismatch. The validated defines are emitted once at file
+scope before the `#include` block and passed to the compiler as `-D` flags.
 
-The `#define`/`#undef` scoping pattern:
+**Varying defines**: Present in only some phases, or with different values
+across phases. Emitted as `#define`/`#undef` pairs wrapping each phase's
+namespace block. The C++ preprocessor resolves `#ifdef` blocks within each
+phase's scope according to that phase's define state:
 
 ```c++
-// Varying define: SOME_FLAG is 1 in phase 0, absent in phase 1
-
+// Phase 0: SOME_FLAG=1
 #define SOME_FLAG 1
-// phase 0 pre-main code (helper functions see SOME_FLAG=1)
+namespace phase_0 {
+    // ... entire source: #ifdef SOME_FLAG is true here ...
+} // namespace phase_0
 #undef SOME_FLAG
 
-// phase 1 pre-main code (helper functions see SOME_FLAG undefined)
+// Phase 1: SOME_FLAG absent
+namespace phase_1 {
+    // ... entire source: #ifdef SOME_FLAG is false here ...
+} // namespace phase_1
+```
 
-#define SOME_FLAG 1
-FORCE_INLINE void phase0_reader() {
-    // kernel body: #ifdef SOME_FLAG is true here
+
+### Compile-Time Arg Redirection
+
+Each phase's compile-time args are concatenated into a single flat array.
+Two kinds of redirects ensure each phase reads from its own slice:
+
+#### Positional CT args (regex offsetting)
+
+Literal `get_compile_time_arg_val(N)` and `TensorAccessorArgs<N>` indices
+are offset by the cumulative count of prior phases' CT args:
+
+```
+// Phase 0: offset = 0
+get_compile_time_arg_val(2)   →  get_compile_time_arg_val(2)
+
+// Phase 1: offset = 10
+get_compile_time_arg_val(2)   →  get_compile_time_arg_val(12)
+TensorAccessorArgs<0>         →  TensorAccessorArgs<10>
+```
+
+This is done via regex before the source is pasted into the namespace. Only
+literal integer arguments are offset — non-literal indices (e.g.
+`method.next_compile_time_args_offset()`) are already correct after
+`TensorAccessorArgs<N>` offsetting.
+
+#### Named CT args (`#define` redirect)
+
+Phase 0 keeps original names. Phase N > 0 gets a `#define` that prepends
+`phase_N_` to the string argument:
+
+```c++
+#define get_named_compile_time_arg_val(name) get_named_ct_arg("phase_1_" name)
+namespace phase_1 {
+    // get_named_compile_time_arg_val("blk")
+    //   → get_named_ct_arg("phase_1_" "blk")
+    //   → get_named_ct_arg("phase_1_blk")    (C string concatenation)
 }
-#undef SOME_FLAG
-
-FORCE_INLINE void phase1_reader() {
-    // kernel body: #ifdef SOME_FLAG is false here
-}
-```
-
-This replaces any need for source-level `#ifdef` resolution. The compiler's
-preprocessor handles it naturally.
-
-
-### Phase Body Transformation
-
-Each phase's kernel body goes through `_transform_phase_source()`, which
-applies three transformations in order:
-
-#### 1. Named compile-time arg prefixing
-
-Phase 0 keeps original names. Phase N > 0 gets `phaseN_` prefix:
-
-```
-get_named_compile_time_arg_val("blk")
-→ get_named_compile_time_arg_val("phase1_blk")
-```
-
-Uses regex on the string argument inside the function call.
-
-#### 2. Positional compile-time arg offsetting
-
-Positional `get_compile_time_arg_val(N)` indices are offset by the
-cumulative count of prior phases' compile-time args. Also handles
-`TensorAccessorArgs<N>` which expands to `get_compile_time_arg_val`:
-
-```
-get_compile_time_arg_val(5)
-→ get_compile_time_arg_val(15)        // offset = 10
-
-TensorAccessorArgs<0>
-→ TensorAccessorArgs<10>              // same offset
-```
-
-Uses regex on the numeric argument.
-
-#### 3. Phase name prefixing
-
-All names from the `phase_names` dict (functions and globals that were
-prefixed in pre-main) are also prefixed in the kernel body. Uses
-`replace_in_code_only()` to avoid replacing inside strings/comments:
-
-```
-helper();         → phase0_helper();
-X + 1             → phase0_X + 1
+#undef get_named_compile_time_arg_val
 ```
 
 
-### Runtime Arg Offsetting
+### Runtime Arg Redirection
 
-Runtime args (`get_arg_val<T>(idx)`) are set by the host at dispatch time
-(tensor addresses, tile counts, semaphore addresses). They cannot be
-substituted as compile-time constants. During fusion, each phase's runtime
-args are concatenated per-core into a single flat array. Phase N's args start
-at an offset equal to the cumulative count of all prior phases' args.
+Each phase's runtime args are concatenated per-core into a single flat array.
+Redirecting uses a **wrapper function + `#define`** pattern:
 
-The offsetting uses a **wrapper + `#define` redirect** pattern instead of
-source-level rewriting:
-
-**Step 1**: A wrapper function is emitted at file scope (before any
-`#define` redirect is active), so its body references the real `get_arg_val`:
+**Step 1**: Wrapper emitted at file scope (before any `#define` redirect is
+active), so its body references the real `get_arg_val`:
 
 ```c++
 template <typename T>
-FORCE_INLINE T __phase1_get_arg_val(int arg_idx) {
-    return get_arg_val<T>(arg_idx + 10);  // offset for phase 1
+FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
+    return get_arg_val<T>(arg_idx + 5);
 }
 ```
 
-**Step 2**: A `#define` redirects all `get_arg_val` tokens to the wrapper
-within the scope of each phase's pre-main code and phase function:
+**Step 2**: `#define` scoped around the phase namespace block:
 
 ```c++
-#define get_arg_val __phase1_get_arg_val
-FORCE_INLINE void phase1_reader() {
-    uint32_t addr = get_arg_val<uint32_t>(0);  // reads arg[10]
+#define get_arg_val phase_1_get_arg_val
+namespace phase_1 {
+    // get_arg_val<uint32_t>(0)  →  phase_1_get_arg_val<uint32_t>(0)
+    //                           →  reads arg[5]
 }
 #undef get_arg_val
 ```
 
-This catches ALL `get_arg_val` calls in scope — including calls in helper
-functions defined in pre-main, calls in inlined header code, calls with
-variable indices like `get_arg_val<uint32_t>(arg_idx++)`, and calls produced
-by macro expansion. The wrapper is `FORCE_INLINE` with a constant offset, so
-it compiles to a single add-immediate instruction.
+This catches ALL `get_arg_val` calls in scope — helper functions, inlined
+header code, variable indices like `get_arg_val<uint32_t>(idx++)`, and macro
+expansions. The wrapper is `FORCE_INLINE` with a constant offset, so it
+compiles to a single add-immediate instruction.
 
-Phase 0 uses no wrapper (offset is 0; it calls the real `get_arg_val`
-directly).
+ALL phases get wrappers (including phase 0) for uniform treatment.
+
+The same pattern applies to `get_common_arg_val` and `get_common_arg_addr`
+when any phase uses common runtime args.
 
 
 ### Generated File Structure
 
-The three RISC-specific generators (`_generate_fused_riscv0_source`,
-`_generate_fused_riscv1_source`, `_generate_fused_compute_source`) all emit
-files with the same layered structure. Below is the complete layout for a
-3-phase reader kernel. Writer and compute kernels follow the same pattern
-with RISC-specific barrier behavior (described in the next section).
+Below is the layout for a 3-phase fused reader kernel.
 
 ```c++
 // =====================================================================
-// Section 1: License Header
+// 1. License Header
 // =====================================================================
-// SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-// SPDX-License-Identifier: Apache-2.0
-
+// SPDX-FileCopyrightText: ...
 // Auto-generated fused reader kernel - 3 phases
 
 
 // =====================================================================
-// Section 2: Uniform Defines
+// 2. File-Scope Defines + Includes
 // =====================================================================
-// Defines identical across all phases. Emitted once.
+// MUST_MATCH defines (identical across all phases)
 #define REDUCE_OP 0
 #define REDUCE_DIM 0
 
-
-// =====================================================================
-// Section 3: Source Defines
-// =====================================================================
-// #define lines collected from original source files (before kernel_main).
+// Source-embedded defines (collected from original source files)
 #define BIT_SET(x, b) ((x) | (1 << (b)))
 
-
-// =====================================================================
-// Section 4: Includes
-// =====================================================================
-// Deduplicated, sorted #include lines from all phases.
+// Deduplicated includes from all phases
 #include <cstdint>
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.h"
+#include "tools/profiler/kernel_profiler.hpp"
+#include <array>
 
 
 // =====================================================================
-// Section 5: Shared Pre-Main
+// 3. Inlined Header Content
 // =====================================================================
-// Deduplicated namespace blocks, using declarations, struct definitions.
-namespace MATH {
+// Content from local #include "..." files, deduplicated by resolved path.
+// Placed at file scope because it may contain namespace definitions.
+namespace some_shared_ns {
     // ...
 }
 
-using uint32_t = unsigned int;
-
 
 // =====================================================================
-// Section 6: Runtime Arg Wrapper Functions
+// 4. RT Arg Wrapper Functions
 // =====================================================================
-// Emitted at file scope BEFORE any #define redirect, so the wrapper
-// body references the real get_arg_val.
+// Emitted at file scope BEFORE any #define redirect.
 template <typename T>
-FORCE_INLINE T __phase1_get_arg_val(int arg_idx) {
+FORCE_INLINE T phase_0_get_arg_val(int arg_idx) {
+    return get_arg_val<T>(arg_idx + 0);
+}
+template <typename T>
+FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 5);
 }
-
 template <typename T>
-FORCE_INLINE T __phase2_get_arg_val(int arg_idx) {
+FORCE_INLINE T phase_2_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 11);
 }
 
 
 // =====================================================================
-// Section 7: Per-Phase Pre-Main Code
+// 5. Phase Namespace Blocks
 // =====================================================================
-// Each phase's helper functions and globals, prefixed with phaseN_.
-// Wrapped with that phase's varying #define/#undef and RT arg redirect.
+// Each phase: #define redirects → namespace { entire source } → #undef
 
-// -- Phase 0 (no RT arg redirect needed; offset is 0) --
-constexpr uint32_t phase0_TILE_SIZE = 2048;
+// ============ Phase 0: LayerNorm ============
+#define SOME_FLAG 1                              // varying define
+#define get_arg_val phase_0_get_arg_val          // RT arg redirect
+namespace phase_0 {
 
-FORCE_INLINE void phase0_read_tiles(uint32_t addr) {
-    uint32_t n = get_arg_val<uint32_t>(3);  // real get_arg_val
+// (entire original source, minus #include lines, with kernel_main → run)
+// Positional CT arg indices already offset (0 for phase 0).
+constexpr uint32_t TILE_SIZE = 2048;
+
+FORCE_INLINE void read_tiles(uint32_t addr) {
+    uint32_t n = get_arg_val<uint32_t>(3);       // → reads arg[3]
     // ...
 }
 
-// -- Phase 1 --
-#define get_arg_val __phase1_get_arg_val
-#define SOME_VARYING_FLAG 1
-constexpr uint32_t phase1_TILE_SIZE = 4096;
-
-FORCE_INLINE void phase1_read_tiles(uint32_t addr) {
-    uint32_t n = get_arg_val<uint32_t>(0);  // → __phase1_get_arg_val(0)
-    // ...                                     → reads arg[5]
+__attribute__((noinline)) void run() {
+    uint32_t addr = get_arg_val<uint32_t>(0);    // → reads arg[0]
+    read_tiles(addr);
 }
-#undef SOME_VARYING_FLAG
+
+} // namespace phase_0
+#undef get_arg_val
+#undef SOME_FLAG
+
+// ============ Phase 1: Slice ============
+#define get_arg_val phase_1_get_arg_val
+#define get_named_compile_time_arg_val(name) \
+    get_named_ct_arg("phase_1_" name)
+namespace phase_1 {
+
+__attribute__((noinline)) void run() {
+    uint32_t addr = get_arg_val<uint32_t>(0);    // → reads arg[5]
+    // get_named_compile_time_arg_val("cb_in")
+    //   → get_named_ct_arg("phase_1_cb_in")
+}
+
+} // namespace phase_1
+#undef get_named_compile_time_arg_val
 #undef get_arg_val
 
-// -- Phase 2 --
-#define get_arg_val __phase2_get_arg_val
-constexpr uint32_t phase2_TILE_SIZE = 2048;
-
-FORCE_INLINE void phase2_read_tiles(uint32_t addr) {
-    uint32_t n = get_arg_val<uint32_t>(0);  // → reads arg[11]
-    // ...
-}
-#undef get_arg_val
+// ============ Phase 2: Matmul ============
+// (same pattern)
 
 
 // =====================================================================
-// Section 8: Infrastructure Functions (reader/BRISC only, multi-phase)
+// 6. Barrier Infrastructure
 // =====================================================================
-
-// Named compile-time args for barrier configuration
-constexpr uint32_t __barrier_rt_offset =
-    get_named_compile_time_arg_val("barrier_rt_offset");
-constexpr uint32_t __seg0_num_cores =
-    get_named_compile_time_arg_val("seg0_num_cores");
-// ... more per-segment constants (core0 coords, mcast bounds)
-
-// CB reset: equalize stream registers + reset BRISC local pointers
-FORCE_INLINE void __cb_reset_to_empty() {
-    // For each CB in sweep list:
-    {
-        uint16_t remaining = *get_cb_tiles_received_ptr(cb)
-                           - *get_cb_tiles_acked_ptr(cb);
-        volatile tt_reg_ptr uint32_t* acked_ptr = ...;
-        for (uint16_t i = 0; i < remaining; i++) {
-            acked_ptr[0] += 1;       // per-tile increment (bulk hangs HW)
-        }
-        uint32_t fifo_start = cb.fifo_limit - cb.fifo_size;
-        cb.fifo_rd_ptr = fifo_start;
-        cb.fifo_wr_ptr = fifo_start;
-    }
-}
-
-// Per-segment NOC barrier
-FORCE_INLINE void __barrier_seg0(uint32_t call_idx,
-    volatile tt_l1_ptr uint32_t* arrive,
-    volatile tt_l1_ptr uint32_t* release) {
-    if constexpr (__seg0_num_cores > 1) {
-        noc_semaphore_inc(core0_arrive_noc_addr, 1);      // all cores
-        if (is_core_0) {
-            noc_semaphore_wait_min(arrive, N*(call_idx+1)); // wait all
-            *release = call_idx + 1;                        // set release
-            noc_semaphore_set_multicast_loopback_src(...);  // broadcast
-            noc_async_write_barrier();
-        } else {
-            noc_semaphore_wait_min(release, call_idx + 1);  // wait
-        }
-    } else {
-        *release = call_idx + 1;  // single-core: no NOC needed
-    }
+namespace barrier {
+    // (described below — CB reset, segment sync, phase wait/reset, init)
 }
 
 
 // =====================================================================
-// Section 9: Phase Functions
-// =====================================================================
-// Each phase's kernel body wrapped in a FORCE_INLINE function.
-// Varying defines and RT arg redirect are scoped per-function.
-
-// Phase 0 reader (no redirect)
-FORCE_INLINE void phase0_reader() {
-    // Transformed kernel body:
-    //   - Named CT args: original names (phase 0 keeps them)
-    //   - Positional CT args: original indices
-    //   - RT args: original get_arg_val (offset = 0)
-    //   - Helper calls: phase0_read_tiles(...)
-    uint32_t addr = get_arg_val<uint32_t>(0);       // reads arg[0]
-    phase0_read_tiles(addr);
-}
-
-// Phase 1 reader (with redirect + varying defines)
-#define get_arg_val __phase1_get_arg_val
-FORCE_INLINE void phase1_reader() {
-    #define SOME_VARYING_FLAG 1
-    // Transformed kernel body:
-    //   - Named CT args: "phase1_blk", "phase1_cb_in", etc.
-    //   - Positional CT args: offset by phase 0's count
-    //   - RT args: redirected to __phase1_get_arg_val
-    //   - Helper calls: phase1_read_tiles(...)
-    uint32_t addr = get_arg_val<uint32_t>(0);       // reads arg[5]
-    phase1_read_tiles(addr);
-    #undef SOME_VARYING_FLAG
-}
-#undef get_arg_val
-
-// Phase 2 reader (with redirect)
-#define get_arg_val __phase2_get_arg_val
-FORCE_INLINE void phase2_reader() {
-    uint32_t addr = get_arg_val<uint32_t>(0);       // reads arg[11]
-    phase2_read_tiles(addr);
-}
-#undef get_arg_val
-
-
-// =====================================================================
-// Section 10: Generated kernel_main()
+// 7. Dispatcher
 // =====================================================================
 void kernel_main() {
-    // Read barrier L1 flag addresses from concatenated runtime args
-    const uint32_t __compute_done_addr =
-        get_arg_val<uint32_t>(__barrier_rt_offset);
-    const uint32_t __writer_done_addr =
-        get_arg_val<uint32_t>(__barrier_rt_offset + 1);
-    volatile tt_l1_ptr uint32_t* __compute_done = ...;
-    volatile tt_l1_ptr uint32_t* __writer_done = ...;
+    barrier::init();
 
-    // Per-segment arrive/release pointers
-    volatile tt_l1_ptr uint32_t* __seg0_arrive = ...;
-    volatile tt_l1_ptr uint32_t* __seg0_release = ...;
-
-    // ---- Phase 0 ----
-    phase0_reader();
-
-    // ==== Barrier: Phase 0 → Phase 1 ====
-    noc_async_full_barrier();                  // drain NOC queue
-    noc_semaphore_wait_min(__compute_done, 1); // wait compute done
-    noc_semaphore_wait_min(__writer_done, 1);  // wait writer done
-    __cb_reset_to_empty();                     // equalize streams, reset ptrs
-    // Reset op semaphores to initial values
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        get_semaphore(sem_id)) = initial_val;
-    // Rebind CB addresses for phase 1
+    // Phase 0: LayerNorm
     {
-        constexpr uint32_t new_addr =
-            get_named_compile_time_arg_val("phase1_cb0_rebind_addr");
-        constexpr uint32_t new_size =
-            get_named_compile_time_arg_val("phase1_cb0_rebind_size");
-        get_local_cb_interface(0).fifo_rd_ptr = new_addr;
-        get_local_cb_interface(0).fifo_wr_ptr = new_addr;
-        get_local_cb_interface(0).fifo_size = new_size;
-        get_local_cb_interface(0).fifo_limit = new_addr + new_size;
+        DeviceZoneScopedN("LayerNorm");
+        phase_0::run();
     }
-    __barrier_seg0(0, __seg0_arrive, __seg0_release);  // cross-core sync
+    barrier::phase::wait();
+    barrier::phase::reset();
 
-    // ---- Phase 1 ----
-    phase1_reader();
+    // Phase 1: Slice
+    {
+        DeviceZoneScopedN("Slice");
+        phase_1::run();
+    }
+    barrier::phase::wait();
+    barrier::phase::reset();
 
-    // ==== Barrier: Phase 1 → Phase 2 ====
-    noc_async_full_barrier();
-    noc_semaphore_wait_min(__compute_done, 2);
-    noc_semaphore_wait_min(__writer_done, 2);
-    __cb_reset_to_empty();
-    // ... rebind, barrier ...
-
-    // ---- Phase 2 ----
-    phase2_reader();
+    // Phase 2: Matmul
+    {
+        DeviceZoneScopedN("Matmul");
+        phase_2::run();
+    }
 }
 ```
 
 
-### RISC-Specific Barrier Behavior
+### Barrier Namespace (`namespace barrier`)
 
-The three RISC types play different roles in inter-phase synchronization.
-All three are generated with the same sectional structure (sections 1-7, 9
-above), but sections 8 and 10 differ:
+All barrier infrastructure lives in a unified `namespace barrier { }` block
+generated by `_generate_barrier_namespace()` for any RISC type. The structure
+is the same across RISC types; only the CB reset/resync function and the
+phase wait/reset bodies differ.
 
-#### Reader / BRISC (`_generate_fused_riscv0_source`)
+#### Structure
 
-The reader is the **barrier coordinator**. Between phases it:
+```c++
+namespace barrier {
+constexpr uint32_t rt_offset =
+    get_named_compile_time_arg_val("barrier_rt_offset");
+constexpr uint32_t rebind_rt_offset =      // only if rebinds exist
+    get_named_compile_time_arg_val("rebind_rt_offset");
 
-1. Drains the NOC queue (`noc_async_full_barrier()`)
-2. Waits for local compute and writer to finish
-   (`noc_semaphore_wait_min` on `compute_done` and `writer_done`)
-3. Resets CB state (`__cb_reset_to_empty()`) — equalizes stream registers
-   via per-tile increment loop, resets `fifo_rd_ptr`/`fifo_wr_ptr` to CB
-   start
-4. Resets op semaphores to initial values
-5. Rebinds CB addresses for the next phase (if CB pool remapped addresses)
-6. Runs the cross-core NOC barrier (`__barrier_segN()`)
+// CB reset/resync function (RISC-specific, see below)
+template <size_t N>
+__attribute__((noinline)) void reset_cbs(const std::array<uint32_t, N>& cbs);
 
-#### Writer / NCRISC (`_generate_fused_riscv1_source`)
+// CB rebind function (only if rebinds exist)
+template <size_t N>
+__attribute__((noinline)) void rebind_cbs(
+    const std::array<uint32_t, N>& slots, uint32_t rt_start);
 
-Between phases the writer:
+// Per-phase CB index arrays (for targeted reset)
+constexpr std::array<uint32_t, 3> phase_0_cbs = {0, 1, 4};
+constexpr std::array<uint32_t, 2> phase_1_cbs = {2, 4};
 
-1. Drains NOC writes (`noc_async_write_barrier()`)
-2. Signals done by writing `phase_idx + 1` to `writer_done` L1 flag
-3. Spins on `global_release` (`while (*release < N)`) — plain volatile read,
-   no NOC APIs
-4. Resyncs NCRISC local CB pointers (`__resync_ncrisc_cb_state()`) — resets
-   `fifo_rd_ptr`/`fifo_wr_ptr` to CB start
-5. Rebinds CB addresses for the next phase
+// Per-segment namespaces (cross-core sync)
+namespace segment_0 { ... }
 
-The NCRISC resync function only resets local pointers. It does not touch
-stream registers (BRISC owns those).
+// Phase namespace (wait + reset state machine)
+namespace phase { ... }
 
-#### Compute / TRISC (`_generate_fused_compute_source`)
+// init() — reads semaphore addresses from RT args, resets state
+void init();
 
-Between phases compute:
+} // namespace barrier
+```
 
-1. Signals done by writing `phase_idx + 1` to `compute_done` L1 flag
-2. Spins on `global_release` (`while (*release < N)`)
-3. Resyncs compute-side CB state (`__resync_cb_state_after_sweep()`)
+The barrier body — CB reset/resync, segment sync, phase wait/reset — is
+described in the **Circular Buffer Management** and **Synchronization
+Protocol** sections. The code generation details specific to the barrier
+namespace are:
 
-The compute resync is split by TRISC instance using `#ifdef`:
-
-- **TRISC0 (unpack)**: Reads `tiles_acked` from stream register via
-  `reg_read()`, stores to local `tiles_acked`. Resets `fifo_rd_ptr` to CB
-  start.
-- **TRISC1 (math)**: No CB resync needed (no cb_interface on TRISC1).
-  Rebind code is guarded with `#ifndef TRISC_MATH`.
-- **TRISC2 (pack)**: Reads `tiles_received` from stream register via
-  `reg_read()`, stores to local `tiles_received`. Resets `fifo_wr_ptr` to
-  CB start and `fifo_wr_tile_ptr` to 0.
-
-### CB Rebinding
-
-When the CB pool allocator remaps a CB to a different physical slot between
-phases, the L1 address and buffer size change. Rebind code is emitted in
-`kernel_main()` between the CB reset and the global barrier. It updates
-`fifo_rd_ptr`, `fifo_wr_ptr`, `fifo_size`, and `fifo_limit` on the
-`local_cb_interface` struct.
-
-For compute kernels, rebind addresses are right-shifted by 4 (`>> 4`)
-because TRISC addresses use 16-byte units. This shift is guarded with
-`#ifndef TRISC_MATH` since TRISC1 has no `cb_interface`.
-
-The rebind addresses and sizes are passed as named compile-time args:
-`phaseN_cbM_rebind_addr` and `phaseN_cbM_rebind_size`.
+- **`reset_cbs` / `resync_cbs`**: Templated on `size_t N` (not `uint32_t` —
+  they differ on RISC-V 32-bit) with `__attribute__((noinline))` to prevent
+  loop unrolling that overflows NCRISC's 16KB code limit. Only CBs from the
+  just-completed phase are touched — per-phase `constexpr std::array`
+  (`phase_K_cbs`) computed from the pool's remap tables.
+- **`rebind_cbs`**: Reads addresses from runtime args (not CT args, to avoid
+  JIT cache busting). On compute, guarded with `#ifndef TRISC_MATH`.
+  See **CB Pool Allocator — CB Address Rebinding** for the concept.
+- **`init()`**: Called once at the top of `kernel_main()`. Reads semaphore
+  L1 addresses from runtime args. Each RISC resets only **its own**
+  semaphore — BRISC does NOT reset `compute_done` or `writer_done` because
+  a fast compute/writer could signal before BRISC's init runs.
 
 
 ### Code Generation Pipeline Summary
 
-For each fused kernel binary (one per root-to-leaf path), the code
-generation pipeline runs independently for each RISC type:
+For each fused kernel binary (one per root-to-leaf path), `_generate_fused_source`
+runs independently for each RISC type:
 
 ```
-1. Read original sources     Read each phase's .cpp file, inline local
-                             #include "..." directives
+1. Read + inline         Read each phase's .cpp file. inline_local_includes()
+                         separates (header_content, remaining_source).
 
-2. Collect & dedup           Gather #include lines, source #define lines
-                             across all phases. Deduplicate.
+2. Collect + dedup       Gather #include and source #define lines from all
+                         phases. Deduplicate.
 
-3. Categorize defines        Split build-system defines into uniform
-                             (same in all phases) vs varying (differ).
-                             Validate MUST_MATCH defines.
+3. Classify defines      _collect_phase_defines() splits build-system defines
+                         into MUST_MATCH (validated identical, file scope) vs
+                         varying (per-phase #define/#undef).
 
-4. Categorize pre-main       Parse each phase's pre-main with tree-sitter.
-                             Split into shared (namespace, using) and
-                             phase-specific (functions, variables, preproc
-                             blocks). Prefix phase-specific names with
-                             phaseN_.
+4. Transform sources     For each phase: strip includes, strip file-scope
+                         defines, rename kernel_main → run, mark noinline,
+                         offset positional CT args + TensorAccessorArgs.
 
-5. Transform phase bodies    For each phase's kernel body:
-                             - Prefix named CT args (phase N>0)
-                             - Offset positional CT args
-                             - Prefix phase-specific function/global names
+5. Emit file preamble    License, MUST_MATCH defines, source defines, includes,
+                         inlined header content, RT arg wrappers.
 
-6. Emit sections 1-7         License, uniform defines, source defines,
-                             includes, shared pre-main, RT arg wrappers,
-                             per-phase pre-main with #define/#undef scoping
+6. Emit phase blocks     _generate_phase_block() per phase: varying #define →
+                         RT arg redirect → named CT arg redirect →
+                         namespace { source } → #undef all.
 
-7. Emit section 8            RISC-specific infrastructure functions
-                             (CB reset, barrier, CB resync)
+7. Emit barrier          _generate_barrier_namespace(): CB reset/resync,
+                         per-phase CB arrays, segment namespaces, phase
+                         wait/reset, init.
 
-8. Emit section 9            Phase functions with per-phase #define/#undef
-                             scoping and RT arg redirect
-
-9. Emit section 10           Generated kernel_main() with phase calls and
-                             inter-phase barrier orchestration
+8. Emit dispatcher       kernel_main(): barrier::init(), then for each phase:
+                         phase_N::run() with DeviceZoneScopedN profiling,
+                         followed by barrier::phase::wait() + reset().
 ```
 
 
-## Public API
+## Argument Concatenation
 
-### `Sequential`
+Each source op has its own runtime args (per-core) and compile-time args
+(positional and named).  The builder concatenates these into single flat
+arrays for the fused kernel, tracking cumulative offsets so the
+[redirection mechanisms](#runtime-arg-redirection) in Code Generation can
+route each phase's accesses to the correct slice.
 
-Fuses a sequence of ops into a single dispatch. Items can be `OpDescriptor`,
-`Sequential`, or `Parallel` objects. Nested `Sequential` items are flattened.
+### Runtime Args
 
-`build()` returns a `FusedOp` — a self-contained result that holds the fused
-`ProgramDescriptor`, input/output tensors, and `GlobalSemaphore` references.
-Device is auto-extracted from the input tensors (or can be passed explicitly).
+Runtime args are **per-core** — each core can have a different number of args
+for a given kernel.  Concatenation pads each phase to its cross-core maximum
+so that all cores share the same offset table:
+
+```
+Phase 0:  core(0,0) has 3 args, core(1,0) has 2 args  →  max = 3
+Phase 1:  core(0,0) has 4 args, core(1,0) has 4 args  →  max = 4
+
+core(0,0):  [a0 a1 a2 | b0 b1 b2 b3]      offset_0 = 0, offset_1 = 3
+core(1,0):  [c0 c1  0 | d0 d1 d2 d3]      (c padded to 3 with a zero)
+```
+
+This guarantees that `get_arg_val(i + offset_N)` reads the correct value on
+every core, regardless of per-core arg count variation within a phase.
+
+After phase concatenation, two suffixes are appended uniformly to every core:
+
+**Barrier suffix.**  The L1 addresses of the phase-sync semaphores, selected
+by RISC type:
+
+| RISC     | Barrier args appended                                 |
+|----------|-------------------------------------------------------|
+| riscv_0  | `[compute_done_addr, writer_done_addr]`               |
+| riscv_1  | `[compute_done_addr, writer_done_addr]` + segment addrs |
+| compute  | `[compute_done_addr, writer_done_addr]`               |
+
+The writer (riscv_1) additionally receives the `global_arrive` and
+`global_release` addresses for each barrier segment, since it coordinates
+the cross-core NOC barrier.  The starting index of the barrier suffix is
+recorded as the named CT arg `barrier_rt_offset`.
+
+**Rebind suffix.**  For sharded CBs whose L1 buffer addresses change between
+phases, the builder appends `[addr, size]` pairs in sorted phase order.  The
+barrier's `rebind_cbs()` function reads these at the index given by the named
+CT arg `rebind_rt_offset`.  When no sharded CBs need rebinding, this suffix
+is omitted.
+
+The final per-core layout:
+
+```
+[phase_0 args (padded)] [phase_1 args (padded)] ... [barrier addrs] [rebind pairs]
+ ↑ offset_0              ↑ offset_1                 ↑ barrier_rt_offset  ↑ rebind_rt_offset
+```
+
+**Common runtime args.**  Some kernels have `common_runtime_args` — values
+shared identically across all cores (as opposed to per-core args above).
+These are concatenated separately with their own cumulative offsets and
+redirected via `get_common_arg_val` / `get_common_arg_addr` wrappers, using
+the same wrapper + `#define` pattern as per-core args.
+
+### Compile-Time Args
+
+**Positional args** are concatenated in phase order.  The cumulative offset
+for each phase drives the regex transform described in
+[CT Arg Redirection](#compile-time-arg-redirection):
+
+```
+Phase 0: [a b c]          offset_0 = 0
+Phase 1: [d e]             offset_1 = 3
+Phase 2: [f g h i]         offset_2 = 5
+Merged:  [a b c d e f g h i]
+```
+
+**Named args** use string prefixing instead of numeric offsets.  Phase 0
+keeps its original names; phase N > 0 gets `phase_N_` prepended.  CB-reference
+names (those starting with `cb_`) are remapped through the CB pool so the
+fused kernel sees pool-allocated slot indices rather than original CB indices:
+
+```
+Phase 0: ("cb_in", 0), ("blk", 4)         →  ("cb_in", 2), ("blk", 4)
+Phase 1: ("cb_in", 0), ("cb_out", 16)     →  ("phase_1_cb_in", 0), ("phase_1_cb_out", 3)
+```
+
+(Here CB 0 in phase 0 was pooled to slot 2; CB 0 and 16 in phase 1 were
+pooled to slots 0 and 3.)
+
+The builder also injects infrastructure offsets as named CT args:
+
+| Named CT arg         | Value                | Used by                     |
+|----------------------|----------------------|-----------------------------|
+| `barrier_rt_offset`  | start of barrier suffix in RT args | `barrier::init()`  |
+| `rebind_rt_offset`   | start of rebind suffix in RT args  | `barrier::rebind_cbs()` |
+
+These are compile-time constants (stable across rebuilds with the same
+structure) that let the barrier code locate its data in the RT arg array
+without any runtime search.
+
+
+## Build Cache
+
+Building a fused kernel is expensive: codegen, CB allocation, barrier setup,
+and C++ source generation are orders of magnitude slower than simply patching
+runtime args.  Since `FusedOp`s are designed to be rebuilt on every call (the
+source ops have new tensors with new buffer addresses each time), a **build
+cache** avoids repeating this work.
+
+### Cache Key
+
+The cache key is the **structural hash** of the input ops — a tuple of
+per-op hashes that capture the compile-time shape of each op (kernel sources,
+compile-time args, CB layouts, core ranges):
 
 ```python
-# Linear chain
-fused = Sequential(op0, op1, op2).build()
-composite.launch([fused])
-
-# Incremental construction
-s = Sequential(op0)
-s.add(op1).add(op2)
-fused = s.build()
-
-# Composition via nesting (flattened automatically)
-stem = Sequential(op0, op1)
-full = Sequential(stem, op2).build()  # equivalent to op0 -> op1 -> op2
+ops = _flatten_ops(items)  # Sequential/Parallel → ordered op list
+key = tuple(ttnn.compute_program_descriptor_hash(op.descriptor) for op in ops)
 ```
 
-### `Parallel`
+Two builds with the same key have identical fused kernel source, CB layout,
+barrier configuration, and semaphore addresses.  Only **runtime args** (which
+encode tensor buffer addresses) and **CB buffer pointers** (for sharded
+tensors) change between calls.
 
-Items that run in parallel on disjoint core subsets. Requires at least 2 items.
+### Cache Hit: Fast Path
+
+On a cache hit, `_update_cached_descriptor` patches the cached
+`ProgramDescriptor` in-place:
+
+```
+1. Per fused kernel: clear RT args, re-append from fresh source ops,
+   append barrier suffix (constant), append rebind values (recomputed)
+2. Per fused kernel: rebuild common_runtime_args from source ops
+3. Per sharded CB: copy new buffer address from source op's CB
+4. Rebuild input/output tensor lists from fresh ops
+```
+
+The barrier suffix (GlobalSemaphore L1 addresses) is **constant** across
+builds because `FusedOp.semaphores` keeps the semaphore objects alive.
+Sharded CB rebind values are recomputed from the new ops' CB buffer
+addresses.
+
+When `generic_op` dispatches the cached `FusedOp`, it calls
+`override_runtime_arguments` on the underlying cached `Program`, which copies
+the patched RT args and CB buffer pointers into the program's device-side
+buffers.
+
+### Cache Miss: Full Build
+
+On a cache miss, the full build pipeline runs (codegen → CB allocation →
+barrier setup → fused source generation → `KernelDescriptor` construction).
+After building, the result is recorded for future hits:
 
 ```python
-# As part of a Sequential (branching tree)
-fused = Sequential(stem_op, Parallel(branch_a, branch_b)).build()
-composite.launch([fused])
-# fused.output_tensors[0] = branch_a output
-# fused.output_tensors[1] = branch_b output
+entry = _BUILD_CACHE.get(key)
+if entry is not None:
+    return _update_cached_descriptor(entry, ops)   # fast: patch RT args only
 
-# Standalone (independent ops merged into one dispatch)
-fused = Parallel(op_a, op_b).build()
-composite.launch([fused])
+fused = self._build_internal(device)               # slow: full codegen pipeline
+_BUILD_CACHE[key] = _cache_build_result(fused, ops, kernel_phase_map)
 ```
 
-### Nested splits
+### What Gets Cached
 
-`Parallel` items can contain `Sequential` chains, which can themselves
-contain further `Parallel` splits:
+`_CacheEntry` stores everything needed to patch fresh ops into the cached
+`FusedOp` without rebuilding:
 
-```python
-fused = Sequential(
-    stem,
-    Parallel(
-        Sequential(op_a, Parallel(op_a1, op_a2)),
-        op_b,
-    ),
-).build()
-```
+| Field | Purpose |
+|-------|---------|
+| `fused_op` | The built `FusedOp` (updated in-place on hit) |
+| `origin_kernel_map` | Per fused kernel: which source op kernels' RT args to concatenate |
+| `barrier_suffix` | Per fused kernel: fixed barrier RT arg values (semaphore addresses) |
+| `rebind_spec` | Per fused kernel: `(op_idx, cb_idx, total_size)` for sharded CB rebind args |
+| `sharded_cb_map` | `(merged_cb_idx, op_idx, orig_cb_idx)` for descriptor-level CB pointer updates |
+| `output_sources` | Which source ops produce the `FusedOp`'s output tensors |
 
-### `FusedOp` vs `OpDescriptor`
+The cache works for all topologies — linear chains (`Sequential`), parallel
+branches (`Parallel`), and branching trees (`Sequential` + `Parallel`).
 
-- **`OpDescriptor`**: Simple `(descriptor, input_tensors, output_tensors)` triple.
-  Used as input to `Sequential`/`Parallel`.
-- **`FusedOp`**: Result of `build()`. Same public fields plus `semaphores`
-  (keeps `GlobalSemaphore` refs alive). **Cannot be nested** in
-  `Sequential`/`Parallel` — `_resolve()` rejects it with a `TypeError`.
+### Cache Invalidation
 
-### Rules
+The cache uses `compute_program_descriptor_hash` which is sensitive to
+compile-time structure (kernel sources, CT args, core ranges, CB formats).
+If any of these change, the hash changes and a full rebuild occurs.
 
-- All three types (`OpDescriptor`, `Sequential`, `Parallel`) are
-  interchangeable as items. `FusedOp` is **not** accepted as an item.
-- Both `Sequential` and `Parallel` have `.add()` for incremental building
-  (returns `self` for chaining).
-- Items after a `Parallel` in a `Sequential` raise an error at build time
-  (the tree diverges and can't rejoin).
-- `build()` should only be called once on the outermost container.
-
-### `composite.launch(op_descriptors)`
-
-Merges and dispatches multiple `OpDescriptor` or `FusedOp` objects as a
-single program.
-
-### Implementation details
-
-`OpNode`, `OpGraphBuilder`, and `build_op_graph` are internal implementation
-details used by `Sequential` and `Parallel`. They remain exported for
-backward compatibility but are not part of the primary interface.
+`clear_build_cache()` manually clears all entries.  This is useful during
+development or when switching between different device configurations.
 
 
 ## Constraints and Limitations
@@ -1642,6 +1954,11 @@ backward compatibility but are not part of the primary interface.
 - **All phases must have all three kernel types** (reader, compute, writer).
 - **32 CB slot limit**: Multi-phase fusion with many phantom CBs may exhaust
   the 32-slot hardware limit.
+- **Rectangular core grids only**: The cross-core NOC barrier uses hardware
+  multicast, which writes to all cores in the physical bounding box.
+  Non-rectangular grids (e.g., L-shaped) would multicast to unintended cores,
+  corrupting their L1.  `_validate_rectangular_grid()` rejects these at build
+  time.
 - **C++ binding objects cannot be deepcopied**: The save/restore mechanism
   works around this by saving individual field values.
 - **MUST_MATCH defines must be consistent**: `REDUCE_OP`, `REDUCE_DIM`,
