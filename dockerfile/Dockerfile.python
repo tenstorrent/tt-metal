@@ -57,20 +57,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
-    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
-    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
-    DETECTED_PYTHON_VERSION="3.12"; \
-    else \
-    DETECTED_PYTHON_VERSION="3.10"; \
-    fi; \
-    fi; \
-    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
-    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
-    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1)
-
-
 # Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
 # This ensures the Python interpreter is installed to a path that can be read
 # when running bundle_python_into_venv.sh
@@ -81,12 +67,22 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Install Python with uv and create relocatable virtual environment
+# Auto-detect Python version from Ubuntu version if not explicitly provided,
+# then install Python with uv and create relocatable virtual environment
 # umask 000 ensures the venv is world-writable for multi-host NFS access
-RUN umask 000 && \
-    uv python install ${DETECTED_PYTHON_VERSION} && \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    umask 000 && \
+    uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
-    uv venv --link-mode copy --relocatable --managed-python --python ${DETECTED_PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv build numpy setuptools==80
 
 # Bundle the Python interpreter into the venv for full portability
@@ -137,20 +133,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Auto-detect Python version from Ubuntu version if not explicitly provided
-RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
-    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
-    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
-    DETECTED_PYTHON_VERSION="3.12"; \
-    else \
-    DETECTED_PYTHON_VERSION="3.10"; \
-    fi; \
-    fi; \
-    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
-    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
-    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1)
-
-
 # Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
@@ -159,14 +141,24 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Install Python with uv and create relocatable virtual environment
+# Auto-detect Python version from Ubuntu version if not explicitly provided,
+# then install Python with uv and create relocatable virtual environment
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
-RUN umask 000 && \
-    uv python install ${DETECTED_PYTHON_VERSION} && \
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    umask 000 && \
+    uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
-    uv venv --link-mode copy --relocatable --managed-python --python ${DETECTED_PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv setuptools==80
 
 # Create directory structure for requirements files
