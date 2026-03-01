@@ -5,7 +5,6 @@
 #pragma once
 
 #include "fabric_channel_allocator.hpp"
-#include "fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
 #include <array>
@@ -13,6 +12,8 @@
 #include <vector>
 
 namespace tt::tt_fabric {
+
+struct PublishedAllocatorState;
 
 /**
  * Remote channels allocator for tracking channel information about the remote ethernet core.
@@ -30,14 +31,12 @@ namespace tt::tt_fabric {
 class FabricRemoteChannelsAllocator : public FabricChannelAllocator {
 public:
     /**
-     * Construct a remote channels allocator from a static channels allocator.
-     * Extracts remote receiver channel base addresses and buffer counts from the static allocator
-     * for all VCs.
+     * Construct a remote channels allocator from published peer state.
+     * Uses the peer's receiver channel layout to populate remote receiver info.
      *
-     * @param static_allocator The static allocator containing remote channel information
+     * @param peer_state Published allocator state from the remote peer
      */
-    explicit FabricRemoteChannelsAllocator(
-        const FabricStaticSizedChannelsAllocator& static_allocator);
+    explicit FabricRemoteChannelsAllocator(const PublishedAllocatorState& peer_state);
 
     /**
      * Emit compile-time arguments for remote receiver channels.

@@ -355,8 +355,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
-bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+bool Device::compile_fabric(const std::vector<IDevice*>& all_devices) {
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this, all_devices);
     return fabric_program_ != nullptr;
 }
 

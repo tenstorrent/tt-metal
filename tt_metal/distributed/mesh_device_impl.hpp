@@ -255,7 +255,7 @@ public:
         bool minimal = false);
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    bool compile_fabric() override;
+    bool compile_fabric(const std::vector<IDevice*>& all_devices = {}) override;
     void configure_fabric() override;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);

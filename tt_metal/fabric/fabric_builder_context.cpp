@@ -4,10 +4,13 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_builder.hpp"
+#include <cstring>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -91,6 +94,28 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     tensix_config_ = nullptr;
 
+    // Compute default allocator state from the template config.
+    // This is available immediately (before any builders are created) for use during
+    // early initialization (e.g., populate_fabric_connection_info in write_routing_tables).
+    {
+        const auto& config = *router_config_;
+        size_t available_channel_buffering_space = std::accumulate(
+            config.available_buffer_memory_regions.begin(),
+            config.available_buffer_memory_regions.end(),
+            size_t{0},
+            [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
+
+        auto default_allocator = FabricStaticSizedChannelsAllocator(
+            config.topology,
+            FabricEriscDatamoverOptions{},
+            config.num_used_sender_channels_per_vc,
+            config.num_used_receiver_channels_per_vc,
+            config.channel_buffer_size_bytes,
+            available_channel_buffering_space,
+            config.available_buffer_memory_regions);
+        default_allocator_state_ = default_allocator.to_published_state();
+    }
+
     // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -100,6 +125,8 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
 }
+
+FabricBuilderContext::~FabricBuilderContext() = default;
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
     FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) const {
@@ -271,5 +298,159 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     return config;
 }
 
+
+// ============ Published Allocator State Registry ============
+
+void FabricBuilderContext::publish_allocator_state(ChipId chip_id, chan_id_t eth_chan, PublishedAllocatorState state) {
+    AllocatorStateKey key{chip_id, eth_chan};
+    TT_FATAL(
+        !published_allocator_state_.contains(key),
+        "Allocator state already published for chip {} eth_chan {}",
+        chip_id,
+        eth_chan);
+    published_allocator_state_.emplace(key, std::move(state));
+}
+
+const PublishedAllocatorState& FabricBuilderContext::get_published_allocator_state(
+    ChipId chip_id, chan_id_t eth_chan) const {
+    AllocatorStateKey key{chip_id, eth_chan};
+    auto it = published_allocator_state_.find(key);
+    TT_FATAL(
+        it != published_allocator_state_.end(),
+        "No published allocator state for chip {} eth_chan {}",
+        chip_id,
+        eth_chan);
+    return it->second;
+}
+
+bool FabricBuilderContext::has_published_allocator_state(ChipId chip_id, chan_id_t eth_chan) const {
+    return published_allocator_state_.contains(AllocatorStateKey{chip_id, eth_chan});
+}
+
+const PublishedAllocatorState& FabricBuilderContext::get_any_published_allocator_state() const {
+    if (!published_allocator_state_.empty()) {
+        return published_allocator_state_.begin()->second;
+    }
+    // Fall back to the default state computed from the template config.
+    // This path is taken during early init before builders have published state.
+    return default_allocator_state_;
+}
+
+// ============ Build Barrier ============
+
+FabricBuildBarrier& FabricBuilderContext::get_or_create_build_barrier(
+    const std::vector<tt::tt_metal::IDevice*>& all_devices) {
+    std::lock_guard<std::mutex> lock(build_barrier_mutex_);
+    if (!build_barrier_) {
+        build_barrier_ = std::make_unique<FabricBuildBarrier>(all_devices);
+    }
+    return *build_barrier_;
+}
+
+void FabricBuilderContext::clear_build_barrier() {
+    std::lock_guard<std::mutex> lock(build_barrier_mutex_);
+    build_barrier_.reset();
+}
+
+// ============ PublishedAllocatorState Serialization ============
+
+std::vector<uint8_t> PublishedAllocatorState::serialize() const {
+    std::vector<uint8_t> buffer;
+
+    auto write_val = [&buffer](const auto& val) {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(&val);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(val));
+    };
+
+    auto write_array_2d = [&](const auto& arr) {
+        for (const auto& inner : arr) {
+            for (const auto& val : inner) {
+                write_val(val);
+            }
+        }
+    };
+
+    auto write_array_1d = [&](const auto& arr) {
+        for (const auto& val : arr) {
+            write_val(val);
+        }
+    };
+
+    // Receiver data
+    write_array_2d(receiver_channels_base_address);
+    write_array_2d(receiver_channels_num_buffers);
+    write_array_1d(num_used_receiver_channels_per_vc);
+
+    // Sender data
+    write_array_2d(sender_channels_base_address);
+    write_array_2d(sender_channels_num_buffers);
+    write_array_1d(num_used_sender_channels_per_vc);
+
+    // Base class construction data
+    write_val(topology);
+    write_val(options);
+
+    // Memory regions (variable length)
+    size_t num_regions = memory_regions.size();
+    write_val(num_regions);
+    for (const auto& region : memory_regions) {
+        write_val(region.start_address);
+        write_val(region.size);
+    }
+
+    return buffer;
+}
+
+PublishedAllocatorState PublishedAllocatorState::deserialize(const std::vector<uint8_t>& data) {
+    PublishedAllocatorState state;
+    size_t offset = 0;
+
+    auto read_val = [&data, &offset](auto& val) {
+        TT_FATAL(offset + sizeof(val) <= data.size(), "Deserialization buffer underflow");
+        std::memcpy(&val, data.data() + offset, sizeof(val));
+        offset += sizeof(val);
+    };
+
+    auto read_array_2d = [&](auto& arr) {
+        for (auto& inner : arr) {
+            for (auto& val : inner) {
+                read_val(val);
+            }
+        }
+    };
+
+    auto read_array_1d = [&](auto& arr) {
+        for (auto& val : arr) {
+            read_val(val);
+        }
+    };
+
+    // Receiver data
+    read_array_2d(state.receiver_channels_base_address);
+    read_array_2d(state.receiver_channels_num_buffers);
+    read_array_1d(state.num_used_receiver_channels_per_vc);
+
+    // Sender data
+    read_array_2d(state.sender_channels_base_address);
+    read_array_2d(state.sender_channels_num_buffers);
+    read_array_1d(state.num_used_sender_channels_per_vc);
+
+    // Base class construction data
+    read_val(state.topology);
+    read_val(state.options);
+
+    // Memory regions
+    size_t num_regions = 0;
+    read_val(num_regions);
+    state.memory_regions.reserve(num_regions);
+    for (size_t i = 0; i < num_regions; ++i) {
+        size_t start_address = 0, region_size = 0;
+        read_val(start_address);
+        read_val(region_size);
+        state.memory_regions.emplace_back(start_address, region_size);
+    }
+
+    return state;
+}
 
 }  // namespace tt::tt_fabric

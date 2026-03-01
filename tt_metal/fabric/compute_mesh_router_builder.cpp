@@ -10,6 +10,10 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
+#include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_router_recipe.hpp"
+#include "tt_metal/fabric/builder/channel_to_pool_mapping.hpp"
+#include "tt_metal/fabric/builder/multi_pool_channel_allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -714,6 +718,28 @@ FabricDatamoverBuilderBase* ComputeMeshRouterBuilder::get_builder_for_vc_channel
         return const_cast<FabricTensixDatamoverBuilder*>(&tensix_builder_.value());
     }
     return erisc_builder_.get();
+}
+
+PublishedAllocatorState ComputeMeshRouterBuilder::get_published_allocator_state() const {
+    return erisc_builder_->get_published_allocator_state();
+}
+
+void ComputeMeshRouterBuilder::update_remote_allocator(const PublishedAllocatorState& peer_state) {
+    // Create new remote channels allocator from peer's published state
+    auto new_remote_allocator = std::make_shared<FabricRemoteChannelsAllocator>(peer_state);
+    erisc_builder_->remote_channels_allocator_ = new_remote_allocator;
+
+    // Rebuild the remote multi-pool allocator and channel-to-pool mapping
+    auto remote_channels_recipe = FabricRouterRecipe::create_default_single_static_pool_recipe(
+        0, erisc_builder_->config.num_used_receiver_channels);
+
+    std::vector<std::shared_ptr<FabricChannelAllocator>> remote_pool_allocators{new_remote_allocator};
+    std::vector<FabricChannelPoolType> remote_pool_types{FabricChannelPoolType::STATIC};
+    // Note: remote multi-pool allocator is not stored separately in config,
+    // it's reconstructed when needed. Only remote_channels_allocator and
+    // remote_channel_to_pool_mapping need updating.
+    erisc_builder_->remote_channel_to_pool_mapping_ =
+        std::make_shared<ChannelToPoolMapping>(remote_channels_recipe);
 }
 
 }  // namespace tt::tt_fabric

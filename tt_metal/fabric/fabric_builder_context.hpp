@@ -10,15 +10,70 @@
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include <vector>
 #include <memory>
 #include <array>
+#include <atomic>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
+#include <utility>
 
 namespace tt::tt_fabric {
 
 class FabricContext;
+
+/**
+ * PublishedAllocatorState
+ *
+ * Per-router allocator state published after phase 1 of fabric build.
+ * Contains the channel layout (base addresses and buffer counts) for both
+ * sender and receiver channels across all VCs. This data allows a peer
+ * device to construct a FabricRemoteChannelsAllocator that accurately
+ * reflects the actual (possibly asymmetric) allocation on the remote side.
+ */
+struct PublishedAllocatorState {
+    // Per-VC receiver channels (what a peer's sender needs to know)
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
+        receiver_channels_base_address{};
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
+        receiver_channels_num_buffers{};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc{};
+
+    // Per-VC sender channels (what a peer's receiver needs to know)
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
+        sender_channels_base_address{};
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
+        sender_channels_num_buffers{};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc{};
+
+    // Base class construction data (needed to construct FabricRemoteChannelsAllocator)
+    Topology topology = Topology::Linear;
+    FabricEriscDatamoverOptions options{};
+    std::vector<MemoryRegion> memory_regions;
+
+    // Serialization support for MPI exchange
+    std::vector<uint8_t> serialize() const;
+    static PublishedAllocatorState deserialize(const std::vector<uint8_t>& data);
+};
+
+/**
+ * Key type for the published allocator state registry.
+ * Identifies a specific router by (chip_id, eth_channel).
+ */
+using AllocatorStateKey = std::pair<ChipId, chan_id_t>;
+
+struct AllocatorStateKeyHash {
+    size_t operator()(const AllocatorStateKey& key) const {
+        auto h1 = std::hash<ChipId>{}(key.first);
+        auto h2 = std::hash<chan_id_t>{}(key.second);
+        return h1 ^ (h2 << 32) ^ (h2 >> 32);
+    }
+};
 
 
 /**
@@ -97,6 +152,23 @@ struct IntermeshVCConfig {
 };
 
 /**
+ * Shared state for the internal barrier in compile_fabric's two-phase build.
+ * Constructor and destructor are out-of-line (in fabric_init.cpp) because
+ * FabricBuildPhase1Result contains unique_ptr<FabricBuilder> (incomplete here).
+ */
+struct FabricBuildBarrier {
+    const std::vector<tt::tt_metal::IDevice*>& all_devices;
+    std::vector<FabricBuildPhase1Result> phase1_results;
+    std::atomic<size_t> phase1_count{0};
+    std::mutex barrier_mutex;
+    std::condition_variable barrier_cv;
+    bool phase1_published = false;
+
+    explicit FabricBuildBarrier(const std::vector<tt::tt_metal::IDevice*>& devices);
+    ~FabricBuildBarrier();
+};
+
+/**
  * FabricBuilderContext
  *
  * Build-time state and config selection for fabric initialization.
@@ -112,7 +184,7 @@ struct IntermeshVCConfig {
 class FabricBuilderContext {
 public:
     explicit FabricBuilderContext(const FabricContext& fabric_context);
-    ~FabricBuilderContext() = default;
+    ~FabricBuilderContext();
 
     // Non-copyable, non-movable (owned by FabricContext)
     FabricBuilderContext(const FabricBuilderContext&) = delete;
@@ -174,6 +246,28 @@ public:
     bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
 
+    // ============ Published Allocator State Registry ============
+    // Used for peer state exchange between build phases.
+    // Publishing happens on the main thread after phase 1 completes — no mutex needed.
+    void publish_allocator_state(ChipId chip_id, chan_id_t eth_chan, PublishedAllocatorState state);
+    const PublishedAllocatorState& get_published_allocator_state(ChipId chip_id, chan_id_t eth_chan) const;
+    bool has_published_allocator_state(ChipId chip_id, chan_id_t eth_chan) const;
+    // Return any published allocator state (for cases where any router's state suffices).
+    // Falls back to the default allocator state if no per-router states have been published yet
+    // (e.g., during early initialization before builders are created).
+    const PublishedAllocatorState& get_any_published_allocator_state() const;
+
+    // Return the default allocator state computed from the template config.
+    // Available immediately after FabricBuilderContext construction (before builders exist).
+    const PublishedAllocatorState& get_default_allocator_state() const { return default_allocator_state_; }
+
+    // ============ Build Barrier ============
+    // Thread-safe barrier for coordinating the two-phase fabric build.
+    // Created lazily on first call; shared across all threads in one build invocation.
+    struct FabricBuildBarrier& get_or_create_build_barrier(
+        const std::vector<tt::tt_metal::IDevice*>& all_devices);
+    void clear_build_barrier();
+
 private:
 
     IntermeshVCConfig compute_intermesh_vc_config() const;
@@ -213,6 +307,18 @@ private:
 
     // Helper to compute max channel counts for this fabric instance
     void compute_max_channel_counts();
+
+    // Default allocator state computed from template config at construction time.
+    // Available before builders exist (used by populate_fabric_connection_info during init).
+    PublishedAllocatorState default_allocator_state_;
+
+    // Published allocator state registry — keyed by (chip_id, eth_channel).
+    // Published on main thread after phase 1; read on worker threads in phase 2.
+    std::unordered_map<AllocatorStateKey, PublishedAllocatorState, AllocatorStateKeyHash> published_allocator_state_;
+
+    // Build barrier for two-phase fabric build coordination.
+    std::unique_ptr<FabricBuildBarrier> build_barrier_;
+    std::mutex build_barrier_mutex_;
 };
 
 }  // namespace tt::tt_fabric

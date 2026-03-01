@@ -261,6 +261,46 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     }
 }
 
+std::vector<std::pair<AllocatorStateKey, PublishedAllocatorState>>
+FabricBuilder::collect_published_allocator_state() const {
+    std::vector<std::pair<AllocatorStateKey, PublishedAllocatorState>> result;
+    result.reserve(routers_.size());
+
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        AllocatorStateKey key{device_->id(), eth_chan};
+        result.emplace_back(key, router_builder->get_published_allocator_state());
+    }
+
+    return result;
+}
+
+void FabricBuilder::update_remote_allocators() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto local_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);
+    const auto& eth_connections = cluster.get_ethernet_connections();
+
+    auto chip_connections_it = eth_connections.find(local_chip_id);
+    if (chip_connections_it == eth_connections.end()) {
+        return;
+    }
+
+    for (auto& [eth_chan, router_builder] : routers_) {
+        // Look up the peer's chip and channel via cluster ethernet connections
+        auto chan_it = chip_connections_it->second.find(eth_chan);
+        if (chan_it == chip_connections_it->second.end()) {
+            continue;
+        }
+        auto [peer_chip_id, peer_eth_chan] = chan_it->second;
+
+        if (builder_context_.has_published_allocator_state(peer_chip_id, peer_eth_chan)) {
+            const auto& peer_state = builder_context_.get_published_allocator_state(peer_chip_id, peer_eth_chan);
+            router_builder->update_remote_allocator(peer_state);
+        }
+        // If no published state exists (e.g., peer didn't create routers), keep the default
+    }
+}
+
 void FabricBuilder::create_kernels() {
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : routers_) {

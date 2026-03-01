@@ -217,19 +217,21 @@ void append_fabric_connection_rt_args(
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
-        const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
-        auto* channel_allocator = edm_config.channel_allocator.get();
-        auto* const static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-        TT_FATAL(
-            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+        const auto& builder_context = fabric_context.get_builder_context();
+        const auto& edm_config = builder_context.get_fabric_router_config();
         // Sender channel 0 is always for local worker in the new design
         const auto sender_channel = 0;
+
+        const auto& pub_state =
+            builder_context.get_published_allocator_state(src_chip_id, fabric_router_channel);
+        size_t sender_base_address = pub_state.sender_channels_base_address[0][sender_channel];
+        size_t sender_num_buffers = pub_state.sender_channels_num_buffers[0][sender_channel];
+
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
-            .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
-            .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(sender_channel),
+            .edm_buffer_base_addr = sender_base_address,
+            .num_buffers_per_channel = sender_num_buffers,
             .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
             .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
             .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],

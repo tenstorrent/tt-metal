@@ -32,6 +32,7 @@
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
+struct PublishedAllocatorState;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
 class MultiPoolChannelAllocator;
@@ -345,22 +346,6 @@ struct FabricEriscDatamoverConfig {
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
-    // Fabric channel allocator for L1 memory management
-    // Points to the primary allocator (typically static allocator for single-pool configs)
-    std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Multi-pool allocator coordinator - manages all pool allocators
-    // Emits pool metadata and delegates to individual pools for CT args
-    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
-
-    // Channel-to-pool mapping for multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
-    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
-    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
-
-    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
-
 private:
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -564,6 +549,12 @@ public:
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
+    /**
+     * Extract the published allocator state from this builder's config.
+     * Used by FabricBuilder to collect per-router state for peer exchange.
+     */
+    PublishedAllocatorState get_published_allocator_state() const;
+
     //    protected:
     CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
@@ -575,6 +566,22 @@ public:
     bool is_inter_mesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
+
+    // Fabric channel allocator for L1 memory management
+    // Points to the primary allocator (typically static allocator for single-pool configs)
+    std::shared_ptr<FabricChannelAllocator> channel_allocator_;
+
+    // Multi-pool allocator coordinator - manages all pool allocators
+    // Emits pool metadata and delegates to individual pools for CT args
+    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator_;
+
+    // Channel-to-pool mapping for multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping_;
+    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping_;
+
+    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
+    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator_;
 
     std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, builder_config::max_downstream_edms>
@@ -663,6 +670,10 @@ private:
 
     // Configure telemetry settings for all RISC cores
     void configure_telemetry_settings();
+
+    // Create a servicing-aware allocator and replace config's allocators.
+    // Called after servicing flags and trimming overrides are computed.
+    void create_servicing_aware_allocator();
 };
 
 }  // namespace tt::tt_fabric

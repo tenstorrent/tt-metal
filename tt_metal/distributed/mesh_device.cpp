@@ -1217,9 +1217,9 @@ void MeshDeviceImpl::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
 }
-bool MeshDeviceImpl::compile_fabric() {
+bool MeshDeviceImpl::compile_fabric(const std::vector<IDevice*>& all_devices) {
     TT_THROW("compile_fabric() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->compile_fabric();
+    return reference_device()->compile_fabric(all_devices);
 }
 void MeshDeviceImpl::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
@@ -1472,7 +1472,9 @@ bool MeshDevice::initialize(
 }
 void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); }
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
-bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
+bool MeshDevice::compile_fabric(const std::vector<IDevice*>& all_devices) {
+    return pimpl_->compile_fabric(all_devices);
+}
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }

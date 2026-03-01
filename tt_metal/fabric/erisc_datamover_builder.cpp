@@ -33,6 +33,7 @@
 #include "tt_metal/fabric/builder/channel_to_pool_mapping.hpp"
 #include "tt_metal/fabric/builder/multi_pool_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
@@ -386,7 +387,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes,
     Topology topology,
-    FabricEriscDatamoverOptions options,
+    FabricEriscDatamoverOptions /* options */,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
     FabricEriscDatamoverConfig(topology) {
@@ -454,51 +455,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "size of {}",
         min_buffer_size);
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
-
-    // Compute available channel buffering space from memory regions
-    size_t available_channel_buffering_space = std::accumulate(
-        this->available_buffer_memory_regions.begin(),
-        this->available_buffer_memory_regions.end(),
-        size_t{0},
-        [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
-
-    // Create a default recipe with a single static pool for backward compatibility
-    // All channels map to pool 0 (the single static pool)
-    auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        this->num_used_sender_channels, this->num_used_receiver_channels);
-    auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        0, this->num_used_receiver_channels);
-
-    // Create the single static pool allocator with per-VC channel distribution
-    auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-        topology,
-        options,
-        this->num_used_sender_channels_per_vc,
-        this->num_used_receiver_channels_per_vc,
-        this->channel_buffer_size_bytes,
-        available_channel_buffering_space,
-        this->available_buffer_memory_regions);
-
-    // Assign static allocator directly to channel_allocator (composition, not wrapped)
-    this->channel_allocator = static_allocator;
-
-    // Create remote channels allocator from the static allocator
-    this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
-
-    // Create multi-pool coordinator that manages the pool allocators
-    std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> pool_allocators;
-    pool_allocators.push_back(static_allocator);
-
-    std::vector<tt::tt_fabric::FabricChannelPoolType> pool_types;
-    pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::STATIC);
-
-    this->multi_pool_allocator =
-        std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(std::move(pool_allocators), std::move(pool_types));
-
-    // Create the channel-to-pool mapping
-    this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipe);
-    this->remote_channel_to_pool_mapping =
-        std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
@@ -729,7 +685,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation
     // We intentionally DON'T override config values because:
-    // 1. config.multi_pool_allocator was created with MAX channel counts
+    // 1. multi_pool_allocator_ was created with MAX channel counts
     // 2. Changing config counts would cause emit_ct_args to emit wrong number of args
     // The config stays at MAX, but we pass actual counts to device via compile-time args
     // Validate injection flags vector size matches the number of sender channels
@@ -800,16 +756,65 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
+    // Create the initial allocators on the builder (moved from FabricEriscDatamoverConfig ctor)
+    {
+        // Compute available channel buffering space from memory regions
+        size_t available_channel_buffering_space = std::accumulate(
+            this->config.available_buffer_memory_regions.begin(),
+            this->config.available_buffer_memory_regions.end(),
+            size_t{0},
+            [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
+
+        auto recipe = FabricRouterRecipe::create_default_single_static_pool_recipe(
+            this->config.num_used_sender_channels, this->config.num_used_receiver_channels);
+        auto remote_channels_recipe = FabricRouterRecipe::create_default_single_static_pool_recipe(
+            0, this->config.num_used_receiver_channels);
+
+        auto static_allocator = std::make_shared<FabricStaticSizedChannelsAllocator>(
+            this->config.topology,
+            FabricEriscDatamoverOptions{
+                .fabric_tensix_config = this->has_tensix_extension
+                                            ? tt::tt_metal::MetalContext::instance().get_fabric_tensix_config()
+                                            : FabricTensixConfig::DISABLED,
+                .direction = this->direction_,
+            },
+            this->config.num_used_sender_channels_per_vc,
+            this->config.num_used_receiver_channels_per_vc,
+            this->config.channel_buffer_size_bytes,
+            available_channel_buffering_space,
+            this->config.available_buffer_memory_regions);
+
+        this->channel_allocator_ = static_allocator;
+
+        this->remote_channels_allocator_ =
+            std::make_shared<FabricRemoteChannelsAllocator>(static_allocator->to_published_state());
+
+        std::vector<std::shared_ptr<FabricChannelAllocator>> pool_allocators;
+        pool_allocators.push_back(static_allocator);
+        std::vector<FabricChannelPoolType> pool_types;
+        pool_types.push_back(FabricChannelPoolType::STATIC);
+        this->multi_pool_allocator_ =
+            std::make_shared<MultiPoolChannelAllocator>(std::move(pool_allocators), std::move(pool_types));
+
+        this->channel_to_pool_mapping_ = std::make_shared<ChannelToPoolMapping>(recipe);
+        this->remote_channel_to_pool_mapping_ = std::make_shared<ChannelToPoolMapping>(remote_channels_recipe);
+    }
+
+    // Create servicing-aware allocator that skips L1 allocation for unserviced channels.
+    // This replaces the builder's allocator, multi_pool_allocator, remote_channels_allocator,
+    // and channel-to-pool mappings if any channels are unserviced.
+    create_servicing_aware_allocator();
+
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
 
     TT_FATAL(
-        config.channel_allocator.get() != nullptr,
+        this->channel_allocator_.get() != nullptr,
         "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
     auto* static_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(this->channel_allocator_.get());
     TT_FATAL(
         static_allocator != nullptr,
         "Channel allocator must be a FabricStaticSizedChannelsAllocator. Failed to build TT-Fabric router. Internal "
@@ -836,6 +841,105 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         static_cast<int>(direction));
 
     configure_telemetry_settings();
+}
+
+void FabricEriscDatamoverBuilder::create_servicing_aware_allocator() {
+    // Collapse per-RISC servicing flags into per-channel flags.
+    // A channel is "serviced" if ANY RISC services it.
+    std::array<bool, builder_config::num_max_sender_channels> sender_serviced{};
+    std::array<bool, builder_config::num_max_receiver_channels> receiver_serviced{};
+
+    size_t num_riscv_cores = this->config.risc_configs.size();
+    for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
+        for (size_t ch = 0; ch < builder_config::num_max_sender_channels; ++ch) {
+            if (this->is_sender_channel_serviced_[risc_id][ch]) {
+                sender_serviced[ch] = true;
+            }
+        }
+        for (size_t ch = 0; ch < builder_config::num_max_receiver_channels; ++ch) {
+            if (this->is_receiver_channel_serviced_[risc_id][ch]) {
+                receiver_serviced[ch] = true;
+            }
+        }
+    }
+
+    // Check if any channels are actually unserviced — if all are serviced, skip replacement
+    bool has_unserviced = false;
+    size_t flat_sender_idx = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (size_t i = 0; i < this->config.num_used_sender_channels_per_vc[vc]; ++i) {
+            if (!sender_serviced[flat_sender_idx++]) {
+                has_unserviced = true;
+            }
+        }
+    }
+    size_t flat_receiver_idx = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (size_t i = 0; i < this->config.num_used_receiver_channels_per_vc[vc]; ++i) {
+            if (!receiver_serviced[flat_receiver_idx++]) {
+                has_unserviced = true;
+            }
+        }
+    }
+
+    if (!has_unserviced) {
+        return;  // All channels serviced, no need to replace allocator
+    }
+
+    // Compute available channel buffering space
+    size_t available_channel_buffering_space = std::accumulate(
+        this->config.available_buffer_memory_regions.begin(),
+        this->config.available_buffer_memory_regions.end(),
+        size_t{0},
+        [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
+
+    // Create servicing-aware allocator
+    auto static_allocator = std::make_shared<FabricStaticSizedChannelsAllocator>(
+        this->config.topology,
+        FabricEriscDatamoverOptions{
+            .fabric_tensix_config = this->has_tensix_extension
+                                        ? tt::tt_metal::MetalContext::instance().get_fabric_tensix_config()
+                                        : FabricTensixConfig::DISABLED,
+            .direction = this->direction_,
+        },
+        this->config.num_used_sender_channels_per_vc,
+        this->config.num_used_receiver_channels_per_vc,
+        this->config.channel_buffer_size_bytes,
+        available_channel_buffering_space,
+        this->config.available_buffer_memory_regions,
+        sender_serviced,
+        receiver_serviced);
+
+    // Replace builder's allocator and related shared_ptrs
+    this->channel_allocator_ = static_allocator;
+
+    // Recreate remote channels allocator from the new static allocator's published state
+    this->remote_channels_allocator_ =
+        std::make_shared<FabricRemoteChannelsAllocator>(static_allocator->to_published_state());
+
+    // Recreate multi-pool coordinator
+    auto recipe = FabricRouterRecipe::create_default_single_static_pool_recipe(
+        this->config.num_used_sender_channels, this->config.num_used_receiver_channels);
+    auto remote_channels_recipe = FabricRouterRecipe::create_default_single_static_pool_recipe(
+        0, this->config.num_used_receiver_channels);
+
+    std::vector<std::shared_ptr<FabricChannelAllocator>> pool_allocators;
+    pool_allocators.push_back(static_allocator);
+    std::vector<FabricChannelPoolType> pool_types;
+    pool_types.push_back(FabricChannelPoolType::STATIC);
+    this->multi_pool_allocator_ =
+        std::make_shared<MultiPoolChannelAllocator>(std::move(pool_allocators), std::move(pool_types));
+
+    // Recreate channel-to-pool mappings
+    this->channel_to_pool_mapping_ = std::make_shared<ChannelToPoolMapping>(recipe);
+    this->remote_channel_to_pool_mapping_ = std::make_shared<ChannelToPoolMapping>(remote_channels_recipe);
+}
+
+PublishedAllocatorState FabricEriscDatamoverBuilder::get_published_allocator_state() const {
+    auto* static_allocator =
+        dynamic_cast<const FabricStaticSizedChannelsAllocator*>(this->channel_allocator_.get());
+    TT_FATAL(static_allocator != nullptr, "Channel allocator must be FabricStaticSizedChannelsAllocator");
+    return static_allocator->to_published_state();
 }
 
 void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
@@ -985,9 +1089,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // TODO: this validation should be done in the allocator with the channel IDs passed in
-    auto* channel_allocator = config.channel_allocator.get();
+    auto* ct_channel_allocator = this->channel_allocator_.get();
     auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(ct_channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     size_t receiver_channel_num_buffers = static_channel_allocator->get_receiver_channel_number_of_slots(0);
     TT_FATAL(
@@ -1170,26 +1274,26 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // Emit pool data via multi-pool coordinator (steps 1-4 of schema: special tag, num_pools, pool_types, individual
     // pool CT args)
-    config.multi_pool_allocator->emit_ct_args(
+    this->multi_pool_allocator_->emit_ct_args(
         ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
-    config.channel_to_pool_mapping->emit_ct_args(ct_args);
+    this->channel_to_pool_mapping_->emit_ct_args(ct_args);
 
     // Emit remote channel pool data (for remote_receiver_channels initialization)
     // Create a multi-pool for remote channels, following the same pattern as local channels
     ct_args.push_back(0xabaddad6);
 
     // Create remote multi-pool allocator with the remote channels allocator
-    TT_FATAL(config.remote_channels_allocator != nullptr, "Remote channels allocator must be non-null");
+    TT_FATAL(this->remote_channels_allocator_ != nullptr, "Remote channels allocator must be non-null");
     MultiPoolChannelAllocator remote_multi_pool_allocator(
-        {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
+        {this->remote_channels_allocator_}, {FabricChannelPoolType::STATIC});
 
     // Emit remote channel pool data via multi-pool coordinator
     remote_multi_pool_allocator.emit_ct_args(ct_args, 0, 0, num_receiver_channels);
 
-    config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
+    this->remote_channel_to_pool_mapping_->emit_ct_args(ct_args);
 
     ct_args.push_back(0xabaddad7);
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
@@ -1418,28 +1522,17 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
 
-    auto remote_pool_allocators =
-        std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>>{config.remote_channels_allocator};
-    auto remote_pool_types =
-        std::vector<tt::tt_fabric::FabricChannelPoolType>{tt::tt_fabric::FabricChannelPoolType::STATIC};
-    auto remote_multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
-        std::move(remote_pool_allocators), std::move(remote_pool_types));
-
     log_debug(
         tt::LogFabric,
         "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
-        "\tnum_sender_channels={}, num_receiver_channels={}\n"
-        "\tchannel_allocator={}\n"
-        "\tremote_channel_allocator={}\n",
+        "\tnum_sender_channels={}, num_receiver_channels={}\n",
 
         local_fabric_node_id.mesh_id,
         local_fabric_node_id.chip_id,
         ethernet_core.x,
         ethernet_core.y,
         config.num_used_sender_channels,
-        config.num_used_receiver_channels,
-        *config.channel_allocator,
-        *remote_multi_pool_allocator->get_pool(0));
+        config.num_used_receiver_channels);
 
     if (build_in_worker_connection_mode) {
         for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
@@ -1515,9 +1608,9 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     // - vc_relative_channel_id: used for VC-aware allocator calls
     // Both are already validated by ComputeMeshRouterBuilder::establish_connections_to_router
 
-    auto* channel_allocator = config.channel_allocator.get();
+    auto* bcf_channel_allocator = this->channel_allocator_.get();
     auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(bcf_channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
     // Use VC-aware allocator getters with VC-relative channel ID
@@ -1604,10 +1697,6 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         downstream_tensix_builder->append_upstream_routers_noc_xy(this->noc_x_, this->noc_y_);
     }
 
-    auto* channel_allocator = config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(

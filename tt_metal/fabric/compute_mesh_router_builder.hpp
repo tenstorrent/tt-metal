@@ -61,6 +61,9 @@ public:
 
     void configure_for_dispatch() override;
 
+    PublishedAllocatorState get_published_allocator_state() const override;
+    void update_remote_allocator(const PublishedAllocatorState& peer_state) override;
+
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;

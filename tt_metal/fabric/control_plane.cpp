@@ -2307,22 +2307,22 @@ ControlPlane::get_global_logical_bindings() const {
     return global_logical_bindings_;
 }
 
-// Helper function to fill connection info with common fields for fabric router configs
+// Helper function to fill connection info with common fields for fabric router configs.
+// When published_state is provided, uses per-router allocator layout for base address and
+// buffer counts (servicing-aware). Otherwise falls back to the shared config's allocator.
 void fill_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
     const CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
-    uint16_t worker_free_slots_stream_id) {
-    auto* channel_allocator = config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+    uint16_t worker_free_slots_stream_id,
+    const tt::tt_fabric::PublishedAllocatorState& published_state) {
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
-    connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);
-    connection_info.num_buffers_per_channel =
-        static_channel_allocator->get_sender_channel_number_of_slots(sender_channel);
+
+    connection_info.edm_buffer_base_addr = published_state.sender_channels_base_address[0][sender_channel];
+    connection_info.num_buffers_per_channel = published_state.sender_channels_num_buffers[0][sender_channel];
+
     connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
     connection_info.edm_worker_location_info_addr =
         config.sender_channels_worker_conn_info_base_address[sender_channel];
@@ -2372,8 +2372,19 @@ void ControlPlane::populate_fabric_connection_info(
         fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
+    // Use per-router published state if available (after fabric build phase 1),
+    // otherwise fall back to the default allocator state (during early init).
+    const auto& pub_state = builder_context.has_published_allocator_state(physical_chip_id, eth_channel_id)
+                                ? builder_context.get_published_allocator_state(physical_chip_id, eth_channel_id)
+                                : builder_context.get_default_allocator_state();
+
     fill_connection_info_fields(
-        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
+        worker_connection_info,
+        fabric_router_virtual_core,
+        edm_config,
+        sender_channel,
+        WORKER_FREE_SLOTS_STREAM_ID,
+        pub_state);
 
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
@@ -2384,7 +2395,8 @@ void ControlPlane::populate_fabric_connection_info(
             fabric_router_virtual_core,
             default_edm_config,
             sender_channel,
-            WORKER_FREE_SLOTS_STREAM_ID);
+            WORKER_FREE_SLOTS_STREAM_ID,
+            pub_state);
 
         const auto& tensix_config = builder_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);

@@ -165,7 +165,7 @@ public:
     [[deprecated("This is an internal function. It will be removed.")]]
     void init_command_queue_device() override;
     [[deprecated("This is an internal function. It will be removed.")]]
-    bool compile_fabric() override;
+    bool compile_fabric(const std::vector<IDevice*>& all_devices = {}) override;
     [[deprecated("This is an internal function. It will be removed.")]]
     void configure_fabric() override;
     bool close() override;

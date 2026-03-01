@@ -12,7 +12,6 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 namespace tt::tt_fabric {
 
 // Implementation of nested MemoryRegion methods
@@ -219,12 +218,8 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         const auto& fabric_tensix_config = builder_context.get_tensix_config();
         fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
     } else {
-        auto* channel_allocator = fabric_router_config.channel_allocator.get();
-        auto* const static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-        TT_FATAL(
-            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-        fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+        const auto& pub_state = builder_context.get_any_published_allocator_state();
+        fabric_endpoint_channel_num_buffers_ = pub_state.sender_channels_num_buffers[0][0];
     }
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
@@ -234,18 +229,15 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
-    const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
-                                           .get_control_plane()
-                                           .get_fabric_context()
-                                           .get_builder_context()
-                                           .get_fabric_router_config();
-    auto* channel_allocator = fabric_router_config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+    const auto& builder_context = tt::tt_metal::MetalContext::instance()
+                                      .get_control_plane()
+                                      .get_fabric_context()
+                                      .get_builder_context();
+    const auto& fabric_router_config = builder_context.get_fabric_router_config();
 
-    // For relay mux, always use fabric router config
-    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+    // Use published allocator state for per-router sender channel num buffers
+    const auto& pub_state = builder_context.get_any_published_allocator_state();
+    fabric_endpoint_channel_num_buffers_ = pub_state.sender_channels_num_buffers[0][0];
     wait_for_fabric_endpoint_ready_ = true;
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
