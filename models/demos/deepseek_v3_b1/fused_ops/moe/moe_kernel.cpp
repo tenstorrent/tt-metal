@@ -672,6 +672,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),  // dst_sem_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),  // output_base_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),  // shard_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),  // socket_config_addr
         };
     }
 #endif
