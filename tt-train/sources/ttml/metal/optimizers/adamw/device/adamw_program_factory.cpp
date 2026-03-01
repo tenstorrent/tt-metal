@@ -289,7 +289,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
             kMaxExpAvgSqCbIndex,
             intermediate_data_format,
             float32_single_tile_size_bytes,
-            num_output_tiles);
+            intermediate_num_tiles);
     }
 
     // Intermediate CBs are always fp32
@@ -299,7 +299,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kMomentumCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     [[maybe_unused]] auto cb_variance = create_circular_buffer(
         program,
@@ -307,7 +307,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kVarianceCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
