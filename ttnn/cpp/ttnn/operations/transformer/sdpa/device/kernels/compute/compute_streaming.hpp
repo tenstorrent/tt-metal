@@ -12,6 +12,13 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
+// BH experimental includes: matmul_block_no_mop, mm_no_mop_init_short, mm_no_mop_reinit_short
+// Using shim to avoid redefinition conflicts with current LLK submodule.
+#include "sdpa_experimental_matmul_shim.h"
+#ifdef ARCH_BLACKHOLE
+#include "api/compute/experimental/sdpa_sub_custom.h"
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -59,7 +66,8 @@ template <
     uint32_t SUBBLOCK_H,
     uint32_t INNER_DIM,
     uint32_t IN1_STRIDE,
-    uint32_t OUT_NUM_COLS>
+    uint32_t OUT_NUM_COLS,
+    bool blocked_pack = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -68,14 +76,22 @@ void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
+#ifndef ARCH_BLACKHOLE
+    // WH requires reinit before every matmul — pack_tile<true> disturbs UNPACK state.
+    // BH uses caller-managed mm_no_mop_init_short for MOP control.
     mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
-
+#endif
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+#ifdef ARCH_BLACKHOLE
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+#else
         matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+#endif
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -83,11 +99,22 @@ void blocked_matmul_and_pack(
 
     tile_regs_wait();
     uint32_t dst_idx = 0;
-    for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
-        uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
-        for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
-            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-            dst_idx++;
+#ifdef ARCH_BLACKHOLE
+    if constexpr (blocked_pack) {
+        for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+            uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
+            dst_idx += SUBBLOCK_W;
+        }
+    } else
+#endif
+    {
+        for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+            uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+            for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
+                pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                dst_idx++;
+            }
         }
     }
     tile_regs_release();
@@ -569,12 +596,21 @@ void sdpa_inner_loop_step(
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
         kt_index_offset = 0;
-
+#ifdef ARCH_BLACKHOLE
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#else
+        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#endif
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                     cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+#ifdef ARCH_BLACKHOLE
+                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#else
+                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#endif
             }
 
             {
@@ -692,9 +728,14 @@ void sdpa_inner_loop_step(
 
                     // Matmul — FPU overlaps with SFPU EXP
                     {
+                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
+                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+#else
+                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+#endif
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -721,9 +762,15 @@ void sdpa_inner_loop_step(
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
+                    mm_no_mop_reinit_short(
+                        cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#else
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
@@ -784,9 +831,14 @@ void sdpa_inner_loop_step(
 
             // Full matmul for current row
             {
+                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
+                mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#else
+                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
