@@ -200,9 +200,7 @@ class TtFasterRCNN:
         num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness_torch]
         num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
 
-        objectness_flat, pred_bbox_deltas_flat = concat_box_prediction_layers(
-            objectness_torch, pred_bbox_deltas_torch
-        )
+        objectness_flat, pred_bbox_deltas_flat = concat_box_prediction_layers(objectness_torch, pred_bbox_deltas_torch)
 
         proposals = rpn.box_coder.decode(pred_bbox_deltas_flat.detach(), anchors)
         proposals = proposals.view(len(anchors), -1, 4)
