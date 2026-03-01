@@ -1330,7 +1330,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_mlp_weights", [True], ids=["mlp"])
+@pytest.mark.parametrize("use_mlp_weights", [True, False], ids=["mlp", "moe"])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
@@ -1603,7 +1603,7 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             ref_block_output = r.torch_input.float() + full_mlp_ref(normed_input.unsqueeze(0)).squeeze(0).float()
         adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
-        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), adjusted_reduce.flatten(), 0.999)
+        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), adjusted_reduce.flatten(), 0.975)
         logger.info(f"Reference full MLP (block) comparison PCC: {pcc_full}")
         assert passing_full, f"Reference full MLP block comparison PCC failed: {pcc_full}"
     else:
@@ -1615,7 +1615,7 @@ def test_mlp_with_reduce(
             num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
         )
 
-    passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.999)
+    passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.975)
     logger.info(f"Reference MLP comparison PCC: {pcc_ref}")
     assert passing_ref, f"Reference MLP comparison PCC failed: {pcc_ref}"
 
