@@ -122,6 +122,7 @@ class TtBottleneck:
         stride,
         layer_name,
         has_downsample=False,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         self.device = device
         self.has_downsample = has_downsample
@@ -140,7 +141,7 @@ class TtBottleneck:
             padding=0,
             activation=relu_activation,
             deallocate_activation=False,
-            enable_act_double_buffer=True,
+            shard_layout=shard_layout,
         )
 
         self.conv2 = TtConv2D(
@@ -155,7 +156,7 @@ class TtBottleneck:
             padding=1,
             activation=relu_activation,
             deallocate_activation=True,
-            enable_act_double_buffer=True,
+            shard_layout=shard_layout,
         )
 
         self.conv3 = TtConv2D(
@@ -170,7 +171,7 @@ class TtBottleneck:
             padding=0,
             activation=None,
             deallocate_activation=True,
-            enable_act_double_buffer=True,
+            shard_layout=shard_layout,
         )
 
         if has_downsample:
@@ -186,7 +187,7 @@ class TtBottleneck:
                 padding=0,
                 activation=None,
                 deallocate_activation=False,
-                enable_act_double_buffer=True,
+                shard_layout=shard_layout,
             )
 
     def __call__(self, x):
@@ -237,17 +238,29 @@ class TtResNet50Backbone:
             padding=3,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
-            enable_act_double_buffer=True,
             reshard_if_not_optimal=False,
         )
 
-        self.layer1 = self._make_layer(parameters, device, batch_size, "layer1", 64, 64, 256, 3, stride=1)
-        self.layer2 = self._make_layer(parameters, device, batch_size, "layer2", 256, 128, 512, 4, stride=2)
-        self.layer3 = self._make_layer(parameters, device, batch_size, "layer3", 512, 256, 1024, 6, stride=2)
-        self.layer4 = self._make_layer(parameters, device, batch_size, "layer4", 1024, 512, 2048, 3, stride=2)
+        hs = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        bs = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+        self.layer1 = self._make_layer(parameters, device, batch_size, "layer1", 64, 64, 256, 3, stride=1, shard_layout=hs)
+        self.layer2 = self._make_layer(parameters, device, batch_size, "layer2", 256, 128, 512, 4, stride=2, shard_layout=hs)
+        self.layer3 = self._make_layer(parameters, device, batch_size, "layer3", 512, 256, 1024, 6, stride=2, shard_layout=bs)
+        self.layer4 = self._make_layer(parameters, device, batch_size, "layer4", 1024, 512, 2048, 3, stride=2, shard_layout=bs)
 
     def _make_layer(
-        self, parameters, device, batch_size, layer_name, in_channels, mid_channels, out_channels, num_blocks, stride
+        self,
+        parameters,
+        device,
+        batch_size,
+        layer_name,
+        in_channels,
+        mid_channels,
+        out_channels,
+        num_blocks,
+        stride,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         blocks = []
         blocks.append(
@@ -261,6 +274,7 @@ class TtResNet50Backbone:
                 stride=stride,
                 layer_name=f"{layer_name}.0",
                 has_downsample=True,
+                shard_layout=shard_layout,
             )
         )
         for i in range(1, num_blocks):
@@ -275,6 +289,7 @@ class TtResNet50Backbone:
                     stride=1,
                     layer_name=f"{layer_name}.{i}",
                     has_downsample=False,
+                    shard_layout=shard_layout,
                 )
             )
         return blocks

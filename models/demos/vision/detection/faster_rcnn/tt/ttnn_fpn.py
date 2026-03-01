@@ -50,7 +50,6 @@ class TtFPN:
                 padding=0,
                 activation=None,
                 deallocate_activation=False,
-                enable_act_double_buffer=True,
             )
             self.inner_convs.append(inner_conv)
 
@@ -66,7 +65,6 @@ class TtFPN:
                 padding=1,
                 activation=None,
                 deallocate_activation=False,
-                enable_act_double_buffer=True,
             )
             self.layer_convs.append(layer_conv)
 
