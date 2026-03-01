@@ -73,6 +73,7 @@ class MultiBarrierSpec:
     segments: List[BarrierSegment] = field(default_factory=list)
     compute_done_addr: int = 0
     writer_done_addr: int = 0
+    reset_done_addr: int = 0
     # Map: phase_transition_index -> (segment_index, call_index_within_segment)
     transition_map: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     _sem_refs: List[Any] = field(default_factory=list)
