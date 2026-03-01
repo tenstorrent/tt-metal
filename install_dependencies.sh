@@ -31,7 +31,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -839,6 +839,20 @@ install() {
 
     # Install core packages
     install_packages
+
+    # On RedHat, openmpi installs to /usr/lib64/openmpi/ and is not in PATH by default.
+    # Persist the paths so subsequent build steps (e.g., build_metal.sh in Docker) can find MPI.
+    if is_redhat_based && [ "$distributed" -eq 1 ]; then
+        if [ -d /usr/lib64/openmpi/bin ]; then
+            cat > /etc/profile.d/openmpi.sh << 'MPIEOF'
+export PATH="/usr/lib64/openmpi/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="/usr/lib64/openmpi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+MPIEOF
+            source /etc/profile.d/openmpi.sh
+            echo "[INFO] Configured openmpi paths in /etc/profile.d/openmpi.sh"
+        fi
+    fi
 
     # Install specialized components
     install_sfpi
