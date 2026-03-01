@@ -475,7 +475,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        0,  // arg 20: use_lightweight_mask (disabled — using full mask matrix)
+        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -585,9 +585,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                                .set_page_size(tt::CBIndex::c_3, mask_tile_size);
+        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
+        bool lightweight_mask = use_streaming_compute && use_padded_mask;
+        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
+        // Lightweight: bfloat16 format avoids Bfp4_b round-trip artifacts on the -inf tile.
+        tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
+        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        auto c_in3_config =
+            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+                .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 

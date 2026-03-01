@@ -425,6 +425,41 @@ void apply_mask_padded_k(uint32_t mask_cb, uint32_t out_cb, uint32_t q_subblock)
 }
 
 /**
+ * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
+ * tile positions in cb_qkt_im. No full mask matrix needed — just 1 tile in neginf_cb.
+ */
+template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
+void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
+    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
+    static_assert(num_padded > 0, "num_padded must be > 0");
+    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
+    constexpr uint32_t start = num_cols - num_padded;
+
+    copy_tile_to_dst_init_short(neginf_cb);
+    cb_wait_front(neginf_cb, 1);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    for (uint32_t row = 0; row < SBH; row++) {
+        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
+        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
+            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < batch; i++) {
+                copy_tile(neginf_cb, 0, i);  // Always tile 0 — single -inf tile
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < batch; i++) {
+                pack_tile<true>(i, out_cb, row_offset + base + i);
+            }
+            tile_regs_release();
+        }
+    }
+
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+/**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
@@ -585,12 +620,7 @@ void sdpa_inner_loop_step(
 
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
-    // Wait for mask tiles if writer generates them (Q or K padding)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
-    }
+    // Lightweight mask: single -inf tile permanently fronted (no full mask wait needed).
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
@@ -635,11 +665,10 @@ void sdpa_inner_loop_step(
             kt_index_offset += qkt_subblock_w;
         }
 
-        // Apply mask on last K chunk: only accumulate -inf onto padded K positions.
-        // Skips zero-valued tiles to avoid Bfp4_b→Float16_b L1 acc round-trip artifacts.
+        // Apply mask on last K chunk: L1-accumulate single -inf tile onto padded K positions.
         if constexpr (padded_k_tiles > 0) {
             if (is_last_iter) {
-                apply_mask_padded_k<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh, Sq_chunk_t>(
+                apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock);
             }
         }
@@ -678,13 +707,6 @@ void sdpa_inner_loop_step(
     // reader can start fetching the next Q chunk during Phase 2.
     if (is_last_iter) {
         cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
-    }
-
-    // Pop mask after all rows processed (must match writer's generate_mask push)
-    if constexpr (use_padded_mask) {
-        if (is_last_iter) {
-            cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-        }
     }
 
     // Pop ring mask after all row groups processed
