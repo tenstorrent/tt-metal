@@ -1251,21 +1251,32 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
 
 
 @pytest.mark.parametrize(
-    "input_shape, begins, ends, layout, description",
+    "input_shape, begins, ends, layout, use_sharding, description",
     [
         # Test 1: Slicing within a tile (should use RM path)
-        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 16, 16], ttnn.TILE_LAYOUT, "within_tile_small"],
-        [[1, 1, 64, 64], [0, 0, 8, 8], [1, 1, 24, 24], ttnn.TILE_LAYOUT, "within_tile_offset"],
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 16, 16], ttnn.TILE_LAYOUT, False, "within_tile_small"],
+        [[1, 1, 64, 64], [0, 0, 8, 8], [1, 1, 24, 24], ttnn.TILE_LAYOUT, False, "within_tile_offset"],
         # Test 2: Slicing across tiles (should use tile path)
-        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 64], ttnn.TILE_LAYOUT, "across_tiles_aligned"],
-        [[1, 1, 128, 128], [0, 0, 32, 32], [1, 1, 96, 96], ttnn.TILE_LAYOUT, "across_tiles_multiple"],
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 64], ttnn.TILE_LAYOUT, False, "across_tiles_aligned"],
+        [[1, 1, 128, 128], [0, 0, 32, 32], [1, 1, 96, 96], ttnn.TILE_LAYOUT, False, "across_tiles_multiple"],
         # Test 3: Non-TILE layout (should always use RM path)
-        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 32], ttnn.ROW_MAJOR_LAYOUT, "row_major_input"],
-        [[1, 1, 128, 128], [0, 0, 16, 16], [1, 1, 48, 48], ttnn.ROW_MAJOR_LAYOUT, "row_major_unaligned"],
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 32], ttnn.ROW_MAJOR_LAYOUT, False, "row_major_input"],
+        [[1, 1, 128, 128], [0, 0, 16, 16], [1, 1, 48, 48], ttnn.ROW_MAJOR_LAYOUT, False, "row_major_unaligned"],
+        # Test 4: Sharded TILE slicing to tile boundary (MUST use tile path, would fail with RM path)
+        # This is the regression test for issue #38841 - if RM path is incorrectly taken,
+        # it would TT_FATAL with "Number of shards along height X must not exceed number of rows Y"
+        [[1, 1, 256, 32], [0, 0, 0, 0], [1, 1, 128, 32], ttnn.TILE_LAYOUT, True, "sharded_tile_boundary"],
+        [[1, 1, 128, 128], [0, 0, 32, 0], [1, 1, 96, 128], ttnn.TILE_LAYOUT, True, "sharded_aligned_slice"],
     ],
 )
-def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, description, device):
-    """Test that slicing within tiles uses RM path and across tiles uses tile path"""
+def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, use_sharding, description, device):
+    """Test that slicing within tiles uses RM path and across tiles uses tile path.
+
+    The sharded test cases specifically verify that the correct path is taken:
+    - Sharded TILE tensors sliced to tile boundaries MUST use tile path
+    - If RM path is incorrectly taken, would fail with shard dimension errors
+    - This serves as a regression test for issue #38841
+    """
     torch.manual_seed(2005)
 
     # Create input tensor
@@ -1276,7 +1287,29 @@ def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, de
         torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    # Perform slice operation
+    if use_sharding:
+        # Apply sharding configuration that would fail if RM path is incorrectly taken
+        # This configuration is similar to issue #38841
+        n, c, h, w = input_shape
+        num_cores_x = 2
+        num_cores_y = 2
+
+        # Calculate shard dimensions - for TILE layout, must be tile-aligned
+        shard_h = max(32, (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y))
+        shard_h = ((shard_h + 31) // 32) * 32  # Round up to tile boundary
+
+        grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+
+        # Convert to sharded - this would fail in RM path for certain configurations
+        tt_input = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    # Perform slice operation - if wrong path is taken with sharded tensors, it will TT_FATAL
     tt_output = ttnn.slice(tt_input, begins, ends, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Get expected output
@@ -1284,6 +1317,8 @@ def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, de
     torch_expected = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
     # Convert back and compare
+    if use_sharding:
+        tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
@@ -1314,6 +1349,8 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
         torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
     if use_sharding:
         # Apply sharding configuration
         # Use a configuration that works with tile-aligned outputs
@@ -1333,8 +1370,24 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
         )
         tt_input = ttnn.to_memory_config(tt_input, sharded_mem_config)
 
+        # CRITICAL: Use sharded output memory config to reproduce issue #38841
+        # The original issue occurred when passing sharded output memory config
+        # Calculate output dimensions for sharding
+        output_h = ends[2] - begins[2]
+        output_w = ends[3] - begins[3]
+        # For tile-aligned slices, output should also be tile-aligned
+        output_shard_h = max(32, (output_h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y))
+        output_shard_h = ((output_shard_h + 31) // 32) * 32
+
+        output_shard_spec = ttnn.ShardSpec(shard_grid, (output_shard_h, output_w), ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, output_shard_spec
+        )
+
     # Perform slice operation
-    tt_output = ttnn.slice(tt_input, begins, ends, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # For sharded cases with sharded output, this would fail with the old code if RM path was incorrectly taken
+    # The error would be: "Number of shards along height X must not exceed number of rows Y"
+    tt_output = ttnn.slice(tt_input, begins, ends, memory_config=output_mem_config)
 
     # Get expected output
     slices = [slice(begins[i], ends[i]) for i in range(len(begins))]
@@ -1343,6 +1396,54 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
     # Convert back and compare
     if use_sharding:
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+def test_issue_38841_regression(device):
+    """Regression test for issue #38841.
+
+    This test reproduces the exact failing case from the issue:
+    - Sharded TILE tensor sliced to tile boundary
+    - Would fail with RM path due to shard dimension mismatch
+    - Must use tile path to succeed
+    """
+    torch.manual_seed(2005)
+
+    # Create a 256x32 tensor (8 tiles high, 1 tile wide)
+    shape = [1, 1, 256, 32]
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    # Create TILE layout tensor
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Shard configuration that would fail with RM path
+    # Height sharded with 4 shards -> 64 rows per shard
+    num_cores = 4
+    shard_h = 64  # 256 / 4 = 64, which is 2 tiles
+    shard_w = 32
+
+    grid_size = ttnn.CoreGrid(y=2, x=2)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    # Convert to sharded
+    tt_input_sharded = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    # Slice to [1, 1, 128, 32] - exactly 4 tiles, aligned to tile boundaries
+    # This MUST use tile path. If RM path is taken, would fail with:
+    # "Number of shards along height 16 must not exceed number of rows 8 for row major orientation!"
+    tt_output = ttnn.slice(tt_input_sharded, [0, 0, 0, 0], [1, 1, 128, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # Verify numerical correctness
+    torch_expected = torch_input[0:1, 0:1, 0:128, 0:32]
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
