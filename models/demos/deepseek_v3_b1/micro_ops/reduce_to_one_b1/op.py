@@ -106,6 +106,7 @@ class ReduceToOneB1:
         shard_cores: list,
         page_size_bytes: int,
         d2d0_downstream_socket: object,  # Sender socket to send aggregated data downstream
+        d2d0_core=None,  # Pre-computed D2D_0 core (if None, computed internally)
     ) -> dict:
         """
         Create D2D_0 socket infrastructure for reduce-to-one aggregation.
@@ -120,6 +121,7 @@ class ReduceToOneB1:
             shard_cores: List of worker cores used by reduce-to-one
             page_size_bytes: Size of each page in bytes (per worker)
             d2d0_downstream_socket: Sender socket for D2D_0 to send aggregated data downstream
+            d2d0_core: Optional pre-computed D2D_0 core; if provided, skips internal search
 
         Returns:
             Dictionary containing:
@@ -162,22 +164,22 @@ class ReduceToOneB1:
                 fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
             fabric_cores.append(fabric_core)
 
-        # Find a D2D_0 aggregator core that doesn't overlap with worker or fabric cores
-        all_reduce_cores = set((c.x, c.y) for c in shard_cores + fabric_cores)
+        if d2d0_core is None:
+            # Find a D2D_0 aggregator core that doesn't overlap with worker or fabric cores
+            all_reduce_cores = set((c.x, c.y) for c in shard_cores + fabric_cores)
 
-        # Search for a free core, starting from bottom-right
-        d2d0_core = None
-        for y in range(compute_grid.y - 1, -1, -1):
-            for x in range(compute_grid.x - 1, -1, -1):
-                candidate = ttnn.CoreCoord(x, y)
-                if (candidate.x, candidate.y) not in all_reduce_cores:
-                    d2d0_core = candidate
+            # Search for a free core, starting from bottom-right
+            for y in range(compute_grid.y - 1, -1, -1):
+                for x in range(compute_grid.x - 1, -1, -1):
+                    candidate = ttnn.CoreCoord(x, y)
+                    if (candidate.x, candidate.y) not in all_reduce_cores:
+                        d2d0_core = candidate
+                        break
+                if d2d0_core:
                     break
-            if d2d0_core:
-                break
 
-        if not d2d0_core:
-            raise RuntimeError("Could not find non-overlapping core for D2D_0 aggregator")
+            if not d2d0_core:
+                raise RuntimeError("Could not find non-overlapping core for D2D_0 aggregator")
 
         d2d0_socket_core = ttnn.MeshCoreCoord(device_coord, d2d0_core)
 
