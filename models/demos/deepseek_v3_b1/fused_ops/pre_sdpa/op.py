@@ -2549,3 +2549,117 @@ class PreSDPA:
 
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result
+
+    @staticmethod
+    def mla_golden(
+        input_tensor,
+        gamma_tensor,
+        matmul_weights_tensor,
+        rmsnorm2_gamma_tensor,
+        matmul2_weights_tensor,
+        matmul3_weights_tensor,
+        sin_tensor,
+        cos_tensor,
+        position_ids,
+        dkv_matmul_weights_tensor,
+        dkv_rmsnorm_gamma_tensor,
+        kv_cache_tensor,
+        scale,
+        up_proj_weights_tensor,
+        out_proj_weights_tensor,
+        epsilon=1e-6,
+        num_qnope_heads=64,
+        num_qrope_heads=64,
+        qnope_head_dim=128,
+        qrope_head_dim=64,
+        heads_per_row=8,
+        nope_dim=512,
+        rope_dim=64,
+    ):
+        """
+        PyTorch reference implementation for validation.
+
+        Args:
+            input_tensor: Input tensor (torch.Tensor) [1, K]
+            gamma_tensor: Gamma/weight tensor (torch.Tensor) [1, K]
+            matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
+            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (torch.Tensor) [1, N]
+            matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M]
+            matmul3_weights_tensor: Matmul3 weights (torch.Tensor) [num_qnope_heads, qnope_head_dim, qnope_out_dim]
+                                    e.g., [64, 128, 512] for batched matmul on Qnope heads
+            sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
+            cos_tensor: Cos tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
+            position_ids: Position indices (torch.Tensor) [batch] for decode mode
+            epsilon: Small value to avoid division by zero
+            num_qnope_heads: Number of Qnope heads (default 64)
+            num_qrope_heads: Number of Qrope heads (default 64)
+            qnope_head_dim: Dimension per Qnope head (default 128)
+            qrope_head_dim: Dimension per Qrope head (default 64)
+            heads_per_row: Number of heads per grid row (default 8)
+
+        Returns:
+            Tuple of (full_q, new_kv, output):
+            - full_q: [1, 1, num_qnope_heads, combined_head_dim] query tensor for SDPA
+            - new_kv: [1, 1, 1, combined_head_dim] new KV cache entry
+            - output: [1, K] final output after attention + residual
+        """
+        from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
+
+        def rmsnorm(x, gamma):
+            variance = x.pow(2).mean(-1, keepdim=True)
+            normalized = x * torch.rsqrt(variance + epsilon)
+            return normalized * gamma
+
+        position_id = position_ids[0]
+        # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
+        input_layernorm = rmsnorm(input_tensor, gamma_tensor)
+        matmul_result = input_layernorm @ matmul_weights_tensor
+
+        # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
+        matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
+
+        qnope_heads = matmul2_result[:, : num_qnope_heads * qnope_head_dim].reshape(num_qnope_heads, 1, qnope_head_dim)
+        qrope_heads = matmul2_result[:, num_qnope_heads * qnope_head_dim :].reshape(num_qrope_heads, 1, qrope_head_dim)
+
+        # Matmul3: Batched matmul on Qnope heads
+        # [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
+        qnope_output = torch.bmm(qnope_heads, matmul3_weights_tensor)
+
+        # Apply RoPE to Qrope heads
+        # qrope_heads: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
+        # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
+        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
+        # position_ids_expanded: [batch, seq_len] = [1, 1]
+        position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
+        # Apply RoPE
+        qrope_output_reshaped = RopeSingleCore.golden(
+            qrope_reshaped_for_rope, cos_tensor, sin_tensor, position_ids_expanded
+        )
+        # Reshape back: [1, 64, 1, 64] -> [64, 1, 64]
+        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)  # [64, 1, 64]
+
+        # Combine QNOPE and QROPE outputs
+        combined_head_dim = nope_dim + rope_dim  # 512 + 64 = 576
+
+        full_q = torch.concat([qnope_output, qrope_output], dim=-1).reshape(1, 1, num_qnope_heads, combined_head_dim)
+
+        # KV Cache Branch
+        dkv = input_layernorm @ dkv_matmul_weights_tensor
+        kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
+        kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
+        k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
+
+        # from 0 to position id, the kv cache is valid
+        full_kv = kv_cache_tensor.to(full_q.dtype)
+        new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
+        full_kv[:, :, position_id, :] = new_kv
+
+        # SDPA: [1, 1, 64, 576] @ KV cache -> [1, 1, 64, 512] -> squeeze to [64, 512]
+        sdpa_output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        # kv_b2 batched matmul: [64, 1, 512] @ [64, 512, 128] -> [64, 1, 128]
+        up_proj_output = torch.bmm(sdpa_output.unsqueeze(1), up_proj_weights_tensor)
+        # Reshape to [1, 8192] and apply o_proj: [1, 8192] @ [8192, 7168] -> [1, 7168]
+        up_proj_output_reshaped = up_proj_output.reshape(1, -1)
+        out_proj_output = up_proj_output_reshaped @ out_proj_weights_tensor
+        output = input_tensor + out_proj_output
+        return full_q, new_kv, output
