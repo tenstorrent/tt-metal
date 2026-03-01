@@ -9,13 +9,16 @@ Demos showcasing different fusion capabilities:
 
 1. Basic 3-op chain (RMS -> Matmul -> RMS) with DRAM I/O on a 4x2 grid
 2. Sharded 2-op chain (RMS -> LN) demonstrating pinned buffer address reassignment
-4. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 1×8 core columns
-5. GlobalCircularBuffer mid-kernel write to an external consumer
-8. Sharded heterogeneous tree (LN → Slice → Matmul → Slice → LN) with block-sharded L1 intermediates
+3. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 1×8 core columns
+4. GlobalCircularBuffer mid-kernel write to an external consumer
+5. Sharded heterogeneous tree (LN → Slice → Matmul → Slice → LN) with block-sharded L1 intermediates
 
 Each demo is split into separate fused and unfused tests, each with cold + warm timing.
 Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
 warm = all caches populated.
+
+To run in Tracy mode (single run, no timing loops), change single_run_only param to [True]
+or override on CLI: pytest ... -o "single_run_only=True"
 """
 
 import shutil
@@ -133,9 +136,6 @@ class TestFusedDemo:
     Cold = all caches cleared, warm = all caches populated.
     """
 
-    # Set to True for Tracy profiling: skips timing loops, runs once only.
-    _SINGLE_RUN_ONLY = False
-
     # -----------------------------------------------------------------
     # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
     # Input [256, H], matmul [H, H], 4x2 = 8 cores
@@ -162,8 +162,9 @@ class TestFusedDemo:
 
         return core_range, mm_cfg, torch_input, torch_w, torch_b
 
+    @pytest.mark.parametrize("single_run_only", [False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo1_fused(self, device, H):
+    def test_demo1_fused(self, device, H, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
@@ -206,7 +207,7 @@ class TestFusedDemo:
             compute_kernel_config=compute_cfg,
         )
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             fused = Sequential(r1, m, r2).build(device)
             fused.launch()
             ttnn.synchronize_device(device)
@@ -237,8 +238,9 @@ class TestFusedDemo:
             print(f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
 
+    @pytest.mark.parametrize("single_run_only", [False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo1_unfused(self, device, H):
+    def test_demo1_unfused(self, device, H, single_run_only):
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
         dram = ttnn.DRAM_MEMORY_CONFIG
         tt_in = ttnn.from_torch(
@@ -252,7 +254,7 @@ class TestFusedDemo:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             return ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             unfused()
             ttnn.synchronize_device(device)
             print(f"\n  Demo 1 Unfused (H={H}): single run (for Tracy)")
@@ -312,8 +314,9 @@ class TestFusedDemo:
 
         return cores, sharded_mem, program_cfg, tt_input, tt_w
 
+    @pytest.mark.parametrize("single_run_only", [False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo2_fused(self, device, H):
+    def test_demo2_fused(self, device, H, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
 
@@ -336,7 +339,7 @@ class TestFusedDemo:
             memory_config=sharded_mem,
         )
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             fused = Sequential(r, ln).build(device)
             fused.launch()
             ttnn.synchronize_device(device)
@@ -373,8 +376,9 @@ class TestFusedDemo:
             print(f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
 
+    @pytest.mark.parametrize("single_run_only", [False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo2_unfused(self, device, H):
+    def test_demo2_unfused(self, device, H, single_run_only):
         cores, sharded_mem, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
 
         def unfused():
@@ -395,7 +399,7 @@ class TestFusedDemo:
                 memory_config=sharded_mem,
             )
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             unfused()
             ttnn.synchronize_device(device)
             print(f"\n  Demo 2 Unfused (H={H}): single run (for Tracy)")
@@ -405,14 +409,14 @@ class TestFusedDemo:
             print(f"\n  Demo 2 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
-    # Demo 4: Two parallel sharded chains on disjoint 1×8 core columns
+    # Demo 3: Two parallel sharded chains on disjoint 1×8 core columns
     # Chain A: LN -> Matmul on cores col 0, rows 0-7
     # Chain B: RMS -> Matmul on cores col 1, rows 0-7
     # Block-sharded [1024,256] inputs, sharded [1024,128] outputs on
     # 1×8 grid. B weight + norm weight/bias L1 sharded.
     # -----------------------------------------------------------------
 
-    def _demo4_setup(self, device):
+    def _demo3_setup(self, device):
         torch.manual_seed(42)
         rows, K, N = 1024, 256, 128
 
@@ -485,7 +489,8 @@ class TestFusedDemo:
             tB,
         )
 
-    def test_demo4_fused(self, device):
+    @pytest.mark.parametrize("single_run_only", [False])
+    def test_demo3_fused(self, device, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
@@ -503,7 +508,7 @@ class TestFusedDemo:
             tw,
             tbi,
             tB,
-        ) = self._demo4_setup(device)
+        ) = self._demo3_setup(device)
 
         la = layer_norm.layer_norm(
             ta,
@@ -539,11 +544,11 @@ class TestFusedDemo:
             output_mem_config=sharded_out_b,
         )
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
             fused.launch()
             ttnn.synchronize_device(device)
-            print("\n  Demo 4 Fused: single run (for Tracy)")
+            print("\n  Demo 3 Fused: single run (for Tracy)")
         else:
             _, cold, warm = _time_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device), device)
 
@@ -562,11 +567,12 @@ class TestFusedDemo:
             p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
             p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
 
-            print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
+            print(f"\n  Demo 3 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
             assert p_a, f"Chain A PCC: {pcc_a}"
             assert p_b, f"Chain B PCC: {pcc_b}"
 
-    def test_demo4_unfused(self, device):
+    @pytest.mark.parametrize("single_run_only", [False])
+    def test_demo3_unfused(self, device, single_run_only):
         """Unfused path using ttnn ops with sharded intermediates.
 
         Both chains serialize on the same (0,0)-based 1×8 grid with matching
@@ -662,20 +668,21 @@ class TestFusedDemo:
             )
             ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out)
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Demo 4 Unfused: single run (for Tracy)")
+            print("\n  Demo 3 Unfused: single run (for Tracy)")
         else:
             cold, warm = _time_cold_warm(unfused, device)
             e2e = _time_steady_state(unfused, device)
-            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            print(f"\n  Demo 3 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
-    # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
+    # Demo 4: GlobalCircularBuffer mid-kernel write (fused only)
     # -----------------------------------------------------------------
 
-    def test_demo5_fused(self, device):
+    @pytest.mark.parametrize("single_run_only", [False])
+    def test_demo4_fused(self, device, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
         TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
@@ -1005,15 +1012,15 @@ void kernel_main() {
         passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
         passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
 
-        print(f"\n  Demo 5 Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
+        print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
         assert passing_recv, f"Receiver PCC: {pcc_recv}"
         assert passing_b, f"Phase 1 PCC: {pcc_b}"
 
     # =================================================================
-    # Demo 8: Sharded Heterogeneous Tree
+    # Demo 5: Sharded Heterogeneous Tree
     # =================================================================
     #
-    # Same balanced binary tree topology as demo 7, but with block-sharded
+    # Balanced binary tree topology with block-sharded
     # intermediates instead of interleaved DRAM I/O.  Scaled down to fit
     # height-sharded in L1.
     #
@@ -1026,7 +1033,7 @@ void kernel_main() {
     #   Level 2:  Slice → LN_ll/lr   ( 4 cores)  [1,1,512,128]
     #             Slice → LN_rl/rr   ( 4 cores)  [1,1,512,128]
 
-    def _demo8_setup(self, device):
+    def _demo5_setup(self, device):
         torch.manual_seed(42)
         # Scaled down to fit block-sharded in L1.  Original was [8192, 1024].
         rows, cols = 2048, 256
@@ -1116,8 +1123,8 @@ void kernel_main() {
             shards,
         )
 
-    def _demo8_make_ops(self, device):
-        """Create all OpDescriptors for Demo 8's sharded tree."""
+    def _demo5_make_ops(self, device):
+        """Create all OpDescriptors for Demo 5's sharded tree."""
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice_op
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
@@ -1136,7 +1143,7 @@ void kernel_main() {
             tt_B_left,
             tt_B_right,
             shards,
-        ) = self._demo8_setup(device)
+        ) = self._demo5_setup(device)
 
         rows, cols = 2048, 256
         half = rows // 2
@@ -1245,7 +1252,7 @@ void kernel_main() {
             shards,
         )
 
-    def _demo8_build_fused(self, device, ops):
+    def _demo5_build_fused(self, device, ops):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
         (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
@@ -1257,7 +1264,8 @@ void kernel_main() {
             ),
         ).build(device)
 
-    def test_demo8_fused(self, device):
+    @pytest.mark.parametrize("single_run_only", [False])
+    def test_demo5_fused(self, device, single_run_only):
         (
             ln_stem,
             sl_top,
@@ -1278,24 +1286,24 @@ void kernel_main() {
             tt_B_left,
             tt_B_right,
             shards,
-        ) = self._demo8_make_ops(device)
+        ) = self._demo5_make_ops(device)
 
         rows, cols = 2048, 256
         half = rows // 2
         quarter = rows // 4
         ops = (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr)
 
-        if self._SINGLE_RUN_ONLY:
-            fused = self._demo8_build_fused(device, ops)
+        if single_run_only:
+            fused = self._demo5_build_fused(device, ops)
             fused.launch()
             ttnn.synchronize_device(device)
-            print("\n  Demo 8 Fused: single run (for Tracy)")
+            print("\n  Demo 5 Fused: single run (for Tracy)")
         else:
             # Cold start
-            _, cold, _ = _time_fused(lambda: self._demo8_build_fused(device, ops), device)
+            _, cold, _ = _time_fused(lambda: self._demo5_build_fused(device, ops), device)
 
             # Steady-state e2e
-            fused = self._demo8_build_fused(device, ops)
+            fused = self._demo5_build_fused(device, ops)
             e2e = _time_steady_state(fused.launch, device)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
@@ -1375,11 +1383,12 @@ void kernel_main() {
 
             p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
             p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
-            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
+            print(f"\n  Demo 5 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
             assert p_ll, f"Left-left PCC: {pcc_ll}"
             assert p_rl, f"Right-left PCC: {pcc_rl}"
 
-    def test_demo8_unfused(self, device):
+    @pytest.mark.parametrize("single_run_only", [False])
+    def test_demo5_unfused(self, device, single_run_only):
         """Unfused path using ttnn ops with sharded intermediates.
 
         ttnn ops require (0,0)-based core grids (compute_with_storage_grid_size
@@ -1503,10 +1512,10 @@ void kernel_main() {
                 memory_config=leaf_mem,
             )
 
-        if self._SINGLE_RUN_ONLY:
+        if single_run_only:
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Demo 8 Unfused: single run (for Tracy)")
+            print("\n  Demo 5 Unfused: single run (for Tracy)")
         else:
             # Cold start
             cold, _ = _time_cold_warm(unfused, device)
@@ -1514,4 +1523,4 @@ void kernel_main() {
             # Steady-state e2e
             e2e = _time_steady_state(unfused, device)
 
-            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+            print(f"\n  Demo 5 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
