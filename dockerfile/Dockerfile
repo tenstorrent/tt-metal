@@ -125,6 +125,10 @@ RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
 #############################################################
 
 FROM base AS ci-build
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI build environment for compiling tt-metal"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
 ENV PATH="/usr/local/bin:$PATH"
@@ -179,6 +183,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #############################################################
 
 FROM ci-build AS ci-test
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI test environment with Python dependencies"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
@@ -216,6 +224,10 @@ RUN umask 000 && \
 #############################################################
 
 FROM ci-test AS dev
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium development environment with full toolchain"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION=22.04
 
@@ -270,6 +282,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #############################################################
 
 FROM base AS release
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium runtime environment for deployment"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG PYTHON_VERSION
 
@@ -302,6 +318,10 @@ RUN umask 000 && \
 #############################################################
 
 FROM base AS release-models
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium runtime environment with models"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG PYTHON_VERSION
 

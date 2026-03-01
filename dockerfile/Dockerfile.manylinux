@@ -16,6 +16,10 @@ FROM scratch AS openmpi-layer
 #############################################################
 
 FROM quay.io/pypa/manylinux_2_34_x86_64
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium manylinux environment for Python wheel builds"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # manylinux_2_34_x86_64 is AlmaLinux 9.7
 

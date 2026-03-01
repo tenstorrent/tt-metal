@@ -81,6 +81,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #############################################################
 
 FROM base AS basic-ttnn-runtime
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Minimal TTNN runtime environment"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION

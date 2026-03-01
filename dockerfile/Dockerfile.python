@@ -81,6 +81,10 @@ RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI builds"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 COPY --from=ci-build-venv-builder /opt/venv /install/venv
 
 #############################################################
@@ -165,4 +169,8 @@ RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-test-venv
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="Pre-built Python virtual environment for CI testing"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 COPY --from=ci-test-venv-builder /opt/venv /install/venv
