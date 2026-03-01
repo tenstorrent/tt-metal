@@ -198,9 +198,17 @@ class TextModel(LightweightModule):
 
         Returns:
             Embeddings of shape [1, 1, seq_len, hidden_dim] in TILE layout
+
+        Note:
+            Uses combined embedding table (wte + new_embedding) to handle
+            both regular tokens and special tokens (image_patch_id, etc.)
         """
-        # Use TTNN embedding lookup
-        embeddings = ttnn.embedding(input_ids, self.wte)
+        # Concatenate base and new embeddings for full vocabulary
+        # This matches HuggingFace: F.embedding(x, torch.cat([self.embedding, self.new_embedding]))
+        full_embedding = ttnn.concat([self.wte, self.new_embedding], dim=2)
+
+        # Use TTNN embedding lookup with combined table
+        embeddings = ttnn.embedding(input_ids, full_embedding)
         embeddings = ttnn.reshape(embeddings, [1, 1, -1, self.hidden_dim])
         # Convert to TILE layout for rest of model
         embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
@@ -314,7 +322,14 @@ class TextModel(LightweightModule):
         # Get RoPE embeddings for current position
         if rot_mats is None:
             if position_ids is None:
-                position_ids = torch.tensor([ttnn.to_torch(current_pos)[0].item()], dtype=torch.int32)
+                # For multi-device, need mesh_composer to convert position tensor
+                if self.mesh_device.__class__.__name__ == "MeshDevice" and self.mesh_device.get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                    position_ids = torch.tensor(
+                        [ttnn.to_torch(current_pos, mesh_composer=mesh_composer)[0].item()], dtype=torch.int32
+                    )
+                else:
+                    position_ids = torch.tensor([ttnn.to_torch(current_pos)[0].item()], dtype=torch.int32)
             rot_mats = self.rotary_setup.get_rot_mats_decode(position_ids)
 
         # Get decode transformation matrix
@@ -352,11 +367,13 @@ def init_kv_cache(
     """
     Initialize pre-allocated KV cache for all layers.
 
+    With tensor parallelism, each device gets a subset of KV heads.
+
     Args:
         mesh_device: TTNN mesh device or single device
         num_layers: Number of decoder layers
         batch_size: Batch size
-        num_kv_heads: Number of KV heads
+        num_kv_heads: Number of KV heads (total across all devices)
         max_seq_len: Maximum sequence length
         head_dim: Dimension per head
         dtype: Data type for cache
@@ -366,14 +383,26 @@ def init_kv_cache(
     """
     from loguru import logger
 
-    logger.info(f"Initializing KV cache: {num_layers} layers, max_seq_len={max_seq_len}")
-
     is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+
+    if is_mesh_device:
+        num_devices = mesh_device.get_num_devices()
+        num_kv_heads_per_device = num_kv_heads // num_devices
+        # Shard KV cache along heads dimension (dim=1)
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+        logger.info(
+            f"Initializing KV cache with tensor parallelism: {num_layers} layers, "
+            f"{num_kv_heads_per_device} kv_heads per device, max_seq_len={max_seq_len}"
+        )
+    else:
+        num_kv_heads_per_device = num_kv_heads
+        mesh_mapper = None
+        logger.info(f"Initializing KV cache: {num_layers} layers, max_seq_len={max_seq_len}")
 
     kv_caches = []
     for layer_idx in range(num_layers):
         # Pre-allocate K cache: [batch, num_kv_heads, max_seq_len, head_dim]
+        # With tensor parallelism, this gets sharded to [batch, num_kv_heads_per_device, max_seq_len, head_dim]
         k_cache = ttnn.as_tensor(
             torch.zeros((batch_size, num_kv_heads, max_seq_len, head_dim)),
             dtype=dtype,
