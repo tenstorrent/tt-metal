@@ -292,3 +292,64 @@ class TextMLP(LightweightModule):
             )
 
         return output
+
+    def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Optimized decode forward pass using L1 memory.
+
+        For decode mode, tensors are small enough to fit in L1, which is faster than DRAM.
+
+        Args:
+            x: Input tensor of shape [1, 1, 1, hidden_dim]
+
+        Returns:
+            Output tensor of shape [1, 1, 1, hidden_dim]
+        """
+        # Use pre-loaded weights (multi-device case with bfloat16)
+        gate_proj = self.gate_proj
+        up_proj = self.up_proj
+        down_proj = self.down_proj
+
+        # Gate projection with SiLU activation - L1 output
+        gate = ttnn.linear(
+            x,
+            gate_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        gate = ttnn.silu(gate)
+
+        # Up projection - L1 output
+        up = ttnn.linear(
+            x,
+            up_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        # Element-wise multiply: silu(gate) * up - L1 output
+        hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        # Down projection - L1 output
+        output = ttnn.linear(
+            hidden,
+            down_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(hidden)
+
+        # All-reduce for tensor parallelism (sum partial outputs from all devices)
+        # Note: all_reduce needs DRAM input, convert from L1 first
+        if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        return output
