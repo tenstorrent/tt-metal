@@ -158,6 +158,50 @@ class TextAttention(LightweightModule):
             cache_file_name=cache_name("wv.weight"),
         )
 
+        # Create fused QKV weight for optimized decode (nlp_create_qkv_heads_decode format)
+        # Format: per-device concatenation of [Q_heads, K_heads, V_heads]
+        if is_mesh_device and self.num_devices > 1:
+            # Multi-device: create fused QKV with per-device chunking
+            qkv_list = []
+            for i in range(self.num_devices):
+                wq_chunk = torch.chunk(wq, self.num_devices, dim=0)[i]
+                wk_chunk = torch.chunk(wk, self.num_devices, dim=0)[i]
+                wv_chunk = torch.chunk(wv, self.num_devices, dim=0)[i]
+
+                wq_chunk_t = torch.transpose(wq_chunk, -2, -1)
+                wk_chunk_t = torch.transpose(wk_chunk, -2, -1)
+                wv_chunk_t = torch.transpose(wv_chunk, -2, -1)
+
+                qkv_chunk = torch.cat([wq_chunk_t, wk_chunk_t, wv_chunk_t], dim=-1)
+                qkv_list.append(qkv_chunk)
+
+            wqkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+
+            self.wqkv = ttnn.as_tensor(
+                wqkv_cat,
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name("wqkv.weight"),
+            )
+        else:
+            # Single device: simple concatenation
+            wqkv_t = torch.cat([wq_t, wk_t, wv_t], dim=-1)
+            self.wqkv = ttnn.as_tensor(
+                wqkv_t,
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=None,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name("wqkv.weight"),
+            )
+
+        # QKV output size per device for nlp_create_qkv_heads_decode
+        self.qkv_size_per_device = (self.num_heads_per_device + 2 * self.num_kv_heads_per_device) * head_dim
+
         # Load output projection: attn_out
         wo = state_dict[f"{prefix}.attn_out.weight"]
         wo_t = torch.transpose(wo, -2, -1).unsqueeze(0).unsqueeze(0)
@@ -391,41 +435,32 @@ class TextAttention(LightweightModule):
         batch_size = 1
         seq_len = 1  # Decode mode processes one token at a time
 
-        # Q, K, V projections (column parallel)
-        q = ttnn.linear(
+        # Fused QKV projection (single matmul instead of 3 separate ones)
+        xqkv = ttnn.linear(
             x,
-            self.wq,
+            self.wqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x)
 
-        k = ttnn.linear(
-            x,
-            self.wk,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Use nlp_create_qkv_heads_decode for efficient reshape
+        # Output: q [1, B, num_heads, d], k [1, B, num_kv_heads, d], v [1, B, num_kv_heads, d]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv,
+            num_heads=self.num_heads_per_device,
+            num_kv_heads=self.num_kv_heads_per_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-        v = ttnn.linear(
-            x,
-            self.wv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Reshape for multi-head attention (using per-device head counts)
-        # Q: [1, 1, 1, num_heads_per_device * head_dim] -> [1, num_heads_per_device, 1, head_dim]
-        q = ttnn.reshape(q, [batch_size, seq_len, self.num_heads_per_device, self.head_dim])
-        q = ttnn.permute(q, (0, 2, 1, 3))
-
-        # K, V: [1, 1, 1, num_kv_heads_per_device * head_dim] -> [1, num_kv_heads_per_device, 1, head_dim]
-        k = ttnn.reshape(k, [batch_size, seq_len, self.num_kv_heads_per_device, self.head_dim])
-        k = ttnn.permute(k, (0, 2, 1, 3))
-
-        v = ttnn.reshape(v, [batch_size, seq_len, self.num_kv_heads_per_device, self.head_dim])
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        ttnn.deallocate(xqkv)
 
         # Apply QK-norm (RMSNorm on Q and K)
+        # nlp_create_qkv_heads_decode output is [1, B, H, d] = [S, B, H, d]
+        # rms_norm doesn't support HEIGHT_SHARDED, so convert to L1 first
+        q_mem = q.memory_config()
+        k_mem = k.memory_config()
+        q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
         k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
 
@@ -435,13 +470,8 @@ class TextAttention(LightweightModule):
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # Transpose for decode format: [B, H, S, d] -> [S, B, H, d]
-        q = ttnn.transpose(q, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
-        q = ttnn.transpose(q, 1, 2)  # [S, H, B, d] -> [S, B, H, d]
-        k = ttnn.transpose(k, 0, 2)
-        k = ttnn.transpose(k, 1, 2)
-        v = ttnn.transpose(v, 0, 2)
-        v = ttnn.transpose(v, 1, 2)
+        # nlp_create_qkv_heads_decode already outputs [S, B, H, d] format
+        # No transpose needed!
 
         # Convert Q and K to HEIGHT_SHARDED for decode RoPE
         # Using per-device head counts
@@ -530,13 +560,10 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(q)
 
-        # Transpose back: [1, B, H, d] -> [B, H, 1, d]
-        attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
-        attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
-
-        # Reshape back: [B, num_heads_per_device, 1, head_dim] -> [1, 1, 1, hidden_dim_per_device]
-        attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, self.num_heads_per_device * self.head_dim])
+        # Reshape: [1, B, H, d] -> [1, 1, B, H*d]
+        # SDPA decode output is [1, B, H, d] = [1, 1, num_heads_per_device, head_dim]
+        attn_output = ttnn.permute(attn_output, (0, 1, 2, 3))  # No-op to ensure contiguous
+        attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, self.num_heads_per_device * self.head_dim])
 
         # Output projection (row parallel)
         output = ttnn.linear(
