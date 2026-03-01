@@ -19,7 +19,7 @@ namespace tt::tt_metal {
 class MemoryConfig;
 }
 
-namespace tt::tt_metal::tensor_impl {
+namespace tt::tt_metal {
 
 // ======================================================================================
 //                                         .to_host() and .to_device()
@@ -65,4 +65,4 @@ HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_t
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
-}  // namespace tt::tt_metal::tensor_impl
+}  // namespace tt::tt_metal

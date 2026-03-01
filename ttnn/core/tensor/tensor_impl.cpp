@@ -27,6 +27,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/experimental/tensor/tensor_apis.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 
@@ -247,9 +248,6 @@ void to_string(
 }  // namespace detail
 
 template <typename T>
-HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout);
-
-template <typename T>
 std::string to_string_impl(const Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
 
@@ -268,9 +266,9 @@ std::string to_string_impl(const Tensor& tensor) {
         }
         if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
             Tensor float_tensor = tt::tt_metal::to_dtype(tensor, DataType::FLOAT32);
-            return Tensor(to_layout_impl<T>(float_tensor.host_tensor(), Layout::ROW_MAJOR));
+            return Tensor(tt::tt_metal::to_layout(float_tensor.host_tensor(), Layout::ROW_MAJOR));
         }
-        return Tensor(to_layout_impl<T>(tensor.host_tensor(), Layout::ROW_MAJOR));
+        return Tensor(tt::tt_metal::to_layout(tensor.host_tensor(), Layout::ROW_MAJOR));
     };
 
     auto get_host_buffers = [&](const HostStorage& storage) {

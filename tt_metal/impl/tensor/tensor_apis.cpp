@@ -24,7 +24,9 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_metal::tensor_impl {
+namespace tt::tt_metal {
+
+namespace tensor_impl {
 
 // ======================================================================================
 //                           Data reader, writer, and initializers
@@ -65,6 +67,8 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
+}  // namespace tensor_impl
+
 // ======================================================================================
 //                                         .to_host()
 // ======================================================================================
@@ -80,7 +84,7 @@ HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tenso
 
     distributed_host_buffer.emplace_shards(
         storage.coords,
-        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
+        [&](const distributed::MeshCoordinate&) { return tensor_impl::allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     queue.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
@@ -173,7 +177,7 @@ MeshTensor to_device(
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
-    auto mesh_buffer = allocate_device_buffer(queue.device(), *tensor_spec);
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(queue.device(), *tensor_spec);
     return to_device_mesh_buffer(
         queue, tensor.get_legacy_host_storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology());
 }
@@ -233,6 +237,8 @@ void copy_to_host(
         device_tensor.tensor_topology());
 }
 
+namespace tensor_impl {
+
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const MeshTensor& device_tensor,
@@ -246,6 +252,8 @@ void copy_to_host(
             .region(region)};
     queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_invariant_breaking(), blocking);
 }
+
+}  // namespace tensor_impl
 
 // ======================================================================================
 //                                  copy_to_device
@@ -270,6 +278,8 @@ void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host
         host_tensor.tensor_topology());
 }
 
+namespace tensor_impl {
+
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
@@ -282,6 +292,8 @@ void copy_to_device(
             .region(region)};
     queue.enqueue_write_shards(device_tensor.mesh_buffer_invariant_breaking(), shard_data_transfers, false);
 }
+
+}  // namespace tensor_impl
 
 // ======================================================================================
 //                                  .to_layout() helpers
@@ -335,7 +347,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
                 return convert_layout_row_major_to_tile(physical_shape, tile, input_data);
             case Layout::TILE:
                 TT_FATAL(target_layout == Layout::ROW_MAJOR, "Unsupported layout conversion");
-                return convert_layout_tile_to_row_major(physical_shape, tile, input_data);
+                return tensor_impl::convert_layout_tile_to_row_major(physical_shape, tile, input_data);
             case Layout::INVALID: TT_THROW("Invalid layout");
         }
         TT_THROW("Unreachable");
@@ -357,7 +369,8 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
 
 template <typename T>
 HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout) {
-    static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
+    static_assert(
+        std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::bfloat4_b>, "Invalid type T");
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
         log_warning(
             tt::LogAlways,
@@ -369,13 +382,13 @@ HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout)
 }
 
 template <>
-HostTensor to_layout_impl<bfloat8_b>(const HostTensor& tensor, Layout target_layout) {
-    return to_layout_bfloat_impl<bfloat8_b>(tensor, target_layout);
+HostTensor to_layout_impl<tensor_impl::bfloat8_b>(const HostTensor& tensor, Layout target_layout) {
+    return to_layout_bfloat_impl<tensor_impl::bfloat8_b>(tensor, target_layout);
 }
 
 template <>
-HostTensor to_layout_impl<bfloat4_b>(const HostTensor& tensor, Layout target_layout) {
-    return to_layout_bfloat_impl<bfloat4_b>(tensor, target_layout);
+HostTensor to_layout_impl<tensor_impl::bfloat4_b>(const HostTensor& tensor, Layout target_layout) {
+    return to_layout_bfloat_impl<tensor_impl::bfloat4_b>(tensor, target_layout);
 }
 
 // ======================================================================================
@@ -383,7 +396,8 @@ HostTensor to_layout_impl<bfloat4_b>(const HostTensor& tensor, Layout target_lay
 // ======================================================================================
 
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
-    return dispatch(tensor.dtype(), [&]<typename T>() { return to_layout_impl<T>(tensor, target_layout); });
+    return tensor_impl::dispatch(
+        tensor.dtype(), [&]<typename T>() { return to_layout_impl<T>(tensor, target_layout); });
 }
 
 // ======================================================================================
@@ -412,7 +426,7 @@ HostTensor pad_bfloat8_b(
                 tensor.logical_shape(),
                 tensor.padded_shape())),
         TensorTopology{});
-    auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
+    auto padded_float_tensor = pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     auto output_buffer =
         padded_float_tensor.get_legacy_host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
@@ -454,7 +468,7 @@ HostTensor pad_bfloat4_b(
                 tensor.logical_shape(),
                 tensor.padded_shape())),
         TensorTopology{});
-    auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
+    auto padded_float_tensor = pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     auto output_buffer =
         padded_float_tensor.get_legacy_host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
@@ -494,7 +508,7 @@ HostTensor unpad_bfloat8_b(const HostTensor& tensor, const Shape& output_tensor_
                 tensor.logical_shape(),
                 tensor.padded_shape())),
         TensorTopology{});
-    auto unpadded_float_tensor = tensor_impl::unpad(float_host_tensor, output_tensor_start, output_tensor_end);
+    auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     auto output_buffer =
         unpadded_float_tensor.get_legacy_host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
@@ -535,7 +549,7 @@ HostTensor unpad_bfloat4_b(const HostTensor& tensor, const Shape& output_tensor_
                 tensor.logical_shape(),
                 tensor.padded_shape())),
         TensorTopology{});
-    auto unpadded_float_tensor = tensor_impl::unpad(float_host_tensor, output_tensor_start, output_tensor_end);
+    auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     auto output_buffer =
         unpadded_float_tensor.get_legacy_host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
@@ -634,13 +648,13 @@ HostTensor pad_impl(
 }
 
 template <>
-HostTensor pad_impl<bfloat8_b>(
+HostTensor pad_impl<tensor_impl::bfloat8_b>(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) {
     return pad_bfloat8_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
 template <>
-HostTensor pad_impl<bfloat4_b>(
+HostTensor pad_impl<tensor_impl::bfloat4_b>(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) {
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
@@ -692,13 +706,13 @@ HostTensor unpad_impl(const HostTensor& tensor, const Shape& output_tensor_start
 }
 
 template <>
-HostTensor unpad_impl<bfloat8_b>(
+HostTensor unpad_impl<tensor_impl::bfloat8_b>(
     const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
     return unpad_bfloat8_b(tensor, output_tensor_start, output_tensor_end);
 }
 
 template <>
-HostTensor unpad_impl<bfloat4_b>(
+HostTensor unpad_impl<tensor_impl::bfloat4_b>(
     const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
 }
@@ -709,13 +723,13 @@ HostTensor unpad_impl<bfloat4_b>(
 
 HostTensor pad(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) {
-    return dispatch(tensor.dtype(), [&]<typename T>() {
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
 }
 
 HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
-    return dispatch(
+    return tensor_impl::dispatch(
         tensor.dtype(), [&]<typename T>() { return unpad_impl<T>(tensor, output_tensor_start, output_tensor_end); });
 }
 
@@ -899,4 +913,4 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     return HostTensor(HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
-}  // namespace tt::tt_metal::tensor_impl
+}  // namespace tt::tt_metal
