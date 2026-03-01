@@ -456,10 +456,7 @@ class TextAttention(LightweightModule):
         ttnn.deallocate(xqkv)
 
         # Apply QK-norm (RMSNorm on Q and K)
-        # nlp_create_qkv_heads_decode output is [1, B, H, d] = [S, B, H, d]
-        # rms_norm doesn't support HEIGHT_SHARDED, so convert to L1 first
-        q_mem = q.memory_config()
-        k_mem = k.memory_config()
+        # nlp_create_qkv_heads_decode outputs HEIGHT_SHARDED, rms_norm needs interleaved
         q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
@@ -528,7 +525,7 @@ class TextAttention(LightweightModule):
         # Get KV cache references
         k_cache, v_cache = kv_cache
 
-        # Update KV cache at current position (K and V are already HEIGHT_SHARDED)
+        # Update KV cache at current position
         ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=None)
         ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=None)
 
@@ -563,7 +560,6 @@ class TextAttention(LightweightModule):
 
         # Reshape: [1, B, H, d] -> [1, 1, B, H*d]
         # SDPA decode output is [1, B, H, d] = [1, 1, num_heads_per_device, head_dim]
-        attn_output = ttnn.permute(attn_output, (0, 1, 2, 3))  # No-op to ensure contiguous
         attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, self.num_heads_per_device * self.head_dim])
 
         # Output projection (row parallel) - use L1 for decode
