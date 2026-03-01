@@ -73,6 +73,14 @@ public:
         impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
     }
 
+    // Factory methods
+
+    /**
+     * Allocate device memory for a tensor with the given tensor spec on the given mesh device.
+     * Returns a MeshTensor that owns the allocated device memory.
+     */
+    static MeshTensor allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
     /**
      * Release ownership of the underlying device memory.
      * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying

@@ -8,6 +8,7 @@
 #include "tt-metalium/experimental/tensor/host_tensor.hpp"
 #include "tt-metalium/experimental/tensor/tensor_apis.hpp"
 #include "tt-metalium/experimental/tensor/details/legacy_data_movements.hpp"
+#include "tt-metalium/experimental/tensor/details/legacy_view.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -54,14 +55,14 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = Tensor(tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device));
+    output = Tensor(MeshTensor::allocate_on_device(tensor_spec, mesh_device));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
 MeshTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    MeshTensor output = tensor_impl::allocate_tensor_on_device(tensor_spec, mesh_device);
+    MeshTensor output = MeshTensor::allocate_on_device(tensor_spec, mesh_device);
     return output;
 }
 }  // namespace tt::tt_metal

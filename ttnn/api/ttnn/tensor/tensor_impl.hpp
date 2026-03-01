@@ -27,27 +27,13 @@ namespace tt::tt_metal::tensor_impl {
 // - pad, unpad, pad_to_tile, unpad_from_tile, to_dtype (tensor_apis.hpp)
 // ===============================================================================================================================================
 
-// ======================================================================================
-//                                  .view()
-//        These maybe replaced by dedicated view types, See: #38093
-// ======================================================================================
-HostTensor view(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& new_logical_shape,
-    const tt::tt_metal::Shape& new_padded_shape);
-
-MeshTensor view(
-    const MeshTensor& tensor,
-    const tt::tt_metal::Shape& new_logical_shape,
-    const tt::tt_metal::Shape& new_padded_shape);
+// view() functions have been moved to tt-metalium/experimental/tensor/details/legacy_view.hpp
 
 // ======================================================================================
 //                                 Runtime Tensor Creation Functions
 // ======================================================================================
 
-// Creations, these should be static factory functions of HostTensor and MeshTensor
-
-tt::tt_metal::MeshTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+// allocate_tensor_on_device is now MeshTensor::allocate_on_device in tt-metalium/experimental/tensor/mesh_tensor.hpp
 
 // HostTensor factory functions (from_vector, from_span, from_borrowed_data, to_vector)
 // are now static member functions of HostTensor defined in tt-metalium/experimental/tensor/host_tensor.hpp
