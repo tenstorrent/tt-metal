@@ -1422,7 +1422,6 @@ def test_issue_38841_regression(device):
 
     # Shard configuration that would fail with RM path
     # Height sharded with 4 shards -> 64 rows per shard
-    num_cores = 4
     shard_h = 64  # 256 / 4 = 64, which is 2 tiles
     shard_w = 32
 
