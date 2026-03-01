@@ -6,14 +6,19 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/tensor/details/legacy_data_movements.hpp>
 #include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
+
 #include <tt_stl/optional_reference.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 class MemoryConfig;

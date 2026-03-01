@@ -49,37 +49,8 @@ MeshTensor view(
 
 tt::tt_metal::MeshTensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-// ======================================================================================
-//                                  HostTensor Factory Functions
-// ======================================================================================
-
-namespace host_tensor {
-
-// ======================================================================================
-//                                  HostTensor from_xxx
-// ======================================================================================
-
-template <typename T>
-HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
-
-template <typename T>
-HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
-
-template <typename T>
-HostTensor from_borrowed_data(
-    ttsl::Span<T> buffer, const Shape& shape, MemoryPin buffer_pin, const std::optional<Tile>& tile = std::nullopt);
-
-// ======================================================================================
-//                                  HostTensor to_vector()
-// ======================================================================================
-
-// Converts a HostTensor to a std::vector<T>.
-// Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
-// the Tensor; block float formats such as BFLOAT8_B and BFLOAT4_B require T equal float.
-template <typename T>
-std::vector<T> to_vector(const HostTensor& tensor);
-
-}  // namespace host_tensor
+// HostTensor factory functions (from_vector, from_span, from_borrowed_data, to_vector)
+// are now static member functions of HostTensor defined in tt-metalium/experimental/tensor/host_tensor.hpp
 
 // ======================================================================================
 //                                  TTNN Tensor Only Functions
