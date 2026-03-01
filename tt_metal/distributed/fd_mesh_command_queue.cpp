@@ -284,7 +284,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     uint32_t num_virtual_eth_cores = 0;
 
     if (mcast_go_signals) {
-        num_workers += mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        for (auto& [device_range, program] : mesh_workload.get_programs()) {
+            uint32_t active_cores = 0;
+            for (auto& v : program.impl().logical_cores())
+                active_cores += v.size();
+            num_workers += active_cores << 6;
+        }
     }
     if (unicast_go_signals) {
         // Issue #19729: Running MeshWorkloads on Active Eth cores is supported through multiple workarounds
