@@ -55,7 +55,7 @@ class CCL:
         Get the maximum number of links for the given axis.
         Legacy TG used to have fewer links on axis 1, 6U has no such limitation
         """
-        return 4
+        return 1  # Multi-link has PCC issues
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """

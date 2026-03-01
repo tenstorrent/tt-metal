@@ -128,10 +128,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         return {
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 4,
+                "num_links": 1,
             },
             "all_to_all_combine": {
-                "num_links": 4,
+                "num_links": 1,
             },
             "ccl": ccl,
         }
@@ -192,6 +192,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
+                    topology=ttnn.Topology.Linear,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -203,6 +204,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     # ),
                     memory_config=memory_config,
                     cluster_axis=1,
+                    topology=ttnn.Topology.Linear,
                 ),
             }
         else:
@@ -231,12 +233,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                     dim=3,
                     memory_config=memory_config,
+                    topology=ttnn.Topology.Linear,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
                     dim=-1,  # Last dimension
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cluster_axis=1,
+                    topology=ttnn.Topology.Linear,
                 ),
             }
 
@@ -312,74 +316,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         # MoE Gate
 
         # TRACE: Router input
-        if os.environ.get("TRACE_FLOW", "0") == "1":
-            import sys
-
-            sys.path.append("/home/ntarafdar/tt-moe/tt-metal")
-            from trace_helpers import trace_point
-
-            trace_point(
-                stage="1_router_input",
-                impl="reference",
-                tensors={"x": x},
-                configs={"router_config": cfg.get("moe_gate", {})},
-                metadata={"seq_len": seq_len, "batch_size": batch_size},
-                mesh_device=cfg["mesh_device"],
-            )
-
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # TRACE: Router output
-        if os.environ.get("TRACE_FLOW", "0") == "1":
-            trace_point(
-                stage="2_router_output",
-                impl="reference",
-                tensors={"weights": topk_experts_weights, "indices": topk_experts_indices},
-                mesh_device=cfg["mesh_device"],
-            )
-
         # Save router outputs for comparison
-        if os.environ.get("SAVE_ROUTER_OUTPUTS", "0") == "1":
-            from pathlib import Path
-
-            import torch
-
-            save_dir = Path("/tmp/moe_activations/reference")
-            save_dir.mkdir(parents=True, exist_ok=True)
-
-            try:
-                # Convert to torch for saving
-                mesh_device = cfg["mesh_device"].get() if hasattr(cfg["mesh_device"], "get") else cfg["mesh_device"]
-                weights_torch = ttnn.to_torch(
-                    topk_experts_weights,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
-                    ),
-                )
-                indices_torch = ttnn.to_torch(
-                    topk_experts_indices,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
-                    ),
-                )
-
-                torch.save(
-                    {
-                        "weights": weights_torch,
-                        "indices": indices_torch,
-                        "weights_shape": weights_torch.shape,
-                        "indices_shape": indices_torch.shape,
-                        "weights_dtype": weights_torch.dtype,
-                        "indices_dtype": indices_torch.dtype,
-                        "implementation": "MoE_Reference",
-                    },
-                    save_dir / "router_outputs.pt",
-                )
-
-                print(f"[Reference] Saved router outputs: weights {weights_torch.shape}, indices {indices_torch.shape}")
-            except Exception as e:
-                print(f"[Reference] Failed to save router outputs: {e}")
-
         # Repeat + Permute Expert weights
 
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
@@ -410,68 +350,14 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_repeat_permute_expert_weights(
         cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
     ) -> ttnn.Tensor:
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            import sys
-
-            sys.path.append("/home/ntarafdar/tt-moe/tt-metal")
-            from tensor_flow_debug import save_tensor_checkpoint
-
-            # Before any transformations
-            save_tensor_checkpoint(
-                "weights_before_repeat_permute",
-                topk_experts_weights,
-                "0_weights_processing",
-                "reference",
-                cfg.get("mesh_device"),
-                {"original_shape": list(topk_experts_weights.shape)},
-            )
-
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            save_tensor_checkpoint(
-                "weights_after_row_major",
-                topk_experts_weights_rm,
-                "0_weights_processing",
-                "reference",
-                cfg.get("mesh_device"),
-            )
 
         topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
 
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            save_tensor_checkpoint(
-                "weights_after_repeat",
-                topk_experts_weights_rm,
-                "0_weights_processing",
-                "reference",
-                cfg.get("mesh_device"),
-                {"repeat_dims": str(cfg["topk_weights_repeat"])},
-            )
-
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            save_tensor_checkpoint(
-                "weights_after_permute",
-                topk_experts_weights_rm,
-                "0_weights_processing",
-                "reference",
-                cfg.get("mesh_device"),
-                {"permute_dims": "(3, 1, 2, 0)"},
-            )
 
         topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            save_tensor_checkpoint(
-                "weights_after_tile_layout",
-                topk_experts_weights,
-                "0_weights_processing",
-                "reference",
-                cfg.get("mesh_device"),
-            )
 
         return topk_experts_weights
 
@@ -489,177 +375,22 @@ class MoE(SharedStateAddOn, AbstractModule):
         tokens = batch_size * seq_len
 
         # Save tensor flow for debugging
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            import sys
-
-            sys.path.append("/home/ntarafdar/tt-moe/tt-metal")
-            from tensor_flow_debug import save_tensor_checkpoint
-
-            # Stage 1: Initial inputs to _fwd_moe
-            save_tensor_checkpoint(
-                "hidden_states",
-                x,
-                "1_fwd_moe_input",
-                "reference",
-                cfg["mesh_device"],
-                {"batch_size": batch_size, "seq_len": seq_len, "tokens": tokens},
-            )
-            save_tensor_checkpoint("weights", topk_experts_weights, "1_fwd_moe_input", "reference", cfg["mesh_device"])
-            save_tensor_checkpoint("indices", topk_experts_indices, "1_fwd_moe_input", "reference", cfg["mesh_device"])
-
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            # Stage 2: After ROW_MAJOR conversion
-            save_tensor_checkpoint("hidden_states_rm", x_rm, "2_after_row_major", "reference", cfg["mesh_device"])
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            # CRITICAL: Save before reshape to understand the transformation
-            from pathlib import Path
-
-            import numpy as np
-
-            save_tensor_checkpoint(
-                "hidden_states_before_reshape",
-                x_rm,
-                "2b_before_reshape",
-                "reference",
-                cfg["mesh_device"],
-                {
-                    "current_shape": list(x_rm.shape),
-                    "target_shape": (batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
-                    "batch_size_per_device": batch_size_per_device,
-                    "batch_size": batch_size,
-                    "seq_len": seq_len,
-                },
-            )
-
-            # Save binary for exact comparison
-            x_rm_torch = ttnn.to_torch(
-                x_rm,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    cfg["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mesh_device"].shape
-                ),
-            )
-            binary_dir = Path("/tmp/tensor_flow_binary/reference/2b_before_reshape")
-            binary_dir.mkdir(parents=True, exist_ok=True)
-            np.save(binary_dir / "hidden_states.npy", x_rm_torch.cpu().float().numpy())
 
         x_rm = ttnn.reshape(
             x_rm,
             shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
         )
 
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            # Stage 3: After reshape
-            save_tensor_checkpoint(
-                "hidden_states_reshaped",
-                x_rm,
-                "3_after_reshape",
-                "reference",
-                cfg["mesh_device"],
-                {"shape": (batch_size_per_device, 1, seq_len, cfg["hidden_size"])},
-            )
-
         topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
 
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            save_tensor_checkpoint(
-                "indices_rm", topk_experts_indices_rm, "2_after_row_major", "reference", cfg["mesh_device"]
-            )
-
         # TRACE: After ROW_MAJOR conversion
-        if os.environ.get("TRACE_FLOW", "0") == "1":
-            import sys
-
-            sys.path.append("/home/ntarafdar/tt-moe/tt-metal")
-            from trace_helpers import trace_point
-
-            trace_point(
-                stage="3_after_row_major",
-                impl="reference",
-                tensors={"x_rm": x_rm, "indices_rm": topk_experts_indices_rm},
-                metadata={"batch_size_per_device": batch_size_per_device, "seq_len": seq_len},
-                mesh_device=cfg["mesh_device"],
-            )
-
         # DEBUG: Save tensor before reshape
-        if os.environ.get("DEBUG_SAVE_CHUNKS", "0") == "1":
-            from pathlib import Path
-
-            import torch
-
-            debug_dir = Path("/tmp/moe_debug/ref_impl")
-            debug_dir.mkdir(parents=True, exist_ok=True)
-
-            # Save indices shape info before reshape
-            mesh_device = cfg["mesh_device"]
-            indices_torch = ttnn.to_torch(
-                topk_experts_indices_rm,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-            )
-
-            torch.save(
-                {
-                    "data": indices_torch.cpu() if hasattr(indices_torch, "cpu") else indices_torch,
-                    "shape": tuple(topk_experts_indices_rm.shape)
-                    if hasattr(topk_experts_indices_rm, "shape")
-                    else indices_torch.shape,
-                    "target_shape": (batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"]),
-                    "batch_size_per_device": batch_size_per_device,
-                    "seq_len": seq_len,
-                    "num_experts_per_tok": cfg["num_experts_per_tok"],
-                },
-                debug_dir / "indices_before_reshape.pt",
-            )
-
-            print(f"[DEBUG] Ref impl - indices before reshape: shape={topk_experts_indices_rm.shape}")
-            print(
-                f"[DEBUG] Ref impl - target shape: ({batch_size_per_device}, 1, {seq_len}, {cfg['num_experts_per_tok']})"
-            )
-
-        if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-            # Critical: Log batch_size_per_device to understand reshape
-            save_tensor_checkpoint(
-                "config_info",
-                x_rm,
-                "2a_batch_size_calculation",
-                "reference",
-                cfg["mesh_device"],
-                {
-                    "batch_size_per_device": batch_size_per_device,
-                    "batch_size": batch_size,
-                    "seq_len": seq_len,
-                    "x_rm_shape": list(x_rm.shape),
-                    "target_reshape": (batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"]),
-                },
-            )
-
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
 
         # DEBUG: Save weights after preparation, before chunking
-        if os.environ.get("DEBUG_SAVE_CHUNKS", "0") == "1":
-            # Save weights shape info
-            weights_torch = ttnn.to_torch(
-                topk_experts_weights,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-            )
-
-            torch.save(
-                {
-                    "data": weights_torch.cpu() if hasattr(weights_torch, "cpu") else weights_torch,
-                    "shape": tuple(topk_experts_weights.shape)
-                    if hasattr(topk_experts_weights, "shape")
-                    else weights_torch.shape,
-                    "note": "weights after _fwd_repeat_permute_expert_weights, before chunking",
-                },
-                debug_dir / "weights_before_chunking.pt",
-            )
-
-            print(f"[DEBUG] Ref impl - weights before chunking: shape={topk_experts_weights.shape}")
-
         # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
         chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
         output_chunks: list[ttnn.Tensor] = []
@@ -668,37 +399,11 @@ class MoE(SharedStateAddOn, AbstractModule):
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
 
-            if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-                save_tensor_checkpoint(
-                    f"weights_slice_input_{batch_start}",
-                    topk_experts_weights,
-                    f"5_weight_slice_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    {
-                        "batch_start": batch_start,
-                        "batch_end": batch_end,
-                        "token_start": token_start,
-                        "token_end": token_end,
-                        "input_shape": list(topk_experts_weights.shape),
-                    },
-                )
-
             sliced = ttnn.slice(
                 topk_experts_weights,
                 [0, 0, token_start, 0],
                 [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
             )
-
-            if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-                save_tensor_checkpoint(
-                    f"weights_sliced_{batch_start}",
-                    sliced,
-                    f"5_weight_slice_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    {"output_shape": list(sliced.shape)},
-                )
 
             return sliced
 
@@ -718,194 +423,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
             )
 
-            if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-                # Stage 4: After slicing for chunk
-                chunk_info = {
-                    "batch_start": batch_start,
-                    "batch_end": batch_end,
-                    "chunk_size": chunk_size,
-                    "batch_chunk": batch_chunk,
-                }
-                save_tensor_checkpoint(
-                    f"x_chunk_{batch_start}",
-                    x_chunk,
-                    f"4_after_slice_chunk_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    chunk_info,
-                )
-                save_tensor_checkpoint(
-                    f"indices_chunk_{batch_start}",
-                    topk_indices_chunk,
-                    f"4_after_slice_chunk_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    chunk_info,
-                )
-
             # TRACE: After slicing
-            if os.environ.get("TRACE_FLOW", "0") == "1":
-                import sys
-
-                sys.path.append("/home/ntarafdar/tt-moe/tt-metal")
-                from trace_helpers import trace_point
-
-                trace_point(
-                    stage=f"4_after_slice_chunk_{batch_start}_{batch_end}",
-                    impl="reference",
-                    tensors={"x_chunk": x_chunk, "indices_chunk": topk_indices_chunk},
-                    metadata={"batch_start": batch_start, "batch_end": batch_end, "chunk_size": chunk_size},
-                    mesh_device=cfg["mesh_device"],
-                )
-
             # Save chunks for comparison - only activations, not weights
-            if os.environ.get("DEBUG_SAVE_CHUNKS", "0") == "1":
-                from pathlib import Path
-
-                import torch
-
-                chunk_dir = Path(f"/tmp/moe_chunks/ref_impl/chunk_{batch_start}_{batch_end}")
-                chunk_dir.mkdir(parents=True, exist_ok=True)
-
-                # Save x_chunk - handle distributed tensors
-                # x_chunk is sliced from x_rm which is distributed on the mesh
-                mesh_device = cfg["mesh_device"]
-                x_chunk_torch = ttnn.to_torch(
-                    x_chunk,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-                )
-                torch.save(
-                    {
-                        "data": x_chunk_torch,
-                        "shape": x_chunk_torch.shape,
-                        "batch_start": batch_start,
-                        "batch_end": batch_end,
-                        "chunk_size": chunk_size,
-                    },
-                    chunk_dir / "x_chunk.pt",
-                )
-
-                # Save indices_chunk - also distributed
-                indices_chunk_torch = ttnn.to_torch(
-                    topk_indices_chunk,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-                )
-                torch.save(
-                    {
-                        "data": indices_chunk_torch,
-                        "shape": indices_chunk_torch.shape,
-                        "batch_start": batch_start,
-                        "batch_end": batch_end,
-                    },
-                    chunk_dir / "indices_chunk.pt",
-                )
-
-                print(f"[DEBUG] Saved ref x_chunk and indices_chunk for batch {batch_start}-{batch_end} to {chunk_dir}")
-
             # Save exact binary inputs to all_to_all_dispatch for comparison
-            if os.environ.get("SAVE_DISPATCH_INPUTS", "0") == "1":
-                import hashlib
-                from pathlib import Path
-
-                import numpy as np
-                import torch
-
-                dispatch_input_dir = Path("/tmp/dispatch_inputs/reference")
-                dispatch_input_dir.mkdir(parents=True, exist_ok=True)
-
-                # Save hidden states (x_chunk)
-                x_chunk_torch = ttnn.to_torch(
-                    x_chunk,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        cfg["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mesh_device"].shape
-                    ),
-                )
-                torch.save(
-                    {
-                        "tensor": x_chunk_torch.cpu(),
-                        "shape": list(x_chunk_torch.shape),
-                        "dtype": str(x_chunk_torch.dtype),
-                    },
-                    dispatch_input_dir / "hidden_states.pt",
-                )
-                # Convert to float32 for numpy (bfloat16 not supported in numpy)
-                np.save(dispatch_input_dir / "hidden_states.npy", x_chunk_torch.cpu().float().numpy())
-
-                # Calculate and save hash (use float32 for consistent hashing)
-                x_bytes = x_chunk_torch.cpu().float().numpy().tobytes()
-                x_hash = hashlib.md5(x_bytes).hexdigest()
-                with open(dispatch_input_dir / "hidden_states_hash.txt", "w") as f:
-                    f.write(f"MD5: {x_hash}\n")
-                    f.write(f"SHA256: {hashlib.sha256(x_bytes).hexdigest()}\n")
-                    f.write(f"Shape: {x_chunk_torch.shape}\n")
-                    f.write(f"Dtype: {x_chunk_torch.dtype}\n")
-
-                # Save indices (topk_indices_chunk)
-                indices_torch = ttnn.to_torch(
-                    topk_indices_chunk,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        cfg["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mesh_device"].shape
-                    ),
-                )
-                torch.save(
-                    {
-                        "tensor": indices_torch.cpu(),
-                        "shape": list(indices_torch.shape),
-                        "dtype": str(indices_torch.dtype),
-                    },
-                    dispatch_input_dir / "indices.pt",
-                )
-                # Indices are int16, can save directly to numpy
-                np.save(dispatch_input_dir / "indices.npy", indices_torch.cpu().numpy())
-
-                # Calculate and save hash
-                idx_bytes = indices_torch.cpu().numpy().tobytes()
-                idx_hash = hashlib.md5(idx_bytes).hexdigest()
-                with open(dispatch_input_dir / "indices_hash.txt", "w") as f:
-                    f.write(f"MD5: {idx_hash}\n")
-                    f.write(f"SHA256: {hashlib.sha256(idx_bytes).hexdigest()}\n")
-                    f.write(f"Shape: {indices_torch.shape}\n")
-                    f.write(f"Dtype: {indices_torch.dtype}\n")
-
-                # Save expert mapping (cfg["expert_mapping_tensors"])
-                expert_mapping_torch = ttnn.to_torch(
-                    cfg["expert_mapping_tensors"],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        cfg["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mesh_device"].shape
-                    ),
-                )
-                torch.save(
-                    {
-                        "tensor": expert_mapping_torch.cpu(),
-                        "shape": list(expert_mapping_torch.shape),
-                        "dtype": str(expert_mapping_torch.dtype),
-                    },
-                    dispatch_input_dir / "expert_mapping.pt",
-                )
-
-                print(f"[REF] Saved dispatch inputs to {dispatch_input_dir}")
-                print(f"  hidden_states MD5: {x_hash}")
-                print(f"  indices MD5: {idx_hash}")
-
-            if os.environ.get("SAVE_TENSOR_FLOW", "0") == "1":
-                # Save RIGHT BEFORE dispatch - the exact inputs
-                save_tensor_checkpoint(
-                    f"dispatch_input_x_{batch_start}",
-                    x_chunk,
-                    f"6_dispatch_input_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    {"batch_start": batch_start, "batch_end": batch_end},
-                )
-                save_tensor_checkpoint(
-                    f"dispatch_input_indices_{batch_start}",
-                    topk_indices_chunk,
-                    f"6_dispatch_input_{batch_start}_{batch_end}",
-                    "reference",
-                    cfg["mesh_device"],
-                    {"batch_start": batch_start, "batch_end": batch_end},
-                )
-
             all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
                 x_chunk,
                 topk_indices_chunk,
@@ -914,31 +434,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # Save dispatch output for comparison
-            if os.environ.get("SAVE_EXPERT_CHECKPOINTS", "0") == "1":
-                from pathlib import Path
-
-                import torch
-
-                expert_debug_dir = Path("/tmp/expert_debug/reference")
-                expert_debug_dir.mkdir(parents=True, exist_ok=True)
-
-                # Save dispatch output
-                dispatch_output_torch = ttnn.to_torch(
-                    all_to_all_dispatch_output_tensors, mesh_composer=ttnn.ConcatMeshToTensor(cfg["mesh_device"], dim=0)
-                )
-                torch.save(
-                    {
-                        "tensor": dispatch_output_torch.cpu(),
-                        "shape": list(dispatch_output_torch.shape),
-                        "dtype": str(dispatch_output_torch.dtype),
-                    },
-                    expert_debug_dir / "dispatch_output.pt",
-                )
-
-                print(f"[REF] Saved dispatch output shape: {dispatch_output_torch.shape}")
-                print(f"[REF] Dispatch output infinities: {torch.isinf(dispatch_output_torch).sum().item()}")
-                print(f"[REF] Dispatch output NaNs: {torch.isnan(dispatch_output_torch).sum().item()}")
-
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(topk_indices_chunk)
 

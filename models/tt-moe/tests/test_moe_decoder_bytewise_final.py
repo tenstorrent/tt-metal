@@ -38,6 +38,12 @@ def test_moe_decoder_bytewise_verification(
 
     # Run the test with our copied implementation
     # Using the exact same parameters as the reference test
+    # Use a unique cache path for this test
+    from pathlib import Path
+
+    test_cache_path = Path("/tmp/deepseek_cache_test_d2")
+    test_cache_path.mkdir(exist_ok=True, parents=True)
+
     run_test_forward_pass_decoder2d(
         DecoderBlockClass=CopiedMoEDecoderBlock2D,
         module_path="model.layers.3",  # Layer 3 weights
@@ -46,7 +52,7 @@ def test_moe_decoder_bytewise_verification(
         seq_len=1,
         batch_size_per_row=32,
         hf_config_short=hf_config,
-        cache_path=cache_path,
+        cache_path=test_cache_path,
         mesh_device=mesh_device,
         model_path=None,  # Not needed, we use state_dict
         ccl=ccl,

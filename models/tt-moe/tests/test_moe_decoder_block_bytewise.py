@@ -86,29 +86,23 @@ def test_moe_decoder_block_bytewise(
     ccl,
     state_dict,
 ):
-    """Test MoEDecoderBlock2D for bytewise identical outputs with actual weights."""
+    """Test MoEDecoderBlock2D for bytewise identical outputs using actual model weights."""
 
     logger.info("=" * 80)
     logger.info("Testing MoEDecoderBlock2D (MoE + SharedExpert) for bytewise identical outputs")
-    logger.info("Using ACTUAL model weights from layer 3")
+    logger.info("Using layer 3 weights from actual model (same as Test B)")
     logger.info("=" * 80)
 
-    # Get state dict for layer 3 (which has MoE)
+    # Create a view of the state_dict for just layer 3 to avoid loading all files
+    # This avoids the corrupted file model-00101-of-000163.safetensors
     layer_idx = 3
-    layer_state_dict = {
-        k.replace(f"model.layers.{layer_idx}.", ""): v
-        for k, v in state_dict.items()
-        if k.startswith(f"model.layers.{layer_idx}.")
-    }
-
-    # Filter to just MLP-related weights (MoE + SharedExpert)
-    mlp_state_dict = {k: v for k, v in layer_state_dict.items() if k.startswith("mlp.")}
-
-    logger.info(f"Loaded {len(mlp_state_dict)} MLP weights for layer {layer_idx}")
+    layer3_state_dict = state_dict.view_with_prefix(f"model.layers.{layer_idx}.")
 
     # Create identical input tensor
+    # Use batch_size=32 to be divisible by the 32 devices (4x8 mesh)
+    batch_size = 32  # Must be divisible by mesh_device.shape[0] * mesh_device.shape[1]
     torch.manual_seed(5)
-    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
+    torch_input = torch.randn(batch_size, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Save input for verification
     input_path = Path("/tmp/test_moe_decoder_input.pt")
@@ -123,24 +117,65 @@ def test_moe_decoder_block_bytewise(
     logger.info("Running REFERENCE MoEDecoderBlock2D implementation...")
     logger.info("-" * 40)
 
-    # Setup configurations for REFERENCE implementation
+    # Use a unique cache directory for this test
+    test_cache_path = Path("/tmp/deepseek_cache_test_d1")
+    test_cache_path.mkdir(exist_ok=True, parents=True)
+
+    # Setup configurations for REFERENCE implementation - use layer 3 view
     ref_weight_config = get_test_weight_config(
         ReferenceMoEDecoderBlock2D,
         hf_config,
-        (mlp_state_dict,),
-        cache_path / "reference_moe_decoder",
+        (layer3_state_dict,),  # Pass layer 3 view to avoid corrupted files
+        test_cache_path / "reference_moe_decoder",
         mesh_device,
         False,  # force_recalculate_weight_config
     )
 
+    # Get the base model config and then add the MLP-specific config
     ref_model_config = get_model_config(ReferenceMoEDecoderBlock2D, mode, hf_config, mesh_device)
     ref_model_config.update({"topk_fallback": True})
 
-    ref_model_state = ReferenceMoEDecoderBlock2D.create_mlp_state(hf_config, mesh_device, ccl)
-    ref_model_shared_state = ReferenceMoEDecoderBlock2D.create_mlp_shared_state(hf_config, mesh_device)
+    # Add the MoE and SharedExpert configurations using the specific decode_mlp_config method
+    mlp_config = ReferenceMoEDecoderBlock2D.decode_mlp_config(hf_config, mesh_device)
+    ref_model_config.update(mlp_config)
+
+    # Create paged config for decoder block (required for create_state)
+    from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
+    from models.demos.deepseek_v3.utils.test_utils import paged_cache_from_torch
+
+    USERS_PER_ROW = 128
+    paged_config = MLA1D.get_valid_paged_config(hf_config.max_position_embeddings, USERS_PER_ROW, mesh_device.shape[1])
+
+    # Create dummy cache for MLA
+    dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    # Use batch_size=32 to match the input tensor and be divisible by 32 devices
+    input_cache = torch.zeros((batch_size, 1, 0, dim), dtype=torch.bfloat16)
+    paged_input_cache, _ = paged_cache_from_torch(input_cache, tuple(mesh_device.shape), paged_config, None)
+
+    # Use create_state instead of create_mlp_state to get proper mesh_device in state
+    ref_model_state = ReferenceMoEDecoderBlock2D.create_state(
+        hf_config,
+        paged_config,
+        mesh_device,
+        ccl,
+        mla_cache=paged_input_cache,
+    )
+    ref_model_shared_state = ReferenceMoEDecoderBlock2D.create_shared_state(hf_config, mesh_device)
 
     # Merge the MLP configs into the run config
     ref_run_config = create_run_config(ref_model_config, ref_weight_config, ref_model_state, ref_model_shared_state)
+
+    # CRITICAL: forward_mlp_decode expects cfg["mlp"] from the full config, not the full config itself
+    # We need to extract just the MLP portion of the configuration
+    # The full decoder config has: {"mla_norm": ..., "mla": ..., "mlp_norm": ..., "mlp": {...}}
+    # We only need the "mlp" portion for forward_mlp_decode
+    ref_mlp_config = ref_run_config.get("mlp", ref_run_config)
+
+    # CRITICAL FIX: The MoE inside the MLP expects cfg["ccl"] to be the CCL object
+    # But MoE.create_state doesn't store the CCL in the state (unlike DistributedRMSNorm which does)
+    # We need to manually ensure the CCL is in the MLP config for MoE to access it
+    if "moe" in ref_mlp_config and "ccl" not in ref_mlp_config["moe"]:
+        ref_mlp_config["moe"]["ccl"] = ccl
 
     # Convert input to TTNN for reference
     ref_tt_input = ttnn.from_torch(
@@ -152,13 +187,41 @@ def test_moe_decoder_block_bytewise(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Run forward pass - calling forward_mlp_decode directly
+    # Run forward pass - we need to preprocess the input like forward_decode does
     ref_tt_input = ttnn.to_memory_config(
         ref_tt_input, ref_run_config.get("input_memory_config", ttnn.DRAM_MEMORY_CONFIG)
     )
 
-    # Call forward_mlp_decode which does MoE + SharedExpert
-    ref_tt_output = ReferenceMoEDecoderBlock2D.forward_mlp_decode(ref_tt_input, ref_run_config)
+    # CRITICAL: forward_mlp_decode expects input that has been through RMS norm and resharding
+    # In forward_decode, the input goes through:
+    # 1. mlp_norm (RMS normalization)
+    # 2. mlp_reshard (memory config transformation)
+    # We need to apply these transformations before calling forward_mlp_decode
+
+    # Import RMS norm
+    from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+
+    # Apply MLP norm (RMS normalization)
+    if "mlp_norm_reshard" in ref_run_config:
+        mlp_norm_in = ttnn.to_memory_config(ref_tt_input, **ref_run_config["mlp_norm_reshard"])
+    else:
+        mlp_norm_in = ref_tt_input
+
+    mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, ref_run_config["mlp_norm"])
+
+    if mlp_norm_in is not ref_tt_input:
+        ttnn.deallocate(mlp_norm_in)
+
+    # Apply MLP resharding
+    if "mlp_reshard" in ref_run_config:
+        mlp_ready_input = ttnn.to_memory_config(mlp_norm_out, **ref_run_config["mlp_reshard"])
+        ttnn.deallocate(mlp_norm_out)
+    else:
+        mlp_ready_input = mlp_norm_out
+
+    # Now call forward_mlp_decode with properly preprocessed input
+    ref_tt_output = ReferenceMoEDecoderBlock2D.forward_mlp_decode(mlp_ready_input, ref_mlp_config)
+    ttnn.deallocate(mlp_ready_input)
 
     # Convert output back to torch
     reference_output = ttnn.to_torch(
@@ -185,21 +248,40 @@ def test_moe_decoder_block_bytewise(
     copy_weight_config = get_test_weight_config(
         CopiedMoEDecoderBlock2D,  # Use our copied class
         hf_config,
-        (mlp_state_dict,),
-        cache_path / "copied_moe_decoder",
+        (layer3_state_dict,),  # Pass layer 3 view to avoid corrupted files
+        test_cache_path / "copied_moe_decoder",
         mesh_device,
         False,  # force_recalculate_weight_config
     )
 
+    # Get the base model config and then add the MLP-specific config
     copy_model_config = get_model_config(CopiedMoEDecoderBlock2D, mode, hf_config, mesh_device)
     copy_model_config.update({"topk_fallback": True})
 
-    copy_model_state = CopiedMoEDecoderBlock2D.create_mlp_state(hf_config, mesh_device, ccl)
-    copy_model_shared_state = CopiedMoEDecoderBlock2D.create_mlp_shared_state(hf_config, mesh_device)
+    # Add the MoE and SharedExpert configurations using the specific decode_mlp_config method
+    mlp_config = CopiedMoEDecoderBlock2D.decode_mlp_config(hf_config, mesh_device)
+    copy_model_config.update(mlp_config)
+
+    # Use create_state for copied implementation too, to match reference
+    copy_model_state = CopiedMoEDecoderBlock2D.create_state(
+        hf_config,
+        paged_config,
+        mesh_device,
+        ccl,
+        mla_cache=paged_input_cache,
+    )
+    copy_model_shared_state = CopiedMoEDecoderBlock2D.create_shared_state(hf_config, mesh_device)
 
     copy_run_config = create_run_config(
         copy_model_config, copy_weight_config, copy_model_state, copy_model_shared_state
     )
+
+    # CRITICAL: Extract just the MLP portion for forward_mlp_decode
+    copy_mlp_config = copy_run_config.get("mlp", copy_run_config)
+
+    # CRITICAL FIX: Ensure CCL is in the MoE config for the copied implementation too
+    if "moe" in copy_mlp_config and "ccl" not in copy_mlp_config["moe"]:
+        copy_mlp_config["moe"]["ccl"] = ccl
 
     # Convert input to TTNN (use same input tensor)
     copy_tt_input = ttnn.from_torch(
@@ -211,13 +293,33 @@ def test_moe_decoder_block_bytewise(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Run forward pass - calling forward_mlp_decode directly
+    # Run forward pass - preprocess input like forward_decode does
     copy_tt_input = ttnn.to_memory_config(
         copy_tt_input, copy_run_config.get("input_memory_config", ttnn.DRAM_MEMORY_CONFIG)
     )
 
-    # Call forward_mlp_decode which does MoE + SharedExpert
-    copy_tt_output = CopiedMoEDecoderBlock2D.forward_mlp_decode(copy_tt_input, copy_run_config)
+    # Apply the same preprocessing as for the reference implementation
+    # Apply MLP norm (RMS normalization)
+    if "mlp_norm_reshard" in copy_run_config:
+        copy_mlp_norm_in = ttnn.to_memory_config(copy_tt_input, **copy_run_config["mlp_norm_reshard"])
+    else:
+        copy_mlp_norm_in = copy_tt_input
+
+    copy_mlp_norm_out = DistributedRMSNorm.forward_decode(copy_mlp_norm_in, copy_run_config["mlp_norm"])
+
+    if copy_mlp_norm_in is not copy_tt_input:
+        ttnn.deallocate(copy_mlp_norm_in)
+
+    # Apply MLP resharding
+    if "mlp_reshard" in copy_run_config:
+        copy_mlp_ready_input = ttnn.to_memory_config(copy_mlp_norm_out, **copy_run_config["mlp_reshard"])
+        ttnn.deallocate(copy_mlp_norm_out)
+    else:
+        copy_mlp_ready_input = copy_mlp_norm_out
+
+    # Now call forward_mlp_decode with properly preprocessed input
+    copy_tt_output = CopiedMoEDecoderBlock2D.forward_mlp_decode(copy_mlp_ready_input, copy_mlp_config)
+    ttnn.deallocate(copy_mlp_ready_input)
 
     # Convert output back to torch
     copied_output = ttnn.to_torch(

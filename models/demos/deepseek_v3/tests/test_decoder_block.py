@@ -62,14 +62,14 @@ def generate_reference_io(
     else:
         if decode_position_id is None:
             position_ids = position_ids_or_seq_lens = torch.randint(
-                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.long
+                0, hf_config.max_position_embeddings - 1, (batch_size,), dtype=torch.long
             )
         else:
             if not isinstance(decode_position_id, int):
                 raise ValueError(f"decode_position_id must be int or None, got {type(decode_position_id)}")
-            if not (0 <= decode_position_id < hf_config.max_seq_len):
+            if not (0 <= decode_position_id < hf_config.max_position_embeddings):
                 raise ValueError(
-                    f"decode_position_id must be in [0, {hf_config.max_seq_len - 1}], got {decode_position_id}"
+                    f"decode_position_id must be in [0, {hf_config.max_position_embeddings - 1}], got {decode_position_id}"
                 )
             position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.long) * decode_position_id
     reference_output, input_cache, output_cache = run_reference_with_attention(
@@ -122,7 +122,9 @@ def run_test_forward_pass_decoder2d(
     # Set up page config
     logger.info("Setting up model configs")
     user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    paged_config = MLA1D.get_valid_paged_config(
+        hf_config_short.max_position_embeddings, USERS_PER_ROW, mesh_device.shape[1]
+    )
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
@@ -176,7 +178,9 @@ def run_test_forward_pass_decoder2d(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    paged_config = MLA2D.get_valid_paged_config(
+        hf_config_short.max_position_embeddings, USERS_PER_ROW, mesh_device.shape[1]
+    )
 
     # Forward pass
     logger.info("Running TTNN forward pass")
