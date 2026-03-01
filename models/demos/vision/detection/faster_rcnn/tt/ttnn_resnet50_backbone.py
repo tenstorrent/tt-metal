@@ -244,10 +244,18 @@ class TtResNet50Backbone:
         hs = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         bs = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
-        self.layer1 = self._make_layer(parameters, device, batch_size, "layer1", 64, 64, 256, 3, stride=1, shard_layout=hs)
-        self.layer2 = self._make_layer(parameters, device, batch_size, "layer2", 256, 128, 512, 4, stride=2, shard_layout=hs)
-        self.layer3 = self._make_layer(parameters, device, batch_size, "layer3", 512, 256, 1024, 6, stride=2, shard_layout=bs)
-        self.layer4 = self._make_layer(parameters, device, batch_size, "layer4", 1024, 512, 2048, 3, stride=2, shard_layout=bs)
+        self.layer1 = self._make_layer(
+            parameters, device, batch_size, "layer1", 64, 64, 256, 3, stride=1, shard_layout=hs
+        )
+        self.layer2 = self._make_layer(
+            parameters, device, batch_size, "layer2", 256, 128, 512, 4, stride=2, shard_layout=hs
+        )
+        self.layer3 = self._make_layer(
+            parameters, device, batch_size, "layer3", 512, 256, 1024, 6, stride=2, shard_layout=bs
+        )
+        self.layer4 = self._make_layer(
+            parameters, device, batch_size, "layer4", 1024, 512, 2048, 3, stride=2, shard_layout=bs
+        )
 
     def _make_layer(
         self,
