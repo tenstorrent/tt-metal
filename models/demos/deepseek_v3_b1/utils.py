@@ -5,12 +5,8 @@
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING
 
 import ttnn
-
-if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 
 def float_to_bfloat16_packed(value):
