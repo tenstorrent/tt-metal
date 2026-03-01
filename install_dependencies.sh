@@ -275,6 +275,7 @@ init_packages() {
                 "curl"
                 "vim-common" # Includes xxd
                 "patch" # Required by CPM PATCHES keyword
+                "zlib-devel" # Required by tt-train examples (-lz)
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
