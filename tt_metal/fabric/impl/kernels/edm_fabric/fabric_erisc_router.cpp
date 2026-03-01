@@ -533,6 +533,32 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
+// Forward declarations for functions defined below that the speedy path header
+// references in template bodies (needed for -Wtemplate-body).
+template <typename DownstreamSenderT>
+FORCE_INLINE bool can_forward_packet_completely(
+    ROUTING_FIELDS_TYPE cached_routing_fields, DownstreamSenderT& downstream_edm_interface);
+
+template <uint8_t rx_channel_id, typename DownstreamSenderT>
+FORCE_INLINE void receiver_forward_packet_impl(
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    typename PACKET_HEADER_TYPE::PackedPayloadAndSendType packed,
+    DownstreamSenderT& downstream_edm_interface,
+    uint8_t transaction_id);
+
+template <bool enable_deadlock_avoidance, bool SKIP_CONNECTION_LIVENESS_CHECK, typename EdmChannelWorkerIFs>
+FORCE_INLINE void send_credits_to_upstream_workers(
+    EdmChannelWorkerIFs& local_sender_channel_worker_interface,
+    int32_t num_credits,
+    bool channel_connection_established);
+
+template <typename LocalTelemetryT>
+FORCE_INLINE void update_bw_counters(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, LocalTelemetryT& local_fabric_telemetry);
+
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp"
+
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -2161,9 +2187,6 @@ static_assert(
     "line_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
 static_assert(!line_speedy_mode || NUM_SENDER_CHANNELS == 2, "line_speedy_mode requires exactly 2 sender channels");
 
-// Include the speedy path functions (must come after all helper function definitions above)
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp"
-
 // Copy persistent speedy state into locals for register promotion at loop entry.
 FORCE_INLINE void speedy_state_copy_in(
     SpeedySenderState& ss,
@@ -2420,9 +2443,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
                     }
                 } else if constexpr (line_speedy_mode) {
-                    static_assert(
-                        !line_speedy_mode || (is_sender_channel_serviced[0] == is_sender_channel_serviced[1]),
-                        "Line speedy mode requires both sender channels to be serviced");
                     if constexpr (is_sender_channel_serviced[0] && is_sender_channel_serviced[1]) {
                         tx_progress |= run_sender_channels_step_line_speedy<
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],

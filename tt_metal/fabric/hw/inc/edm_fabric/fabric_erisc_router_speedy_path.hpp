@@ -17,22 +17,6 @@
 // receiver_send_completion_ack, receiver_send_received_ack,
 // can_forward_packet_completely, receiver_forward_packet, etc.
 
-// Watcher ring buffer event tags (upper 4 bits of the uint32_t)
-// Encoding: [tag:4][payload:28]
-//
-// TX events:
-//   0x1 = TX_SENT:       [tag:4][ch:1][epc:3][we:8][re:8][epoch_val_lo:8]
-//   0x2 = TX_EPOCH_ADV:  [tag:4][0:4][we:8][re:8][0:8]
-//   0x3 = TX_COMPL:      [tag:4][0:4][new_completions:12][total_unproc:12]
-//   0x4 = TX_DECOMPOSE:  [tag:4][re:4][ch0:8][ch1:8][free_slots_lo:8]
-//   0x5 = TX_UPSTREAM:   [tag:4][ch:4][credits:12][0:12]
-//   0x6 = TX_EPOCH_BP:   [tag:4][0:4][we:8][re:8][epc:8]
-//
-// RX events:
-//   0xA = RX_FWD:        [tag:4][trid:4][unacked:12][0:12]
-//   0xB = RX_TRID_FLIP:  [tag:4][pending_trid:4][batch:12][new_wr_trid:12]
-//   0xC = RX_FLUSH_DONE: [tag:4][trid:4][batch:12][remaining:12]
-
 // Ping-pong TRID constants (must precede struct default initializers)
 static constexpr uint8_t pingpong_trid_a = RX_CH_TRID_STARTS[0];
 static constexpr uint8_t pingpong_trid_b = RX_CH_TRID_STARTS[0] + 1;
@@ -284,20 +268,14 @@ constexpr uint32_t next_power_of_2(uint32_t v) {
 static constexpr uint32_t EPOCH_SIZE = SENDER_CREDIT_AMORTIZATION_FREQUENCY;
 static constexpr uint32_t REMOTE_RECEIVER_NUM_BUFFERS = REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL];
 static constexpr uint32_t MIN_CREDIT_EPOCHS =
-    next_power_of_2((REMOTE_RECEIVER_NUM_BUFFERS + EPOCH_SIZE - 1) / EPOCH_SIZE);
+    line_speedy_mode ? next_power_of_2((REMOTE_RECEIVER_NUM_BUFFERS + EPOCH_SIZE - 1) / EPOCH_SIZE) : 1;
 static constexpr uint32_t NUM_CREDIT_EPOCHS = MIN_CREDIT_EPOCHS * 2;
 static_assert((NUM_CREDIT_EPOCHS & (NUM_CREDIT_EPOCHS - 1)) == 0, "NUM_CREDIT_EPOCHS must be a power of 2");
 static_assert(
-    NUM_CREDIT_EPOCHS > (REMOTE_RECEIVER_NUM_BUFFERS + EPOCH_SIZE - 1) / EPOCH_SIZE,
+    !line_speedy_mode || (NUM_CREDIT_EPOCHS > (REMOTE_RECEIVER_NUM_BUFFERS + EPOCH_SIZE - 1) / EPOCH_SIZE),
     "Epoch array must be strictly larger than max in-flight epochs to avoid write/read overlap");
 static constexpr uint32_t EPOCH_MASK = NUM_CREDIT_EPOCHS - 1;
 
-// ---------------------------------------------------------------------------
-// Epoch advance strategy selection (constexpr toggle for benchmarking)
-// ---------------------------------------------------------------------------
-// EPOCH_ADVANCE_BRANCHING:  original if (epoch_pkt_count == EPOCH_SIZE) branch
-// EPOCH_ADVANCE_BRANCHLESS: branchless epoch advance — always pre-clears next slot
-// EPOCH_ADVANCE_POINTER:    raw pointer traversal instead of array indexing
 enum class EpochAdvanceStrategy { BRANCHING, BRANCHLESS, POINTER };
 static constexpr EpochAdvanceStrategy epoch_advance_strategy = EpochAdvanceStrategy::BRANCHING;
 
@@ -364,13 +342,6 @@ FORCE_INLINE bool line_speedy_send_one_packet(
     uint32_t* credit_epoch_array,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry) {
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_SEND_ONE_PACKET,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        send_one_packet_timer;
-    send_one_packet_timer.open();
-
     bool busy;
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         busy = internal_::eth_txq_is_busy(sender_txq_id);
@@ -387,11 +358,7 @@ FORCE_INLINE bool line_speedy_send_one_packet(
     // No epoch back-pressure check needed: the epoch array is sized to 2x the
     // max in-flight epochs (bounded by REMOTE_RECEIVER_NUM_BUFFERS / EPOCH_SIZE),
     // so write_epoch can never wrap into read_epoch.
-
     if (can_send) {
-        // Timer only dumps when we actually send a packet
-        send_one_packet_timer.set_should_dump(true);
-
         // --- Send the packet (inlined for codegen efficiency) ---
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -402,9 +369,6 @@ FORCE_INLINE bool line_speedy_send_one_packet(
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
-            WATCHER_RING_BUFFER_PUSH(0x55555555);
-            WATCHER_RING_BUFFER_PUSH(src_addr);
-            WATCHER_RING_BUFFER_PUSH(dest_addr);
 
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
@@ -450,8 +414,6 @@ FORCE_INLINE bool line_speedy_send_one_packet(
             ss.epoch_pkt_count = 0;
             credit_epoch_array[ss.write_epoch] = 0;
         }
-
-        send_one_packet_timer.close();
     }
 
     return can_send;
@@ -486,52 +448,7 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     uint32_t* credit_epoch_array,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry) {
-    // --- Profiling timers (compile-time disabled when bitfield == 0) ---
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_FULL_BOTH,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_full_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_FULL_SINGLE,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_full_with_send_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_SEND_DATA_BOTH,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_send_data_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_SEND_DATA_SINGLE,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_send_data_single_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_CHECK_COMPLETIONS,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_check_completions_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_SENDER_CREDITS_UPSTREAM,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        sender_credits_upstream_timer;
-
     bool progress = false;
-
-    // Full function timers: opened unconditionally, closed with should_dump at end
-    sender_full_timer.open();
-    sender_full_with_send_timer.open();
-
-    // -----------------------------------------------------------------------
-    // Phase 1 & 2: Send data from both sender channels
-    //
-    // Both channels share the same outbound receiver channel pointers (they
-    // send to the same downstream receiver). Send ch0 first, then ch1.
-    // -----------------------------------------------------------------------
-    sender_send_data_timer.open();
-    sender_send_data_single_timer.open();
 
     bool ch0_sent = line_speedy_send_one_packet<0, to_receiver_pkts_sent_id>(
         local_sender_channel_0,
@@ -554,15 +471,9 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
         local_fabric_telemetry);
 
     progress = ch0_sent || ch1_sent;
-    // SEND_DATA: both packets sent
-    sender_send_data_timer.set_should_dump(ch0_sent && ch1_sent);
-    sender_send_data_timer.close();
-    // SEND_DATA_SINGLE: exactly one packet sent (XOR)
-    sender_send_data_single_timer.set_should_dump(ch0_sent != ch1_sent);
-    sender_send_data_single_timer.close();
 
     // -----------------------------------------------------------------------
-    // Phase 3: Check completions and decompose via credit epoch array
+    // Check completions and decompose via credit epoch array
     //
     // === Credit Epoch Array Book-keeping ===
     //
@@ -571,9 +482,10 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     // credits back into per-channel counts to know how many upstream credits
     // to propagate for each sender channel.
     //
-    // We do this via a circular array of "epochs", where each epoch represents
-    // EPOCH_SIZE consecutive packets sent (across all channels).  Each epoch
-    // slot is a uint32_t with per-channel counts packed as bytes:
+    // We do this via a circular buffers of "epochs", where each epoch represents
+    // EPOCH_SIZE consecutive packets sent (across all channels). An epoch is the
+    // amortization granularity of credit handling. Each epoch slot is a uint32_t
+    // with per-channel counts packed as bytes:
     //
     //          read_epoch                          write_epoch
     //               ↓                                   ↓
@@ -590,32 +502,30 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     //           sum=4      sum=4      sum=0      in progress
     //           (full)     (full)     (cleared)
     //
-    // Recording a send (compile-time constant shift):
-    //     credit_epoch_array[write_epoch] += (1u << (sender_ch * 8));
+    // The high level approach is as follows:
+    //   1. Each epoch holds a fixed number of packet/credit counts
+    //      a. These counts are tracked per channel separately (see diagram above)
+    //   2. For each packet send, we accumulate a count into the current epoch in the array
+    //   3. When the count for that epoch reaches the epoch size (amortization granularity),
+    //      we advance the epoch. This epoch we just "closed" can now be checked against for
+    //      completions
+    //   4. Critical: We only check for completions after we have >= epoch size worth of
+    //      outstanding sends
+    //   5. We have additional levels of amortization for the credit response to the producer(s)
+    //      since noc requests are relatively expensive.
     //
-    // When epoch_pkt_count == EPOCH_SIZE, write_epoch advances (branchless).
-    //
-    // Processing completions (at most ONE epoch per pass to avoid starving
-    // the send path):
-    //   1. Read bulk completion count from shared credit register
-    //   2. If total_unprocessed >= EPOCH_SIZE:
-    //      - Load epoch_array[read_epoch] (single uint32_t — both channels)
-    //      - Extract per-channel byte counts
-    //      - Accumulate into unsent_upstream_credits_chX
-    //      - Advance read_epoch
-    //      - Reclaim EPOCH_SIZE receiver buffer slots
-    //
-    // Upstream credit propagation (at most ONE noc write per pass):
-    //   - When unsent_upstream_credits_chX >= threshold, send and reset
-    //   - Only one channel sends per pass to keep the send path responsive
-    //
-    // Invariants:
-    //   - write_epoch is always ahead of or equal to read_epoch (mod NUM_CREDIT_EPOCHS)
+    // Additional algorithm notes:
+    //   - At most only one channel sends acks per pass to keep the send path responsive
+    //     (this is not a functional requirement, but a performance one)
+    //   - Write_epoch is always ahead of or equal to read_epoch (mod NUM_CREDIT_EPOCHS)
     //   - Completions are consumed in EPOCH_SIZE chunks (receiver also sends
     //     in batches of RECEIVER_CREDIT_AMORTIZATION_FREQUENCY which should
     //     be a multiple of EPOCH_SIZE or equal to it)
     //   - credit_epoch_array[next_epoch] is always safe to clear because it is
     //     strictly ahead of read_epoch
+    //   - The epoch array is always bigger than the total number of epochs for outstanding
+    //     sends to avoid a race where sender fills the epoch array before we've cleared any
+    //     entries
     // -----------------------------------------------------------------------
 
     // Amortize completion checks: only check after enough sends have occurred,
@@ -623,11 +533,6 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
     // get_num_unprocessed_completions_from_receiver on iterations with no progress.
     bool check_completions = ss.sender_completion_amort_counter > SENDER_CREDIT_AMORTIZATION_FREQUENCY;
 
-    sender_check_completions_timer.set_should_dump(check_completions);
-    sender_check_completions_timer.open();
-
-    bool had_new_completions = false;
-    bool did_epoch_decompose = false;
     if (check_completions) {
         int32_t new_completions =
             shared_completion_credits
@@ -636,7 +541,6 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
             shared_completion_credits.increment_num_processed_completions(new_completions);
             ss.total_unprocessed_completions += new_completions;
             ss.sender_completion_amort_counter -= new_completions;
-            had_new_completions = true;
         }
 
         // Process at most one epoch worth of completions per pass.
@@ -648,55 +552,29 @@ FORCE_INLINE bool run_sender_channels_step_line_speedy(
             ss.read_epoch = (ss.read_epoch + 1) & EPOCH_MASK;
             ss.total_unprocessed_completions -= EPOCH_SIZE;
             outbound_to_receiver_channel_pointers.num_free_slots += EPOCH_SIZE;
-            did_epoch_decompose = true;
         }
     }
 
-    sender_check_completions_timer.close();
-
     // -----------------------------------------------------------------------
-    // Phase 4: Send upstream credits (at most 1 NOC write per pass)
+    // Send upstream credits (at most 1 NOC write per pass)
     //
-    // We check ch0 first, then ch1.  Only one channel sends per pass to
-    // avoid starving the forward/send path with expensive NOC writes.
+    // Only one channel sends per pass to avoid starving the forward/send path
+    // with expensive NOC writes.
     // -----------------------------------------------------------------------
-    uint32_t ch0_credits = ss.unsent_upstream_credits_packed & 0xFF;
-    uint32_t ch1_credits = (ss.unsent_upstream_credits_packed >> 8) & 0xFF;
-    sender_credits_upstream_timer.set_should_dump(
-        ch0_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY || ch1_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY);
-    sender_credits_upstream_timer.open();
 
-    bool did_send_upstream_credits = false;
+    uint32_t ch0_credits = ss.unsent_upstream_credits_packed & 0xFF;
     if (ch0_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
-        // 0x5 = TX_UPSTREAM: [tag:4][ch:4][credits:12][0:12]
-        // WATCHER_RING_BUFFER_PUSH(0x50000000u | (0u << 24) | ((ch0_credits & 0xFFF) << 12));
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
             local_sender_channel_worker_interface_0, ch0_credits, channel_connection_established[0]);
         ss.unsent_upstream_credits_packed &= ~0xFFu;  // clear ch0 byte
-        did_send_upstream_credits = true;
-    } else if (ch1_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
-        // 0x5 = TX_UPSTREAM: [tag:4][ch:4][credits:12][0:12]
-        // WATCHER_RING_BUFFER_PUSH(0x50000000u | (1u << 24) | ((ch1_credits & 0xFFF) << 12));
-        send_credits_to_upstream_workers<false /*deadlock_avoidance*/, true /*SKIP_LIVENESS*/>(
-            local_sender_channel_worker_interface_1, ch1_credits, channel_connection_established[1]);
-        ss.unsent_upstream_credits_packed &= ~0xFF00u;  // clear ch1 byte
-        did_send_upstream_credits = true;
+    } else {
+        uint32_t ch1_credits = (ss.unsent_upstream_credits_packed >> 8) & 0xFF;
+        if (ch1_credits >= SENDER_CREDIT_AMORTIZATION_FREQUENCY) {
+            send_credits_to_upstream_workers<false /*deadlock_avoidance*/, true /*SKIP_LIVENESS*/>(
+                local_sender_channel_worker_interface_1, ch1_credits, channel_connection_established[1]);
+            ss.unsent_upstream_credits_packed &= ~0xFF00u;  // clear ch1 byte
+        }
     }
-
-    sender_credits_upstream_timer.close();
-
-    // Common gate: all non-send codepaths must have fired
-    bool all_other_codepaths = had_new_completions && did_epoch_decompose && did_send_upstream_credits;
-
-    // FULL: both packets sent AND all other codepaths
-    bool both_sent = ch0_sent && ch1_sent;
-    sender_full_timer.set_should_dump(both_sent && all_other_codepaths);
-    sender_full_timer.close();
-
-    // FULL_SINGLE: exactly one packet sent (XOR) AND all other codepaths
-    bool exactly_one_sent = ch0_sent != ch1_sent;
-    sender_full_with_send_timer.set_should_dump(exactly_one_sent && all_other_codepaths);
-    sender_full_with_send_timer.close();
 
     return progress;
 }
@@ -727,40 +605,17 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LineReceiverState& rs,
     LocalTelemetryT& local_fabric_telemetry) {
-    // --- Profiling timers (compile-time disabled when bitfield == 0) ---
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_RECEIVER_FULL,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        receiver_full_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_RECEIVER_FORWARD,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        receiver_forward_timer;
-    NamedProfiler<
-        CodeProfilingTimerType::SPEEDY_RECEIVER_FLUSH,
-        code_profiling_enabled_timers_bitfield,
-        code_profiling_buffer_base_addr>
-        receiver_flush_timer;
-
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
     bool unwritten_packets = pkts_received != 0;
-
-    // Full function timer: opened unconditionally, closed with should_dump at end
-    receiver_full_timer.open();
-
     // -----------------------------------------------------------------------
-    // Phase 1: Receive + forward/deliver one packet
+    // Receive + forward/deliver one packet
     //
     // Unlike the neighbor-exchange speedy path, we support forwarding here.
     // We do NOT inspect src_ch_id — the sender-side epoch array handles
     // credit disambiguation.
     // -----------------------------------------------------------------------
-    receiver_forward_timer.open();
-
     if (unwritten_packets) {
         static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "ENABLE_RISC_CPU_DATA_CACHE must be disabled for speedy path");
 
@@ -771,15 +626,11 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
         // Check if we can forward (downstream has space or local-only delivery)
         ROUTING_FIELDS_TYPE cached_routing_fields;
         cached_routing_fields = packet_header->routing_fields;
-        WATCHER_RING_BUFFER_PUSH((uint32_t)packet_header);
-        WATCHER_RING_BUFFER_PUSH((uint32_t)&(packet_header->routing_fields));
 
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces[0]);
 
         if (can_send_to_all_local_chip_receivers) {
-            receiver_forward_timer.set_should_dump(unwritten_packets);
-
             // Single 4B aligned load to get payload_size_bytes + noc_send_type
             // instead of two separate uncached L1 reads inside receiver_forward_packet.
             auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
@@ -792,21 +643,15 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
-            // channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
 
             wr_sent_counter.increment();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             rs.line_unacked_sends++;
-            // 0xA = RX_FWD: [tag:4][trid:4][unacked:12][0:12]
-            WATCHER_RING_BUFFER_PUSH(
-                0xA0000000u | ((uint32_t)rs.line_current_write_trid << 24) | ((rs.line_unacked_sends & 0xFFF) << 12));
         }
     }
 
-    receiver_forward_timer.close();
-
     // -----------------------------------------------------------------------
-    // Phase 2: Ping-pong TRID flush + bulk completion
+    // Ping-pong TRID flush + bulk completion
     //
     // All packets in a batch share a single TRID (line_current_write_trid).
     // When the batch threshold is hit, we flip to the other TRID and check
@@ -819,20 +664,12 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
     // Completion credits are sent as a BULK count (no src_ch_id). The sender
     // side's epoch array decomposes them into per-channel credits.
     // -----------------------------------------------------------------------
-    receiver_flush_timer.set_should_dump(
-        rs.line_has_pending_flush || (rs.line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY));
-    receiver_flush_timer.open();
-
     bool did_flush = false;
     if ((rs.line_unacked_sends >= RECEIVER_CREDIT_AMORTIZATION_FREQUENCY) && !rs.line_has_pending_flush) {
         rs.line_pending_flush_trid = rs.line_current_write_trid;
         rs.line_pending_flush_batch_count = rs.line_unacked_sends;
         rs.line_current_write_trid = 1 - rs.line_current_write_trid;
         rs.line_has_pending_flush = true;
-        // 0xB = RX_TRID_FLIP: [tag:4][pending_trid:4][batch:12][new_wr_trid:12]
-        WATCHER_RING_BUFFER_PUSH(
-            0xB0000000u | ((uint32_t)rs.line_pending_flush_trid << 24) |
-            ((rs.line_pending_flush_batch_count & 0xFFF) << 12) | ((uint32_t)rs.line_current_write_trid & 0xFFF));
     }
     if (rs.line_has_pending_flush) {
         // Must check both NOCs: local delivery uses edm_to_local_chip_noc,
@@ -848,27 +685,18 @@ FORCE_INLINE bool run_receiver_channel_step_line_speedy(
         if (flushed) {
             auto& completion_counter = receiver_channel_pointers.completion_counter;
             completion_counter.increment_n(rs.line_pending_flush_batch_count);
-            // Send bulk completion — src_id=0 is used as the single shared credit channel.
-            // The sender side does not use src_id for disambiguation; it uses the epoch array.
+            // Send bulk completion — src_id=0 is currently hardcoded to enable re-use of the
+            // receiver_send_completion_ack function until all receiver channel steps use this
+            // style of implementation. The sender side does not use src_id for disambiguation;
+            // it uses the epoch array.
             receiver_send_completion_ack<true /*CHECK_BUSY*/>(
                 receiver_channel_response_credit_sender, 0, rs.line_pending_flush_batch_count);
 
-            // 0xC = RX_FLUSH_DONE: [tag:4][trid:4][batch:12][remaining:12]
-            WATCHER_RING_BUFFER_PUSH(
-                0xC0000000u | ((uint32_t)rs.line_pending_flush_trid << 24) |
-                ((rs.line_pending_flush_batch_count & 0xFFF) << 12) |
-                ((rs.line_unacked_sends - rs.line_pending_flush_batch_count) & 0xFFF));
             rs.line_unacked_sends -= rs.line_pending_flush_batch_count;
             rs.line_has_pending_flush = false;
             did_flush = true;
         }
     }
-
-    receiver_flush_timer.close();
-
-    // Full function timer: only dump when both packet forwarded AND flush completed
-    receiver_full_timer.set_should_dump(progress && did_flush);
-    receiver_full_timer.close();
 
     return progress;
 }
