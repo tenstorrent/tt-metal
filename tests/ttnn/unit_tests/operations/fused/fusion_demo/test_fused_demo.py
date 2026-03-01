@@ -5,16 +5,13 @@
 """
 Fusion Infrastructure Demo Suite
 
-Eight demos showcasing different fusion capabilities:
+Demos showcasing different fusion capabilities:
 
 1. Basic 3-op chain (RMS -> Matmul -> RMS) with DRAM I/O on a 4x2 grid
 2. Sharded 2-op chain (RMS -> LN) demonstrating pinned buffer address reassignment
-3. All-matmul symmetric branching (7 matmuls) on full 8x8 grid — same core grids both paths
-4. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 4×4 core groups
+4. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 1×8 core columns
 5. GlobalCircularBuffer mid-kernel write to an external consumer
-6. All-LN symmetric branching on 2x8 grid
-7. Heterogeneous tree (LN → Slice → Matmul → Slice → LN) with interleaved DRAM I/O
-8. Sharded heterogeneous tree — same topology as 7 with block-sharded L1 intermediates
+8. Sharded heterogeneous tree (LN → Slice → Matmul → Slice → LN) with block-sharded L1 intermediates
 
 Each demo is split into separate fused and unfused tests, each with cold + warm timing.
 Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
@@ -39,52 +36,11 @@ from models.experimental.ops.descriptors.fusion import clear_build_cache
 # =============================================================================
 
 
-def _tt(t, device):
-    return ttnn.from_torch(
-        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def _cores(x1, y1, x2, y2):
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2))})
-
-
-def _mm_config(grid_x, grid_y, in0_block_w, per_core_M, per_core_N):
-    return ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=min(per_core_N, 4),
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-    )
-
-
-def _compute(fp32=False, math_approx_mode=True):
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=math_approx_mode,
-        fp32_dest_acc_en=fp32,
-    )
-
-
-def _make_padding_op(device):
-    """Large matmul for pipeline padding (~300-500 us device time)."""
-    from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-
-    A = _tt(torch.randn(1, 1, 2048, 512, dtype=torch.bfloat16), device)
-    B = _tt(torch.randn(1, 1, 512, 512, dtype=torch.bfloat16), device)
-    cores = _cores(0, 0, 7, 7)
-    cfg = _mm_config(grid_x=8, grid_y=8, in0_block_w=4, per_core_M=1, per_core_N=16)
-    op = matmul_desc(A, B, core_range_set=cores, program_config=cfg, compute_kernel_config=_compute())
-
-    def run():
-        ttnn.generic_op(list(op.input_tensors) + list(op.output_tensors), op.descriptor)
-
-    # Warmup to populate JIT cache
-    run()
-    ttnn.synchronize_device(device)
-    return run
+COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+)
 
 
 def _clear_all_caches(device):
@@ -165,47 +121,566 @@ def _time_steady_state(fn, device, num_warmup=5, num_measure=100):
     return total_ms / num_measure
 
 
-def _time_pipelined(fn, padding_fn, device, num_warmup=10, num_measure=500):
-    """Measure incremental device cost of fn in a device-bound pipeline.
+# =============================================================================
+# Tests
+# =============================================================================
 
-    Embeds fn inside a pipeline with padding_fn (a large matmul) to ensure
-    device time dominates host dispatch. The incremental cost approximates
-    the pure device execution time of fn.
+
+class TestFusedDemo:
+    """Fusion infrastructure demo tests.
+
+    Each demo is split into fused and unfused tests with cold + warm timing.
+    Cold = all caches cleared, warm = all caches populated.
     """
-    sync = lambda: ttnn.synchronize_device(device)
 
-    # Baseline: padding only
-    for _ in range(num_warmup):
-        padding_fn()
-    sync()
-    t0 = time.perf_counter()
-    for _ in range(num_measure):
-        padding_fn()
-    sync()
-    baseline = 1000 * (time.perf_counter() - t0) / num_measure
+    # Set to True for Tracy profiling: skips timing loops, runs once only.
+    _SINGLE_RUN_ONLY = False
 
-    # Combined: padding + measured ops
-    for _ in range(num_warmup):
-        padding_fn()
-        fn()
-    sync()
-    t0 = time.perf_counter()
-    for _ in range(num_measure):
-        padding_fn()
-        fn()
-    sync()
-    combined = 1000 * (time.perf_counter() - t0) / num_measure
+    # -----------------------------------------------------------------
+    # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
+    # Input [256, H], matmul [H, H], 4x2 = 8 cores
+    # H must be divisible by 128 (in0_block_w=4 × tile=32)
+    # -----------------------------------------------------------------
 
-    return combined - baseline
+    def _demo1_setup(self, device, H):
+        torch.manual_seed(42)
+        M_tiles = 256 // 32  # 8
+        N_tiles = H // 32
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=min(N_tiles, 4),
+            per_core_M=M_tiles // 8,
+            per_core_N=N_tiles,
+        )
 
+        torch_input = torch.randn(1, 1, 256, H, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, H, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, H, H, dtype=torch.bfloat16)
 
-# =============================================================================
-# GlobalCB Kernel Sources (for Demo 5)
-# =============================================================================
+        return core_range, mm_cfg, torch_input, torch_w, torch_b
 
-TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_demo1_fused(self, device, H):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
-DRAM_READER_SOURCE = """\
+        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tt_in = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+        )
+        tt_w = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+        tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+        # fp32 doesn't fit in L1 for H=1536 on the small 4x2 DRAM-interleaved grid
+        compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        r1 = rms_norm.rms_norm(
+            tt_in,
+            core_range_set=core_range,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+        m = matmul_desc(
+            r1.output_tensors[0],
+            tt_b,
+            core_range_set=core_range,
+            program_config=mm_cfg,
+            compute_kernel_config=compute_cfg,
+        )
+        r2 = rms_norm.rms_norm(
+            m.output_tensors[0],
+            core_range_set=core_range,
+            weight=ttnn.from_torch(
+                torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            ),
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+
+        if self._SINGLE_RUN_ONLY:
+            fused = Sequential(r1, m, r2).build(device)
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print(f"\n  Demo 1 Fused (H={H}): single run (for Tracy)")
+        else:
+            _, cold, warm = _time_fused(lambda: Sequential(r1, m, r2).build(device), device)
+
+            fused = Sequential(r1, m, r2).build(device)
+            e2e = _time_steady_state(fused.launch, device)
+
+            fused_result = ttnn.to_torch(r2.output_tensors[0])
+
+            # Unfused reference for PCC
+            tt_in = ttnn.from_torch(
+                torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            tt_w = ttnn.from_torch(
+                torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            tt_B = ttnn.from_torch(
+                torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
+            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
+            ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
+
+            passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
+            print(f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
+            assert passing, f"PCC: {pcc}"
+
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_demo1_unfused(self, device, H):
+        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tt_in = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+        )
+        tt_w = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+        tt_B = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+
+        def unfused():
+            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
+            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
+            return ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
+
+        if self._SINGLE_RUN_ONLY:
+            unfused()
+            ttnn.synchronize_device(device)
+            print(f"\n  Demo 1 Unfused (H={H}): single run (for Tracy)")
+        else:
+            cold, warm = _time_cold_warm(unfused, device)
+            e2e = _time_steady_state(unfused, device)
+            print(f"\n  Demo 1 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 2: RMS -> LN (block-sharded, 4x4 grid)
+    # Input [H, 512] on 4x4=16 cores, shard [H/4, 128]
+    # H must be divisible by 128 (4 grid-rows × tile=32)
+    # -----------------------------------------------------------------
+
+    def _demo2_setup(self, device, H):
+        torch.manual_seed(42)
+        cols = 512
+        shard_h = H // 4  # rows distributed across 4 core-rows
+        shard_w = cols // 4  # 128 always
+        block_h = shard_h // 32  # tile rows per core
+        block_w = shard_w // 32  # tile cols per core = 4 always
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        shard_spec = ttnn.ShardSpec(cores, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+        program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(4, 4),
+            subblock_w=4,
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+
+        torch_input = torch.randn(1, 1, H, cols, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, cols, dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem,
+        )
+        # Norm weight [1,1,1,512] width-sharded across 4 columns → [32,128] per core
+        w_shard = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 128],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        tt_w = ttnn.from_torch(
+            torch_w,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard),
+        )
+
+        return cores, sharded_mem, program_cfg, tt_input, tt_w
+
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_demo2_fused(self, device, H):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+
+        cores, sharded_mem, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
+
+        r = rms_norm.rms_norm(
+            tt_input,
+            core_range_set=cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=sharded_mem,
+        )
+        ln = layer_norm.layer_norm(
+            r.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=sharded_mem,
+        )
+
+        if self._SINGLE_RUN_ONLY:
+            fused = Sequential(r, ln).build(device)
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print(f"\n  Demo 2 Fused (H={H}): single run (for Tracy)")
+        else:
+            _, cold, warm = _time_fused(lambda: Sequential(r, ln).build(device), device)
+
+            fused = Sequential(r, ln).build(device)
+            e2e = _time_steady_state(fused.launch, device)
+
+            fused_result = ttnn.to_torch(ln.output_tensors[0])
+
+            # Unfused reference for PCC
+            u1 = ttnn.rms_norm(
+                tt_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            ref = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u1,
+                    weight=tt_w,
+                    epsilon=1e-5,
+                    program_config=program_cfg,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    memory_config=sharded_mem,
+                )
+            )
+
+            passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
+            print(f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
+            assert passing, f"PCC: {pcc}"
+
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_demo2_unfused(self, device, H):
+        cores, sharded_mem, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
+
+        def unfused():
+            u1 = ttnn.rms_norm(
+                tt_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            return ttnn.layer_norm(
+                u1,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+
+        if self._SINGLE_RUN_ONLY:
+            unfused()
+            ttnn.synchronize_device(device)
+            print(f"\n  Demo 2 Unfused (H={H}): single run (for Tracy)")
+        else:
+            cold, warm = _time_cold_warm(unfused, device)
+            e2e = _time_steady_state(unfused, device)
+            print(f"\n  Demo 2 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 4: Two parallel sharded chains on disjoint 1×8 core columns
+    # Chain A: LN -> Matmul on cores col 0, rows 0-7
+    # Chain B: RMS -> Matmul on cores col 1, rows 0-7
+    # Block-sharded [1024,256] inputs, sharded [1024,128] outputs on
+    # 1×8 grid. B weight + norm weight/bias L1 sharded.
+    # -----------------------------------------------------------------
+
+    def _demo4_setup(self, device):
+        torch.manual_seed(42)
+        rows, K, N = 1024, 256, 128
+
+        # 1-column grids: K (width) not split → matmul factory CB fits in shard
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7))})
+
+        shard_h = rows // 8  # 128
+
+        def _shard_mem(cores, width):
+            spec = ttnn.ShardSpec(cores, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        sharded_in_a = _shard_mem(cores_a, K)  # input shard [128, 256]
+        sharded_in_b = _shard_mem(cores_b, K)  # input shard [128, 256]
+        sharded_out_a = _shard_mem(cores_a, N)  # output shard [128, 128]
+        sharded_out_b = _shard_mem(cores_b, N)  # output shard [128, 128]
+
+        # [1024,256] × [256,128] on 1×8 grid
+        # M=32 tiles, K=8 tiles, N=4 tiles
+        # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
+        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(N // 32, 4),
+            per_core_M=shard_h // 32,
+            per_core_N=N // 32,
+        )
+
+        torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_B = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        # Inputs block-sharded in L1
+        ta = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_a
+        )
+        tb = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_b
+        )
+
+        # Norm weight/bias [1,1,1,256] width-sharded across 8 cores → [32,32] per core
+        w_shard = ttnn.ShardSpec(cores_a, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
+        tw = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem)
+        tbi = ttnn.from_torch(
+            torch_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem
+        )
+
+        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
+        tB = ttnn.from_torch(
+            torch_B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        return (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            mm_cfg,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        )
+
+    def test_demo4_fused(self, device):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            mm_cfg,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        ) = self._demo4_setup(device)
+
+        la = layer_norm.layer_norm(
+            ta,
+            core_range_set=cores_a,
+            weight=tw,
+            bias=tbi,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=sharded_in_a,
+        )
+        ma = matmul_desc(
+            la.output_tensors[0],
+            tB,
+            core_range_set=cores_a,
+            program_config=mm_cfg,
+            compute_kernel_config=COMPUTE_CONFIG,
+            output_mem_config=sharded_out_a,
+        )
+        rb = rms_norm.rms_norm(
+            tb,
+            core_range_set=cores_b,
+            weight=tw,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=sharded_in_b,
+        )
+        mb = matmul_desc(
+            rb.output_tensors[0],
+            tB,
+            core_range_set=cores_b,
+            program_config=mm_cfg,
+            compute_kernel_config=COMPUTE_CONFIG,
+            output_mem_config=sharded_out_b,
+        )
+
+        if self._SINGLE_RUN_ONLY:
+            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 4 Fused: single run (for Tracy)")
+        else:
+            _, cold, warm = _time_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device), device)
+
+            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
+            e2e = _time_steady_state(fused.launch, device)
+
+            result_a = ttnn.to_torch(ma.output_tensors[0])
+            result_b = ttnn.to_torch(mb.output_tensors[0])
+
+            # Unfused reference for PCC — interleaved to avoid core mapping constraints
+            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+
+            p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
+            p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
+
+            print(f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
+            assert p_a, f"Chain A PCC: {pcc_a}"
+            assert p_b, f"Chain B PCC: {pcc_b}"
+
+    def test_demo4_unfused(self, device):
+        """Unfused path using ttnn ops with sharded intermediates.
+
+        Both chains serialize on the same (0,0)-based 1×8 grid with matching
+        shard shapes (the fused path runs them in parallel on disjoint grids).
+        """
+        torch.manual_seed(42)
+        rows, K, N = 1024, 256, 128
+        shard_h = rows // 8  # 128
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
+
+        def _shard_mem(width):
+            spec = ttnn.ShardSpec(cores, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        sharded_in = _shard_mem(K)  # [128, 256]
+        sharded_out = _shard_mem(N)  # [128, 128]
+
+        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(N // 32, 4),
+            per_core_M=shard_h // 32,
+            per_core_N=N // 32,
+        )
+        ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(1, 8),
+            subblock_w=min(K // 32, 4),
+            block_h=shard_h // 32,
+            block_w=K // 32,
+            inplace=False,
+        )
+
+        ta = ttnn.from_torch(
+            torch.randn(1, 1, rows, K, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_in,
+        )
+        tb = ttnn.from_torch(
+            torch.randn(1, 1, rows, K, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_in,
+        )
+        # Norm weight/bias [1,1,1,256] width-sharded across 8 cores → [32,32] per core
+        w_shard = ttnn.ShardSpec(cores, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
+        tw = ttnn.from_torch(
+            torch.ones(1, 1, 1, K, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=w_mem,
+        )
+        tbi = ttnn.from_torch(
+            torch.zeros(1, 1, 1, K, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=w_mem,
+        )
+        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
+        tB = ttnn.from_torch(
+            torch.randn(1, 1, K, N, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        def unfused():
+            ua1 = ttnn.layer_norm(
+                ta,
+                weight=tw,
+                bias=tbi,
+                epsilon=1e-5,
+                program_config=ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in,
+            )
+            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out)
+            ub1 = ttnn.rms_norm(
+                tb,
+                weight=tw,
+                epsilon=1e-5,
+                program_config=ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in,
+            )
+            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out)
+
+        if self._SINGLE_RUN_ONLY:
+            unfused()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 4 Unfused: single run (for Tracy)")
+        else:
+            cold, warm = _time_cold_warm(unfused, device)
+            e2e = _time_steady_state(unfused, device)
+            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
+    # -----------------------------------------------------------------
+
+    def test_demo5_fused(self, device):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
+
+        DRAM_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -225,7 +700,7 @@ void kernel_main() {
 }
 """
 
-TILE_COPY_COMPUTE_SOURCE = """\
+        TILE_COPY_COMPUTE_SOURCE = """\
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -251,7 +726,7 @@ void kernel_main() {
 }
 """
 
-GLOBALCB_SENDER_WRITER_SOURCE = """\
+        GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
@@ -274,7 +749,7 @@ void kernel_main() {
 }
 """
 
-GLOBALCB_RECEIVER_READER_SOURCE = """\
+        GLOBALCB_RECEIVER_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
@@ -299,7 +774,7 @@ void kernel_main() {
 }
 """
 
-DRAM_WRITER_SOURCE = """\
+        DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -319,7 +794,7 @@ void kernel_main() {
 }
 """
 
-RECEIVER_DRAM_WRITER_SOURCE = """\
+        RECEIVER_DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -339,843 +814,143 @@ void kernel_main() {
 }
 """
 
+        def _get_core_coords(core_ranges):
+            coords = []
+            for cr in core_ranges.ranges():
+                for y in range(cr.start.y, cr.end.y + 1):
+                    for x in range(cr.start.x, cr.end.x + 1):
+                        coords.append(ttnn.CoreCoord(x, y))
+            return coords
 
-# =============================================================================
-# GlobalCB OpDescriptor Builders (for Demo 5)
-# =============================================================================
-
-
-def _get_core_coords(core_ranges):
-    coords = []
-    for cr in core_ranges.ranges():
-        for y in range(cr.start.y, cr.end.y + 1):
-            for x in range(cr.start.x, cr.end.x + 1):
-                coords.append(ttnn.CoreCoord(x, y))
-    return coords
-
-
-def _make_cb_desc(buffer_index, core_ranges, total_size=TILE_SIZE_BF16, is_remote=False, gcb=None):
-    cb = ttnn.CBDescriptor()
-    cb.total_size = total_size
-    cb.core_ranges = core_ranges
-    fmt = ttnn.CBFormatDescriptor(
-        buffer_index=buffer_index,
-        data_format=ttnn.DataType.BFLOAT16,
-        page_size=TILE_SIZE_BF16,
-    )
-    if is_remote:
-        cb.remote_format_descriptors = [fmt]
-    else:
-        cb.format_descriptors = [fmt]
-    if gcb is not None:
-        cb.set_global_circular_buffer(gcb)
-    return cb
-
-
-def _make_kernel_desc(source, core_ranges, config, named_ct_args, rt_args_per_core):
-    k = ttnn.KernelDescriptor()
-    k.kernel_source = source
-    k.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-    k.core_ranges = core_ranges
-    k.named_compile_time_args = named_ct_args
-    k.runtime_args = rt_args_per_core
-    k.config = config
-    return k
-
-
-def _build_globalcb_sender_op(input_tensor, core_ranges, gcb, num_tiles):
-    src_addr = input_tensor.buffer_address()
-    cb_in = _make_cb_desc(0, core_ranges)
-    cb_out = _make_cb_desc(4, core_ranges)
-    cb_remote = _make_cb_desc(31, core_ranges, total_size=gcb.size(), is_remote=True, gcb=gcb)
-    coords = _get_core_coords(core_ranges)
-
-    reader = _make_kernel_desc(
-        DRAM_READER_SOURCE,
-        core_ranges,
-        ttnn.ReaderConfigDescriptor(),
-        [("cb_in", 0)],
-        [(c, [src_addr, num_tiles]) for c in coords],
-    )
-    compute = _make_kernel_desc(
-        TILE_COPY_COMPUTE_SOURCE,
-        core_ranges,
-        ttnn.ComputeConfigDescriptor(),
-        [("cb_in", 0), ("cb_out", 4)],
-        [(c, [num_tiles]) for c in coords],
-    )
-    writer = _make_kernel_desc(
-        GLOBALCB_SENDER_WRITER_SOURCE,
-        core_ranges,
-        ttnn.WriterConfigDescriptor(),
-        [("cb_out", 4), ("cb_remote", 31), ("page_size", TILE_SIZE_BF16)],
-        [(c, [num_tiles]) for c in coords],
-    )
-
-    desc = ttnn.ProgramDescriptor()
-    desc.cbs = [cb_in, cb_out, cb_remote]
-    desc.kernels = [reader, compute, writer]
-    return OpDescriptor(descriptor=desc, input_tensors=[input_tensor], output_tensors=[], name="gcb_sender")
-
-
-def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
-    src_addr = input_tensor.buffer_address()
-    dst_addr = output_tensor.buffer_address()
-    cb_in = _make_cb_desc(0, core_ranges)
-    cb_out = _make_cb_desc(4, core_ranges)
-    coords = _get_core_coords(core_ranges)
-
-    reader = _make_kernel_desc(
-        DRAM_READER_SOURCE,
-        core_ranges,
-        ttnn.ReaderConfigDescriptor(),
-        [("cb_in", 0)],
-        [(c, [src_addr, num_tiles]) for c in coords],
-    )
-    compute = _make_kernel_desc(
-        TILE_COPY_COMPUTE_SOURCE,
-        core_ranges,
-        ttnn.ComputeConfigDescriptor(),
-        [("cb_in", 0), ("cb_out", 4)],
-        [(c, [num_tiles]) for c in coords],
-    )
-    writer = _make_kernel_desc(
-        DRAM_WRITER_SOURCE,
-        core_ranges,
-        ttnn.WriterConfigDescriptor(),
-        [("cb_out", 4)],
-        [(c, [dst_addr, num_tiles]) for c in coords],
-    )
-
-    desc = ttnn.ProgramDescriptor()
-    desc.cbs = [cb_in, cb_out]
-    desc.kernels = [reader, compute, writer]
-    return OpDescriptor(
-        descriptor=desc,
-        input_tensors=[input_tensor],
-        output_tensors=[output_tensor],
-        name="identity",
-    )
-
-
-def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
-    dst_addr = output_tensor.buffer_address()
-
-    cb_recv = ttnn.CBDescriptor()
-    cb_recv.total_size = gcb.size()
-    cb_recv.core_ranges = core_ranges
-    local_fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.DataType.BFLOAT16, page_size=TILE_SIZE_BF16)
-    remote_fmt = ttnn.CBFormatDescriptor(buffer_index=31, data_format=ttnn.DataType.BFLOAT16, page_size=TILE_SIZE_BF16)
-    cb_recv.format_descriptors = [local_fmt]
-    cb_recv.remote_format_descriptors = [remote_fmt]
-    cb_recv.set_global_circular_buffer(gcb)
-
-    coords = _get_core_coords(core_ranges)
-    reader = _make_kernel_desc(
-        GLOBALCB_RECEIVER_READER_SOURCE,
-        core_ranges,
-        ttnn.ReaderConfigDescriptor(),
-        [("cb_remote", 31), ("cb_in", 0), ("page_size", TILE_SIZE_BF16)],
-        [(c, [num_tiles]) for c in coords],
-    )
-    writer = _make_kernel_desc(
-        RECEIVER_DRAM_WRITER_SOURCE,
-        core_ranges,
-        ttnn.WriterConfigDescriptor(),
-        [("cb_in", 0)],
-        [(c, [dst_addr, num_tiles]) for c in coords],
-    )
-
-    desc = ttnn.ProgramDescriptor()
-    desc.cbs = [cb_recv]
-    desc.kernels = [reader, writer]
-    return OpDescriptor(descriptor=desc, input_tensors=[], output_tensors=[output_tensor], name="gcb_consumer")
-
-
-# =============================================================================
-# Tests
-# =============================================================================
-
-
-class TestFusedDemo:
-    """Fusion infrastructure demo tests.
-
-    Each demo is split into fused and unfused tests with cold + warm timing.
-    Cold = all caches cleared, warm = all caches populated.
-    """
-
-    # Set to True for Tracy profiling: skips timing loops, runs once only.
-    _SINGLE_RUN_ONLY = False
-
-    _padding_op_cache = {}
-
-    def _get_padding_op(self, device):
-        if id(device) not in self._padding_op_cache:
-            self._padding_op_cache[id(device)] = _make_padding_op(device)
-        return self._padding_op_cache[id(device)]
-
-    # -----------------------------------------------------------------
-    # Demo 1: RMS -> Matmul -> RMS (DRAM, 4x2 grid)
-    # Input [256, H], matmul [H, H], 4x2 = 8 cores
-    # H must be divisible by 128 (in0_block_w=4 × tile=32)
-    # -----------------------------------------------------------------
-
-    def _demo1_setup(self, device, H):
-        torch.manual_seed(42)
-        M_tiles = 256 // 32  # 8
-        N_tiles = H // 32
-        core_range = _cores(0, 0, 3, 1)  # 4x2 = 8 cores
-        mm_cfg = _mm_config(grid_x=4, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 8, per_core_N=N_tiles)
-
-        torch_input = torch.randn(1, 1, 256, H, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, H, dtype=torch.bfloat16)
-        torch_b = torch.randn(1, 1, H, H, dtype=torch.bfloat16)
-
-        return core_range, mm_cfg, torch_input, torch_w, torch_b
-
-    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo1_fused(self, device, H):
-        from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-
-        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
-
-        tt_in = _tt(torch_input, device)
-        tt_w = _tt(torch_w, device)
-        tt_b = _tt(torch_b, device)
-        r1 = rms_norm.rms_norm(tt_in, core_range_set=core_range, weight=tt_w, epsilon=1e-5)
-        m = matmul_desc(
-            r1.output_tensors[0],
-            tt_b,
-            core_range_set=core_range,
-            program_config=mm_cfg,
-            compute_kernel_config=_compute(),
-        )
-        r2 = rms_norm.rms_norm(
-            m.output_tensors[0], core_range_set=core_range, weight=_tt(torch_w, device), epsilon=1e-5
-        )
-
-        if self._SINGLE_RUN_ONLY:
-            fused = Sequential(r1, m, r2).build(device)
-            fused.launch()
-            ttnn.synchronize_device(device)
-            print(f"\n  Demo 1 Fused (H={H}): single run (for Tracy)")
-        else:
-            _, cold, warm = _time_fused(lambda: Sequential(r1, m, r2).build(device), device)
-
-            fused = Sequential(r1, m, r2).build(device)
-            e2e = _time_steady_state(fused.launch, device)
-
-            fused_result = ttnn.to_torch(r2.output_tensors[0])
-
-            # Unfused reference for PCC
-            tt_in, tt_w, tt_B = _tt(torch_input, device), _tt(torch_w, device), _tt(torch_b, device)
-            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
-            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
-            ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
-
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(fused.launch, padding_fn, device)
-            print(
-                f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC={pcc:.6f}"
+        def _make_cb_desc(buffer_index, core_ranges, total_size=TILE_SIZE_BF16, is_remote=False, gcb=None):
+            cb = ttnn.CBDescriptor()
+            cb.total_size = total_size
+            cb.core_ranges = core_ranges
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=buffer_index,
+                data_format=ttnn.DataType.BFLOAT16,
+                page_size=TILE_SIZE_BF16,
             )
-            assert passing, f"PCC: {pcc}"
+            if is_remote:
+                cb.remote_format_descriptors = [fmt]
+            else:
+                cb.format_descriptors = [fmt]
+            if gcb is not None:
+                cb.set_global_circular_buffer(gcb)
+            return cb
 
-    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo1_unfused(self, device, H):
-        core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
-        tt_in, tt_w, tt_B = _tt(torch_input, device), _tt(torch_w, device), _tt(torch_b, device)
+        def _make_kernel_desc(source, core_ranges, config, named_ct_args, rt_args_per_core):
+            k = ttnn.KernelDescriptor()
+            k.kernel_source = source
+            k.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+            k.core_ranges = core_ranges
+            k.named_compile_time_args = named_ct_args
+            k.runtime_args = rt_args_per_core
+            k.config = config
+            return k
 
-        def unfused():
-            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
-            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg, compute_kernel_config=_compute())
-            return ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
-
-        if self._SINGLE_RUN_ONLY:
-            unfused()
-            ttnn.synchronize_device(device)
-            print(f"\n  Demo 1 Unfused (H={H}): single run (for Tracy)")
-        else:
-            cold, warm = _time_cold_warm(unfused, device)
-            e2e = _time_steady_state(unfused, device)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(unfused, padding_fn, device)
-            print(f"\n  Demo 1 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
-
-    # -----------------------------------------------------------------
-    # Demo 2: RMS -> LN (block-sharded, 4x4 grid)
-    # Input [H, 512] on 4x4=16 cores, shard [H/4, 128]
-    # H must be divisible by 128 (4 grid-rows × tile=32)
-    # -----------------------------------------------------------------
-
-    def _demo2_setup(self, device, H):
-        torch.manual_seed(42)
-        cols = 512
-        shard_h = H // 4  # rows distributed across 4 core-rows
-        shard_w = cols // 4  # 128 always
-        block_h = shard_h // 32  # tile rows per core
-        block_w = shard_w // 32  # tile cols per core = 4 always
-
-        cores = _cores(0, 0, 3, 3)
-        shard_spec = ttnn.ShardSpec(cores, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        compute_cfg = _compute(fp32=False)
-        program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(4, 4),
-            subblock_w=4,
-            block_h=block_h,
-            block_w=block_w,
-            inplace=False,
-        )
-
-        torch_input = torch.randn(1, 1, H, cols, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, cols, dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(
-            torch_input,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=sharded_mem,
-        )
-        # Weight in L1 interleaved to avoid DRAM bandwidth contention
-        # when 16 cores read gamma simultaneously.
-        tt_w = ttnn.from_torch(
-            torch_w,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        return cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w
-
-    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo2_fused(self, device, H):
-        from models.experimental.ops.descriptors.fusion import Sequential
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-
-        cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
-
-        r = rms_norm.rms_norm(
-            tt_input,
-            core_range_set=cores,
-            weight=tt_w,
-            epsilon=1e-5,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_mem,
-        )
-        ln = layer_norm.layer_norm(
-            r.output_tensors[0],
-            core_range_set=cores,
-            weight=tt_w,
-            epsilon=1e-5,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_mem,
-        )
-
-        if self._SINGLE_RUN_ONLY:
-            fused = Sequential(r, ln).build(device)
-            fused.launch()
-            ttnn.synchronize_device(device)
-            print(f"\n  Demo 2 Fused (H={H}): single run (for Tracy)")
-        else:
-            _, cold, warm = _time_fused(lambda: Sequential(r, ln).build(device), device)
-
-            fused = Sequential(r, ln).build(device)
-            e2e = _time_steady_state(fused.launch, device)
-
-            fused_result = ttnn.to_torch(ln.output_tensors[0])
-
-            # Unfused reference for PCC
-            u1 = ttnn.rms_norm(
-                tt_input,
-                weight=tt_w,
-                epsilon=1e-5,
-                program_config=program_cfg,
-                compute_kernel_config=compute_cfg,
-                memory_config=sharded_mem,
+        def _build_globalcb_sender_op(input_tensor, core_ranges, gcb, num_tiles):
+            src_addr = input_tensor.buffer_address()
+            cb_in = _make_cb_desc(0, core_ranges)
+            cb_out = _make_cb_desc(4, core_ranges)
+            cb_remote = _make_cb_desc(31, core_ranges, total_size=gcb.size(), is_remote=True, gcb=gcb)
+            coords = _get_core_coords(core_ranges)
+            reader = _make_kernel_desc(
+                DRAM_READER_SOURCE,
+                core_ranges,
+                ttnn.ReaderConfigDescriptor(),
+                [("cb_in", 0)],
+                [(c, [src_addr, num_tiles]) for c in coords],
             )
-            ref = ttnn.to_torch(
-                ttnn.layer_norm(
-                    u1,
-                    weight=tt_w,
-                    epsilon=1e-5,
-                    program_config=program_cfg,
-                    compute_kernel_config=compute_cfg,
-                    memory_config=sharded_mem,
-                )
+            compute = _make_kernel_desc(
+                TILE_COPY_COMPUTE_SOURCE,
+                core_ranges,
+                ttnn.ComputeConfigDescriptor(),
+                [("cb_in", 0), ("cb_out", 4)],
+                [(c, [num_tiles]) for c in coords],
+            )
+            writer = _make_kernel_desc(
+                GLOBALCB_SENDER_WRITER_SOURCE,
+                core_ranges,
+                ttnn.WriterConfigDescriptor(),
+                [("cb_out", 4), ("cb_remote", 31), ("page_size", TILE_SIZE_BF16)],
+                [(c, [num_tiles]) for c in coords],
+            )
+            desc = ttnn.ProgramDescriptor()
+            desc.cbs = [cb_in, cb_out, cb_remote]
+            desc.kernels = [reader, compute, writer]
+            return OpDescriptor(descriptor=desc, input_tensors=[input_tensor], output_tensors=[], name="gcb_sender")
+
+        def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
+            src_addr = input_tensor.buffer_address()
+            dst_addr = output_tensor.buffer_address()
+            cb_in = _make_cb_desc(0, core_ranges)
+            cb_out = _make_cb_desc(4, core_ranges)
+            coords = _get_core_coords(core_ranges)
+            reader = _make_kernel_desc(
+                DRAM_READER_SOURCE,
+                core_ranges,
+                ttnn.ReaderConfigDescriptor(),
+                [("cb_in", 0)],
+                [(c, [src_addr, num_tiles]) for c in coords],
+            )
+            compute = _make_kernel_desc(
+                TILE_COPY_COMPUTE_SOURCE,
+                core_ranges,
+                ttnn.ComputeConfigDescriptor(),
+                [("cb_in", 0), ("cb_out", 4)],
+                [(c, [num_tiles]) for c in coords],
+            )
+            writer = _make_kernel_desc(
+                DRAM_WRITER_SOURCE,
+                core_ranges,
+                ttnn.WriterConfigDescriptor(),
+                [("cb_out", 4)],
+                [(c, [dst_addr, num_tiles]) for c in coords],
+            )
+            desc = ttnn.ProgramDescriptor()
+            desc.cbs = [cb_in, cb_out]
+            desc.kernels = [reader, compute, writer]
+            return OpDescriptor(
+                descriptor=desc,
+                input_tensors=[input_tensor],
+                output_tensors=[output_tensor],
+                name="identity",
             )
 
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(fused.launch, padding_fn, device)
-            print(
-                f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC={pcc:.6f}"
+        def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
+            dst_addr = output_tensor.buffer_address()
+            cb_recv = ttnn.CBDescriptor()
+            cb_recv.total_size = gcb.size()
+            cb_recv.core_ranges = core_ranges
+            local_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=0, data_format=ttnn.DataType.BFLOAT16, page_size=TILE_SIZE_BF16
             )
-            assert passing, f"PCC: {pcc}"
-
-    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
-    def test_demo2_unfused(self, device, H):
-        cores, sharded_mem, compute_cfg, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
-
-        def unfused():
-            u1 = ttnn.rms_norm(
-                tt_input,
-                weight=tt_w,
-                epsilon=1e-5,
-                program_config=program_cfg,
-                compute_kernel_config=compute_cfg,
-                memory_config=sharded_mem,
+            remote_fmt = ttnn.CBFormatDescriptor(
+                buffer_index=31, data_format=ttnn.DataType.BFLOAT16, page_size=TILE_SIZE_BF16
             )
-            return ttnn.layer_norm(
-                u1,
-                weight=tt_w,
-                epsilon=1e-5,
-                program_config=program_cfg,
-                compute_kernel_config=compute_cfg,
-                memory_config=sharded_mem,
+            cb_recv.format_descriptors = [local_fmt]
+            cb_recv.remote_format_descriptors = [remote_fmt]
+            cb_recv.set_global_circular_buffer(gcb)
+            coords = _get_core_coords(core_ranges)
+            reader = _make_kernel_desc(
+                GLOBALCB_RECEIVER_READER_SOURCE,
+                core_ranges,
+                ttnn.ReaderConfigDescriptor(),
+                [("cb_remote", 31), ("cb_in", 0), ("page_size", TILE_SIZE_BF16)],
+                [(c, [num_tiles]) for c in coords],
             )
-
-        if self._SINGLE_RUN_ONLY:
-            unfused()
-            ttnn.synchronize_device(device)
-            print(f"\n  Demo 2 Unfused (H={H}): single run (for Tracy)")
-        else:
-            cold, warm = _time_cold_warm(unfused, device)
-            e2e = _time_steady_state(unfused, device)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(unfused, padding_fn, device)
-            print(f"\n  Demo 2 Unfused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
-
-    # -----------------------------------------------------------------
-    # Demo 3: All-matmul symmetric branching on full 8x8 grid
-    #
-    #     stem (8x8=64c)
-    #       ├── left (8x4=32c)
-    #       │     ├── ll (8x2=16c)
-    #       │     └── lr (8x2=16c)
-    #       └── right (8x4=32c)
-    #             ├── rl (8x2=16c)
-    #             └── rr (8x2=16c)
-    #
-    # All 7 matmuls: [2048,H] @ [H,H] → [2048,H].
-    # Parametrized on hidden to compare small (128) vs large (1024) compute.
-    # Using matmul everywhere gives both paths identical core grid
-    # control via MatmulMultiCoreReuseProgramConfig.
-    # -----------------------------------------------------------------
-
-    def _demo3_setup(self, device, hidden, half_grid=False):
-        torch.manual_seed(42)
-
-        N_tiles = hidden // 32
-
-        if half_grid:
-            # Half grid: stem 4x4=16, branch 4x2=8, leaf 4x1=4
-            M_tiles = 512 // 32  # 16
-            stem_cores = _cores(0, 0, 3, 3)  # 4x4 = 16 cores
-            left_cores = _cores(0, 0, 3, 1)  # 4x2 = 8 cores
-            right_cores = _cores(0, 2, 3, 3)  # 4x2 = 8 cores
-            ll_cores = _cores(0, 0, 3, 0)  # 4x1 = 4 cores
-            lr_cores = _cores(0, 1, 3, 1)  # 4x1 = 4 cores
-            rl_cores = _cores(0, 2, 3, 2)  # 4x1 = 4 cores
-            rr_cores = _cores(0, 3, 3, 3)  # 4x1 = 4 cores
-            stem_cfg = _mm_config(grid_x=4, grid_y=4, in0_block_w=4, per_core_M=M_tiles // 16, per_core_N=N_tiles)
-            branch_cfg = _mm_config(grid_x=4, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 8, per_core_N=N_tiles)
-            leaf_cfg = _mm_config(grid_x=4, grid_y=1, in0_block_w=4, per_core_M=M_tiles // 4, per_core_N=N_tiles)
-            rows = 512
-        else:
-            # Full grid: stem 8x8=64, branch 8x4=32, leaf 8x2=16
-            M_tiles = 2048 // 32  # 64
-            stem_cores = _cores(0, 0, 7, 7)  # 8x8 = 64 cores
-            left_cores = _cores(0, 0, 7, 3)  # 8x4 = 32 cores
-            right_cores = _cores(0, 4, 7, 7)  # 8x4 = 32 cores
-            ll_cores = _cores(0, 0, 7, 1)  # 8x2 = 16 cores
-            lr_cores = _cores(0, 2, 7, 3)  # 8x2 = 16 cores
-            rl_cores = _cores(0, 4, 7, 5)  # 8x2 = 16 cores
-            rr_cores = _cores(0, 6, 7, 7)  # 8x2 = 16 cores
-            stem_cfg = _mm_config(grid_x=8, grid_y=8, in0_block_w=4, per_core_M=M_tiles // 64, per_core_N=N_tiles)
-            branch_cfg = _mm_config(grid_x=8, grid_y=4, in0_block_w=4, per_core_M=M_tiles // 32, per_core_N=N_tiles)
-            leaf_cfg = _mm_config(grid_x=8, grid_y=2, in0_block_w=4, per_core_M=M_tiles // 16, per_core_N=N_tiles)
-            rows = 2048
-
-        mm_compute = _compute()
-        torch_A = torch.randn(1, 1, rows, hidden, dtype=torch.bfloat16)
-        tt_A = _tt(torch_A, device)
-
-        def _make_b():
-            return ttnn.from_torch(
-                torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            writer = _make_kernel_desc(
+                RECEIVER_DRAM_WRITER_SOURCE,
+                core_ranges,
+                ttnn.WriterConfigDescriptor(),
+                [("cb_in", 0)],
+                [(c, [dst_addr, num_tiles]) for c in coords],
             )
-
-        tt_Bs = [_make_b()] * 7
-
-        return (
-            stem_cores,
-            left_cores,
-            right_cores,
-            ll_cores,
-            lr_cores,
-            rl_cores,
-            rr_cores,
-            mm_compute,
-            stem_cfg,
-            branch_cfg,
-            leaf_cfg,
-            tt_A,
-            tt_Bs,
-        )
-
-    @pytest.mark.parametrize(
-        "hidden,half_grid", [(1024, False), (1024, True), (512, True)], ids=["full", "half", "half512"]
-    )
-    def test_demo3_fused(self, device, hidden, half_grid):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-
-        (
-            stem_cores,
-            left_cores,
-            right_cores,
-            ll_cores,
-            lr_cores,
-            rl_cores,
-            rr_cores,
-            mm_compute,
-            stem_cfg,
-            branch_cfg,
-            leaf_cfg,
-            tt_A,
-            tt_Bs,
-        ) = self._demo3_setup(device, hidden, half_grid=half_grid)
-
-        m_stem = matmul_desc(
-            tt_A, tt_Bs[0], core_range_set=stem_cores, program_config=stem_cfg, compute_kernel_config=mm_compute
-        )
-        m_left = matmul_desc(
-            m_stem.output_tensors[0],
-            tt_Bs[1],
-            core_range_set=left_cores,
-            program_config=branch_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        m_right = matmul_desc(
-            m_stem.output_tensors[0],
-            tt_Bs[2],
-            core_range_set=right_cores,
-            program_config=branch_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        m_ll = matmul_desc(
-            m_left.output_tensors[0],
-            tt_Bs[3],
-            core_range_set=ll_cores,
-            program_config=leaf_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        m_lr = matmul_desc(
-            m_left.output_tensors[0],
-            tt_Bs[4],
-            core_range_set=lr_cores,
-            program_config=leaf_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        m_rl = matmul_desc(
-            m_right.output_tensors[0],
-            tt_Bs[5],
-            core_range_set=rl_cores,
-            program_config=leaf_cfg,
-            compute_kernel_config=mm_compute,
-        )
-        m_rr = matmul_desc(
-            m_right.output_tensors[0],
-            tt_Bs[6],
-            core_range_set=rr_cores,
-            program_config=leaf_cfg,
-            compute_kernel_config=mm_compute,
-        )
-
-        _, cold, warm = _time_fused(
-            lambda: Sequential(
-                m_stem,
-                Parallel(
-                    Sequential(m_left, Parallel(m_ll, m_lr)),
-                    Sequential(m_right, Parallel(m_rl, m_rr)),
-                ),
-            ).build(device),
-            device,
-        )
-        result_ll = ttnn.to_torch(m_ll.output_tensors[0])
-        result_lr = ttnn.to_torch(m_lr.output_tensors[0])
-        result_rl = ttnn.to_torch(m_rl.output_tensors[0])
-        result_rr = ttnn.to_torch(m_rr.output_tensors[0])
-
-        # Unfused reference for PCC
-        u_stem = ttnn.matmul(tt_A, tt_Bs[0], program_config=stem_cfg, compute_kernel_config=mm_compute)
-        u_left = ttnn.matmul(u_stem, tt_Bs[1], program_config=branch_cfg, compute_kernel_config=mm_compute)
-        u_right = ttnn.matmul(u_stem, tt_Bs[2], program_config=branch_cfg, compute_kernel_config=mm_compute)
-        u_ll = ttnn.matmul(u_left, tt_Bs[3], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-        u_lr = ttnn.matmul(u_left, tt_Bs[4], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-        u_rl = ttnn.matmul(u_right, tt_Bs[5], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-        u_rr = ttnn.matmul(u_right, tt_Bs[6], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-
-        p_ll, pcc_ll = comp_pcc(ttnn.to_torch(u_ll), result_ll, pcc=0.97)
-        p_lr, pcc_lr = comp_pcc(ttnn.to_torch(u_lr), result_lr, pcc=0.97)
-        p_rl, pcc_rl = comp_pcc(ttnn.to_torch(u_rl), result_rl, pcc=0.97)
-        p_rr, pcc_rr = comp_pcc(ttnn.to_torch(u_rr), result_rr, pcc=0.97)
-
-        grid = "half" if half_grid else "full"
-        print(
-            f"\n  Demo 3 Fused ({grid}, H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: ll={pcc_ll:.4f} lr={pcc_lr:.4f} rl={pcc_rl:.4f} rr={pcc_rr:.4f}"
-        )
-        assert p_ll, f"ll PCC: {pcc_ll}"
-        assert p_lr, f"lr PCC: {pcc_lr}"
-        assert p_rl, f"rl PCC: {pcc_rl}"
-        assert p_rr, f"rr PCC: {pcc_rr}"
-
-    @pytest.mark.parametrize(
-        "hidden,half_grid", [(1024, False), (1024, True), (512, True)], ids=["full", "half", "half512"]
-    )
-    def test_demo3_unfused(self, device, hidden, half_grid):
-        (
-            stem_cores,
-            left_cores,
-            right_cores,
-            ll_cores,
-            lr_cores,
-            rl_cores,
-            rr_cores,
-            mm_compute,
-            stem_cfg,
-            branch_cfg,
-            leaf_cfg,
-            tt_A,
-            tt_Bs,
-        ) = self._demo3_setup(device, hidden, half_grid=half_grid)
-
-        def unfused():
-            u_stem = ttnn.matmul(tt_A, tt_Bs[0], program_config=stem_cfg, compute_kernel_config=mm_compute)
-            u_left = ttnn.matmul(u_stem, tt_Bs[1], program_config=branch_cfg, compute_kernel_config=mm_compute)
-            ttnn.matmul(u_left, tt_Bs[3], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-            ttnn.matmul(u_left, tt_Bs[4], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-            u_right = ttnn.matmul(u_stem, tt_Bs[2], program_config=branch_cfg, compute_kernel_config=mm_compute)
-            ttnn.matmul(u_right, tt_Bs[5], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-            ttnn.matmul(u_right, tt_Bs[6], program_config=leaf_cfg, compute_kernel_config=mm_compute)
-
-        cold, warm = _time_cold_warm(unfused, device)
-        grid = "half" if half_grid else "full"
-        print(f"\n  Demo 3 Unfused ({grid}, H={hidden}): cold={cold:.2f}ms  warm={warm:.2f}ms")
-
-    # -----------------------------------------------------------------
-    # Demo 4: Two parallel sharded chains on disjoint 1×8 core columns
-    # Chain A: LN -> Matmul on cores col 0, rows 0-7
-    # Chain B: RMS -> Matmul on cores col 1, rows 0-7
-    # Block-sharded [1024,256] inputs, sharded [1024,128] outputs on
-    # 1×8 grid. B weight + norm weight/bias in L1 interleaved.
-    # -----------------------------------------------------------------
-
-    def _demo4_setup(self, device):
-        torch.manual_seed(42)
-        rows, K, N = 1024, 256, 128
-
-        # 1-column grids: K (width) not split → matmul factory CB fits in shard
-        cores_a = _cores(0, 0, 0, 7)  # col 0, rows 0-7 = 8 cores
-        cores_b = _cores(1, 0, 1, 7)  # col 1, rows 0-7 = 8 cores
-
-        shard_h = rows // 8  # 128
-
-        def _shard_mem(cores, width):
-            spec = ttnn.ShardSpec(cores, [shard_h, width], ttnn.ShardOrientation.ROW_MAJOR)
-            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
-
-        sharded_in_a = _shard_mem(cores_a, K)  # input shard [128, 256]
-        sharded_in_b = _shard_mem(cores_b, K)  # input shard [128, 256]
-        sharded_out_a = _shard_mem(cores_a, N)  # output shard [128, 128]
-        sharded_out_b = _shard_mem(cores_b, N)  # output shard [128, 128]
-        compute_cfg = _compute(fp32=False)
-
-        # [1024,256] × [256,128] on 1×8 grid
-        # M=32 tiles, K=8 tiles, N=4 tiles
-        # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
-        mm_cfg = _mm_config(grid_x=1, grid_y=8, in0_block_w=K // 32, per_core_M=shard_h // 32, per_core_N=N // 32)
-
-        torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
-        torch_b = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
-        torch_w = torch.ones(1, 1, 1, K, dtype=torch.bfloat16)
-        torch_bias = torch.zeros(1, 1, 1, K, dtype=torch.bfloat16)
-        torch_B = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
-
-        # Inputs block-sharded in L1
-        ta = ttnn.from_torch(
-            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_a
-        )
-        tb = ttnn.from_torch(
-            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in_b
-        )
-
-        # Weight, bias, B in L1 interleaved
-        def _l1(t):
-            return ttnn.from_torch(
-                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-
-        tw = _l1(torch_w)
-        tbi = _l1(torch_bias)
-        tB = _l1(torch_B)
-
-        return (
-            cores_a,
-            cores_b,
-            sharded_in_a,
-            sharded_in_b,
-            sharded_out_a,
-            sharded_out_b,
-            compute_cfg,
-            mm_cfg,
-            ta,
-            tb,
-            tw,
-            tbi,
-            tB,
-        )
-
-    def test_demo4_fused(self, device):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-
-        (
-            cores_a,
-            cores_b,
-            sharded_in_a,
-            sharded_in_b,
-            sharded_out_a,
-            sharded_out_b,
-            compute_cfg,
-            mm_cfg,
-            ta,
-            tb,
-            tw,
-            tbi,
-            tB,
-        ) = self._demo4_setup(device)
-
-        la = layer_norm.layer_norm(
-            ta,
-            core_range_set=cores_a,
-            weight=tw,
-            bias=tbi,
-            epsilon=1e-5,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_in_a,
-        )
-        ma = matmul_desc(
-            la.output_tensors[0],
-            tB,
-            core_range_set=cores_a,
-            program_config=mm_cfg,
-            compute_kernel_config=compute_cfg,
-            output_mem_config=sharded_out_a,
-        )
-        rb = rms_norm.rms_norm(
-            tb,
-            core_range_set=cores_b,
-            weight=tw,
-            epsilon=1e-5,
-            compute_kernel_config=compute_cfg,
-            memory_config=sharded_in_b,
-        )
-        mb = matmul_desc(
-            rb.output_tensors[0],
-            tB,
-            core_range_set=cores_b,
-            program_config=mm_cfg,
-            compute_kernel_config=compute_cfg,
-            output_mem_config=sharded_out_b,
-        )
-
-        if self._SINGLE_RUN_ONLY:
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
-            fused.launch()
-            ttnn.synchronize_device(device)
-            print("\n  Demo 4 Fused: single run (for Tracy)")
-        else:
-            _, cold, warm = _time_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device), device)
-
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
-            e2e = _time_steady_state(fused.launch, device)
-
-            result_a = ttnn.to_torch(ma.output_tensors[0])
-            result_b = ttnn.to_torch(mb.output_tensors[0])
-
-            # Unfused reference for PCC — interleaved to avoid core mapping constraints
-            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=compute_cfg)
-            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=compute_cfg)
-            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-
-            p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
-            p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
-
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(fused.launch, padding_fn, device)
-            print(
-                f"\n  Demo 4 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC: a={pcc_a:.4f} b={pcc_b:.4f}"
-            )
-            assert p_a, f"Chain A PCC: {pcc_a}"
-            assert p_b, f"Chain B PCC: {pcc_b}"
-
-    def test_demo4_unfused(self, device):
-        (
-            cores_a,
-            cores_b,
-            sharded_in_a,
-            sharded_in_b,
-            sharded_out_a,
-            sharded_out_b,
-            compute_cfg,
-            mm_cfg,
-            ta,
-            tb,
-            tw,
-            tbi,
-            tB,
-        ) = self._demo4_setup(device)
-
-        # Convert to interleaved — ttnn.matmul with MatmulMultiCoreReuseProgramConfig
-        # can't handle sharded input on non-(0,0) core ranges.
-        ta_i = ttnn.to_memory_config(ta, ttnn.L1_MEMORY_CONFIG)
-        tb_i = ttnn.to_memory_config(tb, ttnn.L1_MEMORY_CONFIG)
-
-        def unfused():
-            ua1 = ttnn.layer_norm(ta_i, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=compute_cfg)
-            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-            ub1 = ttnn.rms_norm(tb_i, weight=tw, epsilon=1e-5, compute_kernel_config=compute_cfg)
-            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-
-        if self._SINGLE_RUN_ONLY:
-            unfused()
-            ttnn.synchronize_device(device)
-            print("\n  Demo 4 Unfused: single run (for Tracy)")
-        else:
-            cold, warm = _time_cold_warm(unfused, device)
-            e2e = _time_steady_state(unfused, device)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(unfused, padding_fn, device)
-            print(f"\n  Demo 4 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
-
-    # -----------------------------------------------------------------
-    # Demo 5: GlobalCircularBuffer mid-kernel write (fused only)
-    # -----------------------------------------------------------------
-
-    def test_demo5_fused(self, device):
-        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+            desc = ttnn.ProgramDescriptor()
+            desc.cbs = [cb_recv]
+            desc.kernels = [reader, writer]
+            return OpDescriptor(descriptor=desc, input_tensors=[], output_tensors=[output_tensor], name="gcb_consumer")
 
         torch.manual_seed(42)
         num_tiles = 8
@@ -1185,16 +960,33 @@ class TestFusedDemo:
         torch_input_b = torch.randn(shape, dtype=torch.bfloat16)
 
         sender_core = ttnn.CoreCoord(0, 0)
-        sender_range = _cores(0, 0, 0, 0)
-        receiver_range = _cores(1, 0, 1, 0)
+        sender_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        receiver_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
 
         gcb_size = TILE_SIZE_BF16 * 2
         gcb = ttnn.create_global_circular_buffer(device, [(sender_core, receiver_range)], gcb_size)
 
-        tia = _tt(torch_input_a, device)
-        tib = _tt(torch_input_b, device)
-        tt_output_b = _tt(torch.zeros(shape, dtype=torch.bfloat16), device)
-        tt_output_recv = _tt(torch.zeros(shape, dtype=torch.bfloat16), device)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tia = ttnn.from_torch(
+            torch_input_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+        )
+        tib = ttnn.from_torch(
+            torch_input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+        )
+        tt_output_b = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        tt_output_recv = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
         oa = _build_globalcb_sender_op(tia, sender_range, gcb, num_tiles)
         ob = _build_identity_op(tib, tt_output_b, sender_range, num_tiles)
         con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
@@ -1240,27 +1032,26 @@ class TestFusedDemo:
         rows, cols = 2048, 256
         mm_n = 128  # matmul output width (B = [256, 128] = 64KB)
 
-        stem_cores = _cores(0, 0, 1, 7)  # 2x8 = 16 cores
-        left_cores = _cores(0, 0, 0, 7)  # 1x8 = 8 cores
-        right_cores = _cores(1, 0, 1, 7)  # 1x8 = 8 cores
-        ll_cores = _cores(0, 0, 0, 3)  # 1x4 = 4 cores
-        lr_cores = _cores(0, 4, 0, 7)  # 1x4 = 4 cores
-        rl_cores = _cores(1, 0, 1, 3)  # 1x4 = 4 cores
-        rr_cores = _cores(1, 4, 1, 7)  # 1x4 = 4 cores
-
-        compute_cfg = _compute(fp32=False)
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
+        left_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
+        right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7))})
+        ll_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+        lr_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 7))})
+        rl_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3))})
+        rr_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 7))})
 
         # Matmul config for 8 cores (1x8 grid):
         # A=[1,1,1024,256] → M=32 tiles, K=8 tiles
         # B=[1,1,256,128] → output [1,1,1024,128]
         # in0_block_w must equal shard_w / tile_w for block-sharded A input
         # (shard [128,256] on 1-col grid → shard_w=256, so in0_block_w=256/32=8)
-        mm_cfg = _mm_config(
-            grid_x=1,
-            grid_y=8,
-            in0_block_w=cols // 32,  # 256/32 = 8 (full K)
-            per_core_M=4,  # 32 M-tiles / 8 cores = 4
-            per_core_N=mm_n // 32,  # 128/32 = 4 N-tiles
+        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=cols // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(mm_n // 32, 4),
+            per_core_M=4,
+            per_core_N=mm_n // 32,
         )
 
         # Block-sharded: height ÷ grid_rows, width ÷ grid_cols.
@@ -1292,15 +1083,22 @@ class TestFusedDemo:
             memory_config=shards["stem"],
         )
 
-        # B in L1 interleaved: eliminates DRAM bank contention when parallel
-        # matmuls read B simultaneously on disjoint core groups.
-        def _tt_l1(t):
-            return ttnn.from_torch(
-                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-
-        tt_B_left = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
-        tt_B_right = _tt_l1(torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16))
+        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tt_B_left = ttnn.from_torch(
+            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        tt_B_right = ttnn.from_torch(
+            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
 
         return (
             stem_cores,
@@ -1310,7 +1108,6 @@ class TestFusedDemo:
             lr_cores,
             rl_cores,
             rr_cores,
-            compute_cfg,
             mm_cfg,
             mm_n,
             tt_input,
@@ -1333,7 +1130,6 @@ class TestFusedDemo:
             lr_cores,
             rl_cores,
             rr_cores,
-            compute_cfg,
             mm_cfg,
             mm_n,
             tt_input,
@@ -1348,7 +1144,7 @@ class TestFusedDemo:
 
         # Level 0: stem LN on 16 cores (auto-detects sharded input grid)
         ln_stem = layer_norm.layer_norm(
-            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
         )
 
         # Level 1: slice (sharded on 8 cores) → matmul (sharded output on 8 cores)
@@ -1372,7 +1168,7 @@ class TestFusedDemo:
             tt_B_left,
             core_range_set=left_cores,
             program_config=mm_cfg,
-            compute_kernel_config=compute_cfg,
+            compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_left"],
         )
         mm_right = matmul_desc(
@@ -1380,7 +1176,7 @@ class TestFusedDemo:
             tt_B_right,
             core_range_set=right_cores,
             program_config=mm_cfg,
-            compute_kernel_config=compute_cfg,
+            compute_kernel_config=COMPUTE_CONFIG,
             output_mem_config=shards["mm_right"],
         )
 
@@ -1415,16 +1211,16 @@ class TestFusedDemo:
         )
 
         ln_ll = layer_norm.layer_norm(
-            sl_tl.output_tensors[0], core_range_set=ll_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+            sl_tl.output_tensors[0], core_range_set=ll_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
         )
         ln_lr = layer_norm.layer_norm(
-            sl_bl.output_tensors[0], core_range_set=lr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+            sl_bl.output_tensors[0], core_range_set=lr_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
         )
         ln_rl = layer_norm.layer_norm(
-            sl_tr.output_tensors[0], core_range_set=rl_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+            sl_tr.output_tensors[0], core_range_set=rl_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
         )
         ln_rr = layer_norm.layer_norm(
-            sl_br.output_tensors[0], core_range_set=rr_cores, epsilon=1e-5, compute_kernel_config=compute_cfg
+            sl_br.output_tensors[0], core_range_set=rr_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
         )
 
         return (
@@ -1441,7 +1237,6 @@ class TestFusedDemo:
             ln_lr,
             ln_rl,
             ln_rr,
-            compute_cfg,
             mm_cfg,
             mm_n,
             tt_input,
@@ -1477,7 +1272,6 @@ class TestFusedDemo:
             ln_lr,
             ln_rl,
             ln_rr,
-            compute_cfg,
             mm_cfg,
             mm_n,
             tt_input,
@@ -1504,69 +1298,210 @@ class TestFusedDemo:
             fused = self._demo8_build_fused(device, ops)
             e2e = _time_steady_state(fused.launch, device)
 
-            # Unfused reference for PCC — use L1 interleaved intermediates
-            # to avoid slice/matmul sharding constraints in the reference path
-            u_stem = ttnn.layer_norm(tt_input, epsilon=1e-5, compute_kernel_config=compute_cfg)
+            # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
+            # Right path reuses left-path shard configs (same shapes, serialized).
+            stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(2, 8),
+                subblock_w=min(128 // 32, 4),
+                block_h=256 // 32,
+                block_w=128 // 32,
+                inplace=False,
+            )
+            leaf_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(1, 4),
+                subblock_w=min(128 // 32, 4),
+                block_h=128 // 32,
+                block_w=128 // 32,
+                inplace=False,
+            )
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=shards["stem"],
+            )
 
             # Left path: stem → slice top → matmul → slice top-left → LN
-            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=ttnn.L1_MEMORY_CONFIG)
-            u_left = ttnn.matmul(u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=ttnn.L1_MEMORY_CONFIG)
-            ref_ll = ttnn.to_torch(ttnn.layer_norm(u_tl, epsilon=1e-5, compute_kernel_config=compute_cfg))
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=shards["left"])
+            # Right path slice before deallocating stem
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=shards["left"])
+            ttnn.deallocate(u_stem)
+
+            u_left = ttnn.matmul(
+                u_top,
+                tt_B_left,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=shards["mm_left"],
+            )
+            ttnn.deallocate(u_top)
+            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=shards["ll"])
+            ttnn.deallocate(u_left)
+            ref_ll = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u_tl,
+                    epsilon=1e-5,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    program_config=leaf_ln_cfg,
+                    memory_config=shards["ll"],
+                )
+            )
+            ttnn.deallocate(u_tl)
             result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
 
-            # Right path: stem → slice bottom → matmul → slice top-right → LN
-            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=ttnn.L1_MEMORY_CONFIG)
-            u_right = ttnn.matmul(u_bot, tt_B_right, program_config=mm_cfg, compute_kernel_config=compute_cfg)
-            u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=ttnn.L1_MEMORY_CONFIG)
-            ref_rl = ttnn.to_torch(ttnn.layer_norm(u_tr, epsilon=1e-5, compute_kernel_config=compute_cfg))
+            # Right path (reuses (0,0)-based left-path shard configs)
+            u_right = ttnn.matmul(
+                u_bot,
+                tt_B_right,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=shards["mm_left"],
+            )
+            ttnn.deallocate(u_bot)
+            u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=shards["ll"])
+            ttnn.deallocate(u_right)
+            ref_rl = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u_tr,
+                    epsilon=1e-5,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    program_config=leaf_ln_cfg,
+                    memory_config=shards["ll"],
+                )
+            )
+            ttnn.deallocate(u_tr)
             result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
 
             p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
             p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(fused.launch, padding_fn, device)
-            print(
-                f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}"
-            )
+            print(f"\n  Demo 8 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
             assert p_ll, f"Left-left PCC: {pcc_ll}"
             assert p_rl, f"Right-left PCC: {pcc_rl}"
 
     def test_demo8_unfused(self, device):
-        """Launch the exact same OpDescriptors as the fused path, one at a time."""
-        (
-            ln_stem,
-            sl_top,
-            sl_bot,
-            mm_left,
-            mm_right,
-            sl_tl,
-            sl_bl,
-            sl_tr,
-            sl_br,
-            ln_ll,
-            ln_lr,
-            ln_rl,
-            ln_rr,
-            compute_cfg,
-            mm_cfg,
-            mm_n,
-            tt_input,
-            tt_B_left,
-            tt_B_right,
-            shards,
-        ) = self._demo8_make_ops(device)
+        """Unfused path using ttnn ops with sharded intermediates.
 
-        # Same ops, same order as fused tree traversal
-        all_ops = [ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr]
+        ttnn ops require (0,0)-based core grids (compute_with_storage_grid_size
+        is always (0,0)-origin), so we can't use the fused path's non-origin
+        grids (e.g. right_cores=(1,0)-(1,7)). Instead, all ops use (0,0)-based
+        grids with matching shard shapes. This means left/right paths can't run
+        on disjoint cores — they serialize, which is the normal unfused behavior.
 
-        def _launch_op(op):
-            io = list(op.input_tensors) + list(op.output_tensors)
-            ttnn.generic_op(io, op.descriptor)
+        ttnn.slice operates directly on sharded TILE inputs via the tile factory
+        (which uses TensorAccessor to handle both interleaved and sharded buffers).
+        """
+        torch.manual_seed(42)
+        rows, cols = 2048, 256
+        mm_n = 128
+        half = rows // 2
+        quarter = rows // 4
+
+        def _shard_mem(cores, shard_h, shard_w):
+            spec = ttnn.ShardSpec(cores, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        # All (0,0)-based grids
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
+        branch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
+        leaf_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+
+        stem_mem = _shard_mem(stem_cores, 256, 128)
+        branch_mem = _shard_mem(branch_cores, 128, 256)
+        mm_mem = _shard_mem(branch_cores, 128, 128)
+        leaf_mem = _shard_mem(leaf_cores, 128, 128)
+
+        mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            in0_block_w=cols // 32,
+            out_subblock_h=1,
+            out_subblock_w=min(mm_n // 32, 4),
+            per_core_M=4,
+            per_core_N=mm_n // 32,
+        )
+
+        ln_prog_cfg = lambda gx, gy, bh, bw: ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            subblock_w=min(bw, 4),
+            block_h=bh,
+            block_w=bw,
+            inplace=False,
+        )
+        stem_ln_cfg = ln_prog_cfg(2, 8, 256 // 32, 128 // 32)
+        leaf_ln_cfg = ln_prog_cfg(1, 4, 128 // 32, 128 // 32)
+
+        tt_input = ttnn.from_torch(
+            torch.randn(1, 1, rows, cols, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=stem_mem,
+        )
+        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tt_B_left = ttnn.from_torch(
+            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        tt_B_right = ttnn.from_torch(
+            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
 
         def unfused():
-            for op in all_ops:
-                _launch_op(op)
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=stem_mem,
+            )
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=branch_mem)
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=branch_mem)
+            u_left = ttnn.matmul(
+                u_top, tt_B_left, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=mm_mem
+            )
+            u_right = ttnn.matmul(
+                u_bot, tt_B_right, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=mm_mem
+            )
+            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=leaf_mem)
+            u_bl = ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem)
+            u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=leaf_mem)
+            u_br = ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem)
+            ttnn.layer_norm(
+                u_tl,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=leaf_ln_cfg,
+                memory_config=leaf_mem,
+            )
+            ttnn.layer_norm(
+                u_bl,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=leaf_ln_cfg,
+                memory_config=leaf_mem,
+            )
+            ttnn.layer_norm(
+                u_tr,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=leaf_ln_cfg,
+                memory_config=leaf_mem,
+            )
+            ttnn.layer_norm(
+                u_br,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=leaf_ln_cfg,
+                memory_config=leaf_mem,
+            )
 
         if self._SINGLE_RUN_ONLY:
             unfused()
@@ -1579,6 +1514,4 @@ class TestFusedDemo:
             # Steady-state e2e
             e2e = _time_steady_state(unfused, device)
 
-            padding_fn = self._get_padding_op(device)
-            pipelined = _time_pipelined(unfused, padding_fn, device)
-            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  pipelined={pipelined:.3f}ms")
+            print(f"\n  Demo 8 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
