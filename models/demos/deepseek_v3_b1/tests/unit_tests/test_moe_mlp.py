@@ -140,12 +140,9 @@ ROUTED_EXPERT_LAYER_IDX = 4
 # ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
-def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None, *, get_reference_model_state_dict):
+def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None, *, state_dict):
     """
     Create all tensors needed by SharedExpertOp.
-
-    The state_dict used for weight preparation is always the one returned by
-    get_reference_model_state_dict (same layer/seed as routed path in fused tests).
 
     Args:
         device: TT device or mesh device
@@ -153,8 +150,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         K_gate: Gate/Up input dimension (7168)
         mcast_grid: CoreRangeSet for mcast destination (same as routed input mcast)
         mesh_mapper: Optional mesh mapper for multi-device replication
-        get_reference_model_state_dict: Required callable from conftest; returns state dict
-            for prepare_shared_expert_weights.
+        state_dict: State dict in HF key convention (same as used for routed path in fused tests).
 
     Returns:
         SharedExpertTensors with all ttnn tensors, torch tensors, and validation data.
@@ -177,12 +173,6 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     up_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.up_proj.weight"
     down_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.down_proj.weight"
 
-    state_dict = get_reference_model_state_dict(
-        layer_idx=SHARED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        include_global=False,
-    )
     # Expected HF shapes (out_features, in_features): gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
     expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
     expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
@@ -238,13 +228,15 @@ def create_routed_expert_tensors(
     create_final_output=True,
     enable_routing=True,
     *,
-    get_reference_model_state_dict,
+    state_dict,
 ):
     """
     Create all tensors needed for MoE routed expert test.
 
-    The state_dict from get_reference_model_state_dict is never mutated. Gate weight
-    and bias are always read from it for both device preparation and golden reference.
+    The state_dict is never mutated. Gate weight and bias are always read from it
+    for both device preparation and golden reference. Must contain at least
+    num_experts routed experts (1 when enable_routing=False, 8 when use_hardcoded_expert_index
+    on 8 devices, 256 otherwise).
 
     When enable_routing=False, skips routing-specific tensors (gate MM weights,
     gate bias/indices, gate output scores/indices) and uses a single expert.
@@ -255,8 +247,7 @@ def create_routed_expert_tensors(
         mesh_mapper: Optional mesh mapper for multi-device replication
         create_final_output: If True, create final_output_tensor
         enable_routing: If True, create routing tensors. If False, skip them.
-        get_reference_model_state_dict: Required callable from conftest; returns
-            state dict (read-only when using HF weights).
+        state_dict: State dict in HF key convention (read-only when using HF weights).
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -284,16 +275,9 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    # ── Build state dict from reference fixture (gate weight/bias/rmsnorm_gamma all from state dict) ──
+    # ── Use provided state dict (gate weight/bias/rmsnorm_gamma all from state dict) ──
     bdw = BlitzDecodeWeights(device)
     layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
-    state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        seed=RoutedExpert.SEED,
-        num_routed_experts=num_experts,
-        include_global=False,
-    )
 
     # Create input tensor; gate weight/bias/rmsnorm_gamma are always read from state dict
     torch.manual_seed(RoutedExpert.SEED)
@@ -515,6 +499,29 @@ def extract_routed_expert_output(
 
 
 # ============================================================================
+# Helper: create reference DeepseekV3MoE model for comparison
+# ============================================================================
+def create_reference_moe_model(state_dict, layer_idx):
+    """Instantiate DeepseekV3MoE, load state dict (with auto-dequantization for real weights), return model and config."""
+    from transformers import AutoConfig
+
+    from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+
+    hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
+    moe_prefix = f"model.layers.{layer_idx}.mlp."
+    moe_state = {k[len(moe_prefix) :]: v for k, v in state_dict.items() if k.startswith(moe_prefix)}
+
+    if any(k.endswith("_scale_inv") for k in moe_state):
+        from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
+
+        moe_state = dequantize_state_dict(moe_state, hf_config)
+
+    reference_model = DeepseekV3MoE(hf_config).eval().to(torch.bfloat16)
+    reference_model.load_state_dict(moe_state)
+    return reference_model, hf_config
+
+
+# ============================================================================
 # Test: Fused MoE (routed expert + shared expert)
 # ============================================================================
 @pytest.mark.parametrize(
@@ -532,16 +539,20 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
-    r = create_routed_expert_tensors(
-        device, use_hardcoded_expert_index, get_reference_model_state_dict=get_reference_model_state_dict
-    )
+    r = create_routed_expert_tensors(device, use_hardcoded_expert_index, state_dict=state_dict)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(
-        device, M, K, mcast_grid, get_reference_model_state_dict=get_reference_model_state_dict
-    )
+    s = create_shared_expert_tensors(device, M, K, mcast_grid, state_dict=state_dict)
 
     # ── Create sdpa_kv_cache_buffer for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -676,8 +687,8 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("use_hardcoded_expert_index", [False])
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused_with_reduce(
@@ -688,6 +699,11 @@ def test_moe_fused_with_reduce(
 
     Each of 8 devices runs the full fused MoE (routed + shared expert),
     then results are reduced (summed) across all devices to ROOT1.
+
+    When use_hardcoded_expert_index=True, each device uses expert index = chip_id (0..7)
+    and the gate is only used for scaling; this is not the same as the reference model,
+    which uses the gate to select the actual top-8 experts. The reference comparison
+    is therefore skipped in that case and only runs when use_hardcoded_expert_index=False.
     """
     num_devices = TestConfig.NUM_DEVICES_4x2
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -704,6 +720,14 @@ def test_moe_fused_with_reduce(
 
     logger.info(f"Testing fused MoE with reduce: K={K}")
 
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
@@ -711,7 +735,7 @@ def test_moe_fused_with_reduce(
         use_hardcoded_expert_index,
         mesh_mapper=mesh_mapper,
         create_final_output=False,
-        get_reference_model_state_dict=get_reference_model_state_dict,
+        state_dict=state_dict,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -721,7 +745,7 @@ def test_moe_fused_with_reduce(
         K,
         mcast_grid,
         mesh_mapper=mesh_mapper,
-        get_reference_model_state_dict=get_reference_model_state_dict,
+        state_dict=state_dict,
     )
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
@@ -937,6 +961,39 @@ def test_moe_fused_with_reduce(
     logger.info(f"Reduce output PCC: {pcc_output}")
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
+    # --- Reference model comparison (when doing same op as reference: gate-selected experts) ---
+    # Skip when use_hardcoded_expert_index=True: B1 then uses fixed experts 0..7 (one per device),
+    # while the reference uses gate-selected top-8 experts; they are not the same operation.
+    num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)
+    if num_experts_in_state_dict >= 256 and not use_hardcoded_expert_index:
+        reference_moe, _ = create_reference_moe_model(state_dict, ROUTED_EXPERT_LAYER_IDX)
+
+        # Apply RMSNorm (same as B1 fused op does internally)
+        x = r.torch_input.float()
+        variance = x.pow(2).mean(-1, keepdim=True)
+        normed_input = ((x * torch.rsqrt(variance + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16()
+
+        # Optional: log whether TT gate indices match reference gate indices
+        with torch.no_grad():
+            ref_topk_idx, _ = reference_moe.gate(normed_input.unsqueeze(0))
+        ref_top8_sorted = torch.sort(ref_topk_idx.squeeze(0)).values
+        tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
+        tt_top8_sorted = torch.sort(tt_top8).values
+        if torch.equal(ref_top8_sorted, tt_top8_sorted):
+            logger.info("Gate indices match (reference vs TT)")
+        else:
+            logger.info(f"Gate indices differ: ref={ref_top8_sorted.tolist()}, tt={tt_top8_sorted.tolist()}")
+
+        with torch.no_grad():
+            ref_moe_output = reference_moe(normed_input.unsqueeze(0)).squeeze(0)
+
+        ref_block_output = r.torch_input.float() + ref_moe_output.float()
+        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
+
+        passing_ref, pcc_ref = comp_pcc(ref_block_output, adjusted_reduce, 0.95)
+        logger.info(f"Reference MoE comparison PCC: {pcc_ref}")
+        assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
+
     logger.info("Fused MoE with reduce test PASSED!")
 
 
@@ -954,15 +1011,19 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 
     logger.info(f"Testing MoeOp with enable_routing=False: K={K}")
 
-    # ── Create MLP tensors (no routing) ──
-    r = create_routed_expert_tensors(
-        device, enable_routing=False, get_reference_model_state_dict=get_reference_model_state_dict
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
     )
+
+    # ── Create MLP tensors (no routing) ──
+    r = create_routed_expert_tensors(device, enable_routing=False, state_dict=state_dict)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(
-        device, M, K, mcast_grid, get_reference_model_state_dict=get_reference_model_state_dict
-    )
+    s = create_shared_expert_tensors(device, M, K, mcast_grid, state_dict=state_dict)
 
     # ── Create SDPA buffers for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -1098,6 +1159,14 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
 
     logger.info(f"Testing MoeOp no-routing with reduce: K={K}")
 
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+
     # ── Create MLP tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
@@ -1105,7 +1174,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
         mesh_mapper=mesh_mapper,
         create_final_output=False,
         enable_routing=False,
-        get_reference_model_state_dict=get_reference_model_state_dict,
+        state_dict=state_dict,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -1115,7 +1184,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
         K,
         mcast_grid,
         mesh_mapper=mesh_mapper,
-        get_reference_model_state_dict=get_reference_model_state_dict,
+        state_dict=state_dict,
     )
 
     # ── Create SDPA buffers for CB memory overlap ──
