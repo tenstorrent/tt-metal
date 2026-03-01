@@ -1,0 +1,54 @@
+{
+  "operation_id": 685,
+  "operation_name": "ttnn.dump_tensor",
+  "args": [
+    {
+      "position": 0,
+      "value": {
+        "type": "PosixPath",
+        "value": "/data/deepseek/DeepSeek-R1-0528-Cache/61_layers/mesh_4x8/moe_decoder_block_13/mla/kv_norm/rmsnorm.weight.tensorbin"
+      }
+    },
+    {
+      "position": 1,
+      "value": {
+        "type": "ttnn.Tensor",
+        "original_shape": [
+          1,
+          1,
+          16,
+          32
+        ],
+        "original_dtype": "DataType.BFLOAT16",
+        "mesh_device": {
+          "placements": [
+            "PlacementShard(0)",
+            "PlacementReplicate"
+          ],
+          "distribution_shape": [
+            4,
+            8
+          ]
+        },
+        "shape": [
+          1,
+          1,
+          16,
+          32
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.ROW_MAJOR",
+        "storage_type": "StorageType.HOST",
+        "memory_config": {
+          "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+          "buffer_type": "BufferType.DRAM",
+          "shard_spec": "None",
+          "is_sharded": false,
+          "interleaved": true,
+          "hash": 46082544174525093
+        }
+      }
+    }
+  ],
+  "kwargs": {}
+}
