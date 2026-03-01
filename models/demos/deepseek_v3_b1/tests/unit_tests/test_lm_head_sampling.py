@@ -2825,4 +2825,5 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
     finally:
         # if pipeline_block is not None:
         #     pipeline_block.terminate()
+        # handle termination properly after demo
         pass
