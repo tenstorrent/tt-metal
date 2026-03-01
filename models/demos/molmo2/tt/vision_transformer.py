@@ -216,9 +216,11 @@ class VisionTransformer(LightweightModule):
         x = pixel_values.unfold(2, self.patch_size, self.patch_size)
         x = x.unfold(3, self.patch_size, self.patch_size)
 
-        # Reshape: [batch, patches_h * patches_w, 3 * patch_size * patch_size]
-        x = x.permute(0, 2, 4, 1, 3, 5).reshape(
-            batch_size, patches_h * patches_w, channels * self.patch_size * self.patch_size
+        # Reshape: [batch, patches_h * patches_w, patch_size * patch_size * 3]
+        # After unfolds: [batch, C, patches_h, patches_w, patch_size, patch_size]
+        # Need: [batch, patches_h, patches_w, patch_size, patch_size, C] (HWC order to match HF)
+        x = x.permute(0, 2, 3, 4, 5, 1).reshape(
+            batch_size, patches_h * patches_w, self.patch_size * self.patch_size * channels
         )
 
         # Linear projection (weight is already transposed to [588, 1152])
@@ -295,18 +297,63 @@ class VisionTransformer(LightweightModule):
         # Add positional embedding
         x = x + pos_embed.unsqueeze(0)
 
-        # Convert to TTNN tensor
-        x = x.unsqueeze(0)  # [1, batch, num_patches, hidden_dim]
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
-        x_ttnn = ttnn.from_torch(
-            x,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None,
-        )
+        # Process each crop separately (nlp_create_qkv_heads requires batch_size=1)
+        # Then concatenate hidden states from all crops
+        if batch_size > 1:
+            all_crop_hidden_states = []
 
-        # Forward through transformer blocks
-        return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
+            for crop_idx in range(batch_size):
+                # Get single crop: [1, num_patches, hidden_dim]
+                crop_x = x[crop_idx : crop_idx + 1]
+                crop_x = crop_x.unsqueeze(0)  # [1, 1, num_patches, hidden_dim]
+
+                crop_x_ttnn = ttnn.from_torch(
+                    crop_x,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mesh_mapper,
+                )
+
+                # Forward through transformer blocks
+                crop_hidden_states = self.forward(crop_x_ttnn, return_all_hidden_states=return_all_hidden_states)
+                all_crop_hidden_states.append(crop_hidden_states)
+
+            # Combine hidden states from all crops
+            # Each layer's hidden states from all crops should be concatenated
+            # crop_hidden_states[i] is layer i's output: [1, 1, num_patches, hidden_dim]
+            # We want: [1, 1, batch*num_patches, hidden_dim]
+            combined_hidden_states = []
+            num_layers_out = len(all_crop_hidden_states[0])
+
+            for layer_idx in range(num_layers_out):
+                # Collect this layer's outputs from all crops
+                layer_outputs = [crop_states[layer_idx] for crop_states in all_crop_hidden_states]
+                # Concatenate along sequence dimension (dim=2)
+                combined = ttnn.concat(layer_outputs, dim=2)
+                combined_hidden_states.append(combined)
+
+                # Clean up individual crop tensors
+                for crop_tensor in layer_outputs:
+                    ttnn.deallocate(crop_tensor)
+
+            return combined_hidden_states
+        else:
+            # Single crop - original path
+            x = x.unsqueeze(0)  # [1, batch, num_patches, hidden_dim]
+
+            x_ttnn = ttnn.from_torch(
+                x,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+            # Forward through transformer blocks
+            return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
