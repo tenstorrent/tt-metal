@@ -430,3 +430,84 @@ class TextRotarySetup(LightweightModule):
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         return [cos, sin]
+
+    def get_rot_mats_decode_traced(
+        self,
+        rot_idxs: ttnn.Tensor,
+    ) -> List[ttnn.Tensor]:
+        """
+        Get rotation matrices for decode mode using pre-allocated index tensor.
+
+        Trace-compatible version that doesn't allocate new tensors.
+
+        Args:
+            rot_idxs: Pre-allocated position index tensor on device [1, padded_batch]
+
+        Returns:
+            List of [cos, sin] tensors for decode (HEIGHT_SHARDED)
+        """
+        # Embedding lookup for cos/sin
+        cos = ttnn.embedding(
+            rot_idxs,
+            self.cos_matrix,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, batch, head_dim]
+
+        sin = ttnn.embedding(
+            rot_idxs,
+            self.sin_matrix,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, batch, head_dim]
+
+        # Reshape for decode: [1, batch, 1, head_dim]
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)
+
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
+        sin = ttnn.transpose(sin, 1, 2)
+
+        # Shard to cores
+        core_grid = ttnn.CoreCoord(8, 8)
+        batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size, core_grid, row_wise=True)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        if self.batch_size % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size, :, :]
+            sin = sin[:, : self.batch_size, :, :]
+
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+
+        return [cos, sin]
+
+    def allocate_decode_rot_idxs(self, initial_pos: int = 0) -> ttnn.Tensor:
+        """
+        Allocate position index tensor for traced decode.
+
+        Args:
+            initial_pos: Initial position value
+
+        Returns:
+            Pre-allocated position index tensor on device
+        """
+        # Pad to multiple of 32
+        batch = self.batch_size
+        pad_size = ((batch + 31) // 32) * 32 - batch
+        position_idxs = torch.full((1, batch + pad_size), initial_pos, dtype=torch.int32)
+
+        return ttnn.from_torch(
+            position_idxs,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )

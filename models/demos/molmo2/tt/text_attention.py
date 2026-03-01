@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Grouped-Query Attention for Molmo2 Text Model.
+Grouped-Query Attention for Molmo2 Text Model with Tensor Parallelism.
 
 Implements GQA with:
 - 32 query heads, 8 key/value heads (4:1 ratio)
 - QK-norm (Qwen3-style normalization on Q and K)
 - RoPE (Rotary Position Embeddings) with θ=1M using TTNN-native ops
 - KV cache support for autoregressive generation
+- Tensor parallelism: shard heads across devices
 
 Weight layout:
 - att_proj: fused QKV projection [hidden_dim, (num_heads + 2*num_kv_heads) * head_dim]
@@ -30,6 +31,8 @@ from models.common.lightweightmodule import LightweightModule
 class TextAttention(LightweightModule):
     """
     Grouped-Query Attention with QK-norm for Molmo2 text model.
+
+    Supports tensor parallelism by sharding heads across devices.
     """
 
     def __init__(
@@ -48,7 +51,7 @@ class TextAttention(LightweightModule):
         dtype=ttnn.bfloat8_b,
     ):
         """
-        Initialize TextAttention.
+        Initialize TextAttention with tensor parallelism support.
 
         Args:
             mesh_device: TTNN mesh device or single device
@@ -89,23 +92,38 @@ class TextAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{prefix}.{name}"
 
+        # Determine tensor parallelism setup
         is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        self.is_mesh_device = is_mesh_device
+
+        if is_mesh_device:
+            self.num_devices = mesh_device.get_num_devices()
+            # Column parallel for Q/K/V: shard output (head) dimension
+            col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            # Row parallel for output projection: shard input dimension
+            row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            # Update heads per device
+            self.num_heads_per_device = num_heads // self.num_devices
+            self.num_kv_heads_per_device = num_kv_heads // self.num_devices
+        else:
+            self.num_devices = 1
+            col_mesh_mapper = None
+            row_mesh_mapper = None
+            self.num_heads_per_device = num_heads
+            self.num_kv_heads_per_device = num_kv_heads
 
         # Load fused QKV projection: att_proj
         # Shape: [hidden_dim, (num_heads + 2*num_kv_heads) * head_dim]
         att_proj = state_dict[f"{prefix}.att_proj.weight"]
-        qkv_dim = (num_heads + 2 * num_kv_heads) * head_dim
-
-        # Split into Q, K, V
         q_dim = num_heads * head_dim
         kv_dim = num_kv_heads * head_dim
 
+        # Split into Q, K, V
         wq = att_proj[:q_dim, :]
         wk = att_proj[q_dim : q_dim + kv_dim, :]
         wv = att_proj[q_dim + kv_dim :, :]
 
-        # Transpose for TTNN linear
+        # Transpose for TTNN linear: [out, in] -> [1, 1, in, out]
         wq_t = torch.transpose(wq, -2, -1).unsqueeze(0).unsqueeze(0)
         wk_t = torch.transpose(wk, -2, -1).unsqueeze(0).unsqueeze(0)
         wv_t = torch.transpose(wv, -2, -1).unsqueeze(0).unsqueeze(0)
@@ -114,7 +132,7 @@ class TextAttention(LightweightModule):
             wq_t,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wq.weight"),
@@ -124,7 +142,7 @@ class TextAttention(LightweightModule):
             wk_t,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wk.weight"),
@@ -134,7 +152,7 @@ class TextAttention(LightweightModule):
             wv_t,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=col_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wv.weight"),
@@ -148,21 +166,27 @@ class TextAttention(LightweightModule):
             wo_t,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=row_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.weight"),
         )
 
-        # Load QK-norm weights
+        # Load QK-norm weights (replicated across devices - they apply per head_dim)
         q_norm = state_dict[f"{prefix}.q_norm.weight"]
         k_norm = state_dict[f"{prefix}.k_norm.weight"]
+
+        # QK norm weights are per head_dim, so replicate across devices
+        if is_mesh_device:
+            norm_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        else:
+            norm_mesh_mapper = None
 
         self.q_norm_weight = ttnn.as_tensor(
             q_norm.reshape(1, 1, 1, -1),
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=norm_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("q_norm.weight"),
@@ -172,7 +196,7 @@ class TextAttention(LightweightModule):
             k_norm.reshape(1, 1, 1, -1),
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=norm_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("k_norm.weight"),
@@ -203,7 +227,7 @@ class TextAttention(LightweightModule):
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
-        Forward pass through GQA attention (prefill mode).
+        Forward pass through GQA attention (prefill mode) with tensor parallelism.
 
         Args:
             x: Input tensor of shape [1, 1, seq_len, hidden_dim]
@@ -211,14 +235,14 @@ class TextAttention(LightweightModule):
             transformation_mats: Dict with 'decode' and 'prefill' transformation matrices
             attn_mask: Optional causal mask
             start_pos: Starting position for KV cache
-            kv_cache: Optional (k_cache, v_cache) tuple
+            kv_cache: Optional (k_cache, v_cache) tuple - tensor parallel sharded
 
         Returns:
             Tuple of (output, updated_kv_cache)
         """
         seq_len = x.shape[-2]
 
-        # Q, K, V projections
+        # Q, K, V projections (column parallel - output is sharded across devices)
         q = ttnn.linear(
             x,
             self.wq,
@@ -240,16 +264,16 @@ class TextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Reshape for multi-head attention
-        # Q: [1, 1, seq_len, num_heads * head_dim] -> [1, num_heads, seq_len, head_dim]
-        q = ttnn.reshape(q, [1, seq_len, self.num_heads, self.head_dim])
+        # Reshape for multi-head attention (using per-device head counts)
+        # Q: [1, 1, seq_len, num_heads_per_device * head_dim] -> [1, num_heads_per_device, seq_len, head_dim]
+        q = ttnn.reshape(q, [1, seq_len, self.num_heads_per_device, self.head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
 
-        # K, V: [1, 1, seq_len, num_kv_heads * head_dim] -> [1, num_kv_heads, seq_len, head_dim]
-        k = ttnn.reshape(k, [1, seq_len, self.num_kv_heads, self.head_dim])
+        # K, V: [1, 1, seq_len, num_kv_heads_per_device * head_dim] -> [1, num_kv_heads_per_device, seq_len, head_dim]
+        k = ttnn.reshape(k, [1, seq_len, self.num_kv_heads_per_device, self.head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
 
-        v = ttnn.reshape(v, [1, seq_len, self.num_kv_heads, self.head_dim])
+        v = ttnn.reshape(v, [1, seq_len, self.num_kv_heads_per_device, self.head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
 
         # Apply QK-norm (RMSNorm on Q and K)
@@ -279,19 +303,18 @@ class TextAttention(LightweightModule):
             is_decode_mode=False,
         )
 
-        # Handle KV cache
+        # Update KV cache using fill_cache for prefill
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
-            # Update cache at start_pos
-            # For simplicity, concatenate for now
-            k = ttnn.concat([k_cache, k], dim=2)
-            v = ttnn.concat([v_cache, v], dim=2)
+            # Fill cache at batch_idx=0 (we use single batch during prefill)
+            ttnn.fill_cache(k_cache, k, batch_idx=0)
+            ttnn.fill_cache(v_cache, v, batch_idx=0)
 
         new_kv_cache = (k, v)
 
-        # Repeat K, V for GQA
+        # Repeat K, V for GQA (within each device's subset of heads)
         if self.num_kv_groups > 1:
-            # [1, num_kv_heads, seq_len, head_dim] -> [1, num_heads, seq_len, head_dim]
+            # [1, num_kv_heads_per_device, seq_len, head_dim] -> [1, num_heads_per_device, seq_len, head_dim]
             k = ttnn.repeat_interleave(k, self.num_kv_groups, dim=1)
             v = ttnn.repeat_interleave(v, self.num_kv_groups, dim=1)
 
@@ -315,11 +338,11 @@ class TextAttention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape back: [1, num_heads, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim]
+        # Reshape back: [1, num_heads_per_device, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim_per_device]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, self.num_heads * self.head_dim])
+        attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, self.num_heads_per_device * self.head_dim])
 
-        # Output projection
+        # Output projection (row parallel - input is sharded)
         output = ttnn.linear(
             attn_output,
             self.wo,
@@ -329,33 +352,16 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(attn_output)
 
+        # All-reduce for tensor parallelism
+        if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         return output, new_kv_cache
-
-    def _apply_rotary_emb_torch(
-        self,
-        x: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Apply rotary embeddings to input tensor (PyTorch implementation for decode mode).
-
-        Uses the formula: x_out = x * cos + rotate_half(x) * sin
-
-        Args:
-            x: Input tensor [1, num_heads, seq_len, head_dim]
-            cos: Cosine values [1, 1, seq_len, head_dim]
-            sin: Sine values [1, 1, seq_len, head_dim]
-
-        Returns:
-            Tensor with rotary embedding applied
-        """
-        # rotate_half: [x1, x2] -> [-x2, x1]
-        x1 = x[..., : self.head_dim // 2]
-        x2 = x[..., self.head_dim // 2 :]
-        x_rotated = torch.cat((-x2, x1), dim=-1)
-
-        return x * cos + x_rotated * sin
 
     def forward_decode(
         self,
@@ -366,7 +372,7 @@ class TextAttention(LightweightModule):
         current_pos: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Decode-mode forward pass with KV cache update.
+        Decode-mode forward pass with KV cache update and tensor parallelism.
 
         Uses TTNN-native RoPE, paged_update_cache, and scaled_dot_product_attention_decode
         for efficient autoregressive generation with tracing support.
@@ -376,7 +382,7 @@ class TextAttention(LightweightModule):
             rot_mats: List of [cos, sin] rotation matrices (HEIGHT_SHARDED)
             transformation_mat: RoPE transformation matrix
             kv_cache: Tuple of (k_cache, v_cache) pre-allocated tensors
-                      Shape: [batch, num_kv_heads, max_seq_len, head_dim]
+                      Shape per device: [batch, num_kv_heads_per_device, max_seq_len, head_dim]
             current_pos: Current decode position tensor [batch]
 
         Returns:
@@ -385,7 +391,7 @@ class TextAttention(LightweightModule):
         batch_size = 1
         seq_len = 1  # Decode mode processes one token at a time
 
-        # Q, K, V projections
+        # Q, K, V projections (column parallel)
         q = ttnn.linear(
             x,
             self.wq,
@@ -407,16 +413,16 @@ class TextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Reshape for multi-head attention
-        # Q: [1, 1, 1, num_heads * head_dim] -> [1, num_heads, 1, head_dim]
-        q = ttnn.reshape(q, [batch_size, seq_len, self.num_heads, self.head_dim])
+        # Reshape for multi-head attention (using per-device head counts)
+        # Q: [1, 1, 1, num_heads_per_device * head_dim] -> [1, num_heads_per_device, 1, head_dim]
+        q = ttnn.reshape(q, [batch_size, seq_len, self.num_heads_per_device, self.head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
 
-        # K, V: [1, 1, 1, num_kv_heads * head_dim] -> [1, num_kv_heads, 1, head_dim]
-        k = ttnn.reshape(k, [batch_size, seq_len, self.num_kv_heads, self.head_dim])
+        # K, V: [1, 1, 1, num_kv_heads_per_device * head_dim] -> [1, num_kv_heads_per_device, 1, head_dim]
+        k = ttnn.reshape(k, [batch_size, seq_len, self.num_kv_heads_per_device, self.head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
 
-        v = ttnn.reshape(v, [batch_size, seq_len, self.num_kv_heads, self.head_dim])
+        v = ttnn.reshape(v, [batch_size, seq_len, self.num_kv_heads_per_device, self.head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
 
         # Apply QK-norm (RMSNorm on Q and K)
@@ -438,11 +444,10 @@ class TextAttention(LightweightModule):
         v = ttnn.transpose(v, 1, 2)
 
         # Convert Q and K to HEIGHT_SHARDED for decode RoPE
-        # Q shape: [1, 1, num_heads, head_dim] -> shard per head
-        # K shape: [1, 1, num_kv_heads, head_dim] -> shard per head
+        # Using per-device head counts
         core_grid = ttnn.CoreCoord(8, 8)
-        q_shard_grid = ttnn.num_cores_to_corerangeset(self.num_heads, core_grid, row_wise=True)
-        k_shard_grid = ttnn.num_cores_to_corerangeset(self.num_kv_heads, core_grid, row_wise=True)
+        q_shard_grid = ttnn.num_cores_to_corerangeset(self.num_heads_per_device, core_grid, row_wise=True)
+        k_shard_grid = ttnn.num_cores_to_corerangeset(self.num_kv_heads_per_device, core_grid, row_wise=True)
 
         q_shard_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
@@ -504,6 +509,14 @@ class TextAttention(LightweightModule):
 
         # Scaled dot-product attention decode
         # Uses the full KV cache up to current_pos
+        # Configure SDPA for tensor parallel setup with few heads per device
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 4),  # Limit cores
+            exp_approx_mode=False,
+            q_chunk_size=256,
+            k_chunk_size=256,
+        )
+
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             k_cache,
@@ -512,6 +525,7 @@ class TextAttention(LightweightModule):
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
         )  # Output: [1, B, H, d]
 
         ttnn.deallocate(q)
@@ -520,11 +534,11 @@ class TextAttention(LightweightModule):
         attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
         attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
 
-        # Reshape back: [B, num_heads, 1, head_dim] -> [1, 1, 1, hidden_dim]
+        # Reshape back: [B, num_heads_per_device, 1, head_dim] -> [1, 1, 1, hidden_dim_per_device]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, self.num_heads * self.head_dim])
+        attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, self.num_heads_per_device * self.head_dim])
 
-        # Output projection
+        # Output projection (row parallel)
         output = ttnn.linear(
             attn_output,
             self.wo,
@@ -533,5 +547,14 @@ class TextAttention(LightweightModule):
         )
 
         ttnn.deallocate(attn_output)
+
+        # All-reduce for tensor parallelism
+        if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         return output
