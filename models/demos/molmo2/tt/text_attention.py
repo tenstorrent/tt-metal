@@ -436,11 +436,12 @@ class TextAttention(LightweightModule):
         seq_len = 1  # Decode mode processes one token at a time
 
         # Fused QKV projection (single matmul instead of 3 separate ones)
+        # Use L1 for decode mode - small tensors fit in L1
         xqkv = ttnn.linear(
             x,
             self.wqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
 
@@ -565,18 +566,20 @@ class TextAttention(LightweightModule):
         attn_output = ttnn.permute(attn_output, (0, 1, 2, 3))  # No-op to ensure contiguous
         attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, self.num_heads_per_device * self.head_dim])
 
-        # Output projection (row parallel)
+        # Output projection (row parallel) - use L1 for decode
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(attn_output)
 
         # All-reduce for tensor parallelism
+        # Note: all_reduce needs DRAM input, convert from L1 first
         if self.is_mesh_device and self.num_devices > 1:
+            output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
             output = ttnn.all_reduce(
                 output,
                 cluster_axis=1,
