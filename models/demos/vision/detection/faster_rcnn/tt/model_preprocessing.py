@@ -96,18 +96,33 @@ def preprocess_resnet50_backbone(body, mesh_mapper=None):
     return parameters
 
 
+def _unwrap_conv(module):
+    """Unwrap Conv2d from Conv2dNormActivation or similar Sequential wrappers."""
+    if isinstance(module, nn.Conv2d):
+        return module
+    if isinstance(module, nn.Sequential) or hasattr(module, "__getitem__"):
+        return module[0]
+    return module
+
+
 def preprocess_fpn(fpn, mesh_mapper=None):
-    """Extract FPN inner_blocks and layer_blocks weights (all plain Conv2d)."""
+    """Extract FPN inner_blocks and layer_blocks weights.
+
+    Handles both plain Conv2d and Conv2dNormActivation wrappers
+    (torchvision version dependent).
+    """
     parameters = {}
 
-    for idx, conv in enumerate(fpn.inner_blocks):
+    for idx, block in enumerate(fpn.inner_blocks):
+        conv = _unwrap_conv(block)
         weight = conv.weight.data.clone()
         bias = conv.bias.data.clone() if conv.bias is not None else torch.zeros(conv.out_channels)
         w, b = convert_weight_bias_to_ttnn(weight, bias, mesh_mapper)
         parameters[f"fpn.inner_blocks.{idx}.weight"] = w
         parameters[f"fpn.inner_blocks.{idx}.bias"] = b
 
-    for idx, conv in enumerate(fpn.layer_blocks):
+    for idx, block in enumerate(fpn.layer_blocks):
+        conv = _unwrap_conv(block)
         weight = conv.weight.data.clone()
         bias = conv.bias.data.clone() if conv.bias is not None else torch.zeros(conv.out_channels)
         w, b = convert_weight_bias_to_ttnn(weight, bias, mesh_mapper)
