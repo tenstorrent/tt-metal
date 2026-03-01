@@ -19,7 +19,7 @@
 
 # Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
 ARG UBUNTU_VERSION=22.04
-ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=''
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
@@ -45,6 +45,9 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Install required build dependencies (without system python3 - we'll use uv's managed Python)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -52,6 +55,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Auto-detect Python version from Ubuntu version if not explicitly provided
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1)
+
 
 # Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
 # This ensures the Python interpreter is installed to a path that can be read
@@ -63,15 +80,12 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Enforce strict error handling: exit on error, unset vars, pipe failures
-SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
-
 # Install Python with uv and create relocatable virtual environment
 # umask 000 ensures the venv is world-writable for multi-host NFS access
 RUN umask 000 && \
-    uv python install ${PYTHON_VERSION} && \
-    uv python list | grep -q "${PYTHON_VERSION}" || (echo "ERROR: Python ${PYTHON_VERSION} installation failed" && exit 1) && \
-    uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv python install ${DETECTED_PYTHON_VERSION} && \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
+    uv venv --link-mode copy --relocatable --managed-python --python ${DETECTED_PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv build numpy setuptools==80
 
 # Bundle the Python interpreter into the venv for full portability
@@ -102,6 +116,9 @@ ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 # Install required build dependencies (without system python3 - we'll use uv's managed Python)
 # Some packages require compilation, so we need build-essential and dev headers
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -118,6 +135,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Auto-detect Python version from Ubuntu version if not explicitly provided
+RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"; \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1)
+
+
 # Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
@@ -126,17 +157,14 @@ ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Enforce strict error handling: exit on error, unset vars, pipe failures
-SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
-
 # Install Python with uv and create relocatable virtual environment
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
 RUN umask 000 && \
-    uv python install ${PYTHON_VERSION} && \
-    uv python list | grep -q "${PYTHON_VERSION}" || (echo "ERROR: Python ${PYTHON_VERSION} installation failed" && exit 1) && \
-    uv venv --link-mode copy --relocatable --managed-python --python ${PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
+    uv python install ${DETECTED_PYTHON_VERSION} && \
+    uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
+    uv venv --link-mode copy --relocatable --managed-python --python ${DETECTED_PYTHON_VERSION} ${PYTHON_ENV_DIR} && \
     uv pip install --no-cache uv setuptools==80
 
 # Create directory structure for requirements files
