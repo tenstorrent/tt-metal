@@ -331,13 +331,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
     // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
     const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    // Sq_chunk_t >= 3 with per-row normalization has CB position aliasing: the pushed_rows
-    // sliding window causes pack_tile<true> absolute writes to mismatch sequential
-    // cb_push_back/cb_pop_front reads in normalize_row_streaming. Disable until fixed.
+    // Streaming v2 is validated for Sq_chunk_t == 2 only (q_chunk_size=64). Other values
+    // produce incorrect results: Sq_chunk_t=1 has ~50x output amplification (sum undercount
+    // in Phase 2 split-matmul interleaved sub_exp), Sq_chunk_t >= 3 has CB position aliasing
+    // from the pushed_rows sliding window vs sequential cb_push_back/cb_pop_front in normalize.
     const bool use_streaming_compute =
         !is_causal && !use_provided_mask && !use_attention_sink && sliding_window_size.value_or(0) == 0 &&
         !is_chunked && !fp32_dest_acc_en && qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h == 1 &&
-        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8 && !streaming_mask_unsupported && Sq_chunk_t <= 2;
+        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8 && !streaming_mask_unsupported && Sq_chunk_t == 2;
     log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
