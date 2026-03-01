@@ -195,7 +195,19 @@ just a tree with branching factor 1.
   execution splits into parallel branches, those branches run independently
   to completion. There is no way to merge branches back into a single
   stream. `_resolve()` enforces this — items after a `Parallel` in a
-  `Sequential` raise an error at build time.
+  `Sequential` raise an error at build time. Example of what's prohibited:
+
+  ```python
+  # ERROR: RMS follows a Parallel — this would require merging branches
+  Sequential(LN, Parallel(GeLU_A, GeLU_B), RMS)
+  ```
+
+  This restriction follows from a core invariant: **no data moves between
+  cores between phases**.  A phase's output CB is on the same core as the
+  next phase's input CB.  The entire stack — CB pool allocator, barrier,
+  codegen, argument concatenation — relies on this.  Fan-in would require
+  cross-core data redistribution between phases, which none of these layers
+  support today.
 - **Sibling disjointness**: Children of the same parent must have
   non-overlapping core ranges. Each core runs exactly one kernel binary.
 - **Child subset of parent**: A child's core range must be a subset of its
@@ -259,17 +271,23 @@ model (see next section).
 
 ### Fused Kernel Structure
 
-**Role keys.**  The builder identifies each kernel by its **role key** —
-a `(risc_type, core_ranges_key)` pair.  When building for a specific group,
-`target_core_range` is set and all kernels are mapped to that range regardless
-of their native core ranges.  This collapses a stem kernel (16 cores) and a
-branch kernel (8 cores) into the same role for the group's fused binary.
+Each op's kernels are originally created with whatever core range the op
+needs — LN's reader might cover a 4×4 grid, GeLU_A's reader might cover
+the left 4×2.  We call this the kernel's **original core range**.  When
+building a group's fused binary, the builder narrows all kernels to the
+group's core range, since that binary will only run on those cores.
 
-**Core-range filtering.**  When a phase's op has multiple kernels for the same
-RISC type (e.g., block-sharded sender + receiver), only kernels whose native
-core ranges overlap the group's `target_core_range` are included.  This
-prevents a receiver kernel on row 1 from overwriting the sender when building
-the row-0 group.
+**Role keys.**  The builder identifies each kernel by its **role key** —
+a `(risc_type, core_ranges)` pair.  LN's reader (originally 4×4) and
+GeLU_A's reader (originally 4×2 left) have different original ranges, but
+when narrowed to Group A's 4×2 left cores they collapse into a single role:
+both become "the reader for these 8 cores."
+
+**Core-range filtering.**  When an op has multiple kernels for the same RISC
+type (e.g., block-sharded sender on row 0 + receiver on row 1), only kernels
+whose original core range overlaps the group's cores are included.  This
+prevents a receiver kernel on row 1 from being merged into the row-0 group's
+binary.
 
 Each group's fused kernel binary contains three RISC-specific source files:
 
@@ -379,13 +397,19 @@ GlobalSemaphore L1 addresses for that scope.
 
 `_build_group_barriers()` (`graph.py`) converts a group's barrier scopes into
 the `MultiBarrierSpec`. It walks the scopes in order, creating a new segment
-each time the scope changes, and maps each transition to its segment index:
+each time the scope changes, and maps each transition to its segment index.
+
+`transition_map[T] = (seg_idx, call_idx)` means: "at transition T (after
+phase T completes), call `segment_{seg_idx}::sync()`.  `call_idx` is the
+number of times that segment has already been called — it tells the segment
+which monotonic threshold to wait for."  A segment reused at two different
+transitions would have `call_idx` 0 at the first and 1 at the second.
 
 For **Group A** (barrier scopes = `[16-core, 8-left]`):
 - Transition 0: scope = 16 cores → new segment (seg_idx=0).
-  `transition_map[0] = (0, 0)`
+  `transition_map[0] = (0, 0)` — first call to segment 0
 - Transition 1: scope = 8-left cores → new segment (seg_idx=1).
-  `transition_map[1] = (1, 0)`
+  `transition_map[1] = (1, 0)` — first call to segment 1
 
 ```python
 MultiBarrierSpec(
@@ -1792,13 +1816,14 @@ by RISC type:
 
 | RISC     | Barrier args appended                                 |
 |----------|-------------------------------------------------------|
-| riscv_0  | `[compute_done_addr, writer_done_addr]`               |
-| riscv_1  | `[compute_done_addr, writer_done_addr]` + segment addrs |
-| compute  | `[compute_done_addr, writer_done_addr]`               |
+| riscv_0  | `[compute_done, writer_done]` + per-segment `[arrive, release]` |
+| riscv_1  | `[writer_done]` + per-segment `[release]`             |
+| compute  | `[compute_done]` + per-segment `[release]`            |
 
-The writer (riscv_1) additionally receives the `global_arrive` and
-`global_release` addresses for each barrier segment, since it coordinates
-the cross-core NOC barrier.  The starting index of the barrier suffix is
+BRISC (riscv_0) is the coordinator — it receives both local semaphore
+addresses plus the full `arrive`/`release` pair for each segment, since it
+runs the multicast protocol.  Followers only need their own signaling
+semaphore and each segment's `release` address to spin on.  The starting index of the barrier suffix is
 recorded as the named CT arg `barrier_rt_offset`.
 
 **Rebind suffix.**  For sharded CBs whose L1 buffer addresses change between
@@ -1863,8 +1888,9 @@ without any runtime search.
 Building a fused kernel is expensive: codegen, CB allocation, barrier setup,
 and C++ source generation are orders of magnitude slower than simply patching
 runtime args.  Since `FusedOp`s are designed to be rebuilt on every call (the
-source ops have new tensors with new buffer addresses each time), a **build
-cache** avoids repeating this work.
+source ops have new tensors with new buffer addresses each time), an
+**in-memory build cache** avoids repeating this work.  The cache lives in a
+process-global dict and does not persist to disk — it is lost on process exit.
 
 ### Cache Key
 
@@ -1949,6 +1975,9 @@ development or when switching between different device configurations.
 
 ## Constraints and Limitations
 
+- **Fan-out only (no reconvergence)**: Once execution splits via `Parallel`,
+  branches cannot merge back. Ops after a `Parallel` inside a `Sequential`
+  are rejected at build time (see [Topology Rules](#topology-rules)).
 - **fp32_dest_acc_en must match across all phases**: `DST_ACCUM_MODE` is a
   compile-time constant. Cannot change mid-kernel.
 - **All phases must have all three kernel types** (reader, compute, writer).
@@ -1964,6 +1993,10 @@ development or when switching between different device configurations.
 - **MUST_MATCH defines must be consistent**: `REDUCE_OP`, `REDUCE_DIM`,
   `BCAST_LLKOP`, `BCAST_DIM` must have identical values across all fused
   phases.
+- **Build cache is in-memory only**: The fusion build cache does not persist
+  to disk.  The first `build()` call after process start always pays the full
+  codegen cost.  (The JIT compiler has its own on-disk cache for compiled
+  binaries, so recompilation is still avoided.)
 
 
 ## File Map
