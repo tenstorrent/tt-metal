@@ -135,12 +135,17 @@ class TestConfig:
 # Layer index used when building state dict for prepare_*_expert_weights (HF key convention)
 SHARED_EXPERT_LAYER_IDX = 4
 ROUTED_EXPERT_LAYER_IDX = 4
+DENSE_LAYER_IDX = 0  # Layer index for dense (MLP) weights when is_moe=False
+DENSE_SHARED_N = 2048  # Blitz uses first 2048 of 18432 as shared expert for dense MLP
+DENSE_INTERMEDIATE_SIZE = 18432  # Full dense MLP intermediate size (gate/up rows, down cols)
 
 
 # ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
-def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None, *, state_dict):
+def create_shared_expert_tensors(
+    device, M, K_gate, mcast_grid, mesh_mapper=None, *, state_dict, is_moe=True, layer_idx=None
+):
     """
     Create all tensors needed by SharedExpertOp.
 
@@ -151,6 +156,8 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
         mcast_grid: CoreRangeSet for mcast destination (same as routed input mcast)
         mesh_mapper: Optional mesh mapper for multi-device replication
         state_dict: State dict in HF key convention (same as used for routed path in fused tests).
+        is_moe: If True use MoE keys (shared_experts.*). If False use dense keys (gate_proj/up_proj/down_proj).
+        layer_idx: Layer index for state dict keys. If None, uses SHARED_EXPERT_LAYER_IDX when is_moe else DENSE_LAYER_IDX.
 
     Returns:
         SharedExpertTensors with all ttnn tensors, torch tensors, and validation data.
@@ -169,36 +176,64 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None
     moe_tp = bdw.moe_tp
     K_down_full = K_down * moe_tp
 
-    gate_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.gate_proj.weight"
-    up_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.up_proj.weight"
-    down_key = f"model.layers.{SHARED_EXPERT_LAYER_IDX}.mlp.shared_experts.down_proj.weight"
+    if layer_idx is None:
+        layer_idx = SHARED_EXPERT_LAYER_IDX if is_moe else DENSE_LAYER_IDX
 
-    # Expected HF shapes (out_features, in_features): gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
-    expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
-    expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
-    assert (
-        state_dict[gate_key].shape == expected_gate_up
-    ), f"shared gate_proj: expected {expected_gate_up}, got {state_dict[gate_key].shape}"
-    assert (
-        state_dict[up_key].shape == expected_gate_up
-    ), f"shared up_proj: expected {expected_gate_up}, got {state_dict[up_key].shape}"
-    assert (
-        state_dict[down_key].shape == expected_down
-    ), f"shared down_proj: expected {expected_down}, got {state_dict[down_key].shape}"
-    torch_gate_weights = state_dict[gate_key].T.contiguous()
-    torch_up_weights = state_dict[up_key].T.contiguous()
-    torch_down_weights = state_dict[down_key].T.contiguous()
-    # Reference state dict has full logical (2048); slice to per-TP for single-device golden
-    if moe_tp == 1 and torch_gate_weights.shape[1] == K_down_full * 8:
-        torch_gate_weights = torch_gate_weights[:, :K_down_full].contiguous()
-        torch_up_weights = torch_up_weights[:, :K_down_full].contiguous()
-        torch_down_weights = torch_down_weights[:K_down_full, :].contiguous()
+    if is_moe:
+        gate_key = f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"
+        up_key = f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"
+        down_key = f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"
+        # Expected HF shapes (out_features, in_features): gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
+        expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
+        expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+        assert (
+            state_dict[gate_key].shape == expected_gate_up
+        ), f"shared gate_proj: expected {expected_gate_up}, got {state_dict[gate_key].shape}"
+        assert (
+            state_dict[up_key].shape == expected_gate_up
+        ), f"shared up_proj: expected {expected_gate_up}, got {state_dict[up_key].shape}"
+        assert (
+            state_dict[down_key].shape == expected_down
+        ), f"shared down_proj: expected {expected_down}, got {state_dict[down_key].shape}"
+        torch_gate_weights = state_dict[gate_key].T.contiguous()
+        torch_up_weights = state_dict[up_key].T.contiguous()
+        torch_down_weights = state_dict[down_key].T.contiguous()
+        # Reference state dict has full logical (2048); slice to per-TP for single-device golden
+        if moe_tp == 1 and torch_gate_weights.shape[1] == K_down_full * 8:
+            torch_gate_weights = torch_gate_weights[:, :K_down_full].contiguous()
+            torch_up_weights = torch_up_weights[:, :K_down_full].contiguous()
+            torch_down_weights = torch_down_weights[:K_down_full, :].contiguous()
+    else:
+        # Dense MLP: gate/up (18432, 7168), down (7168, 18432). Blitz uses first 2048 as shared.
+        gate_key = f"model.layers.{layer_idx}.mlp.gate_proj.weight"
+        up_key = f"model.layers.{layer_idx}.mlp.up_proj.weight"
+        down_key = f"model.layers.{layer_idx}.mlp.down_proj.weight"
+        expected_gate_up = (18432, RoutedExpert.K)
+        expected_down = (RoutedExpert.K, 18432)
+        assert (
+            state_dict[gate_key].shape == expected_gate_up
+        ), f"dense gate_proj: expected {expected_gate_up}, got {state_dict[gate_key].shape}"
+        assert (
+            state_dict[up_key].shape == expected_gate_up
+        ), f"dense up_proj: expected {expected_gate_up}, got {state_dict[up_key].shape}"
+        assert (
+            state_dict[down_key].shape == expected_down
+        ), f"dense down_proj: expected {expected_down}, got {state_dict[down_key].shape}"
+        # (out, in) -> (in, out) for gate/up; shared = first 2048 columns
+        gate_full = state_dict[gate_key].T.contiguous()  # (7168, 18432)
+        up_full = state_dict[up_key].T.contiguous()
+        down_full = state_dict[down_key].T.contiguous()  # (18432, 7168)
+        torch_gate_weights = gate_full[:, :DENSE_SHARED_N].contiguous()
+        torch_up_weights = up_full[:, :DENSE_SHARED_N].contiguous()
+        torch_down_weights = down_full[:DENSE_SHARED_N, :].contiguous()
+        # Do not apply MoE per-TP slice; dense shared is always 2048 columns for 8-device sharding
+
     torch.manual_seed(RoutedExpert.SEED)
     torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
     shared_weights = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx=SHARED_EXPERT_LAYER_IDX, is_moe=True, move_to_device=True
+        bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
 
     return SharedExpertTensors(
@@ -229,6 +264,8 @@ def create_routed_expert_tensors(
     enable_routing=True,
     *,
     state_dict,
+    is_moe=True,
+    layer_idx=None,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -236,7 +273,8 @@ def create_routed_expert_tensors(
     The state_dict is never mutated. Gate weight and bias are always read from it
     for both device preparation and golden reference. Must contain at least
     num_experts routed experts (1 when enable_routing=False, 8 when use_hardcoded_expert_index
-    on 8 devices, 256 otherwise).
+    on 8 devices, 256 otherwise). When is_moe=False (dense MLP), state dict has
+    mlp.gate_proj/up_proj/down_proj and we slice into 8 routed experts for golden.
 
     When enable_routing=False, skips routing-specific tensors (gate MM weights,
     gate bias/indices, gate output scores/indices) and uses a single expert.
@@ -248,6 +286,8 @@ def create_routed_expert_tensors(
         create_final_output: If True, create final_output_tensor
         enable_routing: If True, create routing tensors. If False, skip them.
         state_dict: State dict in HF key convention (read-only when using HF weights).
+        is_moe: If True use MoE keys (experts.{e}.*). If False use dense keys and slice to 8 experts.
+        layer_idx: Layer index for state dict. If None, uses ROUTED_EXPERT_LAYER_IDX when is_moe else DENSE_LAYER_IDX.
 
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
@@ -263,9 +303,9 @@ def create_routed_expert_tensors(
     gate_proj_K = K
     gate_proj_N = RoutedExpert.GATE_PROJ_N
 
-    # num_experts: 1 when no routing, otherwise per-device or all 256
+    # num_experts: for dense no-routing we need 8 (one per device) for golden; else 1. With routing: per-device or 256.
     if not enable_routing:
-        num_experts = 1
+        num_experts = 8 if (is_moe is False) else 1
     elif use_hardcoded_expert_index:
         num_experts = device.get_num_devices()
     else:
@@ -277,7 +317,9 @@ def create_routed_expert_tensors(
 
     # ── Use provided state dict (gate weight/bias/rmsnorm_gamma all from state dict) ──
     bdw = BlitzDecodeWeights(device)
-    layer_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}"
+    if layer_idx is None:
+        layer_idx = ROUTED_EXPERT_LAYER_IDX if is_moe else DENSE_LAYER_IDX
+    layer_key = f"model.layers.{layer_idx}"
 
     # Create input tensor; gate weight/bias/rmsnorm_gamma are always read from state dict
     torch.manual_seed(RoutedExpert.SEED)
@@ -354,44 +396,80 @@ def create_routed_expert_tensors(
     down_proj_N = K
     down_proj_N_padded = ((down_proj_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
     per_core_down_proj_N = down_proj_N_padded // num_banks
-    # Expected HF expert shapes: gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
-    expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
-    expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
-    expert0_prefix = f"{layer_key}.mlp.experts.0."
-    assert state_dict[f"{expert0_prefix}gate_proj.weight"].shape == expected_gate_up
-    assert state_dict[f"{expert0_prefix}up_proj.weight"].shape == expected_gate_up
-    assert state_dict[f"{expert0_prefix}down_proj.weight"].shape == expected_down
-    if enable_routing:
-        gate_key = f"{layer_key}.mlp.gate.weight"
-        bias_key = f"{layer_key}.mlp.gate.e_score_correction_bias"
-        torch_gate_mm_weights = state_dict[gate_key].T.contiguous()
-        torch_bias = state_dict[bias_key].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+
     expert_weights_dict = {}
     up_proj_weights_dict = {}
     down_proj_weights_dict = {}
-    for e in range(num_experts):
-        # HF layout: gate/up (out,in)=(2048,7168), down (7168,2048); golden wants (1,1,K,N)
-        w_g = state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous()
-        expert_weights_dict[e] = w_g.reshape(1, 1, gate_proj_K, gate_proj_N)
-        w_u = state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"].T.contiguous()
-        up_proj_weights_dict[e] = w_u.reshape(1, 1, gate_proj_K, gate_proj_N)
-        w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
-        down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
-    routed_weights = prepare_routed_expert_weights(
-        bdw,
-        state_dict,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
-        num_routed_experts=num_experts,
-        move_to_device=True,
-    )
-    gate_proj_expert_tensors = routed_weights.routed_gate_proj
-    up_proj_expert_tensors = routed_weights.routed_up_proj
-    down_proj_expert_tensors = routed_weights.routed_down_proj
-    gate_proj_weights = gate_proj_expert_tensors[0]
-    up_proj_weights = up_proj_expert_tensors[0]
-    down_proj_weights = down_proj_expert_tensors[0]
+    if is_moe:
+        # Expected HF expert shapes: gate/up (GATE_PROJ_N, K), down (K, GATE_PROJ_N)
+        expected_gate_up = (RoutedExpert.GATE_PROJ_N, RoutedExpert.K)
+        expected_down = (RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+        expert0_prefix = f"{layer_key}.mlp.experts.0."
+        assert state_dict[f"{expert0_prefix}gate_proj.weight"].shape == expected_gate_up
+        assert state_dict[f"{expert0_prefix}up_proj.weight"].shape == expected_gate_up
+        assert state_dict[f"{expert0_prefix}down_proj.weight"].shape == expected_down
+        if enable_routing:
+            gate_key = f"{layer_key}.mlp.gate.weight"
+            bias_key = f"{layer_key}.mlp.gate.e_score_correction_bias"
+            torch_gate_mm_weights = state_dict[gate_key].T.contiguous()
+            torch_bias = state_dict[bias_key].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        for e in range(num_experts):
+            # HF layout: gate/up (out,in)=(2048,7168), down (7168,2048); golden wants (1,1,K,N)
+            w_g = state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous()
+            expert_weights_dict[e] = w_g.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_u = state_dict[f"{layer_key}.mlp.experts.{e}.up_proj.weight"].T.contiguous()
+            up_proj_weights_dict[e] = w_u.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
+            down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
+
+        routed_weights = prepare_routed_expert_weights(
+            bdw,
+            state_dict,
+            layer_idx=layer_idx,
+            is_moe=True,
+            num_routed_experts=num_experts,
+            move_to_device=True,
+        )
+        gate_proj_expert_tensors = routed_weights.routed_gate_proj
+        up_proj_expert_tensors = routed_weights.routed_up_proj
+        down_proj_expert_tensors = routed_weights.routed_down_proj
+        gate_proj_weights = gate_proj_expert_tensors[0]
+        up_proj_weights = up_proj_expert_tensors[0]
+        down_proj_weights = down_proj_expert_tensors[0]
+    else:
+        # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
+        gate_key = f"{layer_key}.mlp.gate_proj.weight"
+        up_key = f"{layer_key}.mlp.up_proj.weight"
+        down_key = f"{layer_key}.mlp.down_proj.weight"
+        gate_full = state_dict[gate_key].T.contiguous()  # (7168, 18432)
+        up_full = state_dict[up_key].T.contiguous()
+        down_full = state_dict[down_key].T.contiguous()  # (18432, 7168)
+        for e in range(8):
+            start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
+            end = start + RoutedExpert.GATE_PROJ_N
+            w_g = gate_full[:, start:end].contiguous()
+            expert_weights_dict[e] = w_g.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_u = up_full[:, start:end].contiguous()
+            up_proj_weights_dict[e] = w_u.reshape(1, 1, gate_proj_K, gate_proj_N)
+            w_d = down_full[start:end, :].contiguous()
+            down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
+
+        routed_weights = prepare_routed_expert_weights(
+            bdw,
+            state_dict,
+            layer_idx=layer_idx,
+            is_moe=False,
+            num_routed_experts=8,
+            move_to_device=True,
+        )
+        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
+        gate_proj_weights = routed_weights.routed_gate_proj
+        up_proj_weights = routed_weights.routed_up_proj
+        down_proj_weights = routed_weights.routed_down_proj
+        gate_proj_expert_tensors = None  # unused when is_moe=False
+        up_proj_expert_tensors = None
+        down_proj_expert_tensors = None
 
     if enable_routing:
         # Gate bias/indices from prepare_weights helpers.
@@ -519,6 +597,84 @@ def create_reference_moe_model(state_dict, layer_idx):
     reference_model = DeepseekV3MoE(hf_config).eval().to(torch.bfloat16)
     reference_model.load_state_dict(moe_state)
     return reference_model, hf_config
+
+
+# ============================================================================
+# Helper: create reference dense MLP slices (shared + 8 routed) for comparison
+# ============================================================================
+def create_reference_dense_mlp_slices(state_dict, layer_idx):
+    """Build shared (first 2048) and 8 routed MLP slices from dense layer state dict for reference comparison.
+
+    Blitz uses first 2048 of 18432 as shared, remaining 8*2048 as 8 routed experts. Returns one
+    shared DeepseekV3MLP (intermediate_size=2048) and a list of 8 routed DeepseekV3MLP (each 2048).
+    """
+    from transformers import AutoConfig
+
+    from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+
+    hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
+    gate_key = f"model.layers.{layer_idx}.mlp.gate_proj.weight"
+    up_key = f"model.layers.{layer_idx}.mlp.up_proj.weight"
+    down_key = f"model.layers.{layer_idx}.mlp.down_proj.weight"
+    gate_full = state_dict[gate_key]  # (18432, 7168)
+    up_full = state_dict[up_key]
+    down_full = state_dict[down_key]  # (7168, 18432)
+
+    shared_gate = gate_full[:DENSE_SHARED_N, :].clone()
+    shared_up = up_full[:DENSE_SHARED_N, :].clone()
+    shared_down = down_full[:, :DENSE_SHARED_N].clone()
+    shared_state = {
+        "gate_proj.weight": shared_gate,
+        "up_proj.weight": shared_up,
+        "down_proj.weight": shared_down,
+    }
+    shared_mlp = DeepseekV3MLP(hf_config, intermediate_size=DENSE_SHARED_N).eval().to(torch.bfloat16)
+    shared_mlp.load_state_dict(shared_state, strict=True)
+
+    routed_mlps = []
+    for e in range(8):
+        start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
+        end = start + RoutedExpert.GATE_PROJ_N
+        routed_gate = gate_full[start:end, :].clone()
+        routed_up = up_full[start:end, :].clone()
+        routed_down = down_full[:, start:end].clone()
+        routed_state = {
+            "gate_proj.weight": routed_gate,
+            "up_proj.weight": routed_up,
+            "down_proj.weight": routed_down,
+        }
+        routed_mlp = DeepseekV3MLP(hf_config, intermediate_size=RoutedExpert.GATE_PROJ_N).eval().to(torch.bfloat16)
+        routed_mlp.load_state_dict(routed_state, strict=True)
+        routed_mlps.append(routed_mlp)
+
+    return shared_mlp, routed_mlps
+
+
+# ============================================================================
+# Helper: create reference full dense MLP (single 18432-wide) for block-level comparison
+# ============================================================================
+def create_reference_dense_full_mlp(state_dict, layer_idx):
+    """Build one DeepseekV3MLP(intermediate_size=18432) from dense layer state dict.
+
+    Reference block output = raw_input + full_mlp(normed_input). Reduce output satisfies
+    reduce_output - 7*raw_input = block_output, so we can compare adjusted reduce to this.
+    """
+    from transformers import AutoConfig
+
+    from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+
+    hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
+    gate_key = f"model.layers.{layer_idx}.mlp.gate_proj.weight"
+    up_key = f"model.layers.{layer_idx}.mlp.up_proj.weight"
+    down_key = f"model.layers.{layer_idx}.mlp.down_proj.weight"
+    full_state = {
+        "gate_proj.weight": state_dict[gate_key].clone(),
+        "up_proj.weight": state_dict[up_key].clone(),
+        "down_proj.weight": state_dict[down_key].clone(),
+    }
+    full_mlp = DeepseekV3MLP(hf_config, intermediate_size=DENSE_INTERMEDIATE_SIZE).eval().to(torch.bfloat16)
+    full_mlp.load_state_dict(full_state, strict=True)
+    return full_mlp
 
 
 # ============================================================================
@@ -1174,15 +1330,22 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
+@pytest.mark.parametrize("use_mlp_weights", [True], ids=["mlp"])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_mlp_with_reduce(
+    bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
     Each of 8 devices runs the full fused MLP (dense MLP + shared expert),
     then results are reduced (summed) across all devices to ROOT1.
+
+    When use_mlp_weights=False uses MoE layer weights (experts.0 + shared_experts).
+    When use_mlp_weights=True uses dense MLP weights (gate_proj/up_proj/down_proj)
+    sliced into shared (first 2048) + 8 routed experts.
     """
 
     num_devices = TestConfig.NUM_DEVICES_4x2
@@ -1197,14 +1360,16 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
 
     M = RoutedExpert.M
     K = RoutedExpert.K
+    is_moe = not use_mlp_weights
+    layer_idx = DENSE_LAYER_IDX if use_mlp_weights else ROUTED_EXPERT_LAYER_IDX
 
-    logger.info(f"Testing MoeOp no-routing with reduce: K={K}")
+    logger.info(f"Testing MoeOp no-routing with reduce: K={K}, use_mlp_weights={use_mlp_weights}")
 
     state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        is_moe=True,
+        layer_idx=layer_idx,
+        is_moe=is_moe,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=256 if is_moe else 4,
         include_global=False,
     )
 
@@ -1216,6 +1381,8 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
         create_final_output=False,
         enable_routing=False,
         state_dict=state_dict,
+        is_moe=is_moe,
+        layer_idx=layer_idx if use_mlp_weights else None,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -1226,6 +1393,8 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
         mcast_grid,
         mesh_mapper=mesh_mapper,
         state_dict=state_dict,
+        is_moe=is_moe,
+        layer_idx=layer_idx if use_mlp_weights else None,
     )
 
     # ── Create SDPA buffers for CB memory overlap ──
@@ -1361,6 +1530,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights
+    # For dense (use_mlp_weights): each device uses routed expert d; pass single-expert dict for that device.
     K_down = s.K_down
     expected_final_outputs = []
     for device_idx in range(num_devices):
@@ -1368,14 +1538,23 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
         shared_up_shard = s.torch_up_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
         shared_down_shard = s.torch_down_weights[device_idx * K_down : (device_idx + 1) * K_down, :]
 
+        if use_mlp_weights:
+            gate_dict = {0: r.expert_weights_dict[device_idx]}
+            up_dict = {0: r.up_proj_weights_dict[device_idx]}
+            down_dict = {0: r.down_proj_weights_dict[device_idx]}
+        else:
+            gate_dict = r.expert_weights_dict
+            up_dict = r.up_proj_weights_dict
+            down_dict = r.down_proj_weights_dict
+
         _, _, device_expected = MoeOp.golden(
             r.torch_input,
             shared_gate_weights=shared_gate_shard,
             shared_up_weights=shared_up_shard,
             shared_down_weights=shared_down_shard,
-            gate_proj_weights_dict=r.expert_weights_dict,
-            up_proj_weights_dict=r.up_proj_weights_dict,
-            down_proj_weights_dict=r.down_proj_weights_dict,
+            gate_proj_weights_dict=gate_dict,
+            up_proj_weights_dict=up_dict,
+            down_proj_weights_dict=down_dict,
             rmsnorm_gamma=r.torch_rmsnorm_gamma,
             rmsnorm_epsilon=1e-6,
             enable_routing=False,
@@ -1409,21 +1588,34 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
     # --- Reference MLP comparison ---
-    expert_ref, shared_ref = create_reference_mlp_models(state_dict, ROUTED_EXPERT_LAYER_IDX)
-
     x = r.torch_input.float()
     variance = x.pow(2).mean(-1, keepdim=True)
     normed_input = ((x * torch.rsqrt(variance + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16()
 
-    with torch.no_grad():
-        expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
-        shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
+    if use_mlp_weights:
+        shared_ref, routed_refs = create_reference_dense_mlp_slices(state_dict, layer_idx)
+        with torch.no_grad():
+            shared_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
+            routed_outputs = [routed_refs[d](normed_input.unsqueeze(0)).squeeze(0) for d in range(8)]
+        ref_reduce = sum(routed_outputs).float() + shared_output.float() + num_devices * r.torch_input.float()
+        # Also compare against single full MLP (reference block): reduce_output - 7*residual = block_output
+        full_mlp_ref = create_reference_dense_full_mlp(state_dict, layer_idx)
+        with torch.no_grad():
+            ref_block_output = r.torch_input.float() + full_mlp_ref(normed_input.unsqueeze(0)).squeeze(0).float()
+        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
+        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), adjusted_reduce.flatten(), 0.999)
+        logger.info(f"Reference full MLP (block) comparison PCC: {pcc_full}")
+        assert passing_full, f"Reference full MLP block comparison PCC failed: {pcc_full}"
+    else:
+        expert_ref, shared_ref = create_reference_mlp_models(state_dict, ROUTED_EXPERT_LAYER_IDX)
+        with torch.no_grad():
+            expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
+            shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
+        ref_reduce = (
+            num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
+        )
 
-    ref_reduce = (
-        num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
-    )
-
-    passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.95)
+    passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.999)
     logger.info(f"Reference MLP comparison PCC: {pcc_ref}")
     assert passing_ref, f"Reference MLP comparison PCC failed: {pcc_ref}"
 

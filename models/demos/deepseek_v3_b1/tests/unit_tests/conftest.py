@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import SharedExpertWeights, prepare_shared_expert_weights
 
 # If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
-USE_RANDOM_WEIGHTS = True
+USE_RANDOM_WEIGHTS = False
 
 # HF state dict shapes (out_features, in_features) for reference random weights. Align with test_prepare_weights.
 _REF_HF_Q_B = (24576, 1536)
