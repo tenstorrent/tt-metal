@@ -8,126 +8,24 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 
 namespace tt::tt_metal::tensor_impl {
 
-// Empty structs to facilitate Tensor template logic.
-struct bfloat4_b {};
-struct bfloat8_b {};
-
-// -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
-//                                                              Low Level APIs
+// The following declarations have been moved to tt-metalium/experimental/tensor:
+// - bfloat4_b, bfloat8_b structs (details/tensor_impl.hpp)
+// - convert_layout_tile_to_row_major, encode_tensor_data, decode_tensor_data (details/tensor_impl.hpp)
+// - allocate_device_buffer, allocate_host_buffer (details/tensor_impl.hpp)
+// - dispatch template (details/tensor_impl.hpp)
+// - to_host, copy_to_host, to_device, copy_to_device, to_layout (tensor_apis.hpp)
+// - pad, unpad, pad_to_tile, unpad_from_tile, to_dtype (tensor_apis.hpp)
 // ===============================================================================================================================================
-// -----------------------------------------------------------------------------------------------------------------------------------------------
-
-// ======================================================================================
-//                                  Layout converters
-// ======================================================================================
-
-template <typename T>
-std::vector<T> convert_layout_tile_to_row_major(
-    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
-    auto tile_shape = tile.get_tile_shape();
-    auto face_shape = tile.get_face_shape();
-    auto transpose_within_face = tile.get_transpose_within_face();
-    auto transpose_of_faces = tile.get_transpose_of_faces();
-
-    return convert_layout(
-        data_to_convert,
-        shape,
-        TensorLayoutType::TILED_NFACES,
-        TensorLayoutType::LIN_ROW_MAJOR,
-        tile_shape,
-        face_shape,
-        transpose_within_face,
-        transpose_of_faces);
-}
-
-// Converts logical data into physical data based on tensor spec
-// - Logical data: Flat container of row major data corresponding to some ND logical shape
-// - Physical data: Flat container of physical data corresponding to tensor spec. It takes into account:
-//   * Sharding: Each shard will be padded to nearest page (if needed)
-//     ** This is mostly for logical sharding, since logical shards may not be aligned to page in general
-//     ** For interleaved, it will be handled as a "logically sharded" tensor with same shard shard height/width
-//        as the original tensor dims at -2 and -1. In the future, interleaved may be generalized as sharded.
-//     ** This means padding may be inserted in the middle of logical data (if needed)
-//   * Layout: Each aligned shard will be tilized (if needed)
-//     ** Tilization happens after first inserting padding to align shards (if needed)
-//     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
-//   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
-template <typename T>
-std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
-
-// Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
-// - Physical data: Flat container of physical data corresponding to tensor spec
-//   * Assumes that the physical data already matches tensor spec
-//   * There is a bare minimum check that size of physical data matches size indicated by tensor_spec.physical_shape()
-// - Logical data: Flat container of row major data corresponding to some ND logical shape
-//   * To get logical data, perform the exact inverse process of encode_tensor_data
-//   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
-template <typename T>
-std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
-
-// ===============================================================================================================================================
-//                                                              High Level APIs
-// ===============================================================================================================================================
-
-// ======================================================================================
-//                           Data reader, writer, and initializers
-// ======================================================================================
-
-std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
-    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
-
-HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
-
-// ======================================================================================
-//                                         .to_host() and .to_device()
-// ======================================================================================
-
-HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking = true);
-
-void copy_to_host(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& device_tensor,
-    HostTensor& host_tensor,
-    bool blocking = true);
-
-// TODO: this only exist to support the async runtime, this will be considered a backdoor support if not out-right
-// removed here. See: #38592
-void copy_to_host(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& device_tensor,
-    std::byte* dst,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-
-MeshTensor to_device(
-    distributed::MeshCommandQueue& queue,
-    const HostTensor& tensor,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
-
-void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor);
-
-// TODO: this only exist to support the async runtime, this will be considered a backdoor support if not out-right
-// removed here. See: #38592
-void copy_to_device(
-    distributed::MeshCommandQueue& queue,
-    const std::byte* src,
-    MeshTensor& device_tensor,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-// ======================================================================================
-//                                  .to_layout()
-// ======================================================================================
-
-HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .view()
@@ -142,30 +40,6 @@ MeshTensor view(
     const MeshTensor& tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
-
-// ======================================================================================
-//                                  .pad() and .unpad()
-// ======================================================================================
-HostTensor pad(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-
-HostTensor unpad(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_tensor_start,
-    const tt::tt_metal::Shape& output_tensor_end);
-
-HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
-
-HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
-
-// ======================================================================================
-//                                  .to_dtype()
-// ======================================================================================
-
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 // ======================================================================================
 //                                 Runtime Tensor Creation Functions
@@ -199,9 +73,9 @@ HostTensor from_borrowed_data(
 //                                  HostTensor to_vector()
 // ======================================================================================
 
-// Converts a `HostTensor` to a `std::vector<T>`.
+// Converts a HostTensor to a std::vector<T>.
 // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
-// the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+// the Tensor; block float formats such as BFLOAT8_B and BFLOAT4_B require T equal float.
 template <typename T>
 std::vector<T> to_vector(const HostTensor& tensor);
 
@@ -240,29 +114,5 @@ extern PrintOptions TTNN_PRINT_OPTIONS;
 std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
-
-// Utility to convert runtime DataType to compile-time constant and dispatch the function call
-template <typename Func, typename... Args>
-auto dispatch(DataType dtype, Func&& func, Args&&... args) {
-    switch (dtype) {
-        case DataType::BFLOAT16:
-            return (std::forward<Func>(func)).template operator()<bfloat16>(std::forward<Args>(args)...);
-        case DataType::FLOAT32:
-            return (std::forward<Func>(func)).template operator()<float>(std::forward<Args>(args)...);
-        case DataType::INT32:
-            return (std::forward<Func>(func)).template operator()<int32_t>(std::forward<Args>(args)...);
-        case DataType::UINT32:
-            return (std::forward<Func>(func)).template operator()<uint32_t>(std::forward<Args>(args)...);
-        case DataType::UINT16:
-            return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
-        case DataType::UINT8:
-            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
-        case DataType::BFLOAT8_B:
-            return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
-        case DataType::BFLOAT4_B:
-            return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
-        default: TT_THROW("Unsupported data type");
-    }
-}
 
 }  // namespace tt::tt_metal::tensor_impl
