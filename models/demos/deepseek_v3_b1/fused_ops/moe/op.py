@@ -31,13 +31,14 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
-from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import (
     MESH_LEAF,
     MESH_ROOT1,
     MESH_ROOT2,
     MESH_ROOT3,
-    get_reduce_device_role,
+    ReduceToOneB1,
 )
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -1278,11 +1279,15 @@ class MoeRoutedExpertOp:
             reduce_num_workers_per_column = len(reduce_column_to_cores[reduce_sorted_columns[0]])
 
             # Fabric cores: one per column, placed to the right of bottom core
+            # Avoid sender_core to prevent NOC conflicts with bcast fabric
+            reserved_cores = {(sender_core.x, sender_core.y)}
             reduce_fabric_cores = []
             reduce_column_to_fabric_core = {}
             for x in reduce_sorted_columns:
                 bottom_core = max(reduce_column_to_cores[x], key=lambda c: c.y)
                 fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
+                if (fabric_core.x, fabric_core.y) in reserved_cores:
+                    fabric_core = ttnn.CoreCoord(bottom_core.x - 1, bottom_core.y)
                 reduce_fabric_cores.append(fabric_core)
                 reduce_column_to_fabric_core[x] = fabric_core
 
@@ -3882,11 +3887,15 @@ class MoeOp:
         routed_ctx = ctx.routed_ctx
         reduce_params = ctx.reduce_params
         mesh_device = ctx.mesh_device
-        device_role = get_reduce_device_role(coord, reduce_root_coord)
+        use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
+        device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
 
         # Determine destination coordinate based on role
         if device_role == MESH_LEAF:
-            dest_coord = ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
+            if use_torus:
+                dest_coord = ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
+            else:
+                dest_coord = ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
         elif device_role == MESH_ROOT3:
             dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
         else:
@@ -3982,12 +3991,17 @@ class MoeOp:
         ]
 
         # Per-core runtime args for reduce worker and fabric cores
+        d2d0_infra = self.d2d0_infrastructure
         reduce_brisc_per_core_args = []
-        for core in reduce_params["worker_cores_list"]:
+        for core_idx, core in enumerate(reduce_params["worker_cores_list"]):
             fabric_core = reduce_params["column_to_fabric_core"][core.x]
             fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(fabric_core)
             slot_idx = reduce_params["core_to_slot_idx"][(core.x, core.y)]
             shard_idx = reduce_params["core_to_shard_idx"][(core.x, core.y)]
+            socket_config_addr = 0
+            if device_role == MESH_ROOT1 and d2d0_infra is not None:
+                sender_socket = d2d0_infra["d2d_socket_pairs"][core_idx][0]
+                socket_config_addr = sender_socket.get_config_buffer_address()
             reduce_brisc_per_core_args.append(
                 (
                     core,
@@ -4000,6 +4014,7 @@ class MoeOp:
                         dst_sem_addr,
                         out_tensor.buffer_address(),
                         shard_idx,
+                        socket_config_addr,
                     ],
                 )
             )
@@ -4028,8 +4043,14 @@ class MoeOp:
 
         bcast_ring_size = routed_ctx.mesh_rows
         bcast_ring_index = row
-        bcast_num_targets_forward = bcast_ring_size - bcast_ring_index - 1
-        bcast_num_targets_backward = bcast_ring_index
+        bcast_enable_torus = (sender_row == 0) or (sender_row == routed_ctx.mesh_rows - 1 and self.is_torus)
+
+        if bcast_enable_torus:
+            bcast_num_targets_forward = (bcast_ring_size - 1) // 2
+            bcast_num_targets_backward = bcast_ring_size - 1 - bcast_num_targets_forward
+        else:
+            bcast_num_targets_forward = bcast_ring_size - bcast_ring_index - 1
+            bcast_num_targets_backward = bcast_ring_index
 
         bcast_start_distance_forward = 1 if bcast_num_targets_forward > 0 else 0
         bcast_range_hops_forward = bcast_num_targets_forward
@@ -4101,12 +4122,21 @@ class MoeOp:
         ]
 
         mesh_device = ctx.mesh_device
+        mesh_rows = routed_ctx.mesh_rows
         self.bcast_fabric_node_id = mesh_device.get_fabric_node_id(coord)
         self.bcast_dst_nodes = []
         if bcast_num_targets_forward > 0:
-            self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row + 1, col)))
+            if bcast_enable_torus and sender_row == mesh_rows - 1 and row == sender_row:
+                forward_coord = ttnn.MeshCoordinate(0, col)
+            else:
+                forward_coord = ttnn.MeshCoordinate((row + 1) % mesh_rows, col)
+            self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
         if bcast_num_targets_backward > 0:
-            self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row - 1, col)))
+            if bcast_enable_torus and sender_row == 0 and row == sender_row:
+                backward_coord = ttnn.MeshCoordinate(mesh_rows - 1, col)
+            else:
+                backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
+            self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
         if bcast_has_secondary_target:
             secondary_coord = ttnn.MeshCoordinate(row, 1)
             self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
@@ -4150,17 +4180,25 @@ class MoeOp:
                 )
 
     def _setup_fabric_connections(self, coord, row, col, reduce_root_coord, kernel_result, program):
-        """Setup fabric connections for reduce and broadcast fabric cores."""
+        """Setup fabric connections for reduce, broadcast, and D2D0 fabric cores."""
         ctx = self.ctx
 
         # Reduce fabric connections
         if ctx.enable_reduce_to_one:
-            device_role = get_reduce_device_role(coord, reduce_root_coord)
+            use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
+            device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
             if device_role != MESH_ROOT1:
                 reduce_params = ctx.reduce_params
                 mesh_device = ctx.mesh_device
                 if device_role == MESH_LEAF:
-                    dest_coord = ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
+                    if use_torus:
+                        dest_coord = (
+                            ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
+                        )
+                    else:
+                        dest_coord = (
+                            ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
+                        )
                 elif device_role == MESH_ROOT3:
                     dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
                 else:
@@ -4184,6 +4222,31 @@ class MoeOp:
                         fabric_node_id, dest_fabric_node_id, link_idx, program, fc
                     )
                     fabric_rt_args_ref.extend(fabric_conn_args)
+
+            # D2D0 aggregator fabric connections on ROOT1
+            if device_role == MESH_ROOT1 and self.d2d0_infrastructure is not None:
+                d2d0_infra = self.d2d0_infrastructure
+                d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
+                d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
+                    0
+                ].receiver_core.device_coord
+                mesh_device = ctx.mesh_device
+                my_fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+                    ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
+                )
+                use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+                if use_fabric_on_sender:
+                    d2d0_kernel_idx = len(program.kernels) - 1
+                    d2d0_core = d2d0_infra["d2d0_core"]
+                    program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y] = []
+                    d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
+                    num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
+                    for link_idx in range(num_d2d0_links):
+                        d2d0_fabric_args = ttnn.setup_fabric_connection(
+                            my_fabric_node_id, downstream_fabric_node_id, link_idx, program, d2d0_core
+                        )
+                        d2d0_rt_args_ref.extend(d2d0_fabric_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
@@ -4244,10 +4307,16 @@ class MoeOp:
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         worker_core_grid=None,
+        is_torus=False,
+        enable_d2d0_output=False,
+        d2d0_infrastructure=None,
     ):
         print("start of init")
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
+        self.is_torus = is_torus
+        self.enable_d2d0_output = enable_d2d0_output
+        self.d2d0_infrastructure = d2d0_infrastructure
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         print("moe semaphores created")
@@ -4616,6 +4685,11 @@ class MoeOp:
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         # Optional worker-core grid override (used to avoid overlap with external micro-ops).
         worker_core_grid=None,
+        # Torus topology support
+        is_torus=False,
+        # D2D_0 aggregation output (for reduce-to-one → pipeline loopback)
+        enable_d2d0_output=False,
+        d2d0_infrastructure=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4668,6 +4742,9 @@ class MoeOp:
             semaphores=semaphores,
             noc_mode=noc_mode,
             worker_core_grid=worker_core_grid,
+            is_torus=is_torus,
+            enable_d2d0_output=enable_d2d0_output,
+            d2d0_infrastructure=d2d0_infrastructure,
         )
         print("after creating moe op")
 
@@ -4692,9 +4769,20 @@ class MoeOp:
                 moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, coord, row, col)
                 print("setup per-device args done")
 
+                # Exclude d2d0_core from unified kernel grid on ROOT1 to avoid
+                # having 3 DM kernels on the same core (unified NCRISC + BRISC + D2D0 Reader)
+                effective_grid = ctx.full_device_grid
+                if ctx.enable_reduce_to_one and enable_d2d0_output and d2d0_infrastructure is not None:
+                    use_torus_check = is_torus and reduce_root_coord[0] in [0, 3]
+                    device_role_check = get_reduce_device_role(coord, reduce_root_coord, use_torus_check)
+                    if device_role_check == MESH_ROOT1:
+                        d2d0_core_coord = d2d0_infrastructure["d2d0_core"]
+                        d2d0_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core_coord, d2d0_core_coord)])
+                        effective_grid = effective_grid.subtract(d2d0_core_set)
+
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
-                    core_ranges=ctx.full_device_grid,
+                    core_ranges=effective_grid,
                     ncrisc_named_compile_time_args=moe.ncrisc_args,
                     brisc_named_compile_time_args=moe.brisc_args,
                     trisc_named_compile_time_args=moe.trisc_args,
@@ -4720,6 +4808,29 @@ class MoeOp:
                 kernels = kernel_result.kernels
                 cb_descs = moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs
                 sem_descs = moe.device_sem_descs
+
+                # Add D2D0 aggregator kernel on ROOT1 when D2D0 output is enabled
+                if ctx.enable_reduce_to_one and enable_d2d0_output and d2d0_infrastructure is not None:
+                    use_torus = is_torus and reduce_root_coord[0] in [0, 3]
+                    device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
+                    if device_role == MESH_ROOT1:
+                        d2d0_downstream_socket = d2d0_infrastructure["d2d0_downstream_socket"]
+                        d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
+                            0
+                        ].receiver_core.device_coord
+                        my_fabric_node_id = ctx.mesh_device.get_fabric_node_id(coord)
+                        downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+                            ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
+                        )
+                        use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+                        reduce_params = ctx.reduce_params
+                        d2d0_kernel = ReduceToOneB1.create_d2d0_aggregator_kernel(
+                            d2d0_infrastructure,
+                            reduce_params["payload_size_bytes"],
+                            len(reduce_params["worker_cores_list"]),
+                            use_fabric_on_sender=use_fabric_on_sender,
+                        )
+                        kernels = list(kernels) + [d2d0_kernel]
 
                 print(
                     f"  creating ProgramDescriptor (kernels={len(kernels)}, cbs={len(cb_descs)}, sems={len(sem_descs)})..."
