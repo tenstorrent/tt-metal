@@ -181,18 +181,18 @@ class TextBlock(LightweightModule):
         Returns:
             Output tensor
         """
-        # Attention block with residual
+        # Attention block with residual - use L1 for decode
         residual = x
         x = self.attn_norm(x)
         attn_out = self.self_attn.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos)
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        # MLP block with residual
+        # MLP block with residual - use L1 for decode
         residual = x
         x = self.ff_norm(x)
-        mlp_out = self.mlp(x)
-        x = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mlp_out = self.mlp.forward_decode(x)
+        x = ttnn.add(residual, mlp_out, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
         ttnn.deallocate(mlp_out)
 
         return x
