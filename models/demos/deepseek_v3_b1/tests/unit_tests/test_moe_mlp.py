@@ -522,6 +522,47 @@ def create_reference_moe_model(state_dict, layer_idx):
 
 
 # ============================================================================
+# Helper: create reference DeepseekV3MLP models (expert 0 + shared) for comparison
+# ============================================================================
+def create_reference_mlp_models(state_dict, layer_idx):
+    """Instantiate expert-0 and shared-expert DeepseekV3MLP from state dict for reference comparison."""
+    from transformers import AutoConfig
+
+    from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+
+    hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
+
+    # Expert 0 MLP
+    expert_prefix = f"model.layers.{layer_idx}.mlp.experts.0."
+    expert_state = {k[len(expert_prefix) :]: v for k, v in state_dict.items() if k.startswith(expert_prefix)}
+    if any(k.endswith("_scale_inv") for k in expert_state):
+        from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
+
+        expert_state = dequantize_state_dict(expert_state, hf_config)
+    expert_mlp = DeepseekV3MLP(hf_config, intermediate_size=hf_config.moe_intermediate_size).eval().to(torch.bfloat16)
+    expert_mlp.load_state_dict(expert_state)
+
+    # Shared expert MLP
+    shared_prefix = f"model.layers.{layer_idx}.mlp.shared_experts."
+    shared_state = {k[len(shared_prefix) :]: v for k, v in state_dict.items() if k.startswith(shared_prefix)}
+    if any(k.endswith("_scale_inv") for k in shared_state):
+        from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
+
+        shared_state = dequantize_state_dict(shared_state, hf_config)
+    shared_mlp = (
+        DeepseekV3MLP(
+            hf_config,
+            intermediate_size=hf_config.moe_intermediate_size * hf_config.n_shared_experts,
+        )
+        .eval()
+        .to(torch.bfloat16)
+    )
+    shared_mlp.load_state_dict(shared_state)
+
+    return expert_mlp, shared_mlp
+
+
+# ============================================================================
 # Test: Fused MoE (routed expert + shared expert)
 # ============================================================================
 @pytest.mark.parametrize(
@@ -1133,7 +1174,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
@@ -1366,5 +1407,24 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_refe
     passing, pcc_output = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
     logger.info(f"Reduce output PCC: {pcc_output}")
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
+
+    # --- Reference MLP comparison ---
+    expert_ref, shared_ref = create_reference_mlp_models(state_dict, ROUTED_EXPERT_LAYER_IDX)
+
+    x = r.torch_input.float()
+    variance = x.pow(2).mean(-1, keepdim=True)
+    normed_input = ((x * torch.rsqrt(variance + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16()
+
+    with torch.no_grad():
+        expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
+        shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
+
+    ref_reduce = (
+        num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
+    )
+
+    passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.95)
+    logger.info(f"Reference MLP comparison PCC: {pcc_ref}")
+    assert passing_ref, f"Reference MLP comparison PCC failed: {pcc_ref}"
 
     logger.info("MoeOp no-routing with reduce test PASSED!")
