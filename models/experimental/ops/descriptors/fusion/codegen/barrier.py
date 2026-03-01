@@ -22,6 +22,11 @@ _SECTION_SEP = "// " + "=" * 76
 _BARRIER_RT_OFFSET_CT_ARG = "barrier_rt_offset"
 _REBIND_RT_OFFSET_CT_ARG = "rebind_rt_offset"
 
+# Short suffix per RISC type for unique Tracy zone names.  Each RISC compiles
+# its own kernel_includes.hpp at different line offsets.  Without distinct zone
+# names the profiler's 16-bit FNV hash can collide (only 65536 buckets).
+_RISC_SUFFIX = {"riscv_0": "br", "riscv_1": "nc", "compute": "tr"}
+
 # =============================================================================
 # Per-RISC CB Reset/Resync C++ Templates
 # =============================================================================
@@ -126,26 +131,29 @@ _PHASE_STATE = {
     "compute": ("    uint32_t done;\n" "    volatile tt_l1_ptr uint32_t* compute_done;"),
 }
 
-_PHASE_WAIT = {
-    "riscv_1": (
+
+def _phase_wait_follower(risc_type: str) -> str:
+    s = _RISC_SUFFIX[risc_type]
+    if risc_type == "riscv_1":
+        return (
+            "    __attribute__((noinline)) void wait() {\n"
+            f'        DeviceZoneScopedN("barrier-wait-{s}");\n'
+            "        done++;\n"
+            "        {\n"
+            f'            DeviceZoneScopedN("barrier-noc-drain-{s}");\n'
+            "            noc_async_write_barrier();\n"
+            "        }\n"
+            "        *writer_done = done;\n"
+            "    }"
+        )
+    return (
         "    __attribute__((noinline)) void wait() {\n"
-        '        DeviceZoneScopedN("barrier-wait");\n'
-        "        done++;\n"
-        "        {\n"
-        '            DeviceZoneScopedN("barrier-noc-drain");\n'
-        "            noc_async_write_barrier();\n"
-        "        }\n"
-        "        *writer_done = done;\n"
-        "    }"
-    ),
-    "compute": (
-        "    __attribute__((noinline)) void wait() {\n"
-        '        DeviceZoneScopedN("barrier-wait");\n'
+        f'        DeviceZoneScopedN("barrier-wait-{s}");\n'
         "        done++;\n"
         "        *compute_done = done;\n"
         "    }"
-    ),
-}
+    )
+
 
 _INIT_BODY = {
     "riscv_1": (
@@ -345,15 +353,16 @@ def _emit_coordinator_reset(
         rebinds = entry["rebinds"]
         next_phase_idx = entry["next_phase_idx"]
         completed_phase_idx = done_val - 1
+        s = _RISC_SUFFIX["riscv_0"]
         lines.append(f"        if (done == {done_val}) {{")
         lines.append(f"            {{")
-        lines.append(f'                DeviceZoneScopedN("barrier-cb-reset");')
+        lines.append(f'                DeviceZoneScopedN("barrier-cb-reset-{s}");')
         lines.append(f"                reset_cbs(phase_{completed_phase_idx}_cbs);")
         lines.append(f"            }}")
         if rebinds and next_phase_idx is not None:
             lines.append(_generate_rebind_call(done_val, entry["rebind_entry_offset"], "            "))
         lines.append(f"            {{")
-        lines.append(f'                DeviceZoneScopedN("barrier-segment-sync");')
+        lines.append(f'                DeviceZoneScopedN("barrier-segment-sync-{s}");')
         lines.append(f"                segment_{seg_idx}::sync();")
         lines.append(f"            }}")
         lines.append(f"        }}")
@@ -364,12 +373,14 @@ def _emit_coordinator_reset(
 def _emit_follower_reset(
     dispatch: List[Dict[str, Any]],
     for_compute: bool = False,
+    risc_type: str = "riscv_1",
 ) -> List[str]:
     """Emit ``phase::reset()`` body for NCRISC/compute (followers).
 
     Order: segment sync -> resync_cbs -> rebind.
     For compute, rebind is guarded by ``#ifndef TRISC_MATH``.
     """
+    s = _RISC_SUFFIX[risc_type]
     lines: List[str] = []
     lines.append("    __attribute__((noinline)) void reset() {")
     for entry in dispatch:
@@ -380,11 +391,11 @@ def _emit_follower_reset(
         completed_phase_idx = done_val - 1
         lines.append(f"        if (done == {done_val}) {{")
         lines.append(f"            {{")
-        lines.append(f'                DeviceZoneScopedN("barrier-segment-sync");')
+        lines.append(f'                DeviceZoneScopedN("barrier-segment-sync-{s}");')
         lines.append(f"                segment_{seg_idx}::sync();")
         lines.append(f"            }}")
         lines.append(f"            {{")
-        lines.append(f'                DeviceZoneScopedN("barrier-cb-resync");')
+        lines.append(f'                DeviceZoneScopedN("barrier-cb-resync-{s}");')
         lines.append(f"                resync_cbs(phase_{completed_phase_idx}_cbs);")
         lines.append(f"            }}")
         if rebinds and next_phase_idx is not None:
@@ -409,16 +420,17 @@ def _coordinator_phase_state(has_compute: bool) -> str:
 
 def _coordinator_phase_wait(has_compute: bool) -> str:
     """Generate phase::wait() for BRISC — waits for whichever roles exist."""
+    s = _RISC_SUFFIX["riscv_0"]
     lines = [
         "    __attribute__((noinline)) void wait() {",
-        '        DeviceZoneScopedN("barrier-wait");',
+        f'        DeviceZoneScopedN("barrier-wait-{s}");',
         "        done++;",
         "        {",
-        '            DeviceZoneScopedN("barrier-noc-drain");',
+        f'            DeviceZoneScopedN("barrier-noc-drain-{s}");',
         "            noc_async_full_barrier();",
         "        }",
         "        {",
-        '            DeviceZoneScopedN("barrier-sem-wait");',
+        f'            DeviceZoneScopedN("barrier-sem-wait-{s}");',
     ]
     if has_compute:
         lines.append("            noc_semaphore_wait_min(compute_done, done);")
@@ -539,12 +551,12 @@ def _generate_barrier_namespace(
     if is_coordinator:
         lines.extend(_coordinator_phase_wait(has_compute).split("\n"))
     else:
-        lines.extend(_PHASE_WAIT[risc_type].split("\n"))
+        lines.extend(_phase_wait_follower(risc_type).split("\n"))
     lines.append("")
     if is_coordinator:
         lines.extend(_emit_coordinator_reset(dispatch, op_semaphore_info or []))
     else:
-        lines.extend(_emit_follower_reset(dispatch, for_compute=(risc_type == "compute")))
+        lines.extend(_emit_follower_reset(dispatch, for_compute=(risc_type == "compute"), risc_type=risc_type))
     lines.append("} // namespace phase")
     lines.append("")
 
