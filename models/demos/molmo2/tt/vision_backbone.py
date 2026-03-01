@@ -48,8 +48,8 @@ class VisionBackbone(LightweightModule):
         vit_head_dim: int = 72,
         patch_size: int = 14,
         image_size: int = 378,
-        # Feature layers (0-indexed)
-        feature_layers: Tuple[int, int] = (18, 24),
+        # Feature layers (0-indexed) - match HF order: [-3, -9] -> [24, 18]
+        feature_layers: Tuple[int, int] = (24, 18),
         # Adapter config
         adapter_hidden_dim: int = 1152,
         adapter_intermediate_dim: int = 12288,
@@ -75,7 +75,7 @@ class VisionBackbone(LightweightModule):
             vit_head_dim: ViT head dimension (72)
             patch_size: Image patch size (14)
             image_size: Expected image size (378)
-            feature_layers: ViT layers to extract features from (18, 24)
+            feature_layers: ViT layers to extract features from (24, 18) - HF order
             adapter_hidden_dim: Adapter hidden dimension (1152)
             adapter_intermediate_dim: Projector intermediate dimension (12288)
             adapter_num_heads: Pooling attention heads (16)
@@ -289,12 +289,15 @@ class VisionBackbone(LightweightModule):
             attn_mask = None
 
         # 5. Convert back to TTNN for pooling
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
         query_ttnn = ttnn.from_torch(
             query.unsqueeze(0),  # [1, B*N_out, 1, pool_dim]
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
 
         to_pool_ttnn = ttnn.from_torch(
@@ -303,6 +306,7 @@ class VisionBackbone(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
 
         if attn_mask is not None:
@@ -312,6 +316,7 @@ class VisionBackbone(LightweightModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
         else:
             attn_mask_ttnn = None
