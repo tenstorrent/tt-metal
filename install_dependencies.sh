@@ -579,8 +579,7 @@ install_gcc_versioned() {
             fi
         fi
     elif is_redhat_based; then
-        # RedHat doesn't have versioned gcc packages (gcc-12, gcc-14)
-        echo "[WARNING] Versioned GCC packages are not available on $OS_ID"
+        echo "[WARNING] Versioned GCC packages (g++-${ver}) not found on $OS_ID"
     fi
 
     # Step 4: Fail (no official GCC binary tarballs exist)
@@ -674,58 +673,12 @@ verify_compiler() {
 # Print OS-specific list of available --compiler values. Called on failure.
 available_compilers_message() {
     echo ""
-    echo "Available compiler options for $OS_ID $OS_VERSION:"
+    echo "Valid --compiler values: ${COMPILER_FLAGS[*]}"
     echo ""
-    case "$OS_ID" in
-        ubuntu)
-            case "$OS_VERSION" in
-                22.04)
-                    echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
-                    echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
-                    echo "  --compiler clang           system clang"
-                    echo "  --compiler gcc-12          g++ 12 (system)"
-                    echo "  --compiler gcc-14          g++ 14 (via Ubuntu Toolchain PPA)"
-                    echo "  --compiler gcc             system g++"
-                    ;;
-                24.04)
-                    echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
-                    echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
-                    echo "  --compiler clang           system clang"
-                    echo "  --compiler gcc-14          g++ 14 (system)"
-                    echo "  --compiler gcc-12          g++ 12 (via Ubuntu Toolchain PPA)"
-                    echo "  --compiler gcc             system g++"
-                    ;;
-                *)
-                    echo "  (Ubuntu $OS_VERSION: check available packages)"
-                    ;;
-            esac
-            ;;
-        debian)
-            echo "  --compiler clang-20        clang 20 (via apt.llvm.org)"
-            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via apt.llvm.org)"
-            echo "  --compiler clang           system clang"
-            echo "  --compiler gcc-12          g++ 12 (system on Debian 12)"
-            echo "  --compiler gcc             system g++"
-            echo "  NOTE: gcc-14 is NOT available on Debian 12"
-            ;;
-        fedora)
-            echo "  --compiler clang-20        clang 20 (via LLVM GitHub tarball, ~1.9 GB download)"
-            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via LLVM GitHub tarball)"
-            echo "  --compiler clang           system clang"
-            echo "  --compiler gcc             system gcc"
-            echo "  NOTE: gcc-12, gcc-14 require version match with system gcc"
-            ;;
-        rocky|almalinux|rhel|centos)
-            echo "  --compiler clang-20        clang 20 (via LLVM GitHub tarball, ~1.9 GB download)"
-            echo "  --compiler clang-20-libcpp clang 20 + libc++ (via LLVM GitHub tarball)"
-            echo "  --compiler clang           system clang (EPEL)"
-            echo "  --compiler gcc             system gcc"
-            echo "  NOTE: gcc-12, gcc-14 are NOT available on $OS_ID"
-            ;;
-        *)
-            echo "  (check system packages for available compilers)"
-            ;;
-    esac
+    echo "The installer will try multiple methods to obtain the requested compiler"
+    echo "(system packages, external repos, binary tarballs). If a specific version"
+    echo "is not available on your platform, try '--compiler clang' or '--compiler gcc'"
+    echo "to use whatever version your system provides."
     echo ""
 }
 
