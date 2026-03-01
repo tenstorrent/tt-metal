@@ -21,6 +21,7 @@ class TtCombineModule(LightweightModule):
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
+        cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
     ):
@@ -40,6 +41,7 @@ class TtCombineModule(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
 
@@ -68,7 +70,7 @@ class TtCombineModule(LightweightModule):
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
-            cluster_axis=0,  # Linear topology along axis 0
+            cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
         )

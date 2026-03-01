@@ -34,10 +34,6 @@ ttnn::Tensor ExecutePrefillCombine::invoke(
         num_links.value_or(1) == 1,
         "num_links must be 1 (current value: {}). Other values are not tested.",
         num_links.value_or(1));
-    TT_FATAL(
-        topology.value_or(tt::tt_fabric::Topology::Linear) == tt::tt_fabric::Topology::Linear,
-        "topology must be Linear (current value: {}). Other topologies are not tested.",
-        static_cast<uint32_t>(topology.value_or(tt::tt_fabric::Topology::Linear)));
 
     std::optional<uint32_t> axis = cluster_axis;
     uint32_t num_links_ = num_links.value_or(1);

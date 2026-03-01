@@ -58,8 +58,17 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             1,
             ttnn.Topology.Linear,
         ),
+        (
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Ring,
+        ),
     ],
-    ids=["linear-2", "linear-4", "linear-8"],
+    ids=["linear-2", "linear-4", "linear-8", "ring-8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -146,6 +155,7 @@ def test_ttnn_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
+        cluster_axis=0,
         num_links=num_links,
         topology=topology,
     )
@@ -183,6 +193,7 @@ def test_ttnn_dispatch_combine(
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
+        cluster_axis=0,
         num_links=num_links,
         topology=topology,
     )
