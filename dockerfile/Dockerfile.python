@@ -70,6 +70,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Auto-detect Python version from Ubuntu version if not explicitly provided,
 # then install Python with uv and create relocatable virtual environment
 # umask 000 ensures the venv is world-writable for multi-host NFS access
+# MAKEFLAGS accelerates builds for packages that compile with make
 RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
@@ -79,6 +80,7 @@ RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     fi; \
     fi; \
     echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
@@ -146,6 +148,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
+# MAKEFLAGS accelerates builds for packages that compile with make
 RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
     if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
@@ -155,6 +158,7 @@ RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     fi; \
     fi; \
     echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
@@ -178,7 +182,9 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 # - Then requirements files with unsafe-best-match to avoid transitive dep conflicts
 # umask 000 ensures the venv is world-writable for runtime pip installs
 # no-build-isolation to handle pkg_resources/mmcv/setuptools
-RUN umask 000 && \
+# MAKEFLAGS accelerates builds for packages that compile with make
+RUN export MAKEFLAGS="-j$(nproc)" && \
+    umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
