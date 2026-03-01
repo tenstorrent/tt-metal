@@ -660,6 +660,9 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
             // constraints, ensuring that tiles can fit into a single core's available memory.
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
             constexpr uint32_t MAX_TILES_PER_CORE = 128;
+            if (total_number_of_cores == 0) {
+                return MAX_TILES_PER_CORE;
+            }
             const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
             return std::min(MAX_TILES_PER_CORE, max_val);
         }
