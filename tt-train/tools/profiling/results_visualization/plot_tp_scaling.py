@@ -82,9 +82,10 @@ def make_plot(
     subset: pd.DataFrame,
     col: str,
     ylabel: str,
-    out_path: Path,
+    out_path: Path | None,
     scaling: str,
     ccl_col: str | None = None,
+    show: bool = False,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 4.5))
     tp_dense = np.linspace(TP_VALUES[0], TP_VALUES[-1], 200)
@@ -179,9 +180,26 @@ def make_plot(
         ax.legend()
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"  saved {out_path}")
+    if show:
+        plt.show()
+    elif out_path:
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"  saved {out_path}")
+
+
+def plot_all(
+    df: pd.DataFrame, output_dir: Path | None = None, show: bool = False
+) -> pd.DataFrame:
+    """Filter and plot all TP scaling charts. Returns the filtered subset."""
+    subset = filter_tp_scaling(df)
+    if subset.empty:
+        print("No TP-scaling rows found.")
+        return subset
+    for col, ylabel, fname, scaling, ccl_col in PLOT_SPECS:
+        out = output_dir / fname if output_dir else None
+        make_plot(subset, col, ylabel, out, scaling, ccl_col, show=show)
+    return subset
 
 
 def main() -> None:
@@ -196,19 +214,12 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.input_csv)
-    subset = filter_tp_scaling(df)
+    subset = plot_all(df, output_dir=args.output_dir)
 
-    if subset.empty:
-        sys.exit(
-            "No TP-scaling rows found (dp==1, tp in {1,2,4,8}, n_blocks in {2,4,8})."
-        )
-
-    csv_out = args.output_dir / "tp_scaling.csv"
-    subset.to_csv(csv_out, index=False)
-    print(f"Wrote {len(subset)} rows to {csv_out}")
-
-    for col, ylabel, fname, scaling, ccl_col in PLOT_SPECS:
-        make_plot(subset, col, ylabel, args.output_dir / fname, scaling, ccl_col)
+    if not subset.empty:
+        csv_out = args.output_dir / "tp_scaling.csv"
+        subset.to_csv(csv_out, index=False)
+        print(f"Wrote {len(subset)} rows to {csv_out}")
 
     print("Done.")
 

@@ -90,6 +90,94 @@ def get_measured_phase_ms(entry: dict, phase: str) -> float | None:
     return None
 
 
+def enrich_roofline(
+    results: list[dict],
+    roofline_dir: str | Path,
+    hardware: str = "p100",
+    peak_tflops: float = DEFAULT_BF16_PEAK_TFLOPS,
+) -> int:
+    """Add roofline data to TP=1 experiments in-place. Returns count of annotated entries."""
+    roofline_dir = Path(roofline_dir)
+    tp1_entries = [e for e in results if e.get("experiment", {}).get("tp", 1) == 1]
+
+    for entry in tp1_entries:
+        _enrich_one(entry, roofline_dir, hardware, peak_tflops)
+
+    return sum(1 for e in results if "roofline" in e)
+
+
+def _enrich_one(entry, roofline_dir, hardware, peak_tflops):
+    exp = entry.get("experiment", {})
+    local_batch = exp.get("local_batch", 1)
+    uses_checkpointing = exp.get("runner_type") == "memory_efficient"
+
+    config_path = find_training_config(entry)
+    if not config_path:
+        return
+
+    roofline = run_roofline(roofline_dir, config_path, local_batch, hardware)
+    if not roofline:
+        return
+
+    rf_fwd = roofline.get("forward", {})
+    rf_bwd = roofline.get("backward", {})
+    rf_opt = roofline.get("optimizer", {})
+
+    if uses_checkpointing:
+        rf_bwd = {
+            "roofline_ms": rf_bwd.get("roofline_ms", 0) + rf_fwd.get("roofline_ms", 0),
+            "flops_tflops": rf_bwd.get("flops_tflops", 0)
+            + rf_fwd.get("flops_tflops", 0),
+        }
+
+    roofline_data = {"checkpointing_adjusted": uses_checkpointing}
+    meas_fwd = get_measured_phase_ms(entry, "forward_ms")
+    meas_bwd = get_measured_phase_ms(entry, "backward_ms")
+    meas_opt = get_measured_phase_ms(entry, "optimizer_ms")
+
+    for label, rf, meas_ms in [
+        ("forward", rf_fwd, meas_fwd),
+        ("backward", rf_bwd, meas_bwd),
+        ("optimizer", rf_opt, meas_opt),
+    ]:
+        r_ms = rf.get("roofline_ms", 0)
+        r_flops = rf.get("flops_tflops", 0)
+        phase_data = {"roofline_ms": round(r_ms, 4), "flops_tflops": round(r_flops, 4)}
+        if meas_ms and meas_ms > 0:
+            phase_data["measured_ms"] = round(meas_ms, 3)
+            phase_data["roofline_perc"] = round(r_ms / meas_ms * 100, 1)
+            phase_data["mfu_perc"] = round(
+                r_flops / (meas_ms / 1000) / peak_tflops * 100, 1
+            )
+        roofline_data[label] = phase_data
+
+    rf_total_ms = (
+        rf_fwd.get("roofline_ms", 0)
+        + rf_bwd.get("roofline_ms", 0)
+        + rf_opt.get("roofline_ms", 0)
+    )
+    rf_total_flops = (
+        rf_fwd.get("flops_tflops", 0)
+        + rf_bwd.get("flops_tflops", 0)
+        + rf_opt.get("flops_tflops", 0)
+    )
+    meas_total = entry.get("throughput", {}).get(
+        "step_time_ms"
+    ) or get_measured_phase_ms(entry, "total_ms")
+    total_data = {
+        "roofline_ms": round(rf_total_ms, 4),
+        "flops_tflops": round(rf_total_flops, 4),
+    }
+    if meas_total and meas_total > 0:
+        total_data["measured_ms"] = round(meas_total, 3)
+        total_data["roofline_perc"] = round(rf_total_ms / meas_total * 100, 1)
+        total_data["mfu_perc"] = round(
+            rf_total_flops / (meas_total / 1000) / peak_tflops * 100, 1
+        )
+    roofline_data["total"] = total_data
+    entry["roofline"] = roofline_data
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Add roofline analysis to experiment results"
@@ -127,112 +215,10 @@ def main():
         sys.exit(1)
 
     results = json.loads(results_path.read_text())
+    print(f"Loaded {len(results)} experiments\n")
 
-    tp1_entries = [e for e in results if e.get("experiment", {}).get("tp", 1) == 1]
-    print(f"Loaded {len(results)} experiments, {len(tp1_entries)} with TP=1\n")
-
-    for entry in tp1_entries:
-        name = entry["name"]
-        exp = entry.get("experiment", {})
-        local_batch = exp.get("local_batch", 1)
-        uses_checkpointing = exp.get("runner_type") == "memory_efficient"
-
-        config_path = find_training_config(entry)
-        if not config_path:
-            print(f"  [{name}] no training config found — skipped")
-            continue
-
-        print(f"  [{name}] batch={local_batch} ckpt={uses_checkpointing} ...", end=" ")
-
-        roofline = run_roofline(roofline_dir, config_path, local_batch, args.hardware)
-        if not roofline:
-            print("roofline FAILED")
-            continue
-
-        rf_fwd = roofline.get("forward", {})
-        rf_bwd = roofline.get("backward", {})
-        rf_opt = roofline.get("optimizer", {})
-
-        if uses_checkpointing:
-            # Checkpointing: backward includes a full forward recomputation
-            rf_bwd = {
-                "roofline_ms": rf_bwd.get("roofline_ms", 0)
-                + rf_fwd.get("roofline_ms", 0),
-                "flops_tflops": rf_bwd.get("flops_tflops", 0)
-                + rf_fwd.get("flops_tflops", 0),
-            }
-
-        rf_total_ms = (
-            rf_fwd.get("roofline_ms", 0)
-            + rf_bwd.get("roofline_ms", 0)
-            + rf_opt.get("roofline_ms", 0)
-        )
-        rf_total_flops = (
-            rf_fwd.get("flops_tflops", 0)
-            + rf_bwd.get("flops_tflops", 0)
-            + rf_opt.get("flops_tflops", 0)
-        )
-
-        # Measured times
-        meas_fwd = get_measured_phase_ms(entry, "forward_ms")
-        meas_bwd = get_measured_phase_ms(entry, "backward_ms")
-        meas_opt = get_measured_phase_ms(entry, "optimizer_ms")
-
-        roofline_data = {"checkpointing_adjusted": uses_checkpointing}
-
-        for label, rf, meas_ms in [
-            ("forward", rf_fwd, meas_fwd),
-            ("backward", rf_bwd, meas_bwd),
-            ("optimizer", rf_opt, meas_opt),
-        ]:
-            r_ms = rf.get("roofline_ms", 0)
-            r_flops = rf.get("flops_tflops", 0)
-
-            phase_data = {
-                "roofline_ms": round(r_ms, 4),
-                "flops_tflops": round(r_flops, 4),
-            }
-
-            if meas_ms and meas_ms > 0:
-                phase_data["measured_ms"] = round(meas_ms, 3)
-                phase_data["roofline_perc"] = round(r_ms / meas_ms * 100, 1)
-                phase_data["mfu_perc"] = round(
-                    r_flops / (meas_ms / 1000) / args.peak_tflops * 100, 1
-                )
-
-            roofline_data[label] = phase_data
-
-        # Total — use full step time (includes gradient_sync, host overhead)
-        meas_total = None
-        throughput = entry.get("throughput", {})
-        if throughput.get("step_time_ms"):
-            meas_total = throughput["step_time_ms"]
-        elif get_measured_phase_ms(entry, "total_ms"):
-            meas_total = get_measured_phase_ms(entry, "total_ms")
-
-        total_data = {
-            "roofline_ms": round(rf_total_ms, 4),
-            "flops_tflops": round(rf_total_flops, 4),
-        }
-        if meas_total and meas_total > 0:
-            total_data["measured_ms"] = round(meas_total, 3)
-            total_data["roofline_perc"] = round(rf_total_ms / meas_total * 100, 1)
-            total_data["mfu_perc"] = round(
-                rf_total_flops / (meas_total / 1000) / args.peak_tflops * 100, 1
-            )
-
-        roofline_data["total"] = total_data
-        entry["roofline"] = roofline_data
-
-        # Print summary
-        parts = []
-        for lbl in ["forward", "backward", "optimizer", "total"]:
-            rd = roofline_data.get(lbl, {})
-            if "roofline_perc" in rd:
-                parts.append(f"{lbl[:3]}={rd['roofline_perc']:.0f}%")
-        mfu_total = roofline_data.get("total", {}).get("mfu_perc")
-        mfu_str = f" MFU={mfu_total:.1f}%" if mfu_total else ""
-        print(f"roofline: {' '.join(parts)}{mfu_str}")
+    annotated = enrich_roofline(results, roofline_dir, args.hardware, args.peak_tflops)
+    print(f"\n{annotated}/{len(results)} experiments annotated")
 
     with open(output, "w") as f:
         json.dump(results, f, indent=2)

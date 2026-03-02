@@ -165,6 +165,20 @@ def process_entry(entry: dict) -> dict:
     }
 
 
+def to_dataframe(data: list[dict]) -> "pd.DataFrame":
+    """Convert results JSON list to a pandas DataFrame."""
+    import pandas as _pd
+
+    rows = [
+        {
+            k: round(v, 2) if isinstance(v, float) else v
+            for k, v in process_entry(e).items()
+        }
+        for e in data
+    ]
+    return _pd.DataFrame(rows, columns=COLUMNS)
+
+
 def main():
     if len(sys.argv) < 2:
         default = Path(__file__).parent / "experiments" / "all_results_1.json"

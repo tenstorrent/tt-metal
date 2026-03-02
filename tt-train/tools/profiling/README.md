@@ -333,6 +333,34 @@ Examples:
 - `p3_b1_blk4_tp1_ddp8_ga1_default_naive` — Phase 3, DDP=8, naive profiler
 - `p5_b4_blk4_tp1_ddp1_ga1_memeff_naive` — Phase 5, batch 4, memory efficient (gradient checkpointing), naive profiler
 
+## Visualization
+
+The easiest way to run the full pipeline (extract → enrich → visualize) is the Jupyter notebook:
+
+```bash
+jupyter notebook tt-train/tools/profiling/profiling_analysis.ipynb
+```
+
+It runs all steps in order and displays plots inline. Edit the first cell to set your run directories and configuration.
+
+The visualization scripts can also be run standalone from the command line, taking a CSV as input:
+
+```bash
+# Convert JSON → CSV first
+python3 tt-train/tools/profiling/results_visualization/results_to_csv.py results.json results.csv
+
+# Then generate plots
+python3 tt-train/tools/profiling/results_visualization/plot_batch_scaling.py results.csv output_dir/
+python3 tt-train/tools/profiling/results_visualization/plot_ddp_scaling.py results.csv output_dir/
+python3 tt-train/tools/profiling/results_visualization/plot_tp_scaling.py results.csv output_dir/
+```
+
+| Script | Plots |
+|---|---|
+| `plot_batch_scaling.py` | Tokens/s, fwd/bwd/opt/step time vs batch size (with ideal lines + MFU) |
+| `plot_ddp_scaling.py` | Tokens/s, tokens/s/device, step time, gradient sync vs DDP degree |
+| `plot_tp_scaling.py` | Tokens/s, tokens/s/device, fwd/bwd/opt/step time vs TP (per block count, with CCL overlay) |
+
 ## Experiment Phases
 
 | Phase | Goal | Profiler |

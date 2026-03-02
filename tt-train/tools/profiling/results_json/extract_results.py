@@ -714,6 +714,8 @@ def main_run_dir(
     )
     print(f"\n{ok}/{len(results)} experiments with data → {output}")
 
+    return results
+
 
 def main():
     parser = argparse.ArgumentParser(

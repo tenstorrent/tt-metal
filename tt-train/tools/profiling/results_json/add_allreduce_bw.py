@@ -64,6 +64,49 @@ def compute_allreduce_bw(
     return total_bytes_moved / time_s
 
 
+def enrich_allreduce_bw(
+    results: list[dict],
+    topology: str = "linear",
+    theoretical_bw: float = 48.0,
+    tp_mem_shard: float = 0.88,
+) -> int:
+    """Add all-reduce BW data to DDP experiments in-place. Returns count of annotated entries."""
+    for entry in results:
+        exp = entry.get("experiment", {})
+        ddp = exp.get("ddp", 1)
+        if ddp < 2:
+            continue
+
+        tp = exp.get("tp", 1)
+        num_params = entry.get("num_parameters")
+        grad_sync_ms = get_grad_sync_ms(entry)
+
+        if not grad_sync_ms or grad_sync_ms <= 0 or not num_params:
+            continue
+
+        params_fraction = (1 - tp_mem_shard) + tp_mem_shard / tp
+        tensor_bytes = num_params * params_fraction * DTYPE_BYTES
+        bw = compute_allreduce_bw(tensor_bytes, ddp, grad_sync_ms / 1000, topology)
+        bw_gbs = bw / 1e9
+
+        entry["allreduce"] = {
+            "topology": topology,
+            "ddp": ddp,
+            "tp": tp,
+            "params_fraction": round(params_fraction, 4),
+            "tensor_bytes": round(tensor_bytes),
+            "tensor_mb": round(tensor_bytes / 1e6, 1),
+            "grad_sync_ms": round(grad_sync_ms, 3),
+            "bw_GBs": round(bw_gbs, 2),
+            "theoretical_bw_GBs": theoretical_bw,
+            "bw_util_perc": round(bw_gbs / theoretical_bw * 100, 1)
+            if theoretical_bw > 0
+            else 0,
+        }
+
+    return sum(1 for e in results if "allreduce" in e)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Add all-reduce bandwidth analysis")
     parser.add_argument("results_json", help="Path to results JSON")
@@ -96,58 +139,12 @@ def main():
     )
 
     results = json.loads(results_path.read_text())
+    print(f"Loaded {len(results)} experiments\n")
 
-    ddp_entries = [e for e in results if e.get("experiment", {}).get("ddp", 1) > 1]
-    print(f"Loaded {len(results)} experiments, {len(ddp_entries)} with DDP > 1")
-    print(f"Topology: {args.topology}, theoretical BW: {args.theoretical_bw} GB/s\n")
-
-    for entry in ddp_entries:
-        name = entry["name"]
-        exp = entry.get("experiment", {})
-        ddp = exp.get("ddp", 1)
-        tp = exp.get("tp", 1)
-        num_params = entry.get("num_parameters")
-        tp_mem_shard = args.tp_mem_shard
-
-        grad_sync_ms = get_grad_sync_ms(entry)
-
-        if grad_sync_ms is None or grad_sync_ms <= 0:
-            print(f"  [{name}] no gradient_sync timing — skipped")
-            continue
-
-        if num_params is None:
-            print(f"  [{name}] no num_parameters — skipped")
-            continue
-
-        # Per-chip gradient bytes = total_params * params_fraction * dtype
-        params_fraction = (1 - tp_mem_shard) + tp_mem_shard / tp
-        tensor_bytes = num_params * params_fraction * DTYPE_BYTES
-
-        time_s = grad_sync_ms / 1000.0
-        bw = compute_allreduce_bw(tensor_bytes, ddp, time_s, args.topology)
-        bw_gbs = bw / 1e9
-        bw_util = bw_gbs / args.theoretical_bw * 100 if args.theoretical_bw > 0 else 0
-
-        entry["allreduce"] = {
-            "topology": args.topology,
-            "ddp": ddp,
-            "tp": tp,
-            "params_fraction": round(params_fraction, 4),
-            "tensor_bytes": round(tensor_bytes),
-            "tensor_mb": round(tensor_bytes / 1e6, 1),
-            "grad_sync_ms": round(grad_sync_ms, 3),
-            "bw_GBs": round(bw_gbs, 2),
-            "theoretical_bw_GBs": args.theoretical_bw,
-            "bw_util_perc": round(bw_util, 1),
-        }
-
-        print(
-            f"  [{name}] DDP={ddp} TP={tp} "
-            f"tensor={tensor_bytes/1e6:.1f}MB "
-            f"sync={grad_sync_ms:.1f}ms "
-            f"BW={bw_gbs:.1f}GB/s "
-            f"util={bw_util:.1f}%"
-        )
+    annotated = enrich_allreduce_bw(
+        results, args.topology, args.theoretical_bw, args.tp_mem_shard
+    )
+    print(f"\n{annotated}/{len(results)} experiments annotated")
 
     with open(output, "w") as f:
         json.dump(results, f, indent=2)
