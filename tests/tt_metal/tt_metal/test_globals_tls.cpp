@@ -100,6 +100,10 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         const uint32_t offset = dm * TLS_CHECK_RESULT_SLOT_WORDS;
         return (uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_LO] | ((uint64_t)dram_data[offset + TLS_CHECK_GLOBAL_ADDR_HI] << 32);
     };
+    auto slot_thread_local_addr = [&dram_data](uint32_t dm) {
+        const uint32_t offset = dm * TLS_CHECK_RESULT_SLOT_WORDS;
+        return (uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_LO] | ((uint64_t)dram_data[offset + TLS_CHECK_THREAD_LOCAL_ADDR_HI] << 32);
+    };
     const uint64_t ref_addr_0_3 = slot_global_addr(0);
     const uint64_t ref_addr_4_6 = slot_global_addr(4);
     const uint64_t ref_addr_7 = slot_global_addr(7);
@@ -114,6 +118,12 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         uint32_t global_start = dram_data[offset + TLS_CHECK_GLOBAL_START];
         uint32_t global_end = dram_data[offset + TLS_CHECK_GLOBAL_END];
         uint64_t global_addr = slot_global_addr(dm);
+        uint32_t uninitialized_global_start = dram_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_START];
+        uint32_t uninitialized_global_end = dram_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_END];
+        uint64_t thread_local_start = dram_data[offset + TLS_CHECK_THREAD_LOCAL_START];
+        uint64_t thread_local_end = dram_data[offset + TLS_CHECK_THREAD_LOCAL_END];
+        uint32_t uninitialized_thread_local_start = dram_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_START];
+        uint32_t uninitialized_thread_local_end = dram_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END];
 
         // 1. Kernel ID: DM 0-3 → 1, DM 4-6 → 2, DM 7 → 3
         uint32_t expected_kernel_id = (dm <= 3) ? 1u : (dm <= 6) ? 2u : 3u;
@@ -168,6 +178,31 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
                 EXPECT_NE(ref_addr_7, ref_addr_4_6) << "DM 7 addr should differ from DM 4-6";
             }
         }
+
+        // 7. uninitialized global start & end
+        if (is_legacy_kernel) {
+            EXPECT_EQ(uninitialized_global_start, 0u) << "dm=" << dm;
+            EXPECT_EQ(uninitialized_global_end, 1u) << "dm=" << dm;
+        } else {
+            if (dm <= 3) {
+                EXPECT_EQ(uninitialized_global_start, 0u + dm) << "dm=" << dm;
+                EXPECT_EQ(uninitialized_global_end, 1u + dm) << "dm=" << dm;
+            } else if (dm <= 6) {
+                EXPECT_EQ(uninitialized_global_start, 0u + (dm - 4)) << "dm=" << dm;
+                EXPECT_EQ(uninitialized_global_end, 1u + (dm - 4)) << "dm=" << dm;
+            } else {
+                EXPECT_EQ(uninitialized_global_start, 0u) << "dm=" << dm;
+                EXPECT_EQ(uninitialized_global_end, 1u) << "dm=" << dm;
+            }
+        }
+
+        // 8. thread local start & end
+        EXPECT_EQ(thread_local_start, 0u) << "dm=" << dm;
+        EXPECT_EQ(thread_local_end, 1u) << "dm=" << dm;
+
+        // 9. uninitialized thread local start & end
+        EXPECT_EQ(uninitialized_thread_local_start, 0u) << "dm=" << dm;
+        EXPECT_EQ(uninitialized_thread_local_end, 1u) << "dm=" << dm;
     }
     if (is_legacy_kernel) {
         std::set<uint64_t> addrs;
@@ -176,6 +211,11 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         }
         EXPECT_EQ(addrs.size(), NUM_DM_CORES) << "Legacy: all global addresses should be unique";
     }
+    std::set<uint64_t> thread_local_addrs;
+    for (uint32_t dm = 0; dm < NUM_DM_CORES; dm++) {
+        thread_local_addrs.insert(slot_thread_local_addr(dm));
+    }
+    EXPECT_EQ(thread_local_addrs.size(), NUM_DM_CORES) << "All thread local addresses should be unique";
 }
 
 INSTANTIATE_TEST_SUITE_P(
