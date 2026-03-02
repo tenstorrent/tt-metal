@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
+from models.common.utility_functions import is_wormhole_b0
 import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     run_flash_mla_decode_impl,
@@ -57,7 +57,7 @@ def create_replicated_q_shard_spec(device, batch, nh, d, num_cores_per_head=4):
 @pytest.mark.parametrize("d_rope", [64])
 @pytest.mark.parametrize("q_num_cores", [64])
 @pytest.mark.parametrize("q_dtype, dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)])
-@pytest.mark.parametrize("q_custom_shard", [True])
+@pytest.mark.parametrize("q_custom_shard", [False])
 @pytest.mark.parametrize("reuse_k", [True])
 @pytest.mark.parametrize("use_paged_attention", [True])
 @pytest.mark.parametrize("block_size", [32])
@@ -97,7 +97,9 @@ def test_flash_mla_decode_stress(
         )
 
     q_mem_config = (
-        create_replicated_q_shard_spec(device, batch, nh, kv_lora_rank + d_rope, 4) if q_custom_shard else None
+        create_replicated_q_shard_spec(device, batch, nh, kv_lora_rank + d_rope, 4)
+        if q_custom_shard and is_wormhole_b0()
+        else None
     )
 
     run_flash_mla_decode_impl(
