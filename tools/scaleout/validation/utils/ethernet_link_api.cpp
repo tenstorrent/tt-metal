@@ -10,22 +10,6 @@
 namespace tt::scaleout_tools {
 
 // ============================================================================
-// Consolidated helpers (should be arch agnostic)
-// ============================================================================
-
-void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
-        reset_links_wh(links_to_reset);
-    } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
-        reset_links_bh(links_to_reset);
-    } else {
-        TT_THROW("Unsupported cluster architecture for ethernet link reset: {}", cluster.arch());
-    }
-}
-
-// ============================================================================
 // Wormhole-specific helpers (write to specific L1 addresses)
 // ============================================================================
 
@@ -65,6 +49,16 @@ void reset_links_wh(const std::vector<ResetLink>& links_to_reset) {
         } while (reset_status[0]);
     }
 }
+
+// ============================================================================
+// Blackhole-specific defines (write to mailbox)
+// ============================================================================
+
+struct BHEthMsg {
+    FWMailboxMsg msg_type;
+    std::vector<uint32_t> msg_args;
+    std::string log_message;
+};
 
 // ============================================================================
 // Blackhole-specific helpers (write to mailbox)
@@ -129,6 +123,17 @@ void send_eth_msg(
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     std::vector<uint32_t> msg_vec = {call | msg_val};
 
+    // Ensure we always write the full mailbox arg window to avoid stale values
+    const std::size_t mailbox_arg_count = hal.get_eth_fw_mailbox_arg_count();
+    if (args.size() > mailbox_arg_count) {
+        log_warning(
+            tt::LogDistributed,
+            "send_eth_msg: too many mailbox args ({}) for ETH FW mailbox capacity ({})",
+            args.size(),
+            mailbox_arg_count);
+    }
+    args.resize(mailbox_arg_count, 0);
+
     cluster.write_core(chip_id, coord, args, first_arg_addr);
     cluster.write_core(chip_id, coord, msg_vec, mailbox_addr);
 
@@ -171,6 +176,22 @@ void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
 
     // Send port reinit messages to all links
     send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
+}
+
+// ============================================================================
+// Consolidated helpers (should be arch agnostic)
+// ============================================================================
+
+void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+        reset_links_wh(links_to_reset);
+    } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        reset_links_bh(links_to_reset);
+    } else {
+        TT_THROW("Unsupported cluster architecture for ethernet link reset: {}", cluster.arch());
+    }
 }
 
 }  // namespace tt::scaleout_tools

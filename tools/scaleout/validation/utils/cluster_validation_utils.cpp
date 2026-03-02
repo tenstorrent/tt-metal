@@ -1411,8 +1411,7 @@ void reset_cross_node_ethernet_links(
     std::vector<ResetLink> links_to_reset;
 
     // Collect all cross-node links to reset
-    for (size_t i = 0; i < cross_node_links_to_reset.size(); i++) {
-        const auto& link = cross_node_links_to_reset[i];
+    for (const auto& link : cross_node_links_to_reset) {
         auto chip_id = asic_id_to_chip_id[*link.asic_id];
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
 
@@ -1447,6 +1446,7 @@ void reset_ethernet_links(
     get_cross_node_ethernet_links_to_reset(physical_system_descriptor, asic_topology, cross_node_links_to_reset);
     reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset);
 
+    // Give everything 5 more seconds to stabilize after reset completion
     std::this_thread::sleep_for(std::chrono::seconds(5));
 }
 

@@ -149,7 +149,7 @@ run_cluster_validation() {
     fi
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
-        mpirun --host $HOSTS \
+        mpirun --host "$HOSTS" \
             --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
@@ -210,7 +210,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
     if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
         OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
 
-        mkdir -p $OUTPUT_DIR_RETRY
+        mkdir -p "$OUTPUT_DIR_RETRY"
 
         LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
 
@@ -221,8 +221,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo "=========================================="
             echo ""
 
-            echo ""
-            echo "Running cluster validation..."
+            echo "Re-running cluster validation..."
             run_cluster_validation
             echo "Iteration $i retry completed at $(date)"
             echo "=========================================="
