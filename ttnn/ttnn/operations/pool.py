@@ -385,46 +385,57 @@ if hasattr(ttnn, "adaptive_max_pool2d"):
 
 def golden_upsample(
     input_tensor: ttnn.Tensor,
-    batch_size: int,
-    input_h: int,
-    input_w: int,
-    channels: int,
-    scale_factor: Tuple[int, int],
+    scale_factor,
     mode: str = "nearest",
+    batch_size: int = None,
+    input_h: int = None,
+    input_w: int = None,
+    channels: int = None,
     align_corners: bool = None,
     **_,
 ):
     """
     Golden function for upsample operation using torch.nn.functional.interpolate.
 
+    Supports two input formats:
+    - (N, H, W, C): Used by attach_golden_function (ttnn.upsample passes this format)
+    - (1, 1, N*H*W, C): Used by direct test calls with explicit batch_size/input_h/input_w/channels
+
     Args:
-        input_tensor: Input tensor in (1, 1, N*H*W, C) format
-        batch_size: Number of batches
-        input_h: Input height
-        input_w: Input width
-        channels: Number of channels
-        scale_factor: Upsampling scale factor (scale_h, scale_w)
+        input_tensor: Input tensor in (N, H, W, C) or (1, 1, N*H*W, C) format
+        scale_factor: Upsampling scale factor - int, float, [int, int], or [float, float]
         mode: Interpolation mode ("nearest" or "bilinear")
+        batch_size: Number of batches (required for (1, 1, N*H*W, C) format)
+        input_h: Input height (required for (1, 1, N*H*W, C) format)
+        input_w: Input width (required for (1, 1, N*H*W, C) format)
+        channels: Number of channels (required for (1, 1, N*H*W, C) format)
         align_corners: Whether to align corners (only for bilinear mode)
 
     Returns:
-        Output tensor in (1, 1, N*out_H*out_W, C) format
+        Output tensor in the same spatial format as input
     """
     import torch
 
-    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
-    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+    # Normalize scale_factor to a tuple
+    if isinstance(scale_factor, (int, float)):
+        scale_factor = (scale_factor, scale_factor)
 
-    # Apply upsample
-    output_nchw = torch.nn.functional.interpolate(
-        input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
-    )
-
-    # Convert back to (1, 1, N*H*W, C)
-    N, C, H, W = output_nchw.shape
-    output_tensor = output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
-
-    return output_tensor
+    if batch_size is not None:
+        # Direct call with (1, 1, N*H*W, C) format - reshape to (N, H, W, C) first
+        input_nhwc = input_tensor.reshape(batch_size, input_h, input_w, channels)
+        input_nchw = input_nhwc.permute(0, 3, 1, 2)
+        output_nchw = torch.nn.functional.interpolate(
+            input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
+        )
+        N, C, H, W = output_nchw.shape
+        return output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+    else:
+        # attach_golden_function call with (N, H, W, C) format
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
+        output_nchw = torch.nn.functional.interpolate(
+            input_nchw, scale_factor=scale_factor, mode=mode, align_corners=align_corners
+        )
+        return output_nchw.permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
