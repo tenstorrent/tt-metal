@@ -36,7 +36,7 @@ class MeshDevice;
  * - Device memory resource lifetime == object lifetime
  *   - Device memory is allocated on construction, and released on destruction.
  *   - The programmer explicitly manages the device-allocated memory lifetime.
- *   - This can be tricky in an asynchronous runtime environment. For now, the onus is on the programmer to correctly
+ *   - This can be tricky in an asynchronous runtime environment. For now, the focus is on the programmer to correctly
  *     manage MeshTensor lifetime around queue synchronization events.
  * - Movable (RAII transfer of ownership)
  * - Non-copyable
