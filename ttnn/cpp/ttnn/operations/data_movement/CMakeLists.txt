@@ -303,7 +303,7 @@ target_sources(
             tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp
             tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp
             tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp
+            tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.hpp
             tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp
             tilize_with_val_padding/device/factories/tilize_with_val_padding_shared_variables.hpp
             tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.hpp
@@ -475,7 +475,7 @@ target_sources(
         tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
