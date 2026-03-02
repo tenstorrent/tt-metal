@@ -174,6 +174,25 @@ public:
     bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
 
+    // ============ Connection Pairing Detection ============
+    /**
+     * Determines if a connection is a direct worker-to-router pairing.
+     * 
+     * Pairing is true when:
+     * - fabric_tensix_config == DISABLED: Workers connect directly to routers
+     *   → Use overlay stream 0's scratch register for handshake address
+     * 
+     * Pairing is false when:
+     * - fabric_tensix_config is enabled (MUX, UDM, etc.): Mux/relay intermediaries exist
+     *   → Use L1 addresses for handshake (worker→mux, mux→router, relay→worker, router→relay)
+     * 
+     * @param fabric_tensix_config The tensix configuration mode
+     * @return true if direct worker-to-router pairing (use overlay), false if mux/relay involved (use L1)
+     */
+    static constexpr bool is_worker_router_pairing(FabricTensixConfig fabric_tensix_config) {
+        return fabric_tensix_config == FabricTensixConfig::DISABLED;
+    }
+
 private:
 
     IntermeshVCConfig compute_intermesh_vc_config() const;

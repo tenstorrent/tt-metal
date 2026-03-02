@@ -691,14 +691,14 @@ size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
 }
 
 size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(
-    uint32_t channel_id, FabricTensixCoreType core_id, bool use_overlay) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     TT_FATAL(
         core_id == FabricTensixCoreType::MUX,
         "caller must be for accessing mux config, but was accessing: {} config",
         core_id);
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::ChannelTypes::WORKER_CHANNEL;
-    return config->get_connection_handshake_address(channel_type, channel_id, use_overlay);
+    return config->get_connection_handshake_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(

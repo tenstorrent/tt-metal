@@ -313,6 +313,7 @@ private:
     uint32_t noc_coord_reg_offset_{};
     uint32_t noc_overlay_start_addr_{};
     uint32_t noc_stream_reg_space_size_{};
+    uint32_t noc_stream_remote_src_reg_index_{};  // STREAM_REMOTE_SRC_REG_INDEX: 0 for WH, 4 for BH
     uint32_t noc_stream_remote_dest_buf_size_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
@@ -388,6 +389,14 @@ public:
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
     bool has_stream_registers() const { return has_stream_registers_; }
+
+    // Get the L1 address of a stream's scratch register (STREAM_REMOTE_SRC_REG_INDEX)
+    // Used for overlay stream register access, particularly for fabric handshake optimization
+    uint32_t get_stream_scratch_register_address(uint32_t stream_id) const {
+        return noc_overlay_start_addr_ + 
+               (stream_id * noc_stream_reg_space_size_) + 
+               (noc_stream_remote_src_reg_index_ * sizeof(uint32_t));
+    }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

@@ -150,7 +150,7 @@ public:
     virtual size_t get_channel_credits_stream_id(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_channel_base_address(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_connection_info_address(ChannelTypes channel_type, uint32_t channel_id) const;
-    size_t get_connection_handshake_address(ChannelTypes channel_type, uint32_t channel_id, bool use_overlay) const;
+    size_t get_connection_handshake_address(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_flow_control_address(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_buffer_index_address(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_memory_map_end_address() const;
@@ -262,11 +262,6 @@ protected:
 
     // End of L1 memory map
     size_t memory_map_end_address_ = 0;
-
-    // Architecture-specific overlay register address for channel 0 handshake
-    // Used for WORKER_CHANNEL and ROUTER_CHANNEL channel 0 only
-    // Formula: NOC_OVERLAY_START_ADDR + (stream_id=0 * 0x1000) + (STREAM_REMOTE_SRC_REG_INDEX << 2)
-    size_t stream_scratch_register_0_ = 0;
 };
 
 /**
