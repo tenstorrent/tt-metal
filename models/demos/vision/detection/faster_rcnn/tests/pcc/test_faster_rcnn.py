@@ -7,9 +7,6 @@ PCC validation tests for Faster-RCNN TTNN implementation.
 Validates backbone, FPN, and full model outputs against PyTorch reference.
 """
 
-import math
-from collections import OrderedDict
-
 import pytest
 import torch
 
@@ -21,9 +18,7 @@ from models.demos.vision.detection.faster_rcnn.common import (
     FASTER_RCNN_L1_SMALL_SIZE,
     load_torch_faster_rcnn,
 )
-from models.demos.vision.detection.faster_rcnn.tt.model_preprocessing import (
-    create_faster_rcnn_model_parameters,
-)
+from models.demos.vision.detection.faster_rcnn.tt.model_preprocessing import create_faster_rcnn_model_parameters
 from models.demos.vision.detection.faster_rcnn.tt.ttnn_faster_rcnn import (
     TtFasterRCNN,
     TtFasterRCNNBackboneOnly,

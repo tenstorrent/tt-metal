@@ -25,9 +25,8 @@ import torch
 from torchvision.models.detection.rpn import concat_box_prediction_layers
 
 import ttnn
-
-from models.demos.vision.detection.faster_rcnn.tt.ttnn_resnet50_backbone import TtResNet50Backbone, TtConv2D
 from models.demos.vision.detection.faster_rcnn.tt.ttnn_fpn import TtFPN
+from models.demos.vision.detection.faster_rcnn.tt.ttnn_resnet50_backbone import TtResNet50Backbone
 
 FEATURE_LEVEL_KEYS = ["0", "1", "2", "3", "pool"]
 FPN_CHANNELS = 256

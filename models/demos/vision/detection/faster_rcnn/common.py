@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torchvision
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
+from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights, fasterrcnn_resnet50_fpn
 
 FASTER_RCNN_BATCH_SIZE = 1
 FASTER_RCNN_L1_SMALL_SIZE = 24576
