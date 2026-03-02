@@ -46,9 +46,9 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHON_ENV_DIR=/opt/venv \
-    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv" \
     PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR"
+    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
+    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
@@ -113,10 +113,10 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
 # Set environment variables for the venv (must be Docker ENV, not shell export,
 # so they persist across RUN layers and are inherited by uv's build subprocesses)
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
-    DEBIAN_FRONTEND=noninteractive \
+ENV DEBIAN_FRONTEND=noninteractive \
     PYTHON_ENV_DIR=/opt/venv \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
     UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Install uv from official distroless image
