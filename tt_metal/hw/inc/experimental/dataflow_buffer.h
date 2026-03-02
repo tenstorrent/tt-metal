@@ -93,6 +93,9 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+        if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
+            return;
+        }
         llk_wait_tiles(logical_dfb_id_, num_entries);
         // DPRINT << "wait_front: tc_id: " << static_cast<uint32_t>(tc_id)
         //        << " capacity: " << static_cast<uint32_t>(tile_counters[tc_id].f.buf_capacity)
@@ -119,8 +122,10 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+        if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
+            return;
+        }
         llk_pop_tiles(logical_dfb_id_, num_entries);
-        // DPRINT << "pop_front: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " << static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL();
         // UNPACK({
         //     tile_counters[tc_id].f.acked = num_entries;
         //     local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
@@ -159,9 +164,13 @@ public:
                 PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+                if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
+                    continue;
+                }
                 all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
                 uint8_t tensix_id = get_tensix_id(packed_tc);
+                // DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)) << " read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
                 all_acked &=
                     (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
