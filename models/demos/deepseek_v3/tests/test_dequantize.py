@@ -2,98 +2,54 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import pytest
 import torch
 
-from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
+from models.demos.deepseek_v3.utils.hf_model_utils import load_weight_from_weights_dict
+
+REFERENCE_WEIGHT_KEYS = [
+    # Embedding + LM head (full model endpoints)
+    "model.embed_tokens.weight",
+    "lm_head.weight",
+    # Dense decoder block weights
+    "model.layers.0.self_attn.q_a_proj.weight",
+    "model.layers.0.mlp.gate_proj.weight",
+    # MoE decoder block weights
+    "model.layers.3.mlp.experts.0.gate_proj.weight",
+]
 
 
-def _reference_dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: tuple[int, ...]) -> torch.Tensor:
-    """Naive reference implementation of dequantization that uses `repeat_interleave`"""
-    expanded = inv_scale
-    for dim, block_dim in enumerate(block_shape):
-        expanded = expanded.repeat_interleave(block_dim, dim=dim)
-    slices = tuple(slice(0, size) for size in tensor.shape)
-    return tensor.float() * expanded[slices].float()
+@pytest.mark.parametrize("weight_name", REFERENCE_WEIGHT_KEYS)
+def test_loaded_dequantized_weight_matches_reference_tensor(state_dict, weight_name):
+    if weight_name not in state_dict:
+        pytest.skip(f"Checkpoint does not contain '{weight_name}'")
+
+    # The dequantized checkpoint should not have fp8 scales for these weights.
+    assert f"{weight_name}_scale_inv" not in state_dict
+
+    reference_weight = state_dict[weight_name]
+    assert reference_weight.dtype != torch.float8_e4m3fn
+
+    load_weight = load_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(reference_weight)
+    loaded_tensor = load_weight(weight_name, target_tensor)
+
+    assert loaded_tensor is target_tensor
+    torch.testing.assert_close(loaded_tensor, reference_weight, rtol=0.0, atol=0.0)
 
 
-@pytest.mark.parametrize(
-    "shape,block_shape,input_dtype",
-    [
-        ((130, 257), (128, 128), torch.float8_e4m3fn),  # non-divisible in both dims
-        ((512, 1024), (128, 128), torch.float8_e4m3fn),  # exactly divisible
-        ((63, 65), (32, 32), torch.float8_e4m3fn),  # small non-divisible
-        ((5, 7, 9), (2, 3, 4), torch.float8_e4m3fn),  # rank-3 coverage
-    ],
-)
-def test_dequantize_tensor_matches_reference(
-    shape: tuple[int, ...], block_shape: tuple[int, ...], input_dtype: torch.dtype
-):
-    torch.manual_seed(1234)
-    inv_shape = tuple(math.ceil(shape[i] / block_shape[i]) for i in range(len(shape)))
+def test_loaded_dequantized_weight_matches_reference_with_target_dtype_cast(state_dict):
+    weight_name = "model.layers.0.mlp.down_proj.weight"
+    if weight_name not in state_dict:
+        pytest.skip(f"Checkpoint does not contain '{weight_name}'")
 
-    quantized = torch.rand(shape, dtype=torch.float32).to(input_dtype)
-    inv_scale = torch.rand(inv_shape, dtype=torch.float32)
+    reference_weight = state_dict[weight_name]
+    assert reference_weight.dtype != torch.float8_e4m3fn
 
-    expected = _reference_dequantize(quantized, inv_scale, block_shape)
-    actual = dequantize_tensor(quantized, inv_scale, block_shape)
+    load_weight = load_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty(reference_weight.shape, dtype=torch.float32)
+    loaded_tensor = load_weight(weight_name, target_tensor)
 
-    assert actual.dtype == torch.float32
-    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
-
-
-def test_dequantize_tensor_does_not_mutate_float32_input():
-    torch.manual_seed(2026)
-
-    tensor = torch.randn((8, 257, 259), dtype=torch.float32)
-    tensor_before = tensor.clone()
-    scale = torch.rand((8, 3, 3), dtype=torch.float32) + 0.1
-
-    _ = dequantize_tensor(tensor, scale, (1, 128, 128))
-
-    assert torch.equal(tensor, tensor_before)
-
-
-def test_dequantize_tensor_matches_reference_in_experts_weight_loading_flow():
-    torch.manual_seed(1337)
-
-    num_experts = 8
-    weight_shape = (257, 259)
-    block_shape = (128, 128)
-    block_shape_with_expert_dim = (1, *block_shape)
-    scale_shape = tuple(math.ceil(weight_shape[i] / block_shape[i]) for i in range(len(weight_shape)))
-
-    expert_weights = [torch.randn(weight_shape, dtype=torch.float32) for _ in range(num_experts)]
-    quant_scales = [torch.rand(scale_shape, dtype=torch.float32) + 0.1 for _ in range(num_experts)]
-
-    # This mirrors add_inv_scale_to_state_dict's quantization path in module tests.
-    quantized_old = [
-        _reference_dequantize(weight.clone(), scale, block_shape).to(torch.float8_e4m3fn)
-        for weight, scale in zip(expert_weights, quant_scales, strict=True)
-    ]
-    quantized_new = [
-        dequantize_tensor(weight.clone(), scale, block_shape).to(torch.float8_e4m3fn)
-        for weight, scale in zip(expert_weights, quant_scales, strict=True)
-    ]
-    inv_scales = [1.0 / scale for scale in quant_scales]
-
-    quantized_old_stacked = torch.stack(quantized_old)
-    quantized_new_stacked = torch.stack(quantized_new)
-    inv_scales_stacked = torch.stack(inv_scales)
-
-    # This mirrors Experts.convert_weights dequantization path.
-    loaded_old = _reference_dequantize(quantized_old_stacked, inv_scales_stacked, block_shape_with_expert_dim)
-    loaded_new = dequantize_tensor(quantized_new_stacked, inv_scales_stacked, block_shape_with_expert_dim)
-
-    assert torch.equal(quantized_new_stacked, quantized_old_stacked)
-    assert torch.allclose(loaded_new, loaded_old, atol=1e-6, rtol=1e-6)
-
-
-def test_dequantize_tensor_rejects_invalid_rank():
-    quantized = torch.randn((2, 3), dtype=torch.float32).to(torch.float8_e4m3fn)
-    inv_scale = torch.randn((1,), dtype=torch.float32)
-
-    with pytest.raises(ValueError, match="same ndim"):
-        dequantize_tensor(quantized, inv_scale, (2, 2))
+    assert loaded_tensor is target_tensor
+    assert loaded_tensor.dtype == torch.float32
+    torch.testing.assert_close(loaded_tensor, reference_weight.to(torch.float32), rtol=0.0, atol=0.0)

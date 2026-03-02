@@ -32,7 +32,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
-    dequantize,
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
@@ -65,7 +64,6 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         num_shards = mesh_device.shape[0]
-        weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
         dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
@@ -75,6 +73,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        def _load_weight(weight_name: str, shape: tuple[int, ...]) -> torch.Tensor:
+            """
+            Load an already-dequantized weight tensor (bfloat16) from the HF state dict.
+            """
+            return get_state_dicts(state_dicts, weight_name, shape=shape, dtype=torch.bfloat16)
 
         # Norm weights
         norm_weight_configs = {
@@ -88,15 +92,11 @@ class MLA1D(AbstractModule):
         }
 
         # Regular non-split weights
-        linear_weight_configs = {  # TODO: add dequant
+        linear_weight_configs = {
             ttnn_name: {
                 "input_tensor_b": cls._convert_weight(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    dequantize(
-                        get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
-                        get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
-                        (1, weight_block_height, weight_block_width),
-                    ),
+                    _load_weight(f"{hf_name}.weight", shape),
                     mesh_dims,
                     mesh_device,
                 ),
@@ -109,21 +109,8 @@ class MLA1D(AbstractModule):
 
         # Fused wq_a and wkv_a weights: concatenated along output dimension
         # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        wq_a_weight = dequantize(
-            get_state_dicts(state_dicts, "q_a_proj.weight", (q_lora_rank, dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "q_a_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wkv_a_weight = dequantize(
-            get_state_dicts(
-                state_dicts,
-                "kv_a_proj_with_mqa.weight",
-                (kv_lora_rank + qk_rope_head_dim, dim),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, "kv_a_proj_with_mqa.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_a_weight = _load_weight("q_a_proj.weight", (q_lora_rank, dim))
+        wkv_a_weight = _load_weight("kv_a_proj_with_mqa.weight", (kv_lora_rank + qk_rope_head_dim, dim))
         # Concatenate: [num_shards, q_lora_rank + kv_lora_rank + qk_rope_head_dim, dim]
         wq_kv_a_weight = torch.cat([wq_a_weight, wkv_a_weight], dim=-2)
         fused_weight_configs = {
@@ -138,15 +125,9 @@ class MLA1D(AbstractModule):
         }
 
         # wkv_b (Needs Special handling!!)
-        torch_weights = dequantize(
-            get_state_dicts(
-                state_dicts,
-                f"kv_b_proj.weight",
-                shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, f"kv_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
+        torch_weights = _load_weight(
+            "kv_b_proj.weight",
+            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
         torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(

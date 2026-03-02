@@ -12,12 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
-    dequantize,
-    even_int_div,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI4, even_int_div, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -29,6 +24,10 @@ from models.demos.deepseek_v3.utils.run_config import (
 
 class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
+
+    # Dequantized reference weights are bf16. Keep storage/compute in bf16 for parity.
+    WEIGHT_TORCH_DTYPE = torch.bfloat16
+    WEIGHT_DTYPE = ttnn.bfloat16
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -50,30 +49,27 @@ class Experts(AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
+        def _load_expert_weight(hf_name: str) -> torch.Tensor:
+            weight_name = f"{hf_name}.weight"
+            stacked_weight = torch.stack(
+                [state_dict[f"experts.{expert_id}.{weight_name}"] for expert_id in range(hf_config.n_routed_experts)]
+            )
+            if stacked_weight.dtype != cls.WEIGHT_TORCH_DTYPE:
+                raise TypeError(
+                    f"Expected already-dequantized {cls.WEIGHT_TORCH_DTYPE} expert tensors for '{weight_name}', "
+                    f"got {stacked_weight.dtype}"
+                )
+            return stacked_weight
+
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    dequantize(
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        (1, *hf_config.quantization_config["weight_block_size"]),
-                    )
-                    .unsqueeze(0)
-                    .transpose(-1, -2),
+                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
+                    dtype=cls.WEIGHT_DTYPE,
+                    layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
@@ -122,17 +118,17 @@ class Experts(AbstractModule):
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             ),
             "mul_experts": MulConfig(
                 memory_config=output_memory_config,

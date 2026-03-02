@@ -15,7 +15,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
@@ -487,15 +486,6 @@ def base_model_name(hf_config):
     """Get the base model name from the HuggingFace config."""
     model_name = hf_config.name_or_path.split("/")[-1]
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
-
-
-def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
-    """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim
-    assert len(block_shape) == tensor.ndim and all(
-        inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
-    )
-    return dequantize_tensor(tensor, inv_scale, block_shape)
 
 
 def get_state_dicts(

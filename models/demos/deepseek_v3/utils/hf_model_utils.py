@@ -16,7 +16,6 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import no_init_weights
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.utils.config_helpers import dequantize
 
 
 def load_tokenizer(model_path: str):
@@ -90,9 +89,10 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
             return tensor
         loaded_weight = weights_dict[name]
         if loaded_weight.dtype == torch.float8_e4m3fn:
-            loaded_weight_scale = weights_dict[f"{name}_scale_inv"]
-            loaded_weight = dequantize(loaded_weight, loaded_weight_scale, (128, 128)).to(tensor.dtype)
-            del loaded_weight_scale
+            raise RuntimeError(
+                f"Expected already-dequantized bf16 weights for '{name}', but found float8 tensor. "
+                "Pass a dequantized HF checkpoint."
+            )
         if loaded_weight.dtype != tensor.dtype:
             loaded_weight = loaded_weight.to(dtype=tensor.dtype)
         tensor.data = loaded_weight
@@ -249,17 +249,12 @@ def prepare_model_state_dict(
                 "Random weights with 'moe' single layer is not supported by RowBatchedModel demo yet. Use 'mlp' or disable random mode."
             )
         logger.info("Building random weights from HF reference model (ForCausalLM)...")
-        from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
 
         ref_model = DeepseekV3ForCausalLM(hf_config).eval()
-        # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
+        # Ensure parameter/buffer dtype matches downstream expectations (bfloat16).
+        # Random mode now follows the same dequantized loading path as real HF weights.
         ref_model = ref_model.to(dtype=torch.bfloat16)
         torch_state = ref_model.state_dict()
-        # Quantize MLP weights as expected by TT converters
-        torch_state = add_inv_scale_to_state_dict(
-            torch_state,
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
         model_state = {
             k: v
             for k, v in torch_state.items()
@@ -288,5 +283,15 @@ def prepare_model_state_dict(
             or k.startswith("model.norm.")
             or k.startswith("lm_head.")
         }
+        if any(name.endswith("_scale_inv") for name in model_state):
+            raise RuntimeError(
+                "Detected quantized HF tensors (*_scale_inv) in model weights. "
+                "DeepSeek-V3 TT conversion now only supports already-dequantized bf16 checkpoints."
+            )
+        if any(weight.dtype == torch.float8_e4m3fn for weight in model_state.values()):
+            raise RuntimeError(
+                "Detected float8 quantized tensors in model weights. "
+                "DeepSeek-V3 TT conversion now only supports already-dequantized bf16 checkpoints."
+            )
 
     return model_state
