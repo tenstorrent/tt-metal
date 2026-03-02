@@ -354,19 +354,7 @@ def create_routed_expert_tensors(
     # ── RMSNorm gamma weights [1, K] from state dict (post_attention_layernorm) ──
     ffn_norm_key = f"{layer_key}.post_attention_layernorm.weight"
     torch_rmsnorm_gamma = state_dict[ffn_norm_key].reshape(1, K).to(torch.bfloat16).float()
-    rmsnorm_gamma_shard = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
-    rmsnorm_gamma_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm_gamma_shard
-    )
-    ttnn_rmsnorm_gamma = ttnn.from_torch(
-        torch_rmsnorm_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=rmsnorm_gamma_mem,
-        tile=Tiles.TILE_1x32,
-        **from_torch_kwargs,
-    )
+
     # Get optimal DRAM bank cores for DRAM streaming matmul + SiLU
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
@@ -728,10 +716,24 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
-    r = create_routed_expert_tensors(device, use_hardcoded_expert_index, state_dict=state_dict)
+    r = create_routed_expert_tensors(
+        device,
+        use_hardcoded_expert_index,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(device, M, K, mcast_grid, state_dict=state_dict)
+    s = create_shared_expert_tensors(
+        device,
+        M,
+        K,
+        mcast_grid,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
 
     # ── Create sdpa_kv_cache_buffer for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -912,6 +914,8 @@ def test_moe_fused_with_reduce(
         mesh_mapper=mesh_mapper,
         create_final_output=False,
         state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -922,6 +926,8 @@ def test_moe_fused_with_reduce(
         mcast_grid,
         mesh_mapper=mesh_mapper,
         state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
@@ -1193,10 +1199,24 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     )
 
     # ── Create MLP tensors (no routing) ──
-    r = create_routed_expert_tensors(device, enable_routing=False, state_dict=state_dict)
+    r = create_routed_expert_tensors(
+        device,
+        enable_routing=False,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(device, M, K, mcast_grid, state_dict=state_dict)
+    s = create_shared_expert_tensors(
+        device,
+        M,
+        K,
+        mcast_grid,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
 
     # ── Create SDPA buffers for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -1355,7 +1375,7 @@ def test_mlp_with_reduce(
         enable_routing=False,
         state_dict=state_dict,
         is_moe=is_moe,
-        layer_idx=layer_idx if use_mlp_weights else None,
+        layer_idx=layer_idx,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -1367,7 +1387,7 @@ def test_mlp_with_reduce(
         mesh_mapper=mesh_mapper,
         state_dict=state_dict,
         is_moe=is_moe,
-        layer_idx=layer_idx if use_mlp_weights else None,
+        layer_idx=layer_idx,
     )
 
     # ── Create SDPA buffers for CB memory overlap ──
