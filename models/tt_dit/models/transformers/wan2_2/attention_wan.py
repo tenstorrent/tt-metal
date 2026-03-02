@@ -120,7 +120,7 @@ class WanAttention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
         ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
             (
                 is_blackhole(),
@@ -348,7 +348,8 @@ class WanAttention(Module):
                     mesh_device=self.mesh_device,
                     topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                    ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
+                    ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),  # Place CCL in last column
+                    use_column_major_ccl=True,  # WAN2.2 specific: use column-major CCL allocation
                 )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(

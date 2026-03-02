@@ -33,6 +33,7 @@ struct RingAttentionAllGatherAsyncParams {
     std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 };
 
 struct RingAttentionAllGatherAsyncInputs {
