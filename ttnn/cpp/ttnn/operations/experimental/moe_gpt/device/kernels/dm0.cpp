@@ -57,6 +57,7 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_r2c_bias = tt::CBIndex::c_5;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -115,6 +116,20 @@ void kernel_main() {
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
+    // Offsets for layer_id
+    // GPT-OSS: B0/B1 per expert = 8 Tiles * tile_size (for B0 alone)
+    // b0_b1_total = 2 * that (interleaved B0+B1)
+    constexpr uint32_t b0_size_per_expert = 8 * w0_w1_tile_size;
+    constexpr uint32_t b0_b1_total_size_per_expert = 2 * b0_size_per_expert;
+    constexpr uint32_t b0_b1_total_size_per_layer = num_experts * b0_b1_total_size_per_expert;
+    constexpr uint32_t b0_b1_layer_offset = layer_id * b0_b1_total_size_per_layer;
+
+    // Offsets for layer_id
+    // GPT-OSS: B2 per expert = 8 Tiles * tile_size
+    constexpr uint32_t b2_total_size_per_expert = b0_size_per_expert;
+    constexpr uint32_t b2_total_size_per_layer = num_experts * b2_total_size_per_expert;
+    constexpr uint32_t b2_layer_offset = layer_id * b2_total_size_per_layer;
+
     // GPT-OSS: W2 per expert = 90 height * 8 max width per core * tile_size
     // 90 height (no padding needed: 90/10=9 exact), 8 max tiles/core
     constexpr uint32_t w2_total_size_per_expert = num_w2_tiles_h * 8 * w2_tile_size;  // 90 * 8
@@ -124,6 +139,8 @@ void kernel_main() {
     // Offsets for expert_id
     uint32_t w0_w1_expert_offset = w0_w1_layer_offset + w0_w1_addr;
     uint32_t w2_expert_offset = w2_layer_offset + w2_addr;
+    uint32_t b0_b1_expert_offset = b0_b1_layer_offset + b0_b1_addr;
+    uint32_t b2_expert_offset = b2_layer_offset + b2_addr;
 
     // DRAM bank's base NOC address
     const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
@@ -132,6 +149,7 @@ void kernel_main() {
     // CB addresses
     //-------------------------------------------------------------------------
     const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
+    const uint32_t w_cb_bias_base_addr = get_write_ptr(cb_r2c_bias);
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 1 block (20 tiles = 10 tiles/txn * 2 txns/block)
@@ -149,6 +167,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
     bool txns_in_flight = false;
+    uint64_t a = 10;
 
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
@@ -158,18 +177,30 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         // Pipelined reading of W0/W1
         //-------------------------------------------------------------------------
-        uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
+        uint32_t b0_b1_dram_read_offset = b0_b1_expert_offset;
         // Issue reads with current trid
-        noc_async_read_set_trid(bias_trid);
-        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-            dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], bias_trid);
-        // w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+        // noc_async_read_set_trid(bias_trid);
+        // noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+        //     dram_noc_addr, b0_b1_dram_read_offset, w_cb_bias_base_addr, bias_trid);
+        // b0_b1_dram_read_offset += b0_size_per_expert;
+        //
+        // noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+        //     dram_noc_addr, b0_b1_dram_read_offset, w_cb_bias_base_addr + w0_w1_bytes_per_txn, bias_trid);
+        //
+        // if(txns_in_flight){
+        //     noc_async_read_barrier_with_trid(trid_to_wait);
+        //     cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+        //
+        //     ADVANCE_TRID(trid_to_wait);
+        //
+        //     // Reserve for next block
+        //     // Reserve back is not incremental, so to reserve one more, we need to reserve 2
+        //     // This accounts for the one we already have reserved (for in-flight read)
+        //     cb_reserve_back(cb_r2c_w2, w2_tiles_per_block*2);
+        // }
 
-        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-            dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, bias_trid);
-        // w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
-
+        uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
             noc_async_read_set_trid(trid_to_issue);
@@ -195,18 +226,35 @@ void kernel_main() {
                 // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                 // This accounts for the one we already have reserved (for in-flight read)
                 cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
-            } else {
-                // For the Bias transactions in flight
-                noc_async_read_barrier_with_trid(bias_trid);
             }
+            // else {
+
+            // For the Bias transactions in flight
+            // noc_async_read_barrier_with_trid(bias_trid);
+            // }
             txns_in_flight = true;
         }
 
         //-------------------------------------------------------------------------
         // Pipelined reading of W2
         //-------------------------------------------------------------------------
-        uint32_t w2_dram_read_offset = w2_expert_offset;
+        uint32_t b2_dram_read_offset = b2_expert_offset;
+        // noc_async_read_set_trid(bias_trid);
+        //
+        // noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+        //     dram_noc_addr,b2_dram_read_offset , w_cb_bias_base_addr, bias_trid);
+        //
+        // noc_async_read_barrier_with_trid(trid_to_wait);
+        // txns_in_flight = false;
+        //
+        // cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+        //
+        // ADVANCE_TRID(trid_to_wait);
+        //
+        // // Reserve for next block
+        // cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
 
+        uint32_t w2_dram_read_offset = w2_expert_offset;
         for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
             noc_async_read_set_trid(trid_to_issue);
@@ -220,7 +268,7 @@ void kernel_main() {
 
             ADVANCE_SLOT(slot_to_issue);
             ADVANCE_TRID(trid_to_issue);
-
+            // if (txns_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);
             cb_push_back(cb_r2c_w2, w2_tiles_per_block);
 
@@ -230,11 +278,18 @@ void kernel_main() {
             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
             // This accounts for the one we already have reserved (for in-flight read)
             cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
+            // } else {
+            // For the Bias transactions in flight
+            // noc_async_read_barrier_with_trid(bias_trid);
+            // }
+            // txns_in_flight = true;
         }
 
         // Update offsets for next expert
         w0_w1_expert_offset += w0_w1_total_size_per_expert;
+        b0_b1_expert_offset += b0_b1_total_size_per_expert;
         w2_expert_offset += w2_total_size_per_expert;
+        b2_expert_offset += b2_total_size_per_expert;
     }
 
     // Drain the pipeline - the last txn in flight

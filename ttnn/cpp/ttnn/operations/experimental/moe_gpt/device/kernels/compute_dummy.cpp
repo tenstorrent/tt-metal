@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_r2c_bias = tt::CBIndex::c_5;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
