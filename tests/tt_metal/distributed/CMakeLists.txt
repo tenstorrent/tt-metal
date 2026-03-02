@@ -76,4 +76,28 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+add_executable(multiproc_loopback_test)
+target_sources(multiproc_loopback_test PRIVATE test_multiproc_loopback.cpp)
+
+target_link_libraries(
+    multiproc_loopback_test
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    multiproc_loopback_test
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
+
+set_target_properties(
+    multiproc_loopback_test
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
 add_subdirectory(multiprocess)
