@@ -27,6 +27,51 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD unit tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-smoke-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run metalium and ttnn smoke tests"
+      run-basic-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run metalium and ttnn basic tests"
+      run-tt-cnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-CNN unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
   workflow_dispatch:
     inputs:
       runner-label:
@@ -62,6 +107,51 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD unit tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-smoke-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run metalium and ttnn smoke tests"
+      run-basic-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run metalium and ttnn basic tests"
+      run-tt-cnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-CNN unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -153,6 +243,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   run-profiler-regression:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-profiler-regression == true || github.event_name == 'schedule' }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -169,6 +260,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-umd-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -183,6 +275,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-models-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
@@ -198,6 +291,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-unit-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-ttnn-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
@@ -212,6 +306,7 @@ jobs:
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
   ops-unit-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-ops-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -228,6 +323,7 @@ jobs:
 
   metalium-smoke-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-smoke-tests == true || github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -241,6 +337,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-smoke-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-smoke-tests == true || github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -254,6 +351,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   metalium-basic-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-basic-tests == true || github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -268,6 +366,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-basic-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-basic-tests == true || github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -284,6 +383,7 @@ jobs:
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-matrix]
+    if: ${{ inputs.run-tt-cnn-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
@@ -299,7 +399,7 @@ jobs:
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') }}
+    if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
