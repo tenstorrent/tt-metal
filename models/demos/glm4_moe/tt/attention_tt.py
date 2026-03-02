@@ -607,14 +607,25 @@ class Glm4MoeAttention(LightweightModule):
         )
         # -> [1, 1, batch, 1536] (12 heads * 128 dim)
 
-        # 9. TG: apply user_selection_matrix to reorder batch entries after concat_heads.
-        # Only needed for multi-user: reorders batch entries from DP groups.
+        # 9. TG multi-user: gather DP groups' batch entries, then select real entries.
+        # After concat_heads, each device has [1,1,B_phys,1536] with only Bg real entries.
+        # all_gather(dim=2, axis=1) concatenates 4 DP groups → [1,1,4*B_phys,1536].
+        # user_selection_matrix [active_batch, 4*B_phys] selects the Bg real entries
+        # from each group, discarding padding → [1,1,active_batch,1536].
+        # Pattern from tt_transformers/tt/attention.py lines 667-687.
         if tg_batch_sliced:
-            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_shape = [int(d) for d in attn_output.shape]
             B_phys = ((self.max_batch_size + 31) // 32) * 32
             if attn_shape[-2] != B_phys:
                 attn_output = ttnn.reshape(attn_output, (1, 1, B_phys, attn_shape[-1]))
+
+            # Gather across DP groups (cluster_axis=1) on batch dim
+            attn_output = _simple_all_gather(
+                attn_output, self.mesh_device, cluster_axis=1, dim=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_output = ttnn.matmul(
                 self.user_selection_matrix,
                 attn_output,
