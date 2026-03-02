@@ -99,8 +99,6 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
             "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
             "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
     } else {
-        // Piecewise polynomial approximation — Max ULP = 1 across all BF16 inputs,
-        // 33% fewer compute cycles than the previous erf+exp formula (fixes #35971).
         compute_kernel_path =
             "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
             "kernels/compute/eltwise_bw_gelu_poly.cpp";
