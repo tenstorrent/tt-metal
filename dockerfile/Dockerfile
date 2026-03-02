@@ -70,31 +70,29 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/usr/local/bin:$PATH"
-
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
-
-# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
-# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
-# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
-#ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
-
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
-ARG OMPI_TAG=v5.0.7
-ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
-ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
-ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
 
-COPY --from=openmpi-layer /install/ /opt/
+# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
+# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
+# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    OMPI_TAG=v5.0.7 \
+    OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm \
+    PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH" \
+    LD_LIBRARY_PATH=${OMPI_PREFIX}/lib \
+    CPATH=${OMPI_PREFIX}/include \
+    PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig \
+    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
+COPY --from=openmpi-layer /install/ /opt/
 
 # Install runtime deps (SFPI already copied from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -118,11 +116,10 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PATH="/usr/local/bin:$PATH"
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-ENV CCACHE_TEMPDIR=/tmp/ccache
+ENV PYTHON_ENV_DIR=/opt/venv \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
+    CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
@@ -193,8 +190,8 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Copy pre-built ci-test venv from tool image
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
-    rm -rf $PYTHON_ENV_DIR && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR
+    cp -ua /venv-staging/venv $PYTHON_ENV_DIR
+#rm -rf $PYTHON_ENV_DIR # try just copying in place
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
@@ -216,7 +213,7 @@ LABEL org.opencontainers.image.description="TT-Metalium development environment 
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -232,11 +229,11 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     fi
 
 # Configure SSH for MPI multihost jobs readiness
-RUN adduser --uid 1001 --shell /bin/bash user \
-    && usermod -aG sudo user \
-    && echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user \
-    && mkdir -p /run/sshd \
-    && echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+RUN adduser --uid 1001 --shell /bin/bash user && \
+    usermod -aG sudo user && \
+    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
+    mkdir -p /run/sshd && \
+    echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
@@ -277,9 +274,9 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 ARG PYTHON_VERSION
 
 # Set up virtual environment
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV PYTHON_ENV_DIR=/opt/venv \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
@@ -313,11 +310,11 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 ARG PYTHON_VERSION
 
 # Set up virtual environment and TT_METAL_HOME
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV PYTHON_ENV_DIR=/opt/venv \
+    TT_METAL_HOME=/tt-metal \
+    PYTHONPATH=/tt-metal \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Accept git reference argument
 ARG GIT_REF=main
@@ -339,14 +336,13 @@ WORKDIR /tt-metal
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
     && source "$PYTHON_ENV_DIR/bin/activate" \
-    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache" && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \
