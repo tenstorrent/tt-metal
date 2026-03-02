@@ -1,0 +1,556 @@
+SLURM_NODELIST=bh-glx-c04u[02,08]
+bh-glx-c04u02
+bh-glx-c04u08
+bh-glx-c04u02.exabox.tenstorrent.com
+[95m Resetting WH Galaxy trays with reset command... [0m
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+[95m Resetting WH Galaxy trays with reset command... [0m
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0m
+All 32 chips found in "/dev/tenstorrent"
+[95m Re-initializing boards after reset.... [0m
+[93mWaiting for 30 seconds: 30[0m
+All 32 chips found in "/dev/tenstorrent"
+[95m Re-initializing boards after reset.... [0m
+[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+[1,5]<stdout>: [1m============================= test session starts ==============================[0m
+[1,5]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,5]<stdout>: cachedir: .pytest_cache
+[1,5]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,5]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,5]<stdout>: configfile: pytest.ini
+[1,5]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,5]<stdout>: timeout: 300.0s
+[1,5]<stdout>: timeout method: signal
+[1,5]<stdout>: timeout func_only: False
+[1,5]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,5]<stdout>: 
+[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:21.073[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.089[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.090[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.134[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.151[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.269[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.285[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.286[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.296[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.296[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.706[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.720[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:21.720[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.081[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.092[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.092[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.430[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.441[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.441[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.778[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.788[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:22.788[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.122[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.139[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.139[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.573[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.584[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.584[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.910[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.921[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:23.921[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.247[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[8, 20, 21, 4, 24, 7, 16, 31] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.247[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.247[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.252[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.274[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.298[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.321[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.350[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.380[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.402[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.432[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,5]<stdout>: [90m2026-02-27 23:09:24.460[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,1]<stdout>: [1m============================= test session starts ==============================[0m
+[1,1]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,1]<stdout>: cachedir: .pytest_cache
+[1,1]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,1]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,1]<stdout>: configfile: pytest.ini
+[1,1]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,1]<stdout>: timeout: 300.0s
+[1,1]<stdout>: timeout method: signal
+[1,1]<stdout>: timeout func_only: False
+[1,1]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,1]<stdout>: 
+[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
+[1,2]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,2]<stdout>: cachedir: .pytest_cache
+[1,2]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,2]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,2]<stdout>: configfile: pytest.ini
+[1,2]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,2]<stdout>: timeout: 300.0s
+[1,2]<stdout>: timeout method: signal
+[1,2]<stdout>: timeout func_only: False
+[1,6]<stdout>: [1mcollecting ... [0m[1m============================= test session starts ==============================[0m
+[1,6]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,2]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,6]<stdout>: cachedir: .pytest_cache
+[1,6]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,6]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,6]<stdout>: configfile: pytest.ini
+[1,2]<stdout>: 
+[1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,6]<stdout>: timeout: 300.0s
+[1,6]<stdout>: timeout method: signal
+[1,6]<stdout>: timeout func_only: False
+[1,4]<stdout>: [1mcollecting ... [0m[1m============================= test session starts ==============================[0m
+[1,4]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,4]<stdout>: cachedir: .pytest_cache
+[1,4]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,4]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,4]<stdout>: configfile: pytest.ini
+[1,4]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,4]<stdout>: timeout: 300.0s
+[1,4]<stdout>: timeout method: signal
+[1,4]<stdout>: timeout func_only: False
+[1,7]<stdout>: [1mcollecting ... [0m[1m============================= test session starts ==============================[0m
+[1,7]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,7]<stdout>: cachedir: .pytest_cache
+[1,7]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,7]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,7]<stdout>: configfile: pytest.ini
+[1,7]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,7]<stdout>: timeout: 300.0s
+[1,7]<stdout>: timeout method: signal
+[1,7]<stdout>: timeout func_only: False
+[1,6]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,6]<stdout>: 
+[1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,4]<stdout>: 
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
+[1,3]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,3]<stdout>: cachedir: .pytest_cache
+[1,3]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,3]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,3]<stdout>: configfile: pytest.ini
+[1,3]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,3]<stdout>: timeout: 300.0s
+[1,3]<stdout>: timeout method: signal
+[1,3]<stdout>: timeout func_only: False
+[1,7]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,7]<stdout>: 
+[1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
+[1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
+[1,0]<stdout>: cachedir: .pytest_cache
+[1,0]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,0]<stdout>: rootdir: /data/dmadic/tt-metal
+[1,0]<stdout>: configfile: pytest.ini
+[1,0]<stdout>: plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
+[1,0]<stdout>: timeout: 300.0s
+[1,0]<stdout>: timeout method: signal
+[1,0]<stdout>: timeout func_only: False
+[1,3]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,3]<stdout>: 
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:24.880[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:24.896[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:24.897[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,0]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
+[1,0]<stdout>: 
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:24.941[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:24.957[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.014[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.031[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.032[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.050[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.052[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.067[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.067[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.068[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.068[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.087[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.091[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.102[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.104[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.108[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.114[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.114[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.126[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.127[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.141[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.143[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.144[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.159[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.160[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.210[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.225[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.232[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.248[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.249[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.260[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.260[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.267[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.273[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.283[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.284[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.290[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.291[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.294[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.294[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.302[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.302[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.341[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.356[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.357[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.368[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.368[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.444[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.455[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.455[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.597[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.608[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.608[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.631[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.638[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.642[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.642[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.649[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.649[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.708[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.719[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:25.719[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.788[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.799[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:25.799[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.943[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.953[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:25.953[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.978[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.983[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.988[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:25.988[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.993[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:25.993[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.053[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.063[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.063[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.134[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.145[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.145[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.287[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.297[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.297[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.322[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.327[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.333[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.333[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.337[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.337[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.396[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.406[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.406[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.477[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.488[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.488[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.630[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.641[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.641[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.666[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.670[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.677[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:26.677[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.681[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:26.681[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.737[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.748[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:26.748[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.818[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.829[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:26.829[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.972[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.982[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:26.982[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.007[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.012[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.018[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.018[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.022[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.022[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.078[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.089[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.089[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.157[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.168[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.168[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.313[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.323[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.323[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.351[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x80 dram: 0x0 eth: 0xa0 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.353[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.362[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.362[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.364[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.364[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.420[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x80 dram: 0x0 eth: 0xa0 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.430[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.430[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.498[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.509[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.509[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.652[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.663[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.663[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.691[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.696[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.702[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:27.702[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.706[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:27.706[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.757[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.767[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:27.767[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.835[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[8, 20, 21, 4, 24, 7, 16, 31] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.835[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.835[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:27.840[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.992[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[17, 9, 23, 5, 15, 13, 29, 28] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.992[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.992[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:27.997[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.010[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:28.027[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[17, 9, 23, 5, 15, 13, 29, 28] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:28.027[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:28.027[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.030[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:28.032[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.033[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[30, 11, 6, 3, 18, 27, 25, 1] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.033[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.033[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.038[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.050[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.057[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.068[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.079[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:28.089[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[30, 11, 6, 3, 18, 27, 25, 1] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:28.089[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:28.089[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.090[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:28.094[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.103[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.108[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.121[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.128[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.138[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,2]<stdout>: [90m2026-02-27 23:09:28.146[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.155[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.172[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,4]<stdout>: [90m2026-02-27 23:09:28.188[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,1]<stdout>: [90m2026-02-27 23:09:28.840[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mWaiting for lock 'CHIP_IN_USE_8_PCIe' which is currently held by thread TID: 126206, PID: 126206[0m [90m(robust_mutex.cpp:407)[0m
+[1,6]<stdout>: [90m2026-02-27 23:09:29.032[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mWaiting for lock 'CHIP_IN_USE_17_PCIe' which is currently held by thread TID: 126202, PID: 126202[0m [90m(robust_mutex.cpp:407)[0m
+[1,0]<stdout>: [90m2026-02-27 23:09:29.094[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mWaiting for lock 'CHIP_IN_USE_30_PCIe' which is currently held by thread TID: 126204, PID: 126204[0m [90m(robust_mutex.cpp:407)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.358[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.358[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.373[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.373[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.374[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.374[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.426[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.427[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.441[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.443[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.567[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.573[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.582[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.583[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.589[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.590[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.593[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.593[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.601[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.601[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.918[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.929[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:45.929[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.933[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.944[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:45.944[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.254[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.265[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.265[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.275[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.286[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.286[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.588[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.599[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.599[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.616[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.628[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.628[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.924[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.935[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:46.935[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.957[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.968[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:46.968[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.259[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.269[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.269[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.299[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.310[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.310[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.594[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.605[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.605[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.641[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.653[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.653[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.930[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.940[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:47.940[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.983[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.994[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:47.994[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.266[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[22, 14, 10, 0, 12, 26, 19, 2] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.266[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.266[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.271[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.287[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.301[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.318[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:48.323[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[22, 14, 10, 0, 12, 26, 19, 2] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:48.323[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:48.323[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:48.328[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:964)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.335[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.352[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.370[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.385[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,3]<stdout>: [90m2026-02-27 23:09:48.401[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
+[1,7]<stdout>: [90m2026-02-27 23:09:49.328[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mWaiting for lock 'CHIP_IN_USE_22_PCIe' which is currently held by thread TID: 126203, PID: 126203[0m [90m(robust_mutex.cpp:407)[0m

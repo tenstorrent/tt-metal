@@ -1,0 +1,21 @@
+2026-03-01 12:10:11.320 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-03-01 12:10:13.595 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Configuration file: tools/scaleout/exabox/hello_world_rank_binding.yaml -> /data/dmadic/tt-metal/tools/scaleout/exabox/hello_world_rank_binding.yaml
+2026-03-01 12:10:13.595 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:222 - [tt-run] Loading configuration from: /data/dmadic/tt-metal/tools/scaleout/exabox/hello_world_rank_binding.yaml
+2026-03-01 12:10:13.595 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:223 - [tt-run] Original CWD: /data/dmadic/tt-metal
+2026-03-01 12:10:13.598 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Mesh graph descriptor: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -> /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+2026-03-01 12:10:13.599 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:10:13.599 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+[1,0]<stderr>: docker: Error response from daemon: unable to find user container_app_user: no matching entries in passwd file
+[1,0]<stderr>: 
+[1,0]<stderr>: Run 'docker run --help' for more information
+--------------------------------------------------------------------------
+prterun detected that one or more processes exited with non-zero status,
+thus causing the job to be terminated. The first process to do so was:
+
+   Process name: [prterun-bh-glx-c04u02-4139663@1,0]
+   Exit code:    125
+--------------------------------------------------------------------------
+docker: Error response from daemon: unable to find user container_app_user: no matching entries in passwd file
+
+Run 'docker run --help' for more information

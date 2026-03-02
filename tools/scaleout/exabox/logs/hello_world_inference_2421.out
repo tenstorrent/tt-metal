@@ -1,0 +1,3 @@
+ERROR: docker pull failed. Log in on the launch node (and ensure compute nodes see it):
+  docker login ghcr.io
+Use a GitHub PAT with read:packages for tt-shield. If $HOME is NFS, other nodes will use the same config.

@@ -1,0 +1,7 @@
+docker: 'docker exec' requires at least 2 arguments
+
+Usage:  docker exec [OPTIONS] CONTAINER COMMAND [ARG...]
+
+See 'docker exec --help' for more information
+/var/lib/slurm/slurmctld/job02402/slurm_script: line 11: -e: command not found
+/var/lib/slurm/slurmctld/job02402/slurm_script: line 12: -e: command not found

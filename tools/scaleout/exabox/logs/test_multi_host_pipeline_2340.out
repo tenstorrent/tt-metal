@@ -1,0 +1,4 @@
+SLURM_NODELIST=bh-glx-c04u[02,08]
+bh-glx-c04u02
+bh-glx-c04u08
+bh-glx-c04u02.exabox.tenstorrent.com

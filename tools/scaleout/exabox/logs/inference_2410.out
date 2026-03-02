@@ -1,0 +1,37 @@
+0.9.0-816144975205affc5e962c7de31425a3467aacd5-e3eb9d9-65267833215: Pulling from tenstorrent/tt-shield/tt-media-inference-server
+9c2581ef40f9: Pulling fs layer
+c2c9a7789aa5: Pulling fs layer
+80255c2b6af3: Pulling fs layer
+bc802d49f30b: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+e912a630c452: Pulling fs layer
+323633f50db5: Pulling fs layer
+0535c5910579: Pulling fs layer
+b4ba99d6a629: Pulling fs layer
+f68c0cb4cbcd: Pulling fs layer
+765f57dde22b: Pulling fs layer
+4f4fb700ef54: Already exists
+f68c0cb4cbcd: Download complete
+e912a630c452: Download complete
+323633f50db5: Download complete
+0535c5910579: Download complete
+b4ba99d6a629: Download complete
+765f57dde22b: Download complete
+80255c2b6af3: Download complete
+c2c9a7789aa5: Download complete
+9c2581ef40f9: Download complete
+80255c2b6af3: Pull complete
+9c2581ef40f9: Pull complete
+bc802d49f30b: Download complete
+bc802d49f30b: Pull complete
+0535c5910579: Pull complete
+765f57dde22b: Pull complete
+4f4fb700ef54: Pull complete
+f68c0cb4cbcd: Pull complete
+e912a630c452: Pull complete
+323633f50db5: Pull complete
+b4ba99d6a629: Pull complete
+c2c9a7789aa5: Pull complete
+Digest: sha256:8e839d48d1b16669a72623e6bd197ea81ac19406a68671ee9e268ec61a9983fe
+Status: Downloaded newer image for ghcr.io/tenstorrent/tt-shield/tt-media-inference-server:0.9.0-816144975205affc5e962c7de31425a3467aacd5-e3eb9d9-65267833215
+ghcr.io/tenstorrent/tt-shield/tt-media-inference-server:0.9.0-816144975205affc5e962c7de31425a3467aacd5-e3eb9d9-65267833215

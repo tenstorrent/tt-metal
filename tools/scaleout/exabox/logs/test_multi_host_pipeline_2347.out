@@ -1,0 +1,144 @@
+SLURM_NODELIST=bh-glx-c04u[02,08]
+bh-glx-c04u02
+bh-glx-c04u08
+bh-glx-c04u02.exabox.tenstorrent.com
+[95m Resetting WH Galaxy trays with reset command... [0m
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+[95m Resetting WH Galaxy trays with reset command... [0m
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0m
+All 32 chips found in "/dev/tenstorrent"
+[95m Re-initializing boards after reset.... [0m
+[93mWaiting for 30 seconds: 30[0m
+All 32 chips found in "/dev/tenstorrent"
+[95m Re-initializing boards after reset.... [0m
+[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m1[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m2[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m3[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m4[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m5[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m6[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m7[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m8[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m9[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m10[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m11[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m12[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m13[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m14[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m15[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m16[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m17[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m18[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m19[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m20[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m21[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m22[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m23[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m24[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m25[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m26[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m27[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m28[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m29[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m30[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m31[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[1A[J[95m Detected Chips: [93m32[0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m

@@ -1,0 +1,508 @@
+2026-03-01 12:16:06.021 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:762 - [tt-run] Path Resolution Diagnostics:
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:763 - [tt-run]   Original CWD (at launch): /data/dmadic/tt-metal
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:764 - [tt-run]   Current CWD: /data/dmadic/tt-metal
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:765 - [tt-run]   rank-binding input: blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:766 - [tt-run]   TT_METAL_HOME env: /data/dmadic/tt-metal
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:767 - [tt-run]   HOME env: /home/dmadic
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:768 - [tt-run]   PYTHONPATH env: /data/dmadic/tt-metal
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:769 - [tt-run]   PYTHONHOME env: <not set>
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:770 - [tt-run]   LD_LIBRARY_PATH env: <not set>
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:772 - [tt-run]   SLURM_JOB_ID: 2426
+2026-03-01 12:16:08.176 | INFO     | ttnn.distributed.ttrun:main:773 - [tt-run]   SLURM_SUBMIT_DIR: /data/dmadic/tt-metal/tools/scaleout/exabox
+2026-03-01 12:16:08.176 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Configuration file: blitz_decode_pipeline_rank_binding_single_pod.yaml -> /data/dmadic/tt-metal/blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-03-01 12:16:08.176 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:222 - [tt-run] Loading configuration from: /data/dmadic/tt-metal/blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-03-01 12:16:08.176 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:223 - [tt-run] Original CWD: /data/dmadic/tt-metal
+2026-03-01 12:16:08.183 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Mesh graph descriptor: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -> /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+2026-03-01 12:16:08.183 | INFO     | ttnn.distributed.ttrun:main:781 - [tt-run]   Resolved mesh_graph_desc_path: /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+2026-03-01 12:16:08.184 | INFO     | ttnn.distributed.ttrun:main:831 - [tt-run] Using multihost MPI args: --mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo
+2026-03-01 12:16:08.184 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.184 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.184 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.185 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.186 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.186 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.186 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
+2026-03-01 12:16:08.186 | INFO     | ttnn.distributed.ttrun:print_command:460 - [tt-run] Command:
+2026-03-01 12:16:08.186 | INFO     | ttnn.distributed.ttrun:print_command:474 - [tt-run] Command: mpirun --tag-output --mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo --map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --oversubscribe -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=0 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=1 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=2 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=3 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=4 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=5 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=6 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=7 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=8 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=9 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=10 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=11 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=12 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=13 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=14 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=15 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 tools/scaleout/exabox/docker-exec-wrapper.sh pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block
+[1,11]<stderr>: 2026-03-01 12:16:12.025 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,11]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,14]<stderr>: 2026-03-01 12:16:12.028 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,14]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,13]<stderr>: 2026-03-01 12:16:12.042 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,13]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,15]<stderr>: 2026-03-01 12:16:12.045 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,15]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,12]<stderr>: 2026-03-01 12:16:12.046 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,12]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,10]<stderr>: 2026-03-01 12:16:12.063 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,10]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,8]<stderr>: 2026-03-01 12:16:12.084 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,8]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,9]<stderr>: 2026-03-01 12:16:12.109 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,9]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,5]<stderr>: 2026-03-01 12:16:13.973 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,5]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,7]<stderr>: 2026-03-01 12:16:13.981 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,7]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,6]<stderr>: 2026-03-01 12:16:13.987 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,6]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,4]<stderr>: 2026-03-01 12:16:14.008 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,4]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,2]<stderr>: 2026-03-01 12:16:14.180 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,2]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,3]<stderr>: 2026-03-01 12:16:14.194 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,3]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,0]<stderr>: 2026-03-01 12:16:14.210 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,0]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,1]<stderr>: 2026-03-01 12:16:14.218 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,1]<stderr>: Config{cache_path=/tmp/.cache/ttnn,model_cache_path=/tmp/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,11]<stderr>: Traceback (most recent call last):
+[1,11]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,11]<stderr>:     sys.exit(console_main())
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,11]<stderr>:     code = main()
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,11]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,11]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,11]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,11]<stderr>:     raise exception
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,11]<stderr>:     res = hook_impl.function(*args)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,11]<stderr>:     return wrap_session(config, _main)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,11]<stderr>:     config.hook.pytest_sessionfinish(
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,11]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,11]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,11]<stderr>:     raise exception
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,11]<stderr>:     teardown.throw(exception)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,11]<stderr>:     return (yield)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,11]<stderr>:     teardown.throw(exception)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,11]<stderr>:     result = yield
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,11]<stderr>:     teardown.throw(exception)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,11]<stderr>:     return result.get_result()
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,11]<stderr>:     raise exc.with_traceback(tb)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,11]<stderr>:     res = yield
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,11]<stderr>:     teardown.throw(exception)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,11]<stderr>:     return (yield)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,11]<stderr>:     res = hook_impl.function(*args)
+[1,11]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,11]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,11]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,11]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,11]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,11]<stderr>:     mkdir(name, mode)
+[1,11]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,10]<stderr>: Traceback (most recent call last):
+[1,10]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,10]<stderr>:     sys.exit(console_main())
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,10]<stderr>:     code = main()
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,10]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,10]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,10]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,10]<stderr>:     raise exception
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,10]<stderr>:     res = hook_impl.function(*args)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,10]<stderr>:     return wrap_session(config, _main)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,10]<stderr>:     config.hook.pytest_sessionfinish(
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,10]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,10]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,10]<stderr>:     raise exception
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,10]<stderr>:     teardown.throw(exception)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,10]<stderr>:     return (yield)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,10]<stderr>:     teardown.throw(exception)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,10]<stderr>:     result = yield
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,10]<stderr>:     teardown.throw(exception)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,10]<stderr>:     return result.get_result()
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,10]<stderr>:     raise exc.with_traceback(tb)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,10]<stderr>:     res = yield
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,10]<stderr>:     teardown.throw(exception)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,10]<stderr>:     return (yield)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,10]<stderr>:     res = hook_impl.function(*args)
+[1,10]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,10]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,10]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,10]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,10]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,10]<stderr>:     mkdir(name, mode)
+[1,10]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,14]<stderr>: Traceback (most recent call last):
+[1,14]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,14]<stderr>:     sys.exit(console_main())
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,14]<stderr>:     code = main()
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,14]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,14]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,14]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,14]<stderr>:     raise exception
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,14]<stderr>:     res = hook_impl.function(*args)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,14]<stderr>:     return wrap_session(config, _main)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,14]<stderr>:     config.hook.pytest_sessionfinish(
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,14]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,14]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,14]<stderr>:     raise exception
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,14]<stderr>:     teardown.throw(exception)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,14]<stderr>:     return (yield)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,14]<stderr>:     teardown.throw(exception)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,14]<stderr>:     result = yield
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,14]<stderr>:     teardown.throw(exception)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,14]<stderr>:     return result.get_result()
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,14]<stderr>:     raise exc.with_traceback(tb)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,14]<stderr>:     res = yield
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,14]<stderr>:     teardown.throw(exception)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,14]<stderr>:     return (yield)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,14]<stderr>:     res = hook_impl.function(*args)
+[1,14]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,14]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,14]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,14]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,14]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,14]<stderr>:     mkdir(name, mode)
+[1,14]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,12]<stderr>: Traceback (most recent call last):
+[1,12]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,12]<stderr>:     sys.exit(console_main())
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,12]<stderr>:     code = main()
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,12]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,12]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,12]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,12]<stderr>:     raise exception
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,12]<stderr>:     res = hook_impl.function(*args)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,12]<stderr>:     return wrap_session(config, _main)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,12]<stderr>:     config.hook.pytest_sessionfinish(
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,12]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,12]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,12]<stderr>:     raise exception
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,12]<stderr>:     teardown.throw(exception)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,12]<stderr>:     return (yield)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,12]<stderr>:     teardown.throw(exception)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,12]<stderr>:     result = yield
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,12]<stderr>:     teardown.throw(exception)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,12]<stderr>:     return result.get_result()
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,12]<stderr>:     raise exc.with_traceback(tb)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,12]<stderr>:     res = yield
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,12]<stderr>:     teardown.throw(exception)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,12]<stderr>:     return (yield)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,12]<stderr>:     res = hook_impl.function(*args)
+[1,12]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,12]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,12]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,12]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,12]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,12]<stderr>:     mkdir(name, mode)
+[1,12]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,8]<stderr>: Traceback (most recent call last):
+[1,8]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,8]<stderr>:     sys.exit(console_main())
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,8]<stderr>:     code = main()
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,8]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,8]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,8]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,8]<stderr>:     raise exception
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,8]<stderr>:     res = hook_impl.function(*args)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,8]<stderr>:     return wrap_session(config, _main)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,8]<stderr>:     config.hook.pytest_sessionfinish(
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,8]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,8]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,8]<stderr>:     raise exception
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,8]<stderr>:     teardown.throw(exception)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,8]<stderr>:     return (yield)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,8]<stderr>:     teardown.throw(exception)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,8]<stderr>:     result = yield
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,8]<stderr>:     teardown.throw(exception)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,8]<stderr>:     return result.get_result()
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,8]<stderr>:     raise exc.with_traceback(tb)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,8]<stderr>:     res = yield
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,8]<stderr>:     teardown.throw(exception)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,8]<stderr>:     return (yield)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,8]<stderr>:     res = hook_impl.function(*args)
+[1,8]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,8]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,8]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,8]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,8]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,8]<stderr>:     mkdir(name, mode)
+[1,8]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,15]<stderr>: Traceback (most recent call last):
+[1,15]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,15]<stderr>:     sys.exit(console_main())
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,15]<stderr>:     code = main()
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,15]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,15]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,15]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,15]<stderr>:     raise exception
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,15]<stderr>:     res = hook_impl.function(*args)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,15]<stderr>:     return wrap_session(config, _main)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,15]<stderr>:     config.hook.pytest_sessionfinish(
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,15]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,15]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,15]<stderr>:     raise exception
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,15]<stderr>:     teardown.throw(exception)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,15]<stderr>:     return (yield)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,15]<stderr>:     teardown.throw(exception)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,15]<stderr>:     result = yield
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,15]<stderr>:     teardown.throw(exception)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,15]<stderr>:     return result.get_result()
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,15]<stderr>:     raise exc.with_traceback(tb)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,15]<stderr>:     res = yield
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,15]<stderr>:     teardown.throw(exception)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,15]<stderr>:     return (yield)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,15]<stderr>:     res = hook_impl.function(*args)
+[1,15]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,15]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,15]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,15]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,15]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,15]<stderr>:     mkdir(name, mode)
+[1,15]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,9]<stderr>: Traceback (most recent call last):
+[1,9]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,9]<stderr>:     sys.exit(console_main())
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,9]<stderr>:     code = main()
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,9]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,9]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,9]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,9]<stderr>:     raise exception
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,9]<stderr>:     res = hook_impl.function(*args)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,9]<stderr>:     return wrap_session(config, _main)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,9]<stderr>:     config.hook.pytest_sessionfinish(
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,9]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,9]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,9]<stderr>:     raise exception
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,9]<stderr>:     teardown.throw(exception)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,9]<stderr>:     return (yield)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,9]<stderr>:     teardown.throw(exception)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,9]<stderr>:     result = yield
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,9]<stderr>:     teardown.throw(exception)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,9]<stderr>:     return result.get_result()
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,9]<stderr>:     raise exc.with_traceback(tb)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,9]<stderr>:     res = yield
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,9]<stderr>:     teardown.throw(exception)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,9]<stderr>:     return (yield)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,9]<stderr>:     res = hook_impl.function(*args)
+[1,9]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,9]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,9]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,9]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,9]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,9]<stderr>:     mkdir(name, mode)
+[1,9]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+[1,13]<stderr>: Traceback (most recent call last):
+[1,13]<stderr>:   File "/opt/venv/bin/pytest", line 12, in <module>
+[1,13]<stderr>:     sys.exit(console_main())
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 201, in console_main
+[1,13]<stderr>:     code = main()
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 175, in main
+[1,13]<stderr>:     ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,13]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,13]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,13]<stderr>:     raise exception
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,13]<stderr>:     res = hook_impl.function(*args)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+[1,13]<stderr>:     return wrap_session(config, _main)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 324, in wrap_session
+[1,13]<stderr>:     config.hook.pytest_sessionfinish(
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+[1,13]<stderr>:     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+[1,13]<stderr>:     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+[1,13]<stderr>:     raise exception
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,13]<stderr>:     teardown.throw(exception)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 873, in pytest_sessionfinish
+[1,13]<stderr>:     return (yield)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,13]<stderr>:     teardown.throw(exception)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 936, in pytest_sessionfinish
+[1,13]<stderr>:     result = yield
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,13]<stderr>:     teardown.throw(exception)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+[1,13]<stderr>:     return result.get_result()
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+[1,13]<stderr>:     raise exc.with_traceback(tb)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+[1,13]<stderr>:     res = yield
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+[1,13]<stderr>:     teardown.throw(exception)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 119, in pytest_sessionfinish
+[1,13]<stderr>:     return (yield)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+[1,13]<stderr>:     res = hook_impl.function(*args)
+[1,13]<stderr>:   File "/opt/venv/lib/python3.10/site-packages/_pytest/junitxml.py", line 642, in pytest_sessionfinish
+[1,13]<stderr>:     os.makedirs(dirname, exist_ok=True)
+[1,13]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 215, in makedirs
+[1,13]<stderr>:     makedirs(head, exist_ok=exist_ok)
+[1,13]<stderr>:   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/os.py", line 225, in makedirs
+[1,13]<stderr>:     mkdir(name, mode)
+[1,13]<stderr>: PermissionError: [Errno 13] Permission denied: '/tt-metal/generated'
+--------------------------------------------------------------------------
+prterun detected that one or more processes exited with non-zero status,
+thus causing the job to be terminated. The first process to do so was:
+
+   Process name: [prterun-bh-glx-c03u02-1835757@1,11]
+   Exit code:    1
+--------------------------------------------------------------------------

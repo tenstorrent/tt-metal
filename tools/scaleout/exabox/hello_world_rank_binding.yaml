@@ -1,0 +1,10 @@
+# Minimal rank binding for 2-node hello-world test (1 rank per node).
+# mesh_graph_desc_path must exist; reusing blitz descriptor for validation only.
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+- rank: 1
+  mesh_id: 1
+  mesh_host_rank: 0
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto

@@ -1,0 +1,8 @@
+SLURM_NODELIST=bh-glx-c03u[02,08],bh-glx-c04u[02,08]
+bh-glx-c03u02
+bh-glx-c03u08
+bh-glx-c04u02
+bh-glx-c04u08
+bh-glx-c03u02.exabox.tenstorrent.com
+   NumNodes=4 NumCPUs=4 NumTasks=4 CPUs/Task=1 ReqB:S:C:T=0:0:*:*
+   MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0

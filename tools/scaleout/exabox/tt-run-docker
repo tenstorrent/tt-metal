@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+tt-run-docker: Run tt-run-style MPI jobs with each rank inside a Docker container.
+
+Same CLI as tt-run (--rank-binding, --mpi-args, --tcp-interface, --bare, etc.) plus
+--image and --container-tt-metal. Uses ttrun's binding and per-rank env; remaps host
+tt-metal paths to the container path and builds one "docker run" per rank (no separate
+docker-exec-wrapper.sh). PMIX_MCA_gds=hash and writable generated mount are set
+inside the container like docker-exec-wrapper.sh.
+
+Run with the project venv (or PYTHONPATH including tt-metal root) so ttnn and loguru
+are available, e.g.:
+  source python_env/bin/activate
+  tt-run-docker --rank-binding binding.yaml --image $TT_METAL_IMAGE pytest ...
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+# Allow importing ttnn.distributed.ttrun from tt-metal repo
+_script_dir = Path(__file__).resolve().parent
+_tt_metal_root = (_script_dir / ".." / ".." / ".." / "..").resolve()
+if str(_tt_metal_root) not in sys.path:
+    sys.path.insert(0, str(_tt_metal_root))
+
+import click
+from loguru import logger
+
+from ttnn.distributed.ttrun import (
+    TT_RUN_PREFIX,
+    get_rank_environment,
+    parse_binding_config,
+    print_command,
+    validate_network_interface,
+)
+
+INTERRUPTED_EXIT_CODE = 130
+DEFAULT_CONTAINER_TT_METAL = "/tt-metal"
+
+
+def _remap_env(env: dict[str, str], host_tt_metal: str, container_tt_metal: str) -> dict[str, str]:
+    out = {}
+    for k, v in env.items():
+        if host_tt_metal and host_tt_metal in v:
+            v = v.replace(host_tt_metal, container_tt_metal)
+        out[k] = v
+    return out
+
+
+def _docker_run_per_rank(
+    rank_env_remapped: dict[str, str],
+    image: str,
+    container_tt_metal: str,
+    program: list[str],
+) -> str:
+    """Return the script content for this rank (docker run with --env-file). Caller writes to a file and runs bash script.sh."""
+    lines = []
+    for k, v in sorted(rank_env_remapped.items()):
+        v_clean = v.replace("\n", " ").replace("\r", "")
+        lines.append(f"{k}={v_clean}")
+    env_file_content = "\n".join(lines)
+    env_b64 = base64.b64encode(env_file_content.encode()).decode()
+
+    mpi_append = (
+        'env | grep -E "^(OMPI_|PMIX_|PMI_)" >> "$ENVFILE"'
+    )
+
+    inner_cmd_escaped = " ".join(shlex.quote(a) for a in program)
+    venv_source = (
+        f"if [ -f {container_tt_metal}/python_env/bin/activate ]; then "
+        f"source {container_tt_metal}/python_env/bin/activate; "
+        f"elif [ -f /opt/venv/bin/activate ]; then source /opt/venv/bin/activate; fi"
+    )
+    inner_bash = (
+        f"{venv_source}; export PYTHONPATH={container_tt_metal}; exec {inner_cmd_escaped}"
+    )
+    inner_bash_escaped = inner_bash.replace("'", "'\"'\"'")
+
+    image_sq = image.replace("'", "'\"'\"'")
+
+    script = (
+        "RANK_DIR=/tmp/tt-metal-generated-${OMPI_COMM_WORLD_RANK:-0}; "
+        "ENVFILE=/tmp/tt-metal-env-${OMPI_COMM_WORLD_RANK:-0}; "
+        "mkdir -p \"$RANK_DIR\"; "
+        f"echo '{env_b64}' | base64 -d > \"$ENVFILE\"; "
+        f"{mpi_append}; "
+        "docker run --rm --privileged --net=host --shm-size=4g "
+        "--user $(id -u):$(id -g) "
+        "-v /dev/hugepages:/dev/hugepages -v /dev/hugepages-1G:/dev/hugepages-1G "
+        "-v /etc/udev/rules.d:/etc/udev/rules.d -v /lib/modules:/lib/modules "
+        "-v /var/run/tenstorrent:/var/run/tenstorrent "
+        f'-v "$RANK_DIR:{container_tt_metal}/generated" '
+        "--env-file \"$ENVFILE\" "
+        "-e HOME=/tmp "
+        f"-e TT_METAL_HOME={container_tt_metal} -e TT_METAL_RUNTIME_ROOT={container_tt_metal} "
+        f"-e PYTHONPATH={container_tt_metal} -e PMIX_MCA_gds=hash "
+        f"-w {container_tt_metal} '{image_sq}' bash -c '{inner_bash_escaped}'"
+    )
+    return script
+
+
+def build_mpi_command_docker(
+    config,
+    program: list[str],
+    mpi_args: list[str] | None,
+    image: str,
+    host_tt_metal: str,
+    container_tt_metal: str,
+    script_dir: Path,
+) -> list[str]:
+    """Build mpirun command. Writes per-rank scripts under script_dir and runs bash script_path to avoid long argv."""
+    if os.environ.get("SLURM_JOB_ID") and os.environ.get("SLURM_STEP_ID"):
+        mpi_launcher = "mpirun"
+    else:
+        mpi_launcher = shutil.which("mpirun-ulfm") or "mpirun"
+
+    cmd = [mpi_launcher]
+    bind_to_already_specified = False
+    if mpi_args:
+        for arg in mpi_args:
+            if arg == "--bind-to":
+                bind_to_already_specified = True
+                break
+    if not bind_to_already_specified:
+        cmd.extend(["--bind-to", "none"])
+    cmd.append("--tag-output")
+    if mpi_args:
+        cmd.extend(mpi_args)
+
+    script_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
+        if i > 0:
+            cmd.append(":")
+        cmd.extend(["-np", "1"])
+        rank_env = get_rank_environment(binding, config)
+        rank_env_remapped = _remap_env(rank_env, host_tt_metal, container_tt_metal)
+        script_content = _docker_run_per_rank(
+            rank_env_remapped, image, container_tt_metal, program
+        )
+        script_path = script_dir / f"tt-run-docker-rank-{binding.rank}.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o700)
+        cmd.extend(["bash", str(script_path)])
+
+    return cmd
+
+
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+        allow_extra_args=True,
+    )
+)
+@click.option(
+    "--rank-binding",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Rank binding configuration file (YAML).",
+)
+@click.option("--dry-run", is_flag=True, help="Print command without executing")
+@click.option("-v", "--verbose", is_flag=True, help="Show diagnostics and command details")
+@click.option(
+    "--mpi-args",
+    callback=lambda ctx, param, value: shlex.split(value) if value else None,
+    help="Additional MPI arguments (quoted)",
+)
+@click.option(
+    "--mock-cluster-rank-binding",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Mock cluster rank binding YAML.",
+)
+@click.option("--bare", is_flag=True, help="Disable tt-run default MPI settings (TCP, interface exclusions)")
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP (e.g. eth0, cnx1).",
+)
+@click.option(
+    "--image",
+    type=str,
+    default=None,
+    envvar="TT_METAL_IMAGE",
+    help="Docker image to run each rank in (default: TT_METAL_IMAGE).",
+)
+@click.option(
+    "--container-tt-metal",
+    type=str,
+    default=DEFAULT_CONTAINER_TT_METAL,
+    help=f"Path for tt-metal inside the container (default: {DEFAULT_CONTAINER_TT_METAL}).",
+)
+@click.pass_context
+def main(
+    ctx: click.Context,
+    rank_binding: Path,
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: list[str] | None,
+    mock_cluster_rank_binding: Path | None,
+    bare: bool,
+    tcp_interface: str | None,
+    image: str | None,
+    container_tt_metal: str,
+) -> None:
+    program = ctx.args
+    if not program:
+        raise click.ClickException("No program specified. Provide a program to run (e.g. pytest ...).")
+    if not image:
+        raise click.ClickException("Docker image required. Set --image or TT_METAL_IMAGE.")
+
+    host_tt_metal = os.environ.get("TT_METAL_HOME", str(Path.cwd().resolve()))
+    if verbose:
+        logger.info(
+            f"{TT_RUN_PREFIX} tt-run-docker: host_tt_metal={host_tt_metal!r} container_tt_metal={container_tt_metal!r}"
+        )
+
+    config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
+
+    script_dir = Path(host_tt_metal) / f".tt-run-docker-{os.getpid()}"
+    if os.environ.get("SLURM_JOB_ID"):
+        script_dir = Path(host_tt_metal) / f".tt-run-docker-{os.environ['SLURM_JOB_ID']}"
+
+    effective_mpi_args = list(mpi_args) if mpi_args else []
+    if not bare:
+        multihost_args = [
+            "--mca", "btl", "self,tcp",
+            "--mca", "btl_tcp_if_exclude", "docker0,lo",
+        ]
+        if tcp_interface:
+            validate_network_interface(tcp_interface, verbose=verbose)
+            multihost_args = [
+                "--mca", "btl", "self,tcp",
+                "--mca", "btl_tcp_if_include", tcp_interface,
+            ]
+        effective_mpi_args = multihost_args + effective_mpi_args
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
+
+    mpi_cmd = build_mpi_command_docker(
+        config, program, effective_mpi_args or None, image, host_tt_metal, container_tt_metal
+    )
+
+    if verbose or dry_run:
+        print_command(mpi_cmd, prefix="[tt-run-docker]")
+
+    if dry_run:
+        return
+
+    try:
+        result = subprocess.run(mpi_cmd)
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        logger.error("[tt-run-docker] Interrupted")
+        sys.exit(INTERRUPTED_EXIT_CODE)
+    except OSError as e:
+        raise click.ClickException(f"Error launching mpirun: {e}")
+
+
+if __name__ == "__main__":
+    main()

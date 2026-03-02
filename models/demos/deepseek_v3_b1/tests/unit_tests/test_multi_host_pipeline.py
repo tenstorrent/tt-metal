@@ -9,6 +9,7 @@ Combine H <-> D Interface with Multi-Host sockets under PipelineBlock API.
 """
 
 import pytest
+import time
 import torch
 from loguru import logger
 
@@ -503,6 +504,7 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
         token_size_bytes = 64
         token_size_datums = token_size_bytes // dtype_size(token_dtype)
 
+        times = []
         for token_id in range(vocab_size):
             torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
             torch_input[0, 0] = token_id
@@ -513,8 +515,11 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
             output_tensor = ttnn.from_torch(
                 torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
+            start_time = time.time()
             pipeline_block.write_token(input_tensor)
             pipeline_block.read_output(output_tensor)
+            end_time = time.time()
+            times.append((end_time - start_time) * 1000)
 
             result_torch = ttnn.to_torch(output_tensor).reshape(-1)
             expected = torch_embedding[0, 0, token_id, :].reshape(-1)
@@ -523,6 +528,11 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
                 f"Token {token_id}: D2H output does not match embedding row!\n"
                 f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
             )
+        num_procs = int(ttnn.distributed_context_get_size())
+        logger.info(f"Average latency (milliseconds) per token: {sum(times) / vocab_size}")
+        logger.info(
+            f"Average latency (microseconds) per token per stage: {sum(times) * 1000 / vocab_size / (num_procs + 1)}"
+        )
         logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
 
     pipeline_block.terminate()

@@ -1,0 +1,82 @@
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,4,5,24,25,28,29
+- rank: 1
+  mesh_id: 1
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,3,6,7,26,27,30,31
+- rank: 2
+  mesh_id: 2
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,11,14,15,18,19,22,23
+- rank: 3
+  mesh_id: 3
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 8,9,12,13,16,17,20,21
+- rank: 4
+  mesh_id: 4
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,4,5,24,25,28,29
+- rank: 5
+  mesh_id: 5
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,3,6,7,26,27,30,31
+- rank: 6
+  mesh_id: 6
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,11,14,15,18,19,22,23
+- rank: 7
+  mesh_id: 7
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 8,9,12,13,16,17,20,21
+- rank: 8
+  mesh_id: 8
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,4,5,24,25,28,29
+- rank: 9
+  mesh_id: 9
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,3,6,7,26,27,30,31
+- rank: 10
+  mesh_id: 10
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,11,14,15,18,19,22,23
+- rank: 11
+  mesh_id: 11
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 8,9,12,13,16,17,20,21
+- rank: 12
+  mesh_id: 12
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,4,5,24,25,28,29
+- rank: 13
+  mesh_id: 13
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,3,6,7,26,27,30,31
+- rank: 14
+  mesh_id: 14
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,11,14,15,18,19,22,23
+- rank: 15
+  mesh_id: 15
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 8,9,12,13,16,17,20,21
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto

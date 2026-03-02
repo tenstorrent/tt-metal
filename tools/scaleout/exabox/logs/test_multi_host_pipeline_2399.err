@@ -1,0 +1,681 @@
+2026-02-28 22:22:28.430 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:762 - [tt-run] Path Resolution Diagnostics:
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:763 - [tt-run]   Original CWD (at launch): /data/dmadic/tt-metal
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:764 - [tt-run]   Current CWD: /data/dmadic/tt-metal
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:765 - [tt-run]   rank-binding input: blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:766 - [tt-run]   TT_METAL_HOME env: /data/dmadic/tt-metal
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:767 - [tt-run]   HOME env: /home/dmadic
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:768 - [tt-run]   PYTHONPATH env: /data/dmadic/tt-metal
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:769 - [tt-run]   PYTHONHOME env: <not set>
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:770 - [tt-run]   LD_LIBRARY_PATH env: <not set>
+2026-02-28 22:22:30.989 | INFO     | ttnn.distributed.ttrun:main:772 - [tt-run]   SLURM_JOB_ID: 2399
+2026-02-28 22:22:30.990 | INFO     | ttnn.distributed.ttrun:main:773 - [tt-run]   SLURM_SUBMIT_DIR: /data/dmadic/tt-metal/tools/scaleout/exabox
+2026-02-28 22:22:30.990 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Configuration file: blitz_decode_pipeline_rank_binding_single_pod.yaml -> /data/dmadic/tt-metal/blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-02-28 22:22:30.990 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:222 - [tt-run] Loading configuration from: /data/dmadic/tt-metal/blitz_decode_pipeline_rank_binding_single_pod.yaml
+2026-02-28 22:22:30.990 | DEBUG    | ttnn.distributed.ttrun:parse_binding_config:223 - [tt-run] Original CWD: /data/dmadic/tt-metal
+2026-02-28 22:22:31.001 | DEBUG    | ttnn.distributed.ttrun:resolve_path:194 - [tt-run] Resolved Mesh graph descriptor: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -> /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+2026-02-28 22:22:31.001 | INFO     | ttnn.distributed.ttrun:main:781 - [tt-run]   Resolved mesh_graph_desc_path: /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+2026-02-28 22:22:31.001 | INFO     | ttnn.distributed.ttrun:main:831 - [tt-run] Using multihost MPI args: --mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo
+2026-02-28 22:22:31.002 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.002 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.002 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.003 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.004 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 2 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SLOW_DISPATCH_MODE
+2026-02-28 22:22:31.005 | INFO     | ttnn.distributed.ttrun:print_command:460 - [tt-run] Command:
+2026-02-28 22:22:31.005 | INFO     | ttnn.distributed.ttrun:print_command:474 - [tt-run] Command: mpirun --tag-output --mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo --map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --oversubscribe -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=0 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=1 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=2 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=3 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=4 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=5 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=6 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=7 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=8 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=9 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=10 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=11 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=12 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=0,1,4,5,24,25,28,29 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=13 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=2,3,6,7,26,27,30,31 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=14 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=10,11,14,15,18,19,22,23 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block : -np 1 -x TT_METAL_SLOW_DISPATCH_MODE=1 -x TT_METAL_HOME=/data/dmadic/tt-metal -x TT_MESH_ID=15 -x TT_MESH_GRAPH_DESC_PATH=/data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto -x TT_METAL_RUNTIME_ROOT=/data/dmadic/tt-metal -x PYTHONPATH=/data/dmadic/tt-metal -x LD_LIBRARY_PATH=/data/dmadic/tt-metal/build/lib -x TT_RUN_ORIGINAL_CWD=/data/dmadic/tt-metal -x HOME=/home/dmadic -x USER=dmadic -x PATH=/data/dmadic/tt-metal/python_env/bin:/home/dmadic/.cursor-server/extensions/vadimcn.vscode-lldb-1.12.1/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/home/dmadic/.cursor-server/bin/linux-x64/7d96c2a03bb088ad367615e9da1a3fe20fbbc6a0/bin/remote-cli:/home/dmadic/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin -x VIRTUAL_ENV=/data/dmadic/tt-metal/python_env -x TT_MESH_HOST_RANK=0 -x TT_VISIBLE_DEVICES=8,9,12,13,16,17,20,21 pytest -s models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py -k test_pipeline_block
+[1,5]<stderr>: 2026-02-28 22:22:35.865 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,5]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,15]<stderr>: 2026-02-28 22:22:37.614 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,15]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,10]<stderr>: 2026-02-28 22:22:38.008 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,10]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,11]<stderr>: 2026-02-28 22:22:39.866 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,11]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,9]<stderr>: 2026-02-28 22:22:39.873 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,9]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,8]<stderr>: 2026-02-28 22:22:39.891 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,8]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,4]<stderr>: 2026-02-28 22:22:39.930 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,4]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,14]<stderr>: 2026-02-28 22:22:39.966 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,14]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,7]<stderr>: 2026-02-28 22:22:39.983 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,7]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,6]<stderr>: 2026-02-28 22:22:39.990 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,6]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,12]<stderr>: 2026-02-28 22:22:39.994 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,12]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,13]<stderr>: 2026-02-28 22:22:40.196 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,13]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,2]<stderr>: 2026-02-28 22:22:42.684 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,2]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,3]<stderr>: 2026-02-28 22:22:42.684 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,3]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,0]<stderr>: 2026-02-28 22:22:42.684 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,0]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,1]<stderr>: 2026-02-28 22:22:42.684 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,1]<stderr>: Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,4]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:22:50.958 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:22:50.959 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:22:50.960 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:22:50.961 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:22:50.961 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:11.280 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:11.298 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:11.735 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:11.751 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:11.820 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:11.855 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:12.974 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:13.613 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:13.617 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:13.636 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:13.919 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:23:13.953 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:13.967 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:14.126 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:14.149 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:14.182 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:20.915 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 9.473860263824463
+[1,0]<stderr>: 2026-02-28 22:23:20.915 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 557.2858978720272
+[1,0]<stderr>: 2026-02-28 22:23:20.915 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 256 token lookups verified successfully over multi-host pipeline
+[1,7]<stderr>: 2026-02-28 22:23:21.102 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:21.102 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:21.104 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:21.104 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:21.105 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:21.105 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:21.105 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:21.105 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:21.106 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:21.105 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:21.106 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:21.106 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:21.107 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:21.108 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:21.108 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:21.109 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:21.109 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:23:21.109 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:21.109 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:21.113 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:21.113 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:22.484 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:22.487 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:22.493 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:22.495 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:22.499 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:22.500 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:22.501 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:22.501 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:22.501 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:22.501 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:22.501 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:22.502 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:22.506 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:22.507 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:22.507 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:22.507 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:29.514 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 5.207616835832596
+[1,0]<stderr>: 2026-02-28 22:23:29.514 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 306.3304021077997
+[1,0]<stderr>: 2026-02-28 22:23:29.514 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 512 token lookups verified successfully over multi-host pipeline
+[1,11]<stderr>: 2026-02-28 22:23:29.699 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:29.699 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:29.700 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:29.701 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:29.702 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:29.702 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:29.703 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:29.703 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:23:29.704 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:29.704 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:29.704 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:29.704 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:29.704 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:29.705 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:29.705 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:29.705 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:29.706 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:29.706 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:29.707 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:29.707 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:23:29.707 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:29.707 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:31.056 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:31.060 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:31.062 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:23:31.063 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:31.071 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:31.072 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:31.073 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:31.073 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:31.077 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:31.079 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:31.079 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:31.081 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:31.087 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:31.087 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:31.094 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:31.095 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:37.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 2.4096996057778597
+[1,0]<stderr>: 2026-02-28 22:23:37.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 141.74703563399174
+[1,0]<stderr>: 2026-02-28 22:23:37.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 1024 token lookups verified successfully over multi-host pipeline
+[1,11]<stderr>: 2026-02-28 22:23:38.018 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:38.019 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:38.019 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:38.019 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:38.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:38.020 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:38.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:38.020 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:38.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:38.022 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:38.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:38.022 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:38.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:23:38.023 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:38.023 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:38.023 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:38.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:38.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:38.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:38.025 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:38.025 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:38.025 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:38.025 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:38.027 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:38.027 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:23:38.028 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:38.028 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:39.379 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:39.382 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:39.382 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:39.390 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:39.394 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:39.395 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:39.396 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:39.398 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:39.398 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:39.399 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:39.401 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:39.403 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:39.403 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:39.404 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:39.404 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:39.405 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:43.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.057632802054286
+[1,0]<stderr>: 2026-02-28 22:23:43.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 3.3901648267227062
+[1,0]<stderr>: 2026-02-28 22:23:43.835 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 2048 token lookups verified successfully over multi-host pipeline
+[1,0]<stderr>: 2026-02-28 22:23:44.017 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:44.018 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:44.019 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:23:44.019 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:44.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:44.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:44.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:44.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:44.022 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:44.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:44.022 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:44.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:44.023 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:44.023 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:44.023 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:44.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:44.025 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:23:44.025 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:44.025 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:44.026 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:44.026 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:23:44.026 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:44.027 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:44.027 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:44.027 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:23:44.029 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:44.029 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:45.363 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:45.366 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:45.367 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:45.372 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:45.372 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:45.373 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:45.373 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:23:45.374 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:45.374 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:45.375 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:45.377 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:45.377 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:45.379 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:45.379 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:45.380 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:45.382 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:49.833 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.10481942445039749
+[1,0]<stderr>: 2026-02-28 22:23:49.833 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 6.165848497082205
+[1,0]<stderr>: 2026-02-28 22:23:49.834 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 256 token lookups verified successfully over multi-host pipeline
+[1,5]<stderr>: 2026-02-28 22:23:50.019 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:50.019 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:50.020 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:50.021 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:23:50.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:50.022 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:50.022 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:23:50.023 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:50.023 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:50.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:50.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:23:50.024 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:50.024 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:50.027 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:50.027 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:23:50.027 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:50.027 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:50.029 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:50.029 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:50.034 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:50.034 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:51.407 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:51.415 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:51.417 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:51.421 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:51.422 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:23:51.423 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:51.426 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:51.426 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:51.427 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:51.428 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:51.428 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:51.428 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:51.429 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:51.429 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:51.433 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:51.433 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:23:55.825 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.07663946598768234
+[1,0]<stderr>: 2026-02-28 22:23:55.825 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 4.508203881628373
+[1,0]<stderr>: 2026-02-28 22:23:55.825 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 512 token lookups verified successfully over multi-host pipeline
+[1,12]<stderr>: 2026-02-28 22:23:56.008 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:23:56.008 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:23:56.009 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:23:56.009 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:23:56.009 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:23:56.009 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:56.011 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:23:56.012 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:23:56.012 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:23:56.012 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:23:56.012 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:23:56.012 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:23:56.013 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:23:56.013 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:23:56.014 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:23:56.014 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:23:56.014 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:23:56.014 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:23:56.015 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:23:56.016 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:23:56.016 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:23:56.017 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:23:56.018 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:23:56.018 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:23:56.018 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:23:56.018 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:23:56.018 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:23:57.394 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:23:57.394 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:23:57.401 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:23:57.402 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:23:57.406 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:23:57.407 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:23:57.408 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:23:57.408 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:23:57.409 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:23:57.409 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:23:57.411 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:23:57.413 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:23:57.413 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:23:57.414 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:23:57.417 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:23:57.417 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:01.735 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.06748735904693604
+[1,0]<stderr>: 2026-02-28 22:24:01.735 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 3.9698446498197666
+[1,0]<stderr>: 2026-02-28 22:24:01.736 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 1024 token lookups verified successfully over multi-host pipeline
+[1,9]<stderr>: 2026-02-28 22:24:01.917 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:24:01.917 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:24:01.920 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:24:01.921 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:24:01.922 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:24:01.923 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:24:01.924 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:24:01.924 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:24:01.925 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:24:01.925 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:01.925 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:24:01.926 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:24:01.925 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:24:01.926 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:24:01.926 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:24:01.926 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:24:01.927 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:24:01.927 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:01.927 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:24:01.927 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:03.280 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:24:03.285 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:24:03.294 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:24:03.294 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:24:03.297 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:24:03.297 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:03.297 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:24:03.299 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:24:03.300 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:24:03.303 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:24:03.304 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:24:03.305 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:24:03.305 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:24:03.306 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:24:03.310 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:24:03.310 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:07.800 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.05783082451671362
+[1,0]<stderr>: 2026-02-28 22:24:07.800 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 3.401813206865507
+[1,0]<stderr>: 2026-02-28 22:24:07.800 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 2048 token lookups verified successfully over multi-host pipeline
+[1,8]<stderr>: 2026-02-28 22:24:07.983 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:24:07.983 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:24:07.985 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:24:07.985 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:24:07.986 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:24:07.986 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:07.986 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:24:07.987 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:24:07.987 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:24:07.987 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:24:07.988 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:24:07.989 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:07.989 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:24:07.989 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:24:07.989 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:07.990 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:24:07.991 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:07.992 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:24:07.993 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:24:07.993 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:09.354 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:09.357 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:24:09.363 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:24:09.365 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:24:09.368 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:24:09.369 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:24:09.370 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:24:09.371 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:24:09.373 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:24:09.373 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:24:09.375 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:24:09.375 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:24:09.376 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:24:09.376 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:24:09.376 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:24:09.377 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:13.738 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.10190624743700027
+[1,0]<stderr>: 2026-02-28 22:24:13.739 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 5.994485143352957
+[1,0]<stderr>: 2026-02-28 22:24:13.739 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 256 token lookups verified successfully over multi-host pipeline
+[1,1]<stderr>: 2026-02-28 22:24:13.922 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:24:13.922 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:24:13.923 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:24:13.923 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:24:13.925 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:24:13.925 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:24:13.925 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:24:13.925 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:24:13.926 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:13.926 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:13.926 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:24:13.926 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:24:13.927 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:24:13.928 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:24:13.928 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:24:13.929 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:24:13.929 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:13.930 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:24:13.931 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:24:13.931 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:24:13.931 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:24:13.934 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:24:13.934 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:24:13.934 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:24:13.934 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:13.935 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:24:13.935 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:15.289 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:24:15.289 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:24:15.294 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:24:15.294 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:15.297 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:24:15.298 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:24:15.300 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:24:15.302 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:24:15.303 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:24:15.304 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:24:15.305 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:24:15.305 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:24:15.307 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:24:15.310 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:24:15.310 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:24:15.311 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:19.715 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.07583713158965111
+[1,0]<stderr>: 2026-02-28 22:24:19.716 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 4.461007740567712
+[1,0]<stderr>: 2026-02-28 22:24:19.716 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 512 token lookups verified successfully over multi-host pipeline
+[1,0]<stderr>: 2026-02-28 22:24:19.900 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:24:19.900 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:24:19.901 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:24:19.901 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:24:19.901 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,13]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:24:19.902 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:24:19.903 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:24:19.903 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:24:19.903 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,4]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:24:19.904 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:24:19.905 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:24:19.909 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:24:19.909 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:19.914 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:24:19.914 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:21.262 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:24:21.273 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,12]<stderr>: 2026-02-28 22:24:21.273 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:24:21.274 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:21.278 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:24:21.280 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:24:21.280 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:24:21.282 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:24:21.282 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:24:21.283 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:24:21.284 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:24:21.287 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:24:21.290 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:24:21.290 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:24:21.293 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:24:21.296 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:25.578 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.06651482544839382
+[1,0]<stderr>: 2026-02-28 22:24:25.579 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 3.9126367910819897
+[1,0]<stderr>: 2026-02-28 22:24:25.579 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 1024 token lookups verified successfully over multi-host pipeline
+[1,1]<stderr>: 2026-02-28 22:24:25.763 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-02-28 22:24:25.763 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,5]<stderr>: 2026-02-28 22:24:25.765 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,5]<stderr>: 2026-02-28 22:24:25.765 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,10]<stderr>: 2026-02-28 22:24:25.765 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,10]<stderr>: 2026-02-28 22:24:25.765 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-02-28 22:24:25.766 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-02-28 22:24:25.766 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,9]<stderr>: 2026-02-28 22:24:25.766 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,9]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,13]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,4]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,11]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,11]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stderr>: 2026-02-28 22:24:25.767 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stderr>: 2026-02-28 22:24:25.768 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stderr>: 2026-02-28 22:24:25.768 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,8]<stderr>: 2026-02-28 22:24:25.768 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,8]<stderr>: 2026-02-28 22:24:25.769 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,7]<stderr>: 2026-02-28 22:24:25.769 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,7]<stderr>: 2026-02-28 22:24:25.769 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,6]<stderr>: 2026-02-28 22:24:25.770 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,6]<stderr>: 2026-02-28 22:24:25.770 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,15]<stderr>: 2026-02-28 22:24:25.771 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,15]<stderr>: 2026-02-28 22:24:25.771 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,14]<stderr>: 2026-02-28 22:24:25.780 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,14]<stderr>: 2026-02-28 22:24:25.780 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:25.782 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,12]<stderr>: 2026-02-28 22:24:25.782 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,12]<stderr>: 2026-02-28 22:24:27.139 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,8]<stderr>: 2026-02-28 22:24:27.153 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:27.153 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,11]<stderr>: 2026-02-28 22:24:27.154 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-02-28 22:24:27.155 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,15]<stderr>: 2026-02-28 22:24:27.156 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,13]<stderr>: 2026-02-28 22:24:27.156 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,9]<stderr>: 2026-02-28 22:24:27.159 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,10]<stderr>: 2026-02-28 22:24:27.159 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,2]<stderr>: 2026-02-28 22:24:27.161 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,1]<stderr>: 2026-02-28 22:24:27.161 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,14]<stderr>: 2026-02-28 22:24:27.161 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,7]<stderr>: 2026-02-28 22:24:27.162 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,4]<stderr>: 2026-02-28 22:24:27.165 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,6]<stderr>: 2026-02-28 22:24:27.168 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,5]<stderr>: 2026-02-28 22:24:27.170 | DEBUG    | conftest:mesh_device:580 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-02-28 22:24:31.637 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:532 - Average latency (milliseconds) per token: 0.05792034789919853
+[1,0]<stderr>: 2026-02-28 22:24:31.637 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:533 - Average latency (microseconds) per token per stage: 3.407079288188149
+[1,0]<stderr>: 2026-02-28 22:24:31.637 | INFO     | models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline:test_pipeline_block:536 - 2048 token lookups verified successfully over multi-host pipeline

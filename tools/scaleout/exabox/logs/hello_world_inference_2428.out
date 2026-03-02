@@ -1,0 +1,190 @@
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
+[95m Resetting WH Galaxy trays with reset command... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 second[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 second[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 second[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0mAll 32 chips found in "/dev/tenstorrent"
+s: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0mAll 32 chips found in "/dev/tenstorrent"
+
+[95m Re-initializing boards after reset.... [0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+
+[95m Re-initializing boards after reset.... [0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+s: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0mAll 32 chips found in "/dev/tenstorrent"
+
+[95m Re-initializing boards after reset.... [0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+s: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0mAll 32 chips found in "/dev/tenstorrent"
+
+[95m Re-initializing boards after reset.... [0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
+Running main() from gmock_main.cc
+Note: Google Test filter = *GenerateTrayToPCIeDeviceMapping*
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PhysicalMappingGeneration
+[ RUN      ] PhysicalMappingGeneration.GenerateTrayToPCIeDeviceMapping
+2026-03-01 12:20:01.333 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
+2026-03-01 12:20:01.410 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-03-01 12:20:01.471 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
+2026-03-01 12:20:01.896 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
+2026-03-01 12:20:01.964 | info     |             UMD | Harvesting masks for chip 30 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:01.975 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:01.975 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:02.297 | info     |             UMD | Harvesting masks for chip 6 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:02.308 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:02.308 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:02.626 | info     |             UMD | Harvesting masks for chip 10 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:02.636 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:02.636 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:02.954 | info     |             UMD | Harvesting masks for chip 17 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:02.964 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:02.964 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:03.281 | info     |             UMD | Harvesting masks for chip 22 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:03.291 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:03.291 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:03.610 | info     |             UMD | Harvesting masks for chip 21 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:03.620 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:03.620 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:03.938 | info     |             UMD | Harvesting masks for chip 14 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:03.950 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:03.950 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:04.270 | info     |             UMD | Harvesting masks for chip 1 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:04.281 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:04.281 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:04.599 | info     |             UMD | Harvesting masks for chip 2 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:04.610 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:04.610 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:04.932 | info     |             UMD | Harvesting masks for chip 31 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:04.942 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:04.942 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:05.261 | info     |             UMD | Harvesting masks for chip 15 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:05.272 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:05.272 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:05.590 | info     |             UMD | Harvesting masks for chip 18 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:05.601 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:05.601 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:05.917 | info     |             UMD | Harvesting masks for chip 3 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:05.928 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:05.928 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:06.246 | info     |             UMD | Harvesting masks for chip 16 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:06.257 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:06.257 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:06.576 | info     |             UMD | Harvesting masks for chip 12 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:06.587 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:06.587 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:06.904 | info     |             UMD | Harvesting masks for chip 25 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:06.915 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:06.915 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:07.231 | info     |             UMD | Harvesting masks for chip 9 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:07.242 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:07.242 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:07.559 | info     |             UMD | Harvesting masks for chip 24 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:07.571 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:07.571 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:07.890 | info     |             UMD | Harvesting masks for chip 13 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:07.900 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:07.900 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:08.217 | info     |             UMD | Harvesting masks for chip 27 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:08.228 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:08.228 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:08.545 | info     |             UMD | Harvesting masks for chip 4 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:08.556 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:08.556 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:08.873 | info     |             UMD | Harvesting masks for chip 19 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:08.884 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:08.884 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:09.202 | info     |             UMD | Harvesting masks for chip 23 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:09.212 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:09.212 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:09.531 | info     |             UMD | Harvesting masks for chip 0 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:09.542 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:09.542 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:09.860 | info     |             UMD | Harvesting masks for chip 29 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:09.870 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:09.870 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:10.185 | info     |             UMD | Harvesting masks for chip 28 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:10.196 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:10.196 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:10.514 | info     |             UMD | Harvesting masks for chip 20 tensix: 0x200 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:10.525 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:10.525 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:10.842 | info     |             UMD | Harvesting masks for chip 5 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:10.852 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:10.852 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:11.169 | info     |             UMD | Harvesting masks for chip 11 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:11.180 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:11.180 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:11.498 | info     |             UMD | Harvesting masks for chip 8 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:11.508 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:11.508 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:11.824 | info     |             UMD | Harvesting masks for chip 26 tensix: 0x200 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:11.835 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:11.835 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:12.151 | info     |             UMD | Harvesting masks for chip 7 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
+2026-03-01 12:20:12.161 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
+2026-03-01 12:20:12.161 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
+2026-03-01 12:20:12.475 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[29, 21, 31, 6, 18, 2, 19, 5, 10, 7, 22, 25, 27, 0, 23, 4, 16, 28, 12, 30, 15, 1, 14, 11, 26, 24, 13, 17, 8, 3, 9, 20] and remote chip ids {} (cluster.cpp:180)
+2026-03-01 12:20:12.475 | info     |             UMD | IOMMU: enabled (cluster.cpp:155)
+2026-03-01 12:20:12.475 | info     |             UMD | KMD version: 2.5.0 (cluster.cpp:158)
+2026-03-01 12:20:12.494 | info     |             UMD | Starting devices in cluster (cluster.cpp:964)
+2026-03-01 12:20:12.510 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.528 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.542 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.558 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.573 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.589 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.605 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.620 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.638 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.655 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.671 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.689 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.707 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.724 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.741 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.759 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.776 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.791 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.806 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.821 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.838 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.855 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.869 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.883 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.901 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.919 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.935 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.948 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.966 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:12.983 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:13.002 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+2026-03-01 12:20:13.016 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:331)
+[       OK ] PhysicalMappingGeneration.GenerateTrayToPCIeDeviceMapping (28504 ms)
+[----------] 1 test from PhysicalMappingGeneration (28504 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (28504 ms total)
+[  PASSED  ] 1 test.
+2026-03-01 12:20:20.133 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:476)
+2026-03-01 12:20:20.133 | info     |             UMD | Closing devices in cluster (cluster.cpp:975)

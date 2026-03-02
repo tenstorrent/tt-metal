@@ -1,0 +1,1 @@
+2026-02-27 22:56:52.203 | INFO     | __main__:generate_slice_to_pcie_device_mapping:61 - Running: mpirun --np 2 --host bh-glx-c04u02,bh-glx-c04u08 --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --bind-to none --tag-output build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter=*Generate2x4SliceToPCIeDeviceMapping*

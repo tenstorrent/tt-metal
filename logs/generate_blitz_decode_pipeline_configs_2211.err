@@ -1,0 +1,5 @@
+2026-02-26 16:22:28.208 | INFO     | __main__:generate_slice_to_pcie_device_mapping:61 - Running: mpirun --np 4 --host bh-glx-d05u08,bh-glx-d05u02,bh-glx-d06u02,bh-glx-d06u08 --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --bind-to none --tag-output build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter=*Generate2x4SliceToPCIeDeviceMapping*
+--------------------------------------------------------------------------
+All nodes which are allocated for this job are already filled.
+--------------------------------------------------------------------------
+2026-02-26 16:22:28.476 | ERROR    | __main__:generate_slice_to_pcie_device_mapping:66 - ['mpirun', '--np', '4', '--host', 'bh-glx-d05u08,bh-glx-d05u02,bh-glx-d06u02,bh-glx-d06u08', '--mca', 'btl', 'self,tcp', '--mca', 'btl_tcp_if_include', 'ens5f0np0', '--bind-to', 'none', '--tag-output', 'build/test/tt_metal/tt_fabric/test_physical_discovery', '--gtest_filter=*Generate2x4SliceToPCIeDeviceMapping*'] Failed to generate slice to PCIe device mapping

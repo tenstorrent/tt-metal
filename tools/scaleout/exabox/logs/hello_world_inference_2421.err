@@ -1,0 +1,6 @@
+Error response from daemon: error from registry: unauthorized
+unauthorized
+Error response from daemon: error from registry: unauthorized
+unauthorized
+srun: error: bh-glx-c04u08: task 1: Exited with exit code 1
+srun: error: bh-glx-c04u02: task 0: Exited with exit code 1

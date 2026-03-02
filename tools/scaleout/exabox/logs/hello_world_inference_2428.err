@@ -1,0 +1,5 @@
+2026-03-01 12:19:51.387 | INFO     | __main__:generate_tray_to_pcie_device_mapping:26 - Running: build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter=*GenerateTrayToPCIeDeviceMapping*
+2026-03-01 12:20:29.811 | INFO     | __main__:generate_rank_binding_yaml:80 - Generated rank configuration file: bh_4x4_multi_mesh_rank_binding.yaml
+2026-03-01 12:20:29.814 | INFO     | __main__:generate_rank_binding_yaml:80 - Generated rank configuration file: bh_4x4_z_multi_mesh_rank_binding.yaml
+2026-03-01 12:20:29.817 | INFO     | __main__:generate_rank_binding_yaml:80 - Generated rank configuration file: bh_4x2_multi_mesh_rank_binding.yaml
+2026-03-01 12:20:29.820 | INFO     | __main__:generate_rank_binding_yaml:80 - Generated rank configuration file: bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml

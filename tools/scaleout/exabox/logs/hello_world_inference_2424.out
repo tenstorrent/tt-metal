@@ -1,0 +1,77 @@
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+latest-rc: Pulling from tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64
+2ddd907373f5: Pulling fs layer
+d3999d33029f: Pulling fs layer
+2c2f6dc3e629: Pulling fs layer
+b913768e72ac: Pulling fs layer
+df8caf1ce12d: Pulling fs layer
+2c1ce468d9f3: Pulling fs layer
+505cf4fef066: Pulling fs layer
+c88049bf6f02: Pulling fs layer
+8f97b1e07ebb: Pulling fs layer
+1374c804759b: Pulling fs layer
+453e2e4e2fe4: Pulling fs layer
+19d8e1d807f3: Pulling fs layer
+19d8e1d807f3: Pulling fs layer
+1374c804759b: Pulling fs layer
+d3999d33029f: Pulling fs layer
+2ddd907373f5: Pulling fs layer
+2c1ce468d9f3: Pulling fs layer
+2c2f6dc3e629: Pulling fs layer
+505cf4fef066: Pulling fs layer
+453e2e4e2fe4: Pulling fs layer
+c88049bf6f02: Pulling fs layer
+b913768e72ac: Pulling fs layer
+8f97b1e07ebb: Pulling fs layer
+2c1ce468d9f3: Already exists
+1374c804759b: Download complete
+c88049bf6f02: Download complete
+505cf4fef066: Download complete
+1374c804759b: Download complete
+d3999d33029f: Download complete
+d3999d33029f: Download complete
+2c1ce468d9f3: Download complete
+c88049bf6f02: Download complete
+505cf4fef066: Download complete
+df8caf1ce12d: Download complete
+453e2e4e2fe4: Download complete
+453e2e4e2fe4: Download complete
+19d8e1d807f3: Download complete
+2ddd907373f5: Download complete
+19d8e1d807f3: Download complete
+2ddd907373f5: Download complete
+19d8e1d807f3: Pull complete
+df8caf1ce12d: Pull complete
+19d8e1d807f3: Pull complete
+1374c804759b: Pull complete
+d3999d33029f: Pull complete
+c88049bf6f02: Pull complete
+453e2e4e2fe4: Pull complete
+c88049bf6f02: Pull complete
+1374c804759b: Pull complete
+d3999d33029f: Pull complete
+453e2e4e2fe4: Pull complete
+8f97b1e07ebb: Download complete
+b913768e72ac: Download complete
+8f97b1e07ebb: Download complete
+b913768e72ac: Download complete
+2c2f6dc3e629: Download complete
+2c2f6dc3e629: Download complete
+8f97b1e07ebb: Pull complete
+8f97b1e07ebb: Pull complete
+2c1ce468d9f3: Pull complete
+b913768e72ac: Pull complete
+2c1ce468d9f3: Pull complete
+b913768e72ac: Pull complete
+2c2f6dc3e629: Pull complete
+505cf4fef066: Pull complete
+2ddd907373f5: Pull complete
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Downloaded newer image for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+2c2f6dc3e629: Pull complete
+505cf4fef066: Pull complete
+2ddd907373f5: Pull complete
+Digest: sha256:2f65795e179e4733feea99506d90b3227e7f34219e40f99f9fe4d4c588cc5d52
+Status: Downloaded newer image for ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
+ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:latest-rc
