@@ -51,14 +51,10 @@ void kernel_main() {
     const uint32_t input_page_size = get_tile_size(cb_input);
     auto input_accessor = TensorAccessor(input_accessor_args, input_addr, input_page_size);
 
-    // Gamma and beta accessors: conditionally constructed based on compile-time flags.
-    // Each DRAM interleaved TensorAccessorArgs consumes 1 compile-time arg.
-    // Input accessor starts at CT[2], so gamma starts at CT[3], beta at CT[3] or CT[4].
+    // CT arg layout: [0]=gamma_has_value, [1]=beta_has_value, [2+]=input_accessor,
+    // then gamma_accessor (always present, dummy if no gamma), then beta_accessor (always present, dummy if no beta).
     constexpr uint32_t gamma_ct_offset = TensorAccessorArgs<2, 0>::next_compile_time_args_offset();
-    constexpr uint32_t beta_ct_offset_with_gamma =
-        TensorAccessorArgs<gamma_ct_offset, 0>::next_compile_time_args_offset();
-    // If gamma is absent, beta starts where gamma would have started
-    constexpr uint32_t beta_ct_offset_no_gamma = gamma_ct_offset;
+    constexpr uint32_t beta_ct_offset = TensorAccessorArgs<gamma_ct_offset, 0>::next_compile_time_args_offset();
 
     // ========== Fill scaler CB with 1/W for reduce AVG ==========
     // W = Wt * 32 (total elements across the last dimension)
@@ -122,10 +118,7 @@ void kernel_main() {
 
         // ========== Read beta tiles (if present) ==========
         if constexpr (beta_has_value) {
-            // Beta CT offset depends on whether gamma is present
-            constexpr uint32_t actual_beta_ct_offset =
-                gamma_has_value ? beta_ct_offset_with_gamma : beta_ct_offset_no_gamma;
-            auto beta_accessor_args = TensorAccessorArgs<actual_beta_ct_offset, 0>();
+            auto beta_accessor_args = TensorAccessorArgs<beta_ct_offset, 0>();
             const uint32_t beta_page_size = get_tile_size(cb_beta);
             auto beta_accessor = TensorAccessor(beta_accessor_args, beta_addr, beta_page_size);
 

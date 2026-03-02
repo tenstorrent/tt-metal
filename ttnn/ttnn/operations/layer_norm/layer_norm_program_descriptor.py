@@ -155,11 +155,18 @@ def create_program_descriptor(
     # Compile-time args: gamma_has_value, beta_has_value, TensorAccessorArgs(input),
     # [TensorAccessorArgs(gamma) if present], [TensorAccessorArgs(beta) if present]
     reader_ct_args = [gamma_has_value, beta_has_value]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    if weight is not None:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
-    if bias is not None:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
+    input_accessor_ct = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    reader_ct_args.extend(input_accessor_ct)
+    # Always pad gamma and beta accessor CT args (even with dummies when absent)
+    # so the kernel can unconditionally compute CT arg offsets at compile time.
+    # DRAM interleaved accessor uses 1 CT arg (value 2 = interleaved enum).
+    DUMMY_ACCESSOR_CT = [2]  # Same format as DRAM interleaved accessor
+    reader_ct_args.extend(
+        ttnn.TensorAccessorArgs(weight).get_compile_time_args() if weight is not None else DUMMY_ACCESSOR_CT
+    )
+    reader_ct_args.extend(
+        ttnn.TensorAccessorArgs(bias).get_compile_time_args() if bias is not None else DUMMY_ACCESSOR_CT
+    )
 
     # Runtime args: input_addr, gamma_addr (0 if none), beta_addr (0 if none),
     #               num_rows, Wt, start_tile_id=0, epsilon_as_uint32
