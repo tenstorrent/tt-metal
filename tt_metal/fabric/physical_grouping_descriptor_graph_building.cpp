@@ -69,7 +69,6 @@ void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callba
 namespace {
 
 using tt::tt_fabric::AdjacencyGraph;
-using tt::tt_fabric::iterate_cartesian_product;
 
 AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& instance_ids) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
@@ -212,7 +211,7 @@ AdjacencyGraph<uint32_t> build_custom_connections_graph(
         uint32_t src_idx = conn.src_instance();
         uint32_t dst_idx = conn.dst_instance();
 
-        if (index_to_id.find(src_idx) == index_to_id.end() || index_to_id.find(dst_idx) == index_to_id.end()) {
+        if (!index_to_id.contains(src_idx) || !index_to_id.contains(dst_idx)) {
             TT_THROW(
                 "Custom connection references invalid instance index: src={}, dst={} (valid range: 0-{})",
                 src_idx,
@@ -882,7 +881,8 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         mesh.nodes_row_major = {node_id};
         mesh.node_metadata[node_id] = metadata;
-        mesh.graph = tt::tt_fabric::AdjacencyGraph<uint32_t>({{node_id, {}}});
+        mesh.graph = tt::tt_fabric::AdjacencyGraph<uint32_t>(
+            tt::tt_fabric::AdjacencyGraph<uint32_t>::AdjacencyMap{{node_id, {}}});
 
         // PSD validation is done at the top level only, not for individual leaf nodes
         return {std::move(mesh)};
@@ -1033,14 +1033,14 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
         std::vector<GroupingInfo> result;
         result.reserve(meshes.size());
 
-        for (size_t i = 0; i < meshes.size(); ++i) {
+        for (auto& meshe : meshes) {
             GroupingInfo info = grouping;
             info.name = grouping.name + "_flat";
 
             // Rebuild items from flattened mesh node metadata BEFORE moving the graph
             // (rebuild_items_from_flattened_mesh needs mesh.graph.get_nodes() and mesh.node_metadata)
-            rebuild_items_from_flattened_mesh(info, meshes[i]);
-            info.adjacency_graph = std::move(meshes[i].graph);
+            rebuild_items_from_flattened_mesh(info, meshe);
+            info.adjacency_graph = std::move(meshe.graph);
 
             // If PSD is provided, validate that the graph can be mapped to it
             if (physical_system_descriptor != nullptr) {

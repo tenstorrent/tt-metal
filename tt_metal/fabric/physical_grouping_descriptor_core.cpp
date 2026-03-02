@@ -27,7 +27,6 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <cctype>
 #include <map>
 
 #include <google/protobuf/text_format.h>

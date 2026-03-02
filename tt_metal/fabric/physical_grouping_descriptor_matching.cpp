@@ -589,8 +589,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             found_mesh = true;
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
-                for (size_t i = 0; i < meshes.size(); ++i) {
-                    mesh_flat_groupings[mesh_group_info.name] = std::move(meshes[i]);
+                for (auto& meshe : meshes) {
+                    mesh_flat_groupings[mesh_group_info.name] = std::move(meshe);
                 }
             }
         }
