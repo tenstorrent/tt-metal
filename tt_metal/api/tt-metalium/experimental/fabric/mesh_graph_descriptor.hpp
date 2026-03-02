@@ -133,7 +133,7 @@ public:
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
     const std::vector<GlobalNodeId>& all_switches() const { return switch_instances_; }
-    const std::unordered_set<std::string> all_names() const {
+    std::unordered_set<std::string> all_names() const {
         std::unordered_set<std::string> names;
         names.reserve(instances_by_name_.size());
         for (const auto& [name, _] : instances_by_name_) {
@@ -141,7 +141,7 @@ public:
         }
         return names;
     }
-    const std::unordered_set<std::string> all_types() const {
+    std::unordered_set<std::string> all_types() const {
         std::unordered_set<std::string> types;
         types.reserve(instances_by_type_.size());
         for (const auto& [type, _] : instances_by_type_) {
