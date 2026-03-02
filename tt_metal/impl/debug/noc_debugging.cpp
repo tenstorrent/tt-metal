@@ -103,8 +103,8 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
             } else {
                 issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB;
             }
-            issue_type.issue_address = locked_buf->address;
-            issue_type.issue_size = locked_buf->size;
+            issue_type.issue_address = event.dst_addr;
+            issue_type.issue_size = event.num_bytes;
             issue_type.src_x = event.src_x;
             issue_type.src_y = event.src_y;
             issue_type.dst_x = event.dst_x;

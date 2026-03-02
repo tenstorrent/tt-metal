@@ -105,8 +105,8 @@ enum class NOCDebugIssueBaseType : uint8_t {
 // TODO: Move metadata out into a variant so we can have different metadata for each issue types
 struct NOCDebugIssueType {
     NOCDebugIssueBaseType base_type;
-    uint32_t issue_address;  // The address of the issue
-    uint32_t issue_size;     // The size of the issue in bytes
+    uint32_t issue_address;  // The destination address of the violating NOC transaction
+    uint32_t issue_size;     // The size of the violating NOC transaction in bytes
     uint8_t src_x;
     uint8_t src_y;
     uint8_t dst_x;

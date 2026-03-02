@@ -99,16 +99,24 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         // Writer core (source of the NOC writes) should have been flagged for writing to a locked buffer
-        bool found_write_to_locked = false;
+        std::vector<NOCDebugIssueType> locked_issues;
         for (IDevice* device : mesh_device->get_devices()) {
-            ChipId chip_id = device->id();
-            if (this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0)) {
-                found_write_to_locked = true;
-                break;
-            }
+            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
-        EXPECT_TRUE(found_write_to_locked)
+        ASSERT_FALSE(locked_issues.empty())
             << "Expected write-to-locked-buffer issue on writer core (1,0); NOC debug did not report the violation.";
+
+        uint32_t expected_write_size = num_elements * sizeof(uint32_t);
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
+            EXPECT_EQ(issue.issue_address, locker_buffer_addr);
+            EXPECT_EQ(issue.issue_size, expected_write_size);
+            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+        }
     }
 }
 
@@ -276,15 +284,23 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         distributed::Finish(mesh_device->mesh_command_queue());
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        bool found_write_to_locked_cb = false;
+        std::vector<NOCDebugIssueType> locked_issues;
         for (IDevice* device : mesh_device->get_devices()) {
-            if (this->has_write_to_locked_issue(device->id(), writer_virtual_core, 0)) {
-                found_write_to_locked_cb = true;
-                break;
-            }
+            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
-        EXPECT_TRUE(found_write_to_locked_cb)
+        ASSERT_FALSE(locked_issues.empty())
             << "Expected write-to-locked-CB issue on writer core; NOC debug did not report the violation.";
+
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+            EXPECT_GE(issue.issue_size, write_size);
+            EXPECT_GT(issue.issue_address, 0u);
+            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+        }
     }
 }
 
