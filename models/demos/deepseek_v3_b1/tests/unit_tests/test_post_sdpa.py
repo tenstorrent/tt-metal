@@ -1014,7 +1014,7 @@ def test_post_sdpa_with_sdpa_phase(
     # The original sdpa_reduce_to_all op uses shard shape [batch, l_width + ms_width] per core.
     # Using only L-sized buffers causes MS writes to go past the allocated memory!
     sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker  # 512 + 32 = 544
-    sdpa_recv_shard_shape = (SDPA_L_HEIGHT, sdpa_recv_per_worker)  # [8, 544]
+    sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)  # [8, 544]
     sdpa_recv_shard_spec = ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sdpa_recv_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, sdpa_recv_shard_spec
@@ -1022,18 +1022,9 @@ def test_post_sdpa_with_sdpa_phase(
     # Full receive tensor: [8, (l_width + ms_width) * num_workers] = [8, 544*8] = [8, 4352]
     sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
     mesh_sdpa_recv_torch = torch.cat(
-        [torch.zeros((SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
+        [torch.zeros((2 * SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
     )
-    ttnn_sdpa_r1_recv = ttnn.from_torch(
-        mesh_sdpa_recv_torch,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_recv_mem_config,
-        tile=sdpa_tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_sdpa_r2_recv = ttnn.from_torch(
+    ttnn_sdpa_intermediate_recv = ttnn.from_torch(
         mesh_sdpa_recv_torch,
         device=submesh,
         dtype=ttnn.bfloat16,
@@ -1121,8 +1112,7 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_input_l_mesh=ttnn_sdpa_input_l,
         sdpa_input_ms_mesh=ttnn_sdpa_input_ms,
         sdpa_output_l_mesh=ttnn_sdpa_output_l,
-        sdpa_r1_recv_mesh=ttnn_sdpa_r1_recv,
-        sdpa_r2_recv_mesh=ttnn_sdpa_r2_recv,
+        sdpa_intermediate_recv_mesh=ttnn_sdpa_intermediate_recv,
         sdpa_forwarder_scratch_mesh=ttnn_sdpa_forwarder_scratch,
         sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
