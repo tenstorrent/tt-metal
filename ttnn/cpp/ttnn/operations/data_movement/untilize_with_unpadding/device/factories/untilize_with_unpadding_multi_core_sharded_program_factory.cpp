@@ -101,11 +101,14 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     uint32_t sharded_output_cb_index;
     CBHandle cb_sharded_output;
     if (out_sharded) {
+        // The kernel advances the write pointer by aligned_page_size (which may be
+        // larger than block_row_size due to buffer alignment padding), so the CB
+        // page size must match to avoid overflow.
         std::tie(sharded_output_cb_index, cb_sharded_output) = create_cb(
             tt::CBIndex::c_17,
             program,
             all_cores,
-            block_row_size,
+            aligned_page_size,
             num_output_rows_unpadded,
             output_cb_data_format,
             output.buffer());
