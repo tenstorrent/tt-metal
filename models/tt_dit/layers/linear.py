@@ -11,13 +11,18 @@ import ttnn
 from ..utils.matmul import get_matmul_config
 from .module import Module, Parameter
 
+MATH_FIDELITY = {
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.float32: ttnn.MathFidelity.HiFi4,
+}
+
 
 class Linear(Module):
     """
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
+    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
         super().__init__()
 
         self.in_features = in_features
@@ -38,14 +43,14 @@ class Linear(Module):
         """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -81,6 +86,14 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
+def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
+    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
+    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
+    return 0.5 * x * one_plus_tanh
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -92,6 +105,7 @@ class ColParallelLinear(Module):
         out_features,
         bias=True,
         activation_fn=None,
+        dtype=ttnn.bfloat16,
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
@@ -122,17 +136,20 @@ class ColParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[fsdp_mesh_axis, mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
             if bias
             else None
         )
@@ -218,6 +235,7 @@ class RowParallelLinear(Module):
         in_features,
         out_features,
         bias=True,
+        dtype=ttnn.bfloat16,
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
@@ -237,7 +255,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -246,10 +264,15 @@ class RowParallelLinear(Module):
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[mesh_axis, fsdp_mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype
+            )
             if bias
             else None
         )
@@ -324,6 +347,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
+    if activation_fn == "gelu_tanh":
+        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
