@@ -90,7 +90,7 @@ jobs:
         id: compute-tests
         run: |
           set -euo pipefail
-          echo "[info] Outputting default values"
+          echo "[info] Outputing default values"
           default_ops_tests='${{ toJSON(matrix.default-ops-tests) }}'
           echo $default_ops_tests
           echo $default_ops_tests | jq
