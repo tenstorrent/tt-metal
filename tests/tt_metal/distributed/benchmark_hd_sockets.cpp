@@ -36,7 +36,8 @@ constexpr uint32_t kLatencyIters = 100;
 // Sweep parameters for single-chip throughput benchmarks.
 const std::vector<int64_t> kThroughputPageSizes = {
     64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
-const std::vector<int64_t> kThroughputTotalData = {1LL << 20, 16LL << 20, 512LL << 20, 1024LL << 20};
+const std::vector<int64_t> kThroughputTotalData = {
+    1LL << 14, 1LL << 15, 1LL << 19, 1LL << 20, 16LL << 20, 512LL << 20, 1024LL << 20};
 
 // D2H FIFOs live in host memory (hugepages), so they can be large.
 const std::vector<int64_t> kD2HThroughputFifoSizes = {
