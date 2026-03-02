@@ -26,7 +26,6 @@ from models.demos.deepseek_v3_b1.blitz_overlap_tensors import (
     OverlappedTensor,
     max_shard_bytes,
     overlap_tensors,
-    stitch_width_sharded,
 )
 
 
@@ -682,106 +681,53 @@ class BlitzDecodeWeights:
             kv_a_proj_weights.shape == cfg.kv_a_proj_shape
         ), f"kv_a_proj_weights must be {cfg.kv_a_proj_shape}, got {tuple(kv_a_proj_weights.shape)}"
 
-        # -- Step 1: pack q_a_proj  (H, W) -> (H/2, 2W) ----------------
-        packed = cfg.shuffle_q_a(q_a_proj_weights)
-
-        # -- Step 2: reorder kv_a_proj shards ---------------------------
+        # -- Preprocess --------------------------------------------------
+        q_a_packed = cfg.shuffle_q_a(q_a_proj_weights)
         kv_reordered = cfg.shuffle_kv_a(kv_a_proj_weights)
-        kv_h, kv_w = kv_a_proj_weights.shape
-        kv_num_cores = cfg.kv_core_range_set.num_cores()
-        q_ab_num_cores = cfg.q_ab_core_range_set.num_cores()
 
-        # -- Step 3: build per-TP fused tensors -------------------------
-        per_tp_combined = []
-        for tp_idx in range(q_b_tp):
-            q_b_slice = cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)
-            shuffled = cfg.shuffle_q_b(q_b_slice)
-
-            q_ab_fused, q_ab_shard_shape = stitch_width_sharded(packed, shuffled, q_ab_num_cores)
-            fused_shard_h, target_w = q_ab_shard_shape
-
-            kv_shard_w = kv_w // kv_num_cores
-            assert (
-                kv_shard_w == target_w
-            ), f"kv_a_proj shard width ({kv_shard_w}) must equal q_ab fused shard width ({target_w})"
-
-            kv_padded = torch.zeros(fused_shard_h, kv_w, dtype=kv_a_proj_weights.dtype)
-            kv_padded[:kv_h, :] = kv_reordered
-
-            total_cores = q_ab_num_cores + kv_num_cores
-            combined_tp = torch.cat([q_ab_fused, kv_padded], dim=1)
-            assert combined_tp.shape == (fused_shard_h, target_w * total_cores)
-            per_tp_combined.append(combined_tp)
-
-        combined = torch.cat(per_tp_combined, dim=1) if q_b_tp > 1 else per_tp_combined[0]
-
-        # -- Step 4: place on device as WIDTH_SHARDED -------------------
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({q_ab_bb, kv_bb}),
-            (fused_shard_h, target_w),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        )
-
-        if q_b_tp == 1:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self._device)
-        else:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 1))
-        device_for_torch = self._device if move_to_device else None
-
-        fused = ttnn.from_torch(
-            combined,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device_for_torch,
-            memory_config=mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
-        # -- Build OverlappedTensor views --------------------------------
-        tile = fused.get_tile()
-        ts = tuple(tile.tile_shape)
-        tile_bytes = tile.get_tile_size(ttnn.bfloat8_b)
-
-        q_a_shard_w = cfg.packed_w // q_ab_num_cores
-        q_b_shard_w = cfg.q_b_proj_shape[1] // q_ab_num_cores
-        kv_shard_w = kv_w // kv_num_cores
-
-        return [
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=(cfg.packed_h, cfg.packed_w),
-                shard_shape=(cfg.packed_h, q_a_shard_w),
-                core_range_set=cfg.q_ab_core_range_set,
-                dtype=ttnn.bfloat8_b,
-                tile_shape=ts,
-                byte_offset=0,
-                total_size=cfg.q_a_tiles_per_shard * tile_bytes,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.q_b_proj_shape,
-                shard_shape=(cfg.q_b_proj_shape[0], q_b_shard_w),
-                core_range_set=cfg.q_ab_core_range_set,
-                dtype=ttnn.bfloat8_b,
-                tile_shape=ts,
-                byte_offset=cfg.q_a_shard_spec.tiles_per_shard(mesh_shape) * tile_bytes,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.kv_a_proj_shape,
-                shard_shape=(cfg.kv_a_proj_shape[0], kv_shard_w),
-                core_range_set=cfg.kv_core_range_set,
-                dtype=ttnn.bfloat8_b,
-                tile_shape=ts,
-                byte_offset=0,
-                total_size=cfg.kv_tiles_per_shard * tile_bytes,
-            ),
+        q_b_shuffled_slices = [
+            cfg.shuffle_q_b(cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)) for tp_idx in range(q_b_tp)
         ]
+        q_b_preprocessed = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
+
+        q_ab_cores = cfg.q_ab_core_range_set
+        kv_cores = cfg.kv_core_range_set
+
+        return overlap_tensors(
+            [
+                [
+                    (
+                        q_a_packed,
+                        OverlappedShardSpec(
+                            core_range_set=q_ab_cores,
+                            raw_tensor_shape=tuple(q_a_packed.shape),
+                            dtype=ttnn.bfloat8_b,
+                        ),
+                    ),
+                    (
+                        q_b_preprocessed,
+                        OverlappedShardSpec(
+                            core_range_set=q_ab_cores,
+                            raw_tensor_shape=tuple(q_b_preprocessed.shape),
+                            dtype=ttnn.bfloat8_b,
+                            tp_dim=(None, 1),
+                        ),
+                    ),
+                ],
+                [
+                    (
+                        kv_reordered,
+                        OverlappedShardSpec(
+                            core_range_set=kv_cores,
+                            raw_tensor_shape=tuple(kv_reordered.shape),
+                            dtype=ttnn.bfloat8_b,
+                        ),
+                    ),
+                ],
+            ],
+            device=self._device,
+            move_to_device=move_to_device,
+        )
 
     def get_tt_o_proj_and_gate_mm_weights(
         self,
