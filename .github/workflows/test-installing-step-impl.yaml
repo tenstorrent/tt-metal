@@ -121,18 +121,6 @@ jobs:
         shell: bash
         timeout-minutes: 90
         run: |
-          echo "Start disk usage reporter in background (runs every 30s until this step ends)"
-          (
-            while true; do
-              echo "=== disk usage $(date -Iseconds) ==="
-              df -h
-              du -sh . 2>/dev/null || true
-              sleep 30
-            done
-          ) &
-          TRAP_PID=$!
-          trap "kill $TRAP_PID 2>/dev/null || true" EXIT
-
           set -euo pipefail
           # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
           # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
@@ -152,18 +140,7 @@ jobs:
         shell: bash
         timeout-minutes: 30
         run: |
-          # Start disk usage reporter in background (runs every 30s until this step ends)
-          (
-            while true; do
-              echo "=== disk usage $(date -Iseconds) ==="
-              df -h
-              du -sh . 2>/dev/null || true
-              sleep 30
-            done
-          ) &
-          TRAP_PID=$!
-          trap "kill $TRAP_PID 2>/dev/null || true" EXIT
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
+            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py::test_demo_text[wormhole_b0-8-device_params0-False-performance-batch-1] -k 'not performance-ci-stress-1'"
