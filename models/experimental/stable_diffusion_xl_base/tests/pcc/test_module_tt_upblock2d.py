@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlo
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -26,14 +26,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             2,
             0.997,
         ),
-        # 512x512 image resolution
-        (
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
             (512, 512),
             (1, 640, 64, 64),
             (1, 1280),
             ((1, 320, 64, 64), (1, 320, 64, 64), (1, 320, 64, 64)),
             2,
             0.997,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
         ),
     ],
 )

@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_downsample2d import 
 from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     to_channel_last_ttnn,
     from_channel_last_ttnn,
@@ -26,10 +26,25 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1024, 1024), (1, 128, 1024, 1024), 0),
         ((1024, 1024), (1, 256, 512, 512), 1),
         ((1024, 1024), (1, 512, 256, 256), 2),
-        # 512x512 image resolution
-        ((512, 512), (1, 128, 512, 512), 0),
-        ((512, 512), (1, 256, 256, 256), 1),
-        ((512, 512), (1, 512, 128, 128), 2),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 128, 512, 512),
+            0,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 256, 256, 256),
+            1,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 512, 128, 128),
+            2,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])

@@ -10,10 +10,19 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimes
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 
 
-@pytest.mark.parametrize("image_resolution", [(1024, 1024), (512, 512)])
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        pytest.param(
+            (512, 512),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+    ],
+)
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
 @pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
 def test_embedding(

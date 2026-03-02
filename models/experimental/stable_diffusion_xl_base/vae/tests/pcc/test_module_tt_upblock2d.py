@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import lo
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -21,11 +21,35 @@ from models.common.utility_functions import torch_random
         ((1024, 1024), (1, 512, 256, 256), 1, 0.995),
         ((1024, 1024), (1, 512, 512, 512), 2, 0.998),
         ((1024, 1024), (1, 256, 1024, 1024), 3, 0.999),
-        # 512x512 image resolution
-        ((512, 512), (1, 512, 64, 64), 0, 0.999),
-        ((512, 512), (1, 512, 128, 128), 1, 0.995),
-        ((512, 512), (1, 512, 256, 256), 2, 0.998),
-        ((512, 512), (1, 256, 512, 512), 3, 0.999),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 512, 64, 64),
+            0,
+            0.999,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 512, 128, 128),
+            1,
+            0.995,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 512, 256, 256),
+            2,
+            0.998,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 256, 512, 512),
+            3,
+            0.999,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

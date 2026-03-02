@@ -10,6 +10,7 @@ from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -17,8 +18,11 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     [
         # 1024x1024 image resolution
         (1, 1, 128 * 128, 4),
-        # 512x512 image resolution
-        (1, 1, 64 * 64, 4),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (1, 1, 64 * 64, 4),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
@@ -115,8 +119,11 @@ def test_euler_discrete_scheduler(
     [
         # 1024x1024 image resolution
         (1, 4, 128, 128),
-        # 512x512 image resolution
-        (1, 4, 64, 64),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (1, 4, 64, 64),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

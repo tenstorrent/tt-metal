@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_m
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -20,9 +20,23 @@ from models.common.utility_functions import torch_random
         # 1024x1024 image resolution
         ((1024, 1024), (1024, 1280), 2, 0, 0.997),
         ((1024, 1024), (4096, 640), 1, 0, 0.999),
-        # 512x512 image resolution
-        ((512, 512), (256, 1280), 2, 0, 0.997),
-        ((512, 512), (1024, 640), 1, 0, 0.999),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (256, 1280),
+            2,
+            0,
+            0.997,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1024, 640),
+            1,
+            0,
+            0.999,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 def test_feedforward(

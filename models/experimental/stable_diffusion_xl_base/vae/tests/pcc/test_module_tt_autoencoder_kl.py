@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import lo
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 
 from loguru import logger
 
@@ -22,11 +22,25 @@ from loguru import logger
         # 1024x1024 image resolution
         ((1024, 1024), (1, 4, 128, 128), 0.933, "decoder"),
         ((1024, 1024), (1, 3, 1024, 1024), 0.9769, "encoder"),
-        # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), 0.936, "decoder"),
-        ((512, 512), (1, 3, 512, 512), 0.9797, "encoder"),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 4, 64, 64),
+            0.936,
+            "decoder",
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+            id="test_512x512_decode",
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 3, 512, 512),
+            0.9797,
+            "encoder",
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+            id="test_512x512_encode",
+        ),
     ],
-    ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),
+    ids=("test_1024x1024_decode", "test_1024x1024_encode", None, None),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae(

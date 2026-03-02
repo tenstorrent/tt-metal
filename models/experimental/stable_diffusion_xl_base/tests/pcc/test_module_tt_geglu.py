@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from functools import reduce
 
 
@@ -21,9 +21,21 @@ from functools import reduce
         # 1024x1024 image resolution
         ((1024, 1024), (1024, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
         ((1024, 1024), (4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
-        # 512x512 image resolution
-        ((512, 512), (256, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
-        ((512, 512), (1024, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (256, 1280),
+            "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0",
+            0.948,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1024, 640),
+            "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0",
+            0.950,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 def test_geglu(

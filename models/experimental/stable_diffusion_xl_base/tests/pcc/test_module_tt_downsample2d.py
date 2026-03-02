@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     to_channel_last_ttnn,
     from_channel_last_ttnn,
@@ -25,9 +25,21 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 320, 128, 128), 0, 0.999),
         ((1024, 1024), (1, 640, 64, 64), 1, 0.999),
-        # 512x512 image resolution
-        ((512, 512), (1, 320, 64, 64), 0, 0.999),
-        ((512, 512), (1, 640, 32, 32), 1, 0.999),
+        # 512x512 image resolution - skip on Blackhole
+        pytest.param(
+            (512, 512),
+            (1, 320, 64, 64),
+            0,
+            0.999,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
+        pytest.param(
+            (512, 512),
+            (1, 640, 32, 32),
+            1,
+            0.999,
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])
