@@ -6,6 +6,7 @@
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/trampoline.h>
 
@@ -79,28 +80,93 @@ void py_module_types(nb::module_& m) {
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
 
+namespace {
+
+YAML::Node dict_to_yaml(nb::dict config) {
+    YAML::Node node;
+    for (auto [key, val] : config) {
+        std::string k = nb::cast<std::string>(key);
+        if (nb::isinstance<nb::bool_>(val)) {
+            node[k] = nb::cast<bool>(val);
+        } else if (nb::isinstance<nb::int_>(val)) {
+            node[k] = nb::cast<int64_t>(val);
+        } else if (nb::isinstance<nb::float_>(val)) {
+            node[k] = nb::cast<double>(val);
+        } else if (nb::isinstance<nb::str>(val)) {
+            node[k] = nb::cast<std::string>(val);
+        }
+    }
+    return node;
+}
+
+nb::dict yaml_to_dict(const YAML::Node& node) {
+    nb::dict result;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        auto key = it->first.as<std::string>();
+        const auto& val = it->second;
+        if (!val.IsScalar()) {
+            continue;
+        }
+        auto str = val.Scalar();
+        if (str == "true") {
+            result[key.c_str()] = true;
+        } else if (str == "false") {
+            result[key.c_str()] = false;
+        } else {
+            bool converted = false;
+            try {
+                size_t pos = 0;
+                auto i = std::stoll(str, &pos);
+                if (pos == str.size()) {
+                    result[key.c_str()] = i;
+                    converted = true;
+                }
+            } catch (...) {
+            }
+            if (!converted) {
+                try {
+                    size_t pos = 0;
+                    auto d = std::stod(str, &pos);
+                    if (pos == str.size()) {
+                        result[key.c_str()] = d;
+                        converted = true;
+                    }
+                } catch (...) {
+                }
+            }
+            if (!converted) {
+                result[key.c_str()] = str;
+            }
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
 void py_module(nb::module_& m) {
     m.def(
         "create_optimizer",
         [](nb::dict config, serialization::NamedParameters params) {
-            YAML::Node node;
-            for (auto [key, val] : config) {
-                std::string k = nb::cast<std::string>(key);
-                if (nb::isinstance<nb::bool_>(val)) {
-                    node[k] = nb::cast<bool>(val);
-                } else if (nb::isinstance<nb::int_>(val)) {
-                    node[k] = nb::cast<int64_t>(val);
-                } else if (nb::isinstance<nb::float_>(val)) {
-                    node[k] = nb::cast<double>(val);
-                } else if (nb::isinstance<nb::str>(val)) {
-                    node[k] = nb::cast<std::string>(val);
-                }
-            }
-            return create_optimizer(node, std::move(params));
+            return create_optimizer(dict_to_yaml(config), std::move(params));
         },
         nb::arg("config"),
         nb::arg("params"),
         "Create an optimizer from a config dict and named parameters");
+
+    m.def(
+        "register_optimizer",
+        [](const std::string& type, nb::object creator) {
+            OptimizerRegistry::instance().register_optimizer(
+                type,
+                [creator](
+                    const YAML::Node& config, serialization::NamedParameters params) -> std::unique_ptr<OptimizerBase> {
+                    return nb::cast<std::unique_ptr<OptimizerBase>>(creator(yaml_to_dict(config), std::move(params)));
+                });
+        },
+        nb::arg("type"),
+        nb::arg("creator"),
+        "Register a custom optimizer creator function");
 
     {
         auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
