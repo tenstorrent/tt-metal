@@ -112,35 +112,9 @@ def _create_barrier_segment_config(device: Any, core_ranges: Any) -> BarrierConf
         phys_coords = [device.worker_core_from_logical_core(c) for c in logical_coords]
         config.core0_phys_x = phys_coords[0].x
         config.core0_phys_y = phys_coords[0].y
-        config.mcast_start_x = min(c.x for c in phys_coords)
-        config.mcast_start_y = min(c.y for c in phys_coords)
-        config.mcast_end_x = max(c.x for c in phys_coords)
-        config.mcast_end_y = max(c.y for c in phys_coords)
-
-        if config.num_cores > 1:
-            _validate_rectangular_grid(phys_coords, config)
+        config.other_core_phys_coords = [(c.x, c.y) for c in phys_coords[1:]]
 
     return config
-
-
-def _validate_rectangular_grid(phys_coords: List[Any], config: BarrierConfig) -> None:
-    """Validate that physical cores form a rectangle for safe NOC multicast.
-
-    NOC multicast sends to ALL cores in the bounding box. If the actual core
-    set is non-rectangular (e.g., L-shaped), the multicast would write to
-    unintended cores, corrupting their L1 memory.
-    """
-    phys_set = set((c.x, c.y) for c in phys_coords)
-    bbox_w = config.mcast_end_x - config.mcast_start_x + 1
-    bbox_h = config.mcast_end_y - config.mcast_start_y + 1
-    bbox_area = bbox_w * bbox_h
-    if len(phys_set) != bbox_area:
-        raise ValueError(
-            f"Fused kernel global barrier requires rectangular core grid for "
-            f"safe NOC multicast. Got {len(phys_set)} physical cores in "
-            f"bounding box {bbox_w}x{bbox_h} ({bbox_area} cores). "
-            f"Physical coords: {sorted(phys_set)}"
-        )
 
 
 # =============================================================================
@@ -281,9 +255,12 @@ def _build_fused_descriptor(
         )
 
         # Generate fused source (or reuse from cache)
-        role_label = {"riscv_0": "reader", "riscv_1": "writer", "compute": "compute"}.get(risc_type)
+        # riscv_0 = BRISC = writer, riscv_1 = NCRISC = reader
+        role_label = {"riscv_0": "writer", "riscv_1": "reader", "compute": "compute"}.get(risc_type)
         if role_label is None:
             continue
+
+        is_coordinator = risc_type == "riscv_1"
 
         common_rt_offsets = _compute_common_rt_arg_offsets(phase_kernels, role_key)
 
@@ -300,7 +277,7 @@ def _build_fused_descriptor(
             risc_type=risc_type,
             role_label=role_label,
             rebind_info=rebind_info,
-            op_semaphore_info=op_semaphore_info if risc_type == "riscv_0" else None,
+            op_semaphore_info=op_semaphore_info if is_coordinator else None,
             multi_barrier=multi_barrier,
             rt_arg_offsets=rt_offsets,
             common_rt_arg_offsets=common_rt_offsets,
@@ -309,11 +286,11 @@ def _build_fused_descriptor(
         )
 
         # Determine barrier RT addresses per RISC type.
-        # When no compute kernel exists, BRISC only tracks writer_done
-        # (compute_done would never be signaled).
+        # Coordinator (riscv_1/NCRISC) gets all semaphore addresses;
+        # followers only get their own signal + reset_done + per-seg release.
         barrier_addrs: List[int] = []
         if multi_barrier is not None:
-            if risc_type == "riscv_0":
+            if is_coordinator:
                 if has_compute:
                     barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
                 else:
@@ -321,7 +298,8 @@ def _build_fused_descriptor(
                 barrier_addrs.append(multi_barrier.reset_done_addr)
                 for seg in multi_barrier.segments:
                     barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
-            elif risc_type == "riscv_1":
+            elif risc_type == "riscv_0":
+                # BRISC/writer follower: signals writer_done
                 barrier_addrs = [multi_barrier.writer_done_addr, multi_barrier.reset_done_addr]
                 for seg in multi_barrier.segments:
                     barrier_addrs.append(seg.release_addr)
@@ -343,17 +321,13 @@ def _build_fused_descriptor(
             barrier_rt_offset=barrier_offset if barrier_addrs else None,
             phase_remaps=pool.phase_remaps,
         )
-        # Add per-segment named compile-time args (only riscv_0 needs them)
-        if multi_barrier is not None and risc_type == "riscv_0":
+        # Add per-segment named compile-time args (only coordinator needs them)
+        if multi_barrier is not None and is_coordinator:
             for seg_idx, seg in enumerate(multi_barrier.segments):
                 s = f"seg{seg_idx}"
                 named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
                 named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
                 named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
-                named_ct_args.append((f"{s}_mcast_start_x", seg.config.mcast_start_x))
-                named_ct_args.append((f"{s}_mcast_start_y", seg.config.mcast_start_y))
-                named_ct_args.append((f"{s}_mcast_end_x", seg.config.mcast_end_x))
-                named_ct_args.append((f"{s}_mcast_end_y", seg.config.mcast_end_y))
 
         # Append rebind addresses as runtime args (not CT to avoid JIT cache busting)
         rt_args, rebind_offset = _append_rebind_runtime_args(rt_args, rebind_info)

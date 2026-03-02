@@ -38,10 +38,8 @@ class BarrierConfig:
     num_cores: int = 1
     core0_phys_x: int = 0
     core0_phys_y: int = 0
-    mcast_start_x: int = 0
-    mcast_start_y: int = 0
-    mcast_end_x: int = 0
-    mcast_end_y: int = 0
+    # Physical (x, y) of every core EXCEPT core 0, for unicast release
+    other_core_phys_coords: List[Tuple[int, int]] = field(default_factory=list)
 
     # GlobalSemaphore references (prevent GC)
     _sem_refs: List[Any] = field(default_factory=list)
@@ -52,7 +50,7 @@ class BarrierSegment:
     """A barrier scope covering a range of phase transitions.
 
     Each segment has its own ``global_arrive`` / ``global_release``
-    GlobalSemaphore pair and physical core coordinates for NOC multicast.
+    GlobalSemaphore pair and physical core coordinates for NOC unicast.
     """
 
     config: BarrierConfig  # Physical core coords + mcast params
@@ -153,14 +151,21 @@ def _get_node_allowed_coords(node: Any) -> Set[Tuple[int, int]]:
 
 
 def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
-    """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'."""
+    """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'.
+
+    ReaderConfigDescriptor maps to RISCV_1 (NCRISC) and
+    WriterConfigDescriptor maps to RISCV_0 (BRISC) — matching the
+    hardware mapping in ``kernel_types.cpp`` where
+    ``ReaderDataMovementConfig`` sets ``processor = RISCV_1`` and
+    ``WriterDataMovementConfig`` sets ``processor = RISCV_0``.
+    """
     config = kernel_desc.config
     if isinstance(config, ttnn.ComputeConfigDescriptor):
         return "compute"
     elif isinstance(config, ttnn.ReaderConfigDescriptor):
-        return "riscv_0"
-    elif isinstance(config, ttnn.WriterConfigDescriptor):
         return "riscv_1"
+    elif isinstance(config, ttnn.WriterConfigDescriptor):
+        return "riscv_0"
     elif isinstance(config, ttnn.DataMovementConfigDescriptor):
         if config.processor == ttnn.DataMovementProcessor.RISCV_0:
             return "riscv_0"
@@ -178,7 +183,7 @@ def _kernel_overlaps_core_range(
     Returns ``True`` when *target_core_range* is ``None`` (no filtering).
     This is used to skip kernels that operate on disjoint core subsets
     during tree / branch builds.  For example, a block-sharded LayerNorm
-    on a 2-row grid produces two riscv_0 kernels — a multicast sender on
+    on a 2-row grid produces two riscv_1 kernels — a multicast sender on
     row 0 and a receiver on row 1.  When the tree builder targets only
     one branch (say row 0), the receiver kernel must be excluded so that
     it does not overwrite the sender in the role-key map.
