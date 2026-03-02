@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
@@ -19,7 +18,6 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllBroadcastAsyncConfig,
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     ConcatConfig,
@@ -963,9 +961,7 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        kv_rope_reshard_config = ReshardConfig(
-            memory_config=kv_rope_mem_cfg,
-        )
+        kv_rope_reshard_config = kv_rope_mem_cfg
         kv_rope_permute_config = PermuteConfig(
             dims=(0, 2, 1, 3),
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -1073,6 +1069,7 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
+            use_broadcast=True,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -1147,9 +1144,12 @@ class MLA1D(AbstractModule):
         )
 
         # WO
-        wo_ag_config = AllBroadcastAsyncConfig(
+        wo_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
+            dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_broadcast=True,
         )
 
         return {
@@ -1800,16 +1800,14 @@ class MLA1D(AbstractModule):
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
         # KV: 1,1,32,512 8x2 [32,32]
 
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,512 L1 interleaved
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
         # TODO: merge the following two once illia has his pr
         tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2
+            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
         )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -1817,13 +1815,12 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # TODO: remove the to memory config after illia's pr is merged
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
+        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
@@ -1902,17 +1899,18 @@ class MLA1D(AbstractModule):
 
         # Q Rope: wkv_b1
         # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=cfg["wkv_b1_in0_memory_config"]
+        )  # [1, num_heads_local, bsz, qk_nope_head_dim]
         # 1,16,32,128 L1 interleaved
 
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
-
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+        # tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,16,32,512 L1 interleaved
-        tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, bsz, num_heads_local, kv_lora_rank]
+        tt_q_nope = ttnn.transpose(
+            tt_q_nope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, bsz, num_heads_local, kv_lora_rank]
         # 1,32,16,512 L1 interleaved
 
         # Q RoPE
@@ -1968,21 +1966,19 @@ class MLA1D(AbstractModule):
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
         # 1,4,128,512 L1 interleaved
         # wkv_b2: DP
-        attn_out = ttnn.transpose(attn_out, 1, 2)  # [1, num_heads, bsz, kv_lora_rank]
-        # 1,128,4,512 L1 interleaved
 
-        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
-        attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
+        attn_out = ttnn.transpose(
+            attn_out, 1, 2, memory_config=cfg["wkv_b2_in0_memory_config"]
+        )  # [1, num_heads, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
-        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b2 output
 
         # 1,128,4,128 L1 interleaved = [1, num_heads, bsz, v_head_dim]
-        v_out = ttnn.transpose(v_out, 1, 2)
-        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        v_out = ttnn.to_memory_config(
+        v_out = ttnn.transpose(
             v_out,
+            1,
+            2,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -2011,10 +2007,14 @@ class MLA1D(AbstractModule):
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
-        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
-        v_out = ttnn.concat(v_out, dim=2)
+        wo_in0_memory_config = ttnn.create_sharded_memory_config(
+            (1, 1, bsz, num_heads * v_head_dim),
+            **cfg["wo_in0_memory_config"],
+        )
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         v_out = ttnn.tilize(v_out)
+        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+
         # 1,1,32,16384 L1 interleaved
         return v_out
 
@@ -2022,11 +2022,7 @@ class MLA1D(AbstractModule):
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,1,32,16384 L1 interleaved
         # Shard in0 to L1 WIDTH sharded for wo matmul
-        wo_in0_memory_config = ttnn.create_sharded_memory_config(
-            v_out.shape,
-            **cfg["wo_in0_memory_config"],
-        )
-        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
