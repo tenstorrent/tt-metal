@@ -201,28 +201,14 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false>
-inline void _llk_unpack_AB_custom_mm_(
-    const std::uint32_t base_address_a,
-    const std::uint32_t base_address_b,
-    const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b,
-    const std::uint32_t tile_size_a,
-    const std::uint32_t tile_size_b,
+inline void _llk_unpack_AB_custom_mm_run_(
+    volatile uint* cfg,
+    std::uint32_t address_a,
+    const std::uint32_t address_b,
+    const std::uint32_t block_increment,
+    const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
-    volatile uint* cfg = get_cfg_pointer();
-
-    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
-    const std::uint32_t inner_increment = read_transposed ? tile_size_a : ct_dim * tile_size_a;
-
-    std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
-    std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
-
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
-
+    const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
 
@@ -304,4 +290,28 @@ inline void _llk_unpack_AB_custom_mm_(
     // Reset counters at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+}
+
+template <bool read_transposed = false>
+inline void _llk_unpack_AB_custom_mm_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim = 1) {
+    volatile uint* cfg = get_cfg_pointer();
+    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
+    const std::uint32_t inner_increment = read_transposed ? tile_size_a : ct_dim * tile_size_a;
+
+    const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
+    const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
+
+    // Wait for all contexts to be free
+    wait_for_next_context(1);
+    reset_config_context();
+
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

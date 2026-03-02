@@ -9,6 +9,10 @@
 namespace tt::tt_metal::distributed {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
+private:
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
 protected:
     bool write_shard_to_device(
         const MeshBuffer& buffer,
@@ -33,7 +37,10 @@ protected:
 
 public:
     SDMeshCommandQueue(
-        MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        MeshDevice* mesh_device,
+        uint32_t id,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;

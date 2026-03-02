@@ -66,6 +66,7 @@ void kernel_main() {
             exp_approx_mode>(
             cb_q,
             cb_k,
+            0,  // cb_mask
             cb_out,
             mm1_dst_offset,
             mm2_dst_offset,
@@ -73,7 +74,8 @@ void kernel_main() {
             sum_dst_offset,
             corr_exp_dst_offset,
             chunk == 0,
-            chunk == num_chunks - 1);
+            chunk == num_chunks - 1,
+            false /* mask_last_chunk */);
     }
 
     // Sem is incremented once per 2 tiles since sem can only go up to 15

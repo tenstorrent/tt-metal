@@ -14,10 +14,10 @@
 //   3. Matmul: Each matmul core computes [1, K] x [K, N_per_core] -> [1, N_per_core]
 //
 // RISC responsibilities:
-//   NCRISC: CCL broadcast reader (on sender device) + mcast receiver (semaphore wait +
-//           CB push) + sharded buffer setup (mcast_src on sender core, weight shards on
+//   NCRISC: CCL broadcast writer (fabric multicast to remote devices) + mcast receiver
+//           (semaphore wait + CB push) + sharded buffer setup (mcast_src on sender core, weight shards on
 //           matmul cores)
-//   BRISC:  CCL broadcast writer (fabric multicast to remote devices) + mcast sender
+//   BRISC:  CCL broadcast reader + mcast sender
 //           (reads mcast_src CB, NOC multicasts to all receiver cores)
 //   TRISC:  Matmul compute (reads in0 from mcast_dst CB, in1 from weights CB, writes to out CB)
 //
@@ -35,6 +35,8 @@
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+#include "../../../unified_kernels/argmax.hpp"
+#include "../../../unified_kernels/rmsnorm.hpp"
 
 // Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
 // Each flag is specialized per core group at compile time, enabling if constexpr
@@ -44,6 +46,20 @@ struct Core {
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
+    static constexpr bool enable_argmax = get_named_compile_time_arg_val("enable_argmax") == 1;
+    static constexpr uint32_t input_socket_mode = get_named_compile_time_arg_val("input_socket_mode");
+    static constexpr uint32_t input_socket_mode_none = 0;
+    static constexpr uint32_t input_socket_mode_d2d = 2;
+    static constexpr bool bcast_use_socket_input = input_socket_mode == input_socket_mode_d2d;
+    static constexpr bool is_argmax_core = is_matmul_core;
+    static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
+    static constexpr bool is_argmax_mesh_sender_core =
+        get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
+    static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
+    static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
+    static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
+    static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
+    static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 };
 
 void kernel_main() {
@@ -53,7 +69,8 @@ void kernel_main() {
 // constructs the appropriate Broadcast/Mcast/Matmul arg structs for its role.
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // --- NCRISC: CCL broadcast reader + mcast receiver + sharded buffer setup ---
+    uint32_t ncrisc_rt_arg_idx = 0;
+    // --- NCRISC: CCL broadcast writer + mcast receiver + sharded buffer setup ---
 
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
@@ -72,29 +89,32 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
         get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_common_arg_val<uint32_t>(0),   // tensor_address0
-            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(7),   // barrier_sem
-            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(10),  // ring_index
-            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // tensor_address0
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // wait_output_semaphore
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // reset_global_semaphore
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // ring_index
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // num_connections (computed from len(dst_nodes))
         };
     }
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_dst_cb"),
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
@@ -102,6 +122,34 @@ void kernel_main() {
     // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ReaderCTArgs<
+        get_named_compile_time_arg_val("argmax_num_values"),
+        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
+        get_named_compile_time_arg_val("argmax_num_senders"),
+        get_named_compile_time_arg_val("argmax_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("argmax_mesh_mode"),
+        get_named_compile_time_arg_val("argmax_stage1_sender"),
+        get_named_compile_time_arg_val("argmax_stage1_receiver"),
+        get_named_compile_time_arg_val("argmax_stage2_sender"),
+        get_named_compile_time_arg_val("argmax_stage2_receiver"),
+        get_named_compile_time_arg_val("argmax_stage1_slot_base_offset"),
+        get_named_compile_time_arg_val("argmax_stage1_num_slots"),
+        get_named_compile_time_arg_val("argmax_stage1_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_stage1_local_slot_offset"),
+        get_named_compile_time_arg_val("argmax_stage2_slot_base_offset"),
+        get_named_compile_time_arg_val("argmax_stage2_num_slots"),
+        get_named_compile_time_arg_val("argmax_stage2_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_stage2_local_slot_offset"),
+        get_named_compile_time_arg_val("argmax_mesh_local_send_slot_offset"),
+        get_named_compile_time_arg_val("argmax_sender_idx"),
+        get_named_compile_time_arg_val("argmax_socket_mode"),
+        get_named_compile_time_arg_val("argmax_socket_cb"),
+        get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
+        get_named_compile_time_arg_val("matmul_out"),
+        get_named_compile_time_arg_val("matmul_out_w"),
+        get_named_compile_time_arg_val("argmax_gather_cb")>;
 
     // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
@@ -111,15 +159,51 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
     }
 
+    deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
+        .scores_addr = 0,
+        .indices_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .output_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .scratch_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .gather_addr = 0,
+    };
+    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
+    // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
+    // or intermediate_tensor (CCL mode, where broadcast placed the data)
+    if constexpr (Core::is_input_core) {
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
+        if constexpr (!(Core::skip_ccl && Core::bcast_use_socket_input)) {
+            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+    }
+
 #elif defined(COMPILE_FOR_BRISC)
-    // --- BRISC: CCL broadcast reader + mcast sender ---
+    uint32_t brisc_rt_arg_idx = 0;
+    // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender")>;
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        (get_named_compile_time_arg_val("input_socket_mode") == 2 ? 1 : 0)>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    // BRISC common args layout:
+    // [0..3] argmax writer args, [4..6] optional socket-input reader args,
+    // [7..12] persistent signal routing metadata.
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
+        get_common_arg_val<uint32_t>(4),  // socket_config_addr
+        get_common_arg_val<uint32_t>(5),  // socket_page_size
+        get_common_arg_val<uint32_t>(6),  // socket_num_pages
+    };
+
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
 
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
@@ -135,18 +219,38 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast_data_size_bytes"),
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
+        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         get_write_ptr(mcast_dst_cb),
     };
 
     // Matmul writer args (BRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
+        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
+        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("argmax_socket_mode"),
+        get_named_compile_time_arg_val("argmax_socket_cb"),
+        get_named_compile_time_arg_val("argmax_socket_page_size_bytes")>;
+
+    deepseek_b1_ops::Sampling::WriterArgs sampling_args{
+        .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .scratch_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .socket_config_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .persistent_enable = get_common_arg_val<uint32_t>(7),
+        .persistent_dst_noc_x = get_common_arg_val<uint32_t>(8),
+        .persistent_dst_noc_y = get_common_arg_val<uint32_t>(9),
+        .persistent_dst_mesh_id = get_common_arg_val<uint32_t>(10),
+        .persistent_dst_chip_id = get_common_arg_val<uint32_t>(11),
+        .persistent_dst_sem_addr = get_common_arg_val<uint32_t>(12),
+    };
+    const uint32_t persistent_next_iter_global_sem_addr = get_common_arg_val<uint32_t>(12);
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
@@ -160,6 +264,18 @@ void kernel_main() {
 
     // Matmul compute: [1, K] x [K, N_per_core] -> [1, N_per_core]
     // out_w (output tiles per core) is a compile-time template param for loop unrolling
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
+    };
+
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;
 
     // CB indices and tile count from op.py compile-time args
@@ -174,56 +290,80 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
+    deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
+
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);
 #endif
 
-    // ========================================================================
-    // Phase 0 (multi-device only): CCL Broadcast — replicate input from sender
-    // device to all devices in the mesh via the fabric interconnect.
-    // Only the input core participates (reader on NCRISC, writer on BRISC).
-    // After this phase, every device has the input in its intermediate tensor
-    // (which backs CB 0 / mcast_src).
-    // ========================================================================
-    if constexpr (!Core::skip_ccl) {
-        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
-        bcast(bcast_args);
-    }
-
-#if defined(COMPILE_FOR_NCRISC)
-    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
-    // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
-    // or intermediate_tensor (CCL mode, where broadcast placed the data)
-    if constexpr (Core::is_input_core) {
-        constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-        constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
-    }
-#endif
-
-    // ========================================================================
-    // Phase 1: Mcast — multicast input from sender core to all device cores
-    //
-    // Template params: <CTArgs, IsSender, IsMcastGridCore, IsReceiverCore, PopSrc>
-    //   IsMcastGridCore: participates in semaphore-based sync (all receivers)
-    //   IsReceiverCore:  performs CB reserve/push for incoming data (all receivers)
-    //   PopSrc:          sender pops mcast_src CB after send (frees tensor-backed buffer)
-    // ========================================================================
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
-    mcast.init(mcast_args);
-    mcast(mcast_args);
-    mcast.teardown();
+    deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
+    deepseek_b1_ops::Sampling::
+        Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
+            sampling_op;
 
-    // ========================================================================
-    // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
-    //
-    // Template params: <CTArgs, IsActive, PopIn0, PopIn1>
-    //   IsActive: only matmul cores execute; others are no-ops
-    //   PopIn0:   pop mcast_dst CB (CB 1) after read (frees intermediate buffer)
-    //   PopIn1:   pop matmul_in1 CB (CB 2) after read (frees weight buffer)
-    // ========================================================================
-    deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, true> matmul;
-    matmul(matmul_args);
+    uint32_t iteration_count = 0;
+    mcast.init(mcast_args);
+    while (true) {
+        iteration_count++;
+        // ====================================================================
+        // Phase 0: broadcast_rms-style combined path.
+        // ====================================================================
+        if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
+#if defined(COMPILE_FOR_BRISC)
+            constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
+            if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
+                auto next_iteration_semaphore =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
+                noc_semaphore_wait(next_iteration_semaphore, 1);
+                noc_semaphore_set(next_iteration_semaphore, 0);
+            }
+#endif
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+            {
+                DeviceZoneScopedN("CCL_BROADCAST");
+                bcast(bcast_args);
+            }
+        }
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_input_core && Core::persistent_mode) {
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+            if (iteration_count > 1) {
+                unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+            }
+        }
+#endif
+
+        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, true> rmsnorm;
+        {
+            DeviceZoneScopedN("RMSNORM");
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
+
+        {
+            DeviceZoneScopedN("MATMUL");
+            matmul(matmul_args);
+        }
+
+        {
+            DeviceZoneScopedN("ARGMAX");
+            sampling_op(sampling_args);
+        }
+
+        if constexpr (!Core::persistent_mode) {
+            break;
+        }
+    }
+    mcast.teardown();
 }

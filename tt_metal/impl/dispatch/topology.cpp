@@ -407,10 +407,11 @@ DispatchTopology::DispatchTopology(
     get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
+    bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs());
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs());
+        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -525,7 +526,11 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                         break;
                     }
                 }
-                TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
+                TT_FATAL(
+                    found_remote,
+                    "Couldn't find paired remote chip for device {}. Potential hardware configuration "
+                    "and/or topology issue as each MMIO device should have a Remote Chip.",
+                    mmio_device_id);
 
                 // Add dispatch kernels for the mmio/remote pair
                 for (DispatchKernelNode node : nodes_for_one_mmio) {
