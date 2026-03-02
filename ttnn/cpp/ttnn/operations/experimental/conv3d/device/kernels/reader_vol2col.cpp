@@ -231,6 +231,11 @@ void kernel_main() {
 
                                 // --- Phase 2: L1 Vol2col -> CB ---
                                 // Push patches in TILE_HEIGHT-sized chunks to keep cb_vol2col small.
+                                // Use stateful NOC read: L1->L1 with constexpr transfer size.
+                                constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
+                                static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
+                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+
                                 constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
                                 uint32_t patches_remaining = num_patches;
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
@@ -252,9 +257,8 @@ void kernel_main() {
                                                     uint32_t shard_offset = (t_local * H_shard_max_W_shard_max +
                                                                              h_local * W_shard_max + w_base) *
                                                                             C_in_block_bytes;
-                                                    constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
-                                                    noc_async_read(
-                                                        shard_noc_base + shard_offset, cb_write_addr, kW_bytes);
+                                                    noc_async_read_one_packet_with_state(
+                                                        shard_l1_base + shard_offset, cb_write_addr);
                                                     cb_write_addr += kW_bytes;
                                                 }
                                             }
