@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <stdint.h>
 #include <tuple>
-#include <fmt/format.h>
+#include <fmt/core.h>
 #include <string>
 
 namespace tt::tt_fabric {
