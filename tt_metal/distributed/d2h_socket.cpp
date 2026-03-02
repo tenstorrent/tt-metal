@@ -56,7 +56,8 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
+void D2HSocket::init_config_buffer(
+    const std::shared_ptr<MeshDevice>& mesh_device, std::optional<DeviceAddr> config_buffer_address) {
     const SocketSenderSize sender_size;
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
@@ -75,7 +76,16 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .size = config_buffer_size,
     };
 
-    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+    if (config_buffer_address.has_value()) {
+        auto l1_size = mesh_device->allocator()->get_bank_size(BufferType::L1);
+        TT_FATAL(
+            config_buffer_address.value() + config_buffer_size <= l1_size,
+            "Config buffer address {} is out of bounds for L1 size {}",
+            config_buffer_address.value(),
+            l1_size);
+    }
+    config_buffer_ =
+        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), config_buffer_address);
 }
 
 void D2HSocket::write_socket_metadata(
@@ -132,7 +142,10 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
 }
 
 D2HSocket::D2HSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    std::optional<DeviceAddr> config_buffer_address) :
     sender_core_(sender_core), fifo_size_(fifo_size) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
@@ -148,7 +161,7 @@ D2HSocket::D2HSocket(
     bytes_sent_info.addr_lo = static_cast<uint32_t>(bytes_sent_addr & 0xFFFFFFFFull);
     bytes_sent_info.addr_hi = static_cast<uint32_t>(bytes_sent_addr >> 32);
 
-    init_config_buffer(mesh_device);
+    init_config_buffer(mesh_device, config_buffer_address);
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
 }

@@ -69,7 +69,11 @@ public:
      *
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
-    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        std::optional<DeviceAddr> config_buffer_address = std::nullopt);
 
     /**
      * @brief Destroys the D2HSocket.
@@ -159,7 +163,8 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment);
-    void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_config_buffer(
+        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<DeviceAddr> config_buffer_address);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,

@@ -38,12 +38,16 @@ void py_module_types(nb::module_& mod) {
                 const tt::tt_metal::distributed::MeshCoreCoord&,
                 tt::tt_metal::BufferType,
                 uint32_t,
-                tt::tt_metal::distributed::H2DMode>(),
+                tt::tt_metal::distributed::H2DMode,
+                std::optional<tt::tt_metal::DeviceAddr>,
+                std::optional<tt::tt_metal::DeviceAddr>>(),
             nb::arg("mesh_device"),
             nb::arg("recv_core"),
             nb::arg("buffer_type"),
             nb::arg("fifo_size"),
             nb::arg("h2d_mode"),
+            nb::arg("config_buffer_address") = nb::none(),
+            nb::arg("data_buffer_address") = nb::none(),
             R"doc(
                 Construct an H2DSocket for streaming data from host to a device core.
 
@@ -167,10 +171,12 @@ void py_module_types(nb::module_& mod) {
             nb::init<
                 const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
                 const tt::tt_metal::distributed::MeshCoreCoord&,
-                uint32_t>(),
+                uint32_t,
+                std::optional<tt::tt_metal::DeviceAddr>>(),
             nb::arg("mesh_device"),
             nb::arg("sender_core"),
             nb::arg("fifo_size"),
+            nb::arg("config_buffer_address") = nb::none(),
             R"doc(
                 Construct a D2HSocket for streaming data from a device core to host.
 

@@ -50,6 +50,9 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        sender_config_buffer_address=None,
+        receiver_config_buffer_address=None,
+        data_buffer_address=None,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -122,7 +125,21 @@ class HostInterface:
         if loopback_mode:
             self.intermed_cb_index = 0
         else:
-            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
+            downstream_socket_memory_config = ttnn.SocketMemoryConfig(
+                ttnn.BufferType.L1,
+                core_to_core_socket_buffer_size,
+                data_buffer_address=data_buffer_address,
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+            )
+
+            upstream_socket_memory_config = ttnn.SocketMemoryConfig(
+                ttnn.BufferType.L1,
+                core_to_core_socket_buffer_size,
+                data_buffer_address=data_buffer_address,
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+            )
 
             if self.h2d_socket and self.h2d_downstream_core is not None:
                 downstream_socket_connection = ttnn.SocketConnection(
@@ -131,7 +148,7 @@ class HostInterface:
                 )
                 downstream_socket_config = ttnn.SocketConfig(
                     [downstream_socket_connection],
-                    socket_memory_config,
+                    downstream_socket_memory_config,
                 )
                 self.downstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, downstream_socket_config
@@ -144,7 +161,7 @@ class HostInterface:
                 )
                 upstream_socket_config = ttnn.SocketConfig(
                     [upstream_socket_connection],
-                    socket_memory_config,
+                    upstream_socket_memory_config,
                 )
                 self.upstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, upstream_socket_config

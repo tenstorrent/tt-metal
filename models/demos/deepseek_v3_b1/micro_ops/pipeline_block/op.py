@@ -57,6 +57,9 @@ class PipelineBlock:
         exit_node_upstream=None,
         embedding_tensor=None,
         initialize_loopback=True,
+        sender_config_buffer_address=None,
+        receiver_config_buffer_address=None,
+        data_buffer_address=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -102,6 +105,8 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 embedding_tensor,
+                config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
         elif self.is_last_stage and not initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -115,6 +120,9 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 exit_node_upstream,
+                sender_config_buffer_address,
+                receiver_config_buffer_address,
+                data_buffer_address,
             )
         else:
             self._init_forwarding_stage(
@@ -127,6 +135,9 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 entry_node_downstream,
                 exit_node_upstream,
+                sender_config_buffer_address,
+                receiver_config_buffer_address,
+                data_buffer_address,
             )
 
     def _init_first_stage(
@@ -169,7 +180,10 @@ class PipelineBlock:
 
         if self.initialize_loopback:
             self.d2h_socket = ttnn.D2HSocket(
-                mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
+                mesh_device,
+                ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord),
+                d2h_socket_fifo_size,
+                config_buffer_address=sender_config_buffer_address,
             )
 
         self.host_io = HostInterface(
@@ -183,6 +197,9 @@ class PipelineBlock:
             ),
             d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
             embedding_tensor=embedding_tensor,
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
         self.exit_socket_interface = SocketInterface(
@@ -194,6 +211,9 @@ class PipelineBlock:
             upstream_socket=self.host_io.get_downstream_socket(),
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
         if self.initialize_loopback:
@@ -206,6 +226,9 @@ class PipelineBlock:
                 downstream_socket=self.host_io.get_upstream_socket(),
                 sender_mesh=MeshWrapper(mesh_id=self.num_procs - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
 
     def _init_last_stage_with_d2h(
@@ -220,6 +243,9 @@ class PipelineBlock:
         d2h_socket_fifo_size,
         d2h_socket_page_size,
         exit_node_upstream,
+        sender_config_buffer_address,
+        receiver_config_buffer_address,
+        data_buffer_address,
     ):
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
         assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
@@ -256,6 +282,9 @@ class PipelineBlock:
             downstream_socket=self.host_io.get_upstream_socket(),
             sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
             receiver_mesh=MeshWrapper(mesh_device),
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
     def _init_forwarding_stage(
@@ -269,6 +298,9 @@ class PipelineBlock:
         downstream_d2d_socket_page_size,
         entry_node_downstream,
         exit_node_upstream,
+        sender_config_buffer_address,
+        receiver_config_buffer_address,
+        data_buffer_address,
     ):
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
@@ -281,6 +313,9 @@ class PipelineBlock:
             else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
             sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
             receiver_mesh=MeshWrapper(mesh_device),
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
         next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
@@ -294,6 +329,9 @@ class PipelineBlock:
             upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
     def run(self):
