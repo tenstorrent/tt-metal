@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/base_types.hpp>
+#include <optional>
 
 namespace ttnn::operations::experimental::moe_gpt {
 
@@ -18,7 +19,13 @@ struct ExecuteMoEGPT {
         const ttnn::Tensor& output_tensor,
         const uint32_t num_experts,
         const uint32_t layer_id,
-        bool enable_dram_output = false);
+        bool enable_dram_output = false,
+        std::optional<ttnn::Tensor> sparse_buffer = std::nullopt,
+        std::optional<ttnn::Tensor> expert_indices = std::nullopt,
+        std::optional<ttnn::Tensor> expert_scores = std::nullopt,
+        std::optional<ttnn::Tensor> expert_mapping = std::nullopt,
+        std::optional<ttnn::Tensor> tilize_output = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::moe_gpt

@@ -38,7 +38,13 @@ struct MoEGPTDeviceOperation {
         const uint32_t num_experts,
         const uint32_t layer_id,
         bool enable_dram_output = false,
-        std::optional<Tensor> dram_output_tensor = std::nullopt);
+        std::optional<Tensor> dram_output_tensor = std::nullopt,
+        std::optional<Tensor> sparse_buffer = std::nullopt,
+        std::optional<Tensor> expert_indices = std::nullopt,
+        std::optional<Tensor> expert_scores = std::nullopt,
+        std::optional<Tensor> expert_mapping = std::nullopt,
+        std::optional<Tensor> tilize_output = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::moe_gpt

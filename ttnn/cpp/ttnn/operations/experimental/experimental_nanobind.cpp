@@ -58,8 +58,8 @@
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
-#include "ttnn/operations/experimental/moe_gpt/moe_gpt_nanobind.hpp"
-#include "ttnn/operations/experimental/moe_gpt_fused/moe_gpt_fused_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_gpt_fused/moe_gpt_fused_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 

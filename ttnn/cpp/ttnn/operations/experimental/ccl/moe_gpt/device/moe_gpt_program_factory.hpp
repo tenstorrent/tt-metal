@@ -13,11 +13,17 @@ struct MoEGPTSharedVariables {
     // CB handles for sharded circular buffers
     std::map<std::string, tt::tt_metal::CBHandle> cb_handles_sharded;
 
-    // Kernel handles
+    // Kernel handles (matmul)
     std::vector<tt::tt_metal::KernelHandle> kernel_handles;
 
-    // Cores active
+    // Kernel handles (tilize)
+    std::vector<tt::tt_metal::KernelHandle> tilize_kernel_handles;
+
+    // Matmul cores
     std::vector<CoreCoord> worker_cores;
+
+    // Tilize cores
+    std::vector<CoreCoord> tilize_cores;
 };
 
 struct MoEGPTProgramFactory {
