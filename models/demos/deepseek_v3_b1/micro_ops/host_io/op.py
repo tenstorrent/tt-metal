@@ -154,29 +154,18 @@ class HostInterface:
             self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
         )
 
+        fabric_max_payload_size = 0
+        num_whole_fabric_packets_per_link = 0
+        partial_packet_size_per_link = 0
+
         if use_fabric:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             if self.has_embedding:
-                num_whole_fabric_packets = self.embedding_page_size // fabric_max_payload_size
-                partial_packet_size = self.embedding_page_size % fabric_max_payload_size
+                page_size_per_link = self.embedding_page_size // self.num_fwd_links
             else:
-                num_whole_fabric_packets = self.h2d_page_size // fabric_max_payload_size
-                partial_packet_size = self.h2d_page_size % fabric_max_payload_size
-
-            if num_whole_fabric_packets > 0:
-                num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // self.num_fwd_links) + int(
-                    partial_packet_size > 0
-                )
-                num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
-                num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
-            else:
-                num_whole_fabric_packets_link_0 = 0
-                num_whole_fabric_packets_link_1 = 0
-        else:
-            fabric_max_payload_size = 0
-            num_whole_fabric_packets_link_0 = 0
-            num_whole_fabric_packets_link_1 = 0
-            partial_packet_size = 0
+                page_size_per_link = self.h2d_page_size // self.num_fwd_links
+            num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
+            partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
 
         # H2D Receiver Core will forward data to downstream core via fabric if:
         # 1. Not in loopback mode (i.e. real workload)
@@ -192,9 +181,8 @@ class HostInterface:
             else self.downstream_socket_pair[0].get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
             fabric_max_payload_size,
-            num_whole_fabric_packets_link_0,
-            num_whole_fabric_packets_link_1,
-            partial_packet_size,
+            num_whole_fabric_packets_per_link,
+            partial_packet_size_per_link,
             use_fabric,
         ]
         # Add CTAs for fused embedding op if needed

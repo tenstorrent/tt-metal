@@ -15,6 +15,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -28,7 +30,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t Mt = 4, Kt = 2, Nt = 3, B = 2;
+
+    uint32_t Mt, Kt, Nt, B;
+    if (dev->arch() == ARCH::QUASAR) {
+        Mt = 1;
+        Kt = 1;
+        Nt = 1;
+        B = 1;
+    } else {
+        Mt = 4;
+        Kt = 2;
+        Nt = 3;
+        B = 2;
+    }
     uint32_t num_tilesA = Mt * Kt * B;
     uint32_t num_tilesB = Kt * Nt * B;
     uint32_t num_tilesC = Mt * Nt * B;
@@ -51,26 +65,6 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     auto dst_dram_buffer = CreateBuffer(dst_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_src0_config);
-
-    uint32_t src1_cb_index = 1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_src1_config);
-
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_output_config);
-
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
@@ -78,31 +72,129 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
 
-    auto reader = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
-
-    auto writer = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    uint32_t num_input_tiles = 2;
+    uint32_t num_output_tiles = 2;
 
     vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt};
+    KernelHandle reader;
+    KernelHandle writer;
+    KernelHandle compute;
 
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
-        core,
-        ComputeConfig{.compile_args = compute_kernel_args});
+    uint32_t src0_dfb = 0;
+    uint32_t src1_dfb = 0;
+    uint32_t dst_dfb = 0;
+    if (dev->arch() != ARCH::QUASAR) {
+        uint32_t src0_cb_index = 0;
+        CircularBufferConfig cb_src0_config =
+            CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_size);
+        CreateCircularBuffer(program, core, cb_src0_config);
+
+        uint32_t src1_cb_index = 1;
+        CircularBufferConfig cb_src1_config =
+            CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src1_cb_index, single_tile_size);
+        CreateCircularBuffer(program, core, cb_src1_config);
+
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        CircularBufferConfig cb_output_config =
+            CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_size);
+        CreateCircularBuffer(program, core, cb_output_config);
+
+        reader = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+            core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
+
+        writer = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+            core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
+
+        compute = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+            core,
+            ComputeConfig{.compile_args = compute_kernel_args});
+    } else {
+        tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
+            .entry_size = single_tile_size,
+            .num_entries = num_input_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
+            .entry_size = single_tile_size,
+            .num_entries = num_input_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b
+        };
+        tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
+            .entry_size = single_tile_size,
+            .num_entries = num_output_tiles,
+            .producer_risc_mask = 0x100,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x2,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b
+        };
+
+        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, src0_dfb_config);
+        src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, src1_dfb_config);
+        dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, dst_dfb_config);
+
+        reader = tt_metal::experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = reader_compile_time_args});
+
+        writer = tt_metal::experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = writer_compile_time_args});
+
+        compute = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_kernel_args});
+    }
+
+    if (dev->arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, src0_dfb, reader, compute);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, src1_dfb, reader, compute);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dst_dfb, compute, writer);
+    }
 
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
@@ -117,7 +209,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast});
     SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B});
 
-    detail::LaunchProgram(dev, program);
+    detail::LaunchProgram(dev, program, true);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);

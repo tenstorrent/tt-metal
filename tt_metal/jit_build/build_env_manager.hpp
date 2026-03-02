@@ -72,7 +72,7 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    BuildEnvManager();
+    explicit BuildEnvManager(const Hal& hal);
     ~BuildEnvManager() = default;
 
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;

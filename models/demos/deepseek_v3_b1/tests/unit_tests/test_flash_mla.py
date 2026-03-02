@@ -17,18 +17,50 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 256])
+@pytest.mark.parametrize(
+    "decode_position",
+    [
+        # Aligned Chunks
+        127,
+        255,
+        383,
+        511,
+        639,
+        767,
+        895,
+        1023,
+        1151,
+        1279,
+        1919,
+        2047,
+        2175,
+        32767,
+        # Unaligned Chunks
+        0,
+        1,
+        2,
+        3,
+        6,
+        7,
+        8,
+        15,
+        16,
+        128,
+        564,
+        1203,
+        2046,
+        32750,
+    ],
+)
 @pytest.mark.parametrize(
     "k_chunk_size", [128]
 )  # Chunk size 256 support can be added by consolidating tensix sem incs since cap is 15 but we have 16 tiles
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
-def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_len):
+def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max_seq_len):
     """Test FlashMLADecode op."""
     if is_blackhole() and is_watcher_enabled():
         pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
 
-    # Calculate decode_position from num_chunks and k_chunk_size
-    decode_position = num_chunks * k_chunk_size - 1
     torch.manual_seed(0)
 
     # Debug: Print optimal worker core for each DRAM bank from device API
@@ -48,7 +80,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
     scale = qk_head_dim**-0.5
 
     logger.info(
-        f"Testing FlashMLADecode with batch_size={batch_size}, k_chunk_size={k_chunk_size}, num_chunks={num_chunks}, "
+        f"Testing FlashMLADecode with batch_size={batch_size}, k_chunk_size={k_chunk_size}, "
         f"decode_position={decode_position}, max_seq_len={max_seq_len}"
     )
 
