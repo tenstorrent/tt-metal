@@ -55,7 +55,7 @@ Both API versions run the same test cases but use different underlying implement
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
-| NOC Estimator               | 800-814                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
+| NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 
 
 ## Running Tests

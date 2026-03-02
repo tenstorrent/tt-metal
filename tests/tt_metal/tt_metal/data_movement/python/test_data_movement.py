@@ -8,7 +8,6 @@ import os
 import csv
 import sys
 import yaml
-import pytest
 from loguru import logger  # type: ignore
 from matplotlib.gridspec import GridSpec
 import itertools

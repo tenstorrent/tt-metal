@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -292,12 +292,22 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
 
     // L1 addresses
     L1AddressInfo mst_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, mst_coord);
-    if (mst_l1.size < bytes_per_txn) {
-        log_error(LogTest, "Insufficient L1 size");
+    // Need space for both source and destination regions in non-loopback case.
+    uint32_t required_l1_bytes = (uint32_t)bytes_per_txn * (cfg.loopback ? 1u : 2u);
+    if (mst_l1.size < required_l1_bytes) {
+        log_error(LogTest, "Insufficient L1 size on master core");
         return false;
     }
     uint32_t mst_l1_addr = mst_l1.base_address;
     uint32_t sub_l1_addr = cfg.loopback ? mst_l1_addr : mst_l1_addr + (uint32_t)bytes_per_txn;
+    // Validate that a representative subordinate core also has enough L1.
+    if (!cfg.loopback && !sub_core_list.empty()) {
+        L1AddressInfo sub_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, sub_core_list.front());
+        if (sub_l1.size < required_l1_bytes) {
+            log_error(LogTest, "Insufficient L1 size on subordinate core");
+            return false;
+        }
+    }
 
     if (is_write) {
         uint32_t writer_mode;
@@ -631,7 +641,7 @@ static bool run_dram_accessor(
     auto dram_buffer = CreateBuffer(buf_config);
 
     std::set<CoreRange> core_ranges;
-    for (auto& c : cores) {
+    for (const auto& c : cores) {
         core_ranges.insert(CoreRange(c));
     }
     CoreRangeSet core_set(core_ranges);
@@ -982,7 +992,7 @@ static void dram_accessor_sweep(
     for (NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
         for (uint32_t num_txn = 1; num_txn <= max_transactions; num_txn *= 4) {
             for (uint32_t pages = 1; pages <= max_pages_per_txn; pages *= 2) {
-                if (num_txn * pages * bytes_per_page >= max_bytes) {
+                if (pages * bytes_per_page >= max_bytes) {
                     continue;
                 }
 
@@ -1002,22 +1012,6 @@ static void dram_accessor_sweep(
     }
 
     ReadMeshDeviceProfilerResults(*mesh_device);
-}
-
-// Helpers to build core/bank lists for sharded multi-core and interleaved all-core patterns
-static void get_sharded_all_cores(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
-    vector<CoreCoord>& cores,
-    vector<uint32_t>& bank_assignments) {
-    IDevice* device = mesh_device->impl().get_device(0);
-    CoreCoord device_grid = device->compute_with_storage_grid_size();
-    uint32_t num_dram_banks = (uint32_t)device->num_dram_channels();
-    for (uint32_t y = 0; y < device_grid.y; y++) {
-        for (uint32_t x = 0; x < device_grid.x; x++) {
-            cores.push_back(CoreCoord(x, y));
-            bank_assignments.push_back((y * device_grid.x + x) % num_dram_banks);
-        }
-    }
 }
 
 static void get_all_cores(
@@ -1053,7 +1047,7 @@ static void sweep_dram_sharded_one_from_one(const shared_ptr<distributed::MeshDe
 static void sweep_dram_sharded_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
-    get_sharded_all_cores(mesh_device, cores, bank_assignments);
+    get_all_cores(mesh_device, cores, bank_assignments);
     dram_accessor_sweep(
         mesh_device,
         test_id,
@@ -1111,7 +1105,7 @@ static void sweep_dram_sharded_one_to_one(const shared_ptr<distributed::MeshDevi
 static void sweep_dram_sharded_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
     vector<CoreCoord> cores;
     vector<uint32_t> bank_assignments;
-    get_sharded_all_cores(mesh_device, cores, bank_assignments);
+    get_all_cores(mesh_device, cores, bank_assignments);
     dram_accessor_sweep(
         mesh_device,
         test_id,
