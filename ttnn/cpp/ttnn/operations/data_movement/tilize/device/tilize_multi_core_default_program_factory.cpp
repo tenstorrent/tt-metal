@@ -55,8 +55,8 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     /** reader
      */
-    uint32_t page_size = a.buffer()->page_size();
-    uint32_t aligned_page_size = a.buffer()->aligned_page_size();
+    uint32_t page_size = src0_buffer->page_size();
+    uint32_t aligned_page_size = src0_buffer->aligned_page_size();
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
