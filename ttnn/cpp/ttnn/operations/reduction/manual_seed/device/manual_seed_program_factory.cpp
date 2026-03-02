@@ -80,7 +80,7 @@ ManualSeedSingleSeedToAllCoresProgramFactory::cached_program_t ManualSeedSingleS
     CoreRangeSet core_grid = compute_core_grid(operation_attributes, operation_attributes.device, num_cores);
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {operation_attributes.seeds.value_or(0)};
+    std::vector<uint32_t> compute_compile_time_args = {static_cast<uint32_t>(operation_attributes.seeds.value_or(0))};
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compute/manual_seed_set_seed.cpp";
     tt::tt_metal::CreateKernel(
@@ -107,7 +107,7 @@ ManualSeedSingleSeedSingleCoreProgramFactory::cached_program_t ManualSeedSingleS
     const auto& core_chosen = cores.at(operation_attributes.user_ids.value_or(0));
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {operation_attributes.seeds.value_or(0)};
+    std::vector<uint32_t> compute_compile_time_args = {static_cast<uint32_t>(operation_attributes.seeds.value_or(0))};
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compute/manual_seed_set_seed.cpp";
     tt::tt_metal::CreateKernel(
@@ -166,7 +166,7 @@ ManualSeedSingleSeedSetCoresProgramFactory::cached_program_t ManualSeedSingleSee
 
     // Create compute kernel
     std::vector<uint32_t> compute_compile_time_args = {
-        kernel_communication_cb_index, operation_attributes.seeds.value_or(0)};
+        kernel_communication_cb_index, static_cast<uint32_t>(operation_attributes.seeds.value_or(0))};
     tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
