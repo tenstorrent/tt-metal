@@ -3,6 +3,11 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+
+# Unless explicitly CIv2, the runner is on CIv1.
+# For CIv2 runners: unless explicitly hugepages, the runner is using viommu.
+# CIv1 runners do not use viommu.
+
 skus:
   wh_llmbox:
     runs_on:
@@ -80,19 +85,19 @@ skus:
       - P150
       - in-service
 
-  bh_p100a_civ2_viommu:
+  bh_p100a_civ2:
     runs_on:
       - tt-ubuntu-2204-P100a-viommu-stable
 
-  bh_p150b_civ2_viommu:
+  bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
 
-  bh_p150b_civ2:
+  bh_p150b_civ2_hugepages:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
 
-  bh_p300_viommu:
+  bh_p300:
     runs_on:
       - pipeline-yyz2-lfc
       - P300-viommu
@@ -122,7 +127,7 @@ skus:
       - pipeline-functional
       - in-service
 
-  bh_loudbox_civ2_viommu:
+  bh_loudbox_civ2:
     runs_on:
       - tt-ubuntu-2204-BH-LoudBox-viommu-stable
 
