@@ -285,6 +285,47 @@ inline void read_tiles_by_row(
 }
 
 /**
+ * Utility: read multiple contiguous tiles with a SINGLE NOC call.
+ *
+ * This is optimized for DRAM sharded tensors where tiles in the same row
+ * are contiguous in memory within the same DRAM bank. Instead of issuing
+ * one noc_async_read_page per tile, we issue a single noc_async_read for
+ * multiple tiles, reducing NOC overhead.
+ *
+ * IMPORTANT: Only use when tiles are guaranteed to be contiguous (same DRAM bank,
+ * consecutive addresses). For HEIGHT_SHARDED tensors, tiles in the same row
+ * of a shard satisfy this requirement.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param start_idx Starting tile index in DRAM
+ * @param num_tiles_to_read Number of contiguous tiles to read
+ * @param tile_bytes Size of each tile in bytes
+ * @param num_tiles_to_push Number of tiles to reserve/push in CB
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tiles_contiguous(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles_to_read,
+    const uint32_t tile_bytes,
+    const uint32_t num_tiles_to_push) {
+    cb_reserve_back(cb_idx, num_tiles_to_push);
+    uint32_t l1_addr = get_write_ptr(cb_idx);
+
+    // Single NOC read for all contiguous tiles
+    // Use member function for TensorAccessor compatibility
+    uint64_t noc_addr = addr_gen.get_noc_addr(start_idx);
+    noc_async_read(noc_addr, l1_addr, num_tiles_to_read * tile_bytes);
+
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, num_tiles_to_push);
+    }
+}
+
+/**
  * Utility: write a block of tiles from CB to DRAM in row-major order.
  *
  * @param cb_idx Circular buffer index to read from
@@ -331,6 +372,39 @@ inline void read_full_row_tiles(
     for (uint32_t j = 0; j < Wt; j += block_size) {
         uint32_t current_block_size = std::min(block_size, Wt - j);
         read_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+// Read a full row of tiles using contiguous multi-tile reads (optimized for DRAM sharding)
+// tiles_per_read specifies how many tiles to read per NOC call (e.g., 2 or 4)
+template <typename AddrGen>
+inline void read_full_row_tiles_contiguous(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t tile_bytes,
+    const uint32_t row_start_idx,
+    const uint32_t tiles_per_read) {
+    for (uint32_t j = 0; j < Wt; j += block_size) {
+        uint32_t current_block_size = std::min(block_size, Wt - j);
+
+        // Reserve CB space for the full block
+        cb_reserve_back(cb_idx, block_size);
+        uint32_t l1_addr = get_write_ptr(cb_idx);
+
+        // Read tiles in chunks of tiles_per_read
+        for (uint32_t t = 0; t < current_block_size; t += tiles_per_read) {
+            uint32_t tiles_this_read =
+                (t + tiles_per_read <= current_block_size) ? tiles_per_read : (current_block_size - t);
+            // Use member function for TensorAccessor compatibility
+            uint64_t noc_addr = addr_gen.get_noc_addr(row_start_idx + j + t);
+            noc_async_read(noc_addr, l1_addr, tiles_this_read * tile_bytes);
+            l1_addr += tiles_this_read * tile_bytes;
+        }
+
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, block_size);
     }
 }
 

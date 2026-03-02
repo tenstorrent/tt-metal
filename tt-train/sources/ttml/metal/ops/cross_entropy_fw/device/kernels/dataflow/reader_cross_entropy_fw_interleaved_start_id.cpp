@@ -33,6 +33,11 @@ void kernel_main() {
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
 
+#ifdef USE_CONTIGUOUS_READ
+    // Number of tiles to read per NOC call for sharded tensors (e.g., 4 for ND shard_shape [1,1,32,128])
+    constexpr uint32_t tiles_per_read = get_compile_time_arg_val(6);
+#endif
+
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
     constexpr bool do_mask_w = true;
@@ -76,8 +81,14 @@ void kernel_main() {
     cb_push_back(cb_scaler_idx, onetile);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
+#ifdef USE_CONTIGUOUS_READ
+    constexpr auto input_args = TensorAccessorArgs<7>();  // Extra arg for tiles_per_read
+#else
     constexpr auto input_args = TensorAccessorArgs<6>();
+#endif
     constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    // Keep page_size = tile_bytes (single tile) for correct address calculation
+    // Multi-tile reads are done explicitly via read_tiles_contiguous / read_full_row_tiles_contiguous
     const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
     const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
 
@@ -135,14 +146,30 @@ void kernel_main() {
 
 #ifdef EVERYTHING_FITS_IN_L1
         // read entire input row at once
+#ifdef USE_CONTIGUOUS_READ
+        // Optimized: read multiple tiles per NOC call (for sharded tensors)
+        read_tiles_contiguous(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
+#else
         read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
+#endif
 
 #else
         // read input buffer by blocks to calculate max value in row
+#ifdef USE_CONTIGUOUS_READ
+        // Optimized: read multiple tiles per NOC call (for sharded tensors)
+        read_full_row_tiles_contiguous(
+            cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx, tiles_per_read);
+#else
         read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+#endif
 
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
+#ifdef USE_CONTIGUOUS_READ
+        read_full_row_tiles_contiguous(
+            cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx, tiles_per_read);
+#else
         read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+#endif
 
 #endif
     }

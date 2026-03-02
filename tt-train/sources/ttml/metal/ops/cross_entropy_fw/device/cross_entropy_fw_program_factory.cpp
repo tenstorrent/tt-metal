@@ -60,6 +60,10 @@ constexpr uint32_t kPageElementsNumber = 32U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
+const std::string kUseContiguousReadDefineKey = "USE_CONTIGUOUS_READ";
+
+// Default tiles per NOC read for ND sharded tensors (matches shard_shape [1,1,32,128] = 4 tiles)
+constexpr uint32_t kDefaultTilesPerRead = 4U;
 
 }  // namespace
 
@@ -303,6 +307,14 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         defines[kEverythingFitsInL1DefineKey] = "1";
     }
 
+    // Check if input is sharded - enable contiguous multi-tile reads for better DRAM bandwidth
+    bool input_is_sharded = input.memory_config().is_sharded();
+    uint32_t tiles_per_read = kDefaultTilesPerRead;
+
+    if (input_is_sharded) {
+        defines[kUseContiguousReadDefineKey] = "1";
+    }
+
     // setup defines for reduce
     // Compute kernel does not compile without these defines
     // LLK reduction uses define values as default template parameters
@@ -312,6 +324,10 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     CrossEntropyForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{
         block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+    // Add tiles_per_read for sharded tensors (used by USE_CONTIGUOUS_READ path)
+    if (input_is_sharded) {
+        reader_compile_time_args.push_back(tiles_per_read);
+    }
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
