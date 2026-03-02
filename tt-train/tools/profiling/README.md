@@ -335,13 +335,15 @@ Examples:
 
 ## Visualization
 
-The easiest way to run the full pipeline (extract → enrich → visualize) is the Jupyter notebook:
+Two Jupyter notebooks are provided:
+
+- **`profiling_analysis_multiple_exp.ipynb`** — Full pipeline across all experiments: extract → enrich → DataFrame → batch/DDP/TP scaling plots. Edit the first cell to set your run directories and configuration.
+- **`profiling_analysis_single_exp.ipynb`** — Deep-dive into a single profiler CSV: per-op time breakdowns (pie charts, bar charts), interactive per-operation plots, anomaly detection, and per-phase training step timing.
 
 ```bash
-jupyter notebook tt-train/tools/profiling/profiling_analysis.ipynb
+jupyter notebook tt-train/tools/profiling/profiling_analysis_multiple_exp.ipynb
+jupyter notebook tt-train/tools/profiling/profiling_analysis_single_exp.ipynb
 ```
-
-It runs all steps in order and displays plots inline. Edit the first cell to set your run directories and configuration.
 
 The visualization scripts can also be run standalone from the command line, taking a CSV as input:
 
