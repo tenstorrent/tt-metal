@@ -91,10 +91,6 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
 
     // Support maximum 32 heads for now
     TT_FATAL(
-        operation_attributes.num_q_heads <= 32,
-        "There are {} q heads only 32 are supported",
-        operation_attributes.num_q_heads);
-    TT_FATAL(
         operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
         "num_q_heads={} must be greater than or equal to num_kv_heads={}",
         operation_attributes.num_q_heads,
@@ -133,7 +129,7 @@ std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_ou
     const Shape& k_output_shape = v_output_shape;
 
     auto num_q_heads_padded = ((operation_attributes.num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = ((operation_attributes.num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((operation_attributes.num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
     CoreRangeSet output_core_grid = operation_attributes.output_mem_config.shard_spec().value().grid;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
