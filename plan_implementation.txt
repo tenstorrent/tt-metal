@@ -1,0 +1,143 @@
+================================================================================
+EXECUTION TRACE: Add Qwen3-32B Model to vLLM Nightly Pipeline
+================================================================================
+
+STEP 1: RESEARCH - Identify vLLM Nightly Pipeline Structure
+--------------------------------------------------------------------------------
+Action: Searched for vllm_nightly pipeline files
+Files found:
+  - .github/workflows/vllm-nightly-tests.yaml (entry point workflow)
+  - .github/workflows/vllm-nightly-tests-impl.yaml (implementation with test matrix)
+
+Action: Read .github/workflows/vllm-nightly-tests.yaml
+Finding: Model dropdown contains options: all, Llama-3.1-8B, Llama-3.3-70B,
+         Qwen2.5-VL-72B, Qwen3-VL-32B, gemma-3-27b, gpt-oss-120b, test utils
+Finding: Triggers on schedule (daily 12am UTC) and workflow_dispatch
+Finding: Calls vllm-nightly-tests-impl.yaml with docker image, wheel, and model params
+
+Action: Read .github/workflows/vllm-nightly-tests-impl.yaml
+Finding: Contains JSON test matrix in generate-matrix step
+Finding: Llama3.3-70B has 2 configurations:
+  Config 1 (lines 197-211): "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests"
+    - model: meta-llama/Llama-3.3-70B-Instruct
+    - server-timeout: 35, benchmark-timeout: 10
+    - runner-label: topology-6u, arch: arch-wormhole_b0, mesh-device: TG
+    - tt-llama-text-ver: llama3_70b_galaxy
+    - override-tt-config: dispatch_core_axis=col, sample_on_device_mode=all,
+      fabric_config=FABRIC_1D_RING, worker_l1_size=1344544, trace_region_size=184915840
+    - additional-server-args: --data_parallel_size 4 --max_num_seqs 8
+    - sampling-tests: true, multimodal: false
+    - co-owners: U08E1JCDVNX (Pavle), U08CEGF78ET (Salar)
+
+  Config 2 (lines 213-227): "[WH-GLX] Llama-3.3-70B-Instruct hostsample"
+    - Same as Config 1 except:
+    - No sample_on_device_mode in override-tt-config
+    - structured-output: true instead of sampling-tests: true
+
+STEP 2: RESEARCH - Identify Qwen3-32B Model Specifics
+--------------------------------------------------------------------------------
+Action: Searched for Qwen3-32B references across codebase
+Files found with Qwen3-32B configurations:
+  - models/tt_transformers/tt/model_config.py (batch sizes: T3K=64, TG=128, P150x4=128)
+  - models/tt_transformers/tt/prefetcher.py (verified config: dim=5120, hidden_dim=22016, n_heads=40, n_kv_heads=8)
+  - models/demos/llama3_70b_galaxy/tt/qwen_model_config.py (Galaxy-specific model config)
+  - models/tt_transformers/demo/trace_region_config.py (TG trace_region_size=96000000)
+  - tests/pipeline_reorg/galaxy_demo_tests.yaml (demo test configs)
+  - scripts/download_hf_artifacts.py (HF model ID: Qwen/Qwen3-32B)
+
+Action: Read models/demos/llama3_70b_galaxy/tt/qwen_model_config.py
+Finding: Contains Galaxy-specific TG attention config, memory layouts, etc.
+Finding: Uses llama3_70b_galaxy model infrastructure (imports TtModelArgs, etc.)
+
+Action: Read tests/pipeline_reorg/galaxy_demo_tests.yaml
+Finding: Galaxy Qwen3-32B demo tests use:
+  - HF_MODEL=Qwen/Qwen3-32B
+  - MESH_DEVICE=TG
+  - Tests: demo_qwen_decode.py, text_qwen_demo.py
+  - Owner: U053W15B6JF (Djordje Ivanovic)
+
+Action: Read models/tt_transformers/demo/trace_region_config.py
+Finding: Qwen3-32B trace_region_size for TG = 96000000
+Note: vLLM pipeline uses larger trace_region_size (184915840 for Llama3.3-70B)
+      than demo tests. Using same value as Llama3.3-70B for vLLM safety margin.
+
+STEP 3: IMPLEMENTATION - Add Qwen3-32B to model dropdown
+--------------------------------------------------------------------------------
+Action: Edited .github/workflows/vllm-nightly-tests.yaml
+Change: Added "Qwen/Qwen3-32B" to model options list (after Llama-3.3-70B-Instruct,
+        before Qwen/Qwen2.5-VL-72B-Instruct)
+Result: Success
+
+STEP 4: IMPLEMENTATION - Add Qwen3-32B test configurations
+--------------------------------------------------------------------------------
+Action: Edited .github/workflows/vllm-nightly-tests-impl.yaml
+Change 1: Updated owner mapping comment to include:
+  "Djordje Ivanovic (U053W15B6JF) - Qwen 3 32B text model"
+
+Change 2: Added Configuration 1 after Llama3.3-70B hostsample entry:
+  {
+    "name": "[WH-GLX] Qwen3-32B device with sampling-tests",
+    "model": "Qwen/Qwen3-32B",
+    "server-timeout": 35,
+    "benchmark-timeout": 10,
+    "runner-label": "topology-6u",
+    "arch": "arch-wormhole_b0",
+    "mesh-device": "TG",
+    "tt-llama-text-ver": "llama3_70b_galaxy",
+    "override-tt-config": {"dispatch_core_axis":"col","sample_on_device_mode":"all",
+      "fabric_config":"FABRIC_1D_RING","worker_l1_size":1344544,"trace_region_size":184915840},
+    "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+    "sampling-tests": true,
+    "multimodal": false,
+    "co-owner-1-id": "U053W15B6JF",
+    "co-owner-2-id": "U08CEGF78ET"
+  }
+
+Change 3: Added Configuration 2 after Config 1:
+  {
+    "name": "[WH-GLX] Qwen3-32B hostsample",
+    "model": "Qwen/Qwen3-32B",
+    "server-timeout": 35,
+    "benchmark-timeout": 10,
+    "runner-label": "topology-6u",
+    "arch": "arch-wormhole_b0",
+    "mesh-device": "TG",
+    "tt-llama-text-ver": "llama3_70b_galaxy",
+    "override-tt-config": {"dispatch_core_axis":"col",
+      "fabric_config":"FABRIC_1D_RING","worker_l1_size":1344544,"trace_region_size":184915840},
+    "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+    "structured-output": true,
+    "multimodal": false,
+    "co-owner-1-id": "U053W15B6JF",
+    "co-owner-2-id": "U08CEGF78ET"
+  }
+
+Result: Success - both configs added, verified via file read
+
+STEP 5: VERIFICATION
+--------------------------------------------------------------------------------
+Action: Read back modified files to verify correctness
+  - vllm-nightly-tests.yaml: Qwen/Qwen3-32B appears in dropdown at correct position
+  - vllm-nightly-tests-impl.yaml: Both Qwen3-32B configs appear after Llama3.3-70B
+    entries and before Qwen2.5-VL-72B entry, with correct JSON structure
+
+STEP 6: DOCUMENTATION
+--------------------------------------------------------------------------------
+Action: Created plan.txt with full plan report
+Action: Created plan_implementation.txt (this file) with execution trace
+
+STEP 7: GIT OPERATIONS
+--------------------------------------------------------------------------------
+Action: Create branch add_qwen3_32b_model
+Action: Stage and commit changes
+Action: Push to remote
+
+================================================================================
+FILES MODIFIED:
+  1. .github/workflows/vllm-nightly-tests.yaml - Added Qwen/Qwen3-32B to dropdown
+  2. .github/workflows/vllm-nightly-tests-impl.yaml - Added 2 test configs + owner comment
+
+FILES CREATED:
+  3. plan.txt - Full plan report
+  4. plan_implementation.txt - This execution trace
+================================================================================

@@ -1,0 +1,108 @@
+================================================================================
+PLAN: Add Qwen3-32B Model to vLLM Nightly Pipeline
+================================================================================
+
+Objective:
+  Add the Qwen3-32B text model to the vLLM nightly CI pipeline, following the
+  same pattern as the existing Llama3.3-70B-Instruct model configuration.
+
+--------------------------------------------------------------------------------
+1. RESEARCH PHASE
+--------------------------------------------------------------------------------
+
+1.1 Identify existing Llama3.3-70B configuration in vLLM nightly pipeline:
+    - File: .github/workflows/vllm-nightly-tests.yaml (model dropdown)
+    - File: .github/workflows/vllm-nightly-tests-impl.yaml (test matrix)
+    - Llama3.3-70B has TWO test configurations:
+      a) Device sampling tests (sample_on_device_mode: all, sampling-tests: true)
+      b) Host sampling / structured output tests (structured-output: true)
+
+1.2 Identify Qwen3-32B model specifics:
+    - HuggingFace model ID: Qwen/Qwen3-32B
+    - Model architecture: 64 layers, 40 heads, 8 KV heads, hidden dim 5120
+    - Supported devices: T3K (batch 64), TG (batch 128), P150x4 (batch 128)
+    - Galaxy model code: models/demos/llama3_70b_galaxy/tt/qwen_model_config.py
+    - tt-llama-text-ver: llama3_70b_galaxy (uses Galaxy model implementation)
+
+1.3 Identify configuration parameters:
+    - Runner: topology-6u (Galaxy)
+    - Architecture: arch-wormhole_b0
+    - Mesh device: TG (Galaxy Tensor Grid)
+    - Data parallel size: 4
+    - Max num sequences: 8
+    - Fabric config: FABRIC_1D_RING (standard for Galaxy)
+    - Dispatch core axis: col (standard for Galaxy)
+    - Worker L1 size: 1344544 (same as Llama3.3-70B Galaxy)
+    - Trace region size: 184915840 (same as Llama3.3-70B vLLM config)
+    - Server timeout: 35 minutes
+    - Benchmark timeout: 10 minutes
+
+--------------------------------------------------------------------------------
+2. IMPLEMENTATION PLAN
+--------------------------------------------------------------------------------
+
+2.1 Modify .github/workflows/vllm-nightly-tests.yaml:
+    - Add "Qwen/Qwen3-32B" to the model choice dropdown options
+    - Place it after Llama models and before Qwen VL models
+
+2.2 Modify .github/workflows/vllm-nightly-tests-impl.yaml:
+    - Update owner mapping comment to include Qwen3-32B text model owner
+    - Add Configuration 1: "[WH-GLX] Qwen3-32B device with sampling-tests"
+      * Model: Qwen/Qwen3-32B
+      * tt-llama-text-ver: llama3_70b_galaxy
+      * sample_on_device_mode: all
+      * sampling-tests: true
+      * data_parallel_size: 4, max_num_seqs: 8
+      * co-owner-1-id: U053W15B6JF (Djordje Ivanovic)
+      * co-owner-2-id: U08CEGF78ET (Salar Hosseini Khorasgani)
+
+    - Add Configuration 2: "[WH-GLX] Qwen3-32B hostsample"
+      * Model: Qwen/Qwen3-32B
+      * tt-llama-text-ver: llama3_70b_galaxy
+      * structured-output: true
+      * data_parallel_size: 4, max_num_seqs: 8
+      * co-owner-1-id: U053W15B6JF (Djordje Ivanovic)
+      * co-owner-2-id: U08CEGF78ET (Salar Hosseini Khorasgani)
+
+2.3 Create branch and push:
+    - Branch name: add_qwen3_32b_model
+    - Commit changes and push to remote
+
+--------------------------------------------------------------------------------
+3. TEST PLAN
+--------------------------------------------------------------------------------
+
+3.1 The two new test configurations will execute the following tests in CI:
+    - Standard benchmark: 32 prompts, 100 input tokens, 100 output tokens
+    - Device sampling tests (Config 1): pytest vllm/tests/tt with server URL
+    - Structured output benchmark (Config 2): 32 prompts with JSON output
+    - Both configs validate server startup and benchmark completion
+
+3.2 Validation:
+    - Pipeline can be triggered manually via workflow_dispatch with model=Qwen/Qwen3-32B
+    - Pipeline runs as part of nightly "all" models schedule
+    - Slack alerts configured for co-owners on failure
+
+--------------------------------------------------------------------------------
+4. DESIGN DECISIONS
+--------------------------------------------------------------------------------
+
+4.1 Used llama3_70b_galaxy as tt-llama-text-ver:
+    - Qwen3-32B Galaxy model code lives under models/demos/llama3_70b_galaxy/
+    - qwen_model_config.py provides Galaxy-specific attention and memory configs
+    - Galaxy demo tests (galaxy_demo_tests.yaml) confirm this model path
+
+4.2 Used same override-tt-config as Llama3.3-70B:
+    - Both models run on Galaxy with DP=4 and similar fabric configuration
+    - worker_l1_size and trace_region_size values are proven for Galaxy vLLM
+    - Qwen3-32B is smaller (32B vs 70B), so these should be sufficient
+
+4.3 Placed entries after Llama3.3-70B and before Qwen VL models:
+    - Maintains logical grouping (text models before VL models)
+    - Consistent with Qwen model ordering
+
+4.4 Owner assignment:
+    - co-owner-1-id: Djordje Ivanovic (U053W15B6JF) - Qwen3-32B model owner
+    - co-owner-2-id: Salar Hosseini Khorasgani (U08CEGF78ET) - vLLM pipeline co-owner
+
+================================================================================
