@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <span>
+#include <vector>
+
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -134,13 +137,13 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
      */
     template <typename T>
-    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
+    static HostTensor from_borrowed_data(tt::stl::Span<T> buffer, const Shape& shape, MemoryPin pin);
 
     template <typename T>
     static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);

@@ -98,6 +98,11 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/legacy_view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/tensor_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp

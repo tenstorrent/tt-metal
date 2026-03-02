@@ -12,9 +12,7 @@
 
 namespace tt::tt_metal {
 
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
-}
+// logical_matches_physical is now inline in tt-metalium/experimental/tensor/tensor_utils.hpp
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
