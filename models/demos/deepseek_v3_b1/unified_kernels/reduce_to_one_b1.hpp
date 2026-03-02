@@ -246,11 +246,13 @@ struct ReduceToOneB1 {
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
+            DPRINT << "start of reduce to one op\n";
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     // ROOT1 fabric cores have nothing to do
+                    DPRINT << "end of reduce to one op - ROOT1 fabric core\n";
                     return;
                 }
 
@@ -290,6 +292,7 @@ struct ReduceToOneB1 {
 
                 fabric_sender.close();
                 noc_async_write_barrier();
+                DPRINT << "end of reduce to one op - fabric core\n";
                 return;
             }
 
@@ -313,6 +316,7 @@ struct ReduceToOneB1 {
                 noc_async_write_barrier();
 
                 // Send to D2H socket if enabled (socket_config_addr != 0)
+                DPRINT << "before socket send to host\n";
                 if (args.socket_config_addr != 0) {
                     // Create socket sender interface
                     SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
@@ -325,6 +329,7 @@ struct ReduceToOneB1 {
                     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
                     // Write to downstream socket
+                    DPRINT << "writing to socket downstream\n";
                     noc_async_write(
                         src_addr,
                         get_noc_addr(
@@ -337,6 +342,7 @@ struct ReduceToOneB1 {
                     socket_push_pages(sender_socket, 1);
                     socket_notify_receiver(sender_socket);
                     noc_async_writes_flushed();
+                    DPRINT << "finished writing to socket downstream\n";
 
                     socket_barrier(sender_socket);
                     noc_async_write_barrier();
@@ -344,6 +350,7 @@ struct ReduceToOneB1 {
 
                 // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "end of reduce to one op - ROOT1 worker core\n";
                 return;
             }
 
@@ -416,6 +423,7 @@ struct ReduceToOneB1 {
             } else {
                 cb_pop_front(source_cb, CTArgs::num_tiles);
             }
+            DPRINT << "end of reduce to one op - worker core\n";
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
