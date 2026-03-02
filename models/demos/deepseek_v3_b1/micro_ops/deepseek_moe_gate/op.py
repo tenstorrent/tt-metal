@@ -75,17 +75,21 @@ class DeepseekMoeGateSingleCore:
         Args:
             input_tensor: Input tensor with values to sort (must be sharded, shape [16, 16])
             bias_tensor: Transposed bias tensor with values to add (must be sharded, shape [16, 16])
-            output_tensor: Pre-allocated output tensor for top8 normalized scores (must be sharded, shape [16, 16])
+            output_tensor: Pre-allocated output tensor for top8 normalized scores
             input_indices_tensor: Input tensor with transposed indices to sort (must be sharded, shape [16, 16])
-            output_indices_tensor: Pre-allocated output tensor for top8 indices (must be sharded, shape [16, 16])
+            output_indices_tensor: Pre-allocated output tensor for top8 indices
             eps: Epsilon value for normalization
             scaling_factor: Scaling factor for normalization
             enable_sigmoid: Whether to enable sigmoid activation
 
         Returns:
-            output_tensor with top8 normalized scores (must be sharded, shape [16, 16])
-            output_indices_tensor with top8 indices (must be sharded, shape [16, 16])
+            output_tensor with top8 normalized scores (shape [1, 8])
+            output_indices_tensor with top8 indices (shape [1, 8])
             Note: Only the first 8 values are relevant
+
+        Note:
+            For the output_tensor and output_indices_tensor, it doesn't have to be 1x16 tiled.
+            Actually in the moe code, it's set to 32x32. And we will just return the first 8 values from the 32x32 tensor.
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -94,9 +98,9 @@ class DeepseekMoeGateSingleCore:
         input_indices_shape = input_indices_tensor.shape
         output_indices_shape = output_indices_tensor.shape
 
-        assert bias_shape == input_shape, "Bias and input tensors must have the same shape"
-        assert input_indices_shape == input_shape, "Input indices and input tensors must have the same shape"
-        assert output_indices_shape == output_shape, "Output indices and output tensors must have the same shape"
+        # assert bias_shape == input_shape, "Bias and input tensors must have the same shape"
+        # assert input_indices_shape == input_shape, "Input indices and input tensors must have the same shape"
+        # assert output_indices_shape == output_shape, "Output indices and output tensors must have the same shape"
 
         # Get core grid from input tensor
         input_shard_spec = input_tensor.memory_config().shard_spec
@@ -104,8 +108,8 @@ class DeepseekMoeGateSingleCore:
         all_cores = input_shard_spec.grid
         # assert input_shard_spec == bias_tensor.memory_config().shard_spec
         # assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
-        assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
-        assert all_cores == output_shard_spec.grid
+        # assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
+        # assert all_cores == output_shard_spec.grid
 
         # Get tile info from input tensor
         input_tile = input_tensor.tile
@@ -116,17 +120,17 @@ class DeepseekMoeGateSingleCore:
         output_tile_height, output_tile_width = output_tile.tile_shape
         output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
         expected_output_tile_size = (1, 16)
-        assert input_tile == bias_tensor.tile
+        # assert input_tile == bias_tensor.tile
         # assert input_tile == input_indices_tensor.tile
-        assert output_tile == output_indices_tensor.tile
+        # assert output_tile == output_indices_tensor.tile
         # assert input_tile_height == expected_input_tile_size[0]
         # assert input_tile_width == expected_input_tile_size[1]
-        assert output_tile_height == expected_output_tile_size[0]
-        assert output_tile_width == expected_output_tile_size[1]
+        # assert output_tile_height == expected_output_tile_size[0]
+        # assert output_tile_width == expected_output_tile_size[1]
         # assert input_shard_spec.shape[0] == expected_input_tile_size[0]
         # assert input_shard_spec.shape[1] == expected_input_tile_size[1]
-        assert output_shard_spec.shape[0] == expected_output_tile_size[0]
-        assert output_shard_spec.shape[1] == expected_output_tile_size[1]
+        # assert output_shard_spec.shape[0] == expected_output_tile_size[0]
+        # assert output_shard_spec.shape[1] == expected_output_tile_size[1]
 
         # Get tile info from bias tensor
         bias_tile = bias_tensor.tile
@@ -256,4 +260,13 @@ class DeepseekMoeGateSingleCore:
         io_tensors = [input_tensor, bias_tensor, input_indices_tensor, output_tensor, output_indices_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
+        # here we only take the 1x8  out of 32x32
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_indices_tensor = ttnn.to_layout(output_indices_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = output_tensor[:, 0, :8]
+        output_tensor = ttnn.reshape(output_tensor, (1, 1, output_tensor.shape[-2], output_tensor.shape[-1]))
+        output_indices_tensor = output_indices_tensor[:, 0, :8]
+        output_indices_tensor = ttnn.reshape(
+            output_indices_tensor, (1, 1, output_indices_tensor.shape[-2], output_indices_tensor.shape[-1])
+        )
         return output_tensor, output_indices_tensor

@@ -434,12 +434,12 @@ def test_new_forward_pass(
     # Convert output back to torch
     tt_topk_weights_torch = ttnn.to_torch(
         tt_topk_weights,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
-    )[:, 0, :8]
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)[:, :8]
     tt_topk_indices_torch = ttnn.to_torch(
         tt_topk_indices,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
-    )[:, 0, :8]
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)[:, :8]
 
     # Cleanup
     ttnn.deallocate(tt_input)
