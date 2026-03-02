@@ -249,9 +249,9 @@ The operation automatically selects the appropriate program factory based on the
 
 | Seeds Type | User IDs Type | Selected Strategy |
 |------------|---------------|-------------------|
-| int32_t    | None (omitted) | Single Seed to All Cores |
-| int32_t    | uint32_t (core ID) | Single Seed to Single Core |
-| int32_t    | Tensor (core IDs) | Single Seed to Set of Cores |
+| uint32_t    | None (omitted) | Single Seed to All Cores |
+| uint32_t    | uint32_t (core ID) | Single Seed to Single Core |
+| uint32_t    | Tensor (core IDs) | Single Seed to Set of Cores |
 | Tensor     | Tensor (core IDs) | Multiple Seeds to Set of Cores |
 
 Note: When seeds is provided as a Tensor, user_ids must also be provided as a Tensor with matching shape and volume, or the operation will fail validation.
