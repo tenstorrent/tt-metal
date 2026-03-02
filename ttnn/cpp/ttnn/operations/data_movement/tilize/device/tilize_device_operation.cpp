@@ -66,10 +66,11 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
     TT_FATAL(
-        input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
-        "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
-        input_tensor_a.physical_volume(),
-        tt::constants::TILE_HW);
+        input_tensor_a.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+        "Input tensor width must be divisible by TILE_WIDTH");
+    TT_FATAL(
+        input_tensor_a.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        "Input tensor height must be divisible by TILE_HEIGHT");
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
