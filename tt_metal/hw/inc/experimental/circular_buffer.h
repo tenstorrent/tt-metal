@@ -14,8 +14,8 @@
 #endif
 #else  // !COMPILE_FOR_TRISC
 #include "experimental/noc.h"
-#include "noc_debugging_metadata.hpp"
-#include "noc_debugging_profiler.hpp"
+#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 #include "experimental/lock.h"

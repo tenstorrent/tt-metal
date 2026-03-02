@@ -6,8 +6,8 @@
 
 #include "experimental/noc.h"
 #include "experimental/lock.h"
-#include "noc_debugging_metadata.hpp"
-#include "noc_debugging_profiler.hpp"
+#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 
 namespace experimental {
 
