@@ -329,8 +329,9 @@ enum class AddressableCoreType : uint8_t {
     PCIE = 2,
     DRAM = 3,
     HARVESTED = 4,
-    UNKNOWN = 5,
-    COUNT = 6,
+    ROUTER_ONLY = 5,
+    UNKNOWN = 6,
+    COUNT = 7,
 };
 
 struct addressable_core_t {
@@ -342,12 +343,12 @@ struct addressable_core_t {
 // TODO: This can move into the hal eventually.
 // This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-// Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth). On WH only Eth and Tensix
-// cores are virtualized BH = DRAM(8*2) + 1 PCIe + Eth(12) vs. WH = Eth(16)
-constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
+// Currently sized for BH (first term is DRAM, second term is PCIe, third term is eth, fourth term is router-only).
+// BH = DRAM(8*2) + 1 PCIe + Eth(12) + RouterOnly(18) vs. WH = Eth(16)
+constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 47;
 // This is the max number of Non Worker Cores across BH and WH.
-// BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
-constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
+// BH = DRAM(8) + 1 PCIe + Eth(12) + RouterOnly(18) vs. WH = DRAM(18) + 1 PCIe + Eth(16) + RouterOnly(4)
+constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 39;
 constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
 

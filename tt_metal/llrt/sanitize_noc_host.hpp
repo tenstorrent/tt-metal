@@ -90,6 +90,11 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
         }
+    } else if (coord_found_p(soc_d.get_cores(CoreType::ROUTER_ONLY, CoordSystem::NOC0), core)) {
+        if (!(DEBUG_VALID_REG_ADDR(addr) && lbytes == 4)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} router_only address {}", what, noc_address(core, addr, lbytes));
+        }
     } else {
         // Bad COORD
         print_stack_trace();

@@ -700,13 +700,16 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);
+    const std::vector<tt::umd::CoreCoord>& router_only_cores =
+        soc_d.get_cores(CoreType::ROUTER_ONLY, CoordSystem::NOC0);
 
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= core_info.non_worker_cores().size(),
-        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() + router_only_cores.size() <=
+            core_info.non_worker_cores().size(),
+        "Detected more pcie/dram/eth/router_only cores than fit in the device mailbox.");
     TT_ASSERT(
-        eth_cores.size() <= core_info.virtual_non_worker_cores().size(),
-        "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
+        eth_cores.size() + router_only_cores.size() <= core_info.virtual_non_worker_cores().size(),
+        "Detected more eth/router_only cores (virtual non-workers) than can fit in device mailbox.");
     auto set_addressable_core =
         [](dev_msgs::addressable_core_t::View core, const CoreCoord& core_coord, dev_msgs::AddressableCoreType type) {
             core.x() = core_coord.x;
@@ -740,6 +743,10 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             set_addressable_core(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
         }
+        for (tt::umd::CoreCoord core : router_only_cores) {
+            set_addressable_core(
+                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ROUTER_ONLY);
+        }
     }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
@@ -769,6 +776,15 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                     core_info.virtual_non_worker_cores()[virtual_non_worker_cores_idx++],
                     virtual_core,
                     dev_msgs::AddressableCoreType::DRAM);
+            }
+
+            for (const CoreCoord& core : router_only_cores) {
+                auto virtual_core =
+                    cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
+                set_addressable_core(
+                    core_info.virtual_non_worker_cores()[virtual_non_worker_cores_idx++],
+                    virtual_core,
+                    dev_msgs::AddressableCoreType::ROUTER_ONLY);
             }
         }
     }

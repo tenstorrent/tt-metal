@@ -404,6 +404,19 @@ uint32_t debug_sanitize_noc_addr(
                 DEBUG_SANITIZE_NOC_TARGET,
                 debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
         }
+    } else if (core_type == AddressableCoreType::ROUTER_ONLY) {
+        // Router-only cores have no L1 - only NOC register accesses are valid
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
+            debug_sanitize_post_addr_and_hang(
+                noc_id,
+                noc_addr,
+                l1_addr,
+                noc_len,
+                multicast,
+                dir,
+                DEBUG_SANITIZE_NOC_TARGET,
+                DebugSanitizeNocAddrOverflow);
+        }
     } else if (core_type == AddressableCoreType::TENSIX) {
         if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_addr_and_hang(
