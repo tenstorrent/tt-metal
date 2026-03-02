@@ -63,7 +63,7 @@ def run_unet_inference(
         sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env or is_ci_v2_env,
+        local_files_only=is_ci_v2_env,
     )
 
     # 2. Load tt_unet and tt_scheduler
