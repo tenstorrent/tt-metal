@@ -90,9 +90,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
-
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -135,9 +132,6 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
-
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -486,9 +480,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
 
 // Test small batch and sequence dimensions (non-1 values)
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
-
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -499,9 +490,6 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
-
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
