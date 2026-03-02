@@ -126,6 +126,56 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             b_padded[-1] % TILE_WIDTH == 0, "all_gather_minimal_matmul_async bias last dimension must be tile-aligned");
     }
 
+    // Validate fused ternary tensors if present
+    bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
+    if (has_fused_ternary) {
+        TT_FATAL(
+            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value(),
+            "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_b must be "
+            "provided");
+
+        TT_FATAL(
+            !attributes.fused_activation.has_value(),
+            "minimal_matmul does not support using fused_activation together with ternary inputs "
+            "(dit_minimal_matmul_addcmul_fused). "
+            "Please use either fused_activation or ternary inputs, not both.");
+
+        const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
+        const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
+
+        TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
+        TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
+        TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
+        TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
+        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
+
+        TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
+        TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
+
+        TT_FATAL(
+            dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_b.dtype()),
+            "fused_ternary tensors must have supported dtypes");
+
+        const auto& ternary_a_logical = ternary_a.logical_shape();
+        const auto& ternary_b_logical = ternary_b.logical_shape();
+
+        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
+        TT_FATAL(
+            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
+            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
+            M,
+            N,
+            ternary_a_logical[-2],
+            ternary_a_logical[-1]);
+        TT_FATAL(
+            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            N,
+            ternary_b_logical[-2],
+            ternary_b_logical[-1]);
+    }
+
     // Config constraints
     if (attributes.config.has_value()) {
         const auto& cfg = attributes.config.value();
@@ -228,6 +278,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
+    const std::optional<float> scalar,
+    const std::optional<ttnn::Tensor>& addcmul_input_tensor1,
+    const std::optional<ttnn::Tensor>& addcmul_input_tensor2,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -275,8 +328,15 @@ ttnn::Tensor all_gather_minimal_matmul_async(
         using_persistent_buffers,
         force_transpose,
         num_workers_per_link,
-        num_buffers_per_channel};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor, weight_tensor, bias_tensor, persistent_output_buffer};
+        num_buffers_per_channel,
+        scalar};
+    auto tensor_args = OperationType::tensor_args_t{
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        persistent_output_buffer,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).at(1);
 }
