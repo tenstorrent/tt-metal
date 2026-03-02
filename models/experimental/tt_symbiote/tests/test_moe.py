@@ -1,16 +1,33 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Tests MoE modules with TTNN acceleration."""
+
+import os
+
 import pytest
 import torch
+import ttnn
+
 from models.experimental.tt_symbiote.modules.moe import (
     Glm4MoeConfig,
     Glm4MoeMoE,
     TTNNMoE,
+    TTNNQwen3MoE,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
-import ttnn
+
+
+# Model path and layer index for real-weights tests.
+# Use Qwen3-Coder-Next with TTNNQwen3MoE; for GLM-4 use TTNNMoE.
+REAL_WEIGHTS_MODEL_PATH = "Qwen/Qwen3-Coder-Next"
+REAL_WEIGHTS_LAYER_INDEX = 1
+
+# Device mesh shape. Must be set in env so TTNNMoE run_on_devices can resolve architecture (e.g. T3K).
+_MESH_DEVICE_ENV = "MESH_DEVICE"
+if _MESH_DEVICE_ENV not in os.environ:
+    os.environ[_MESH_DEVICE_ENV] = "T3K"
+MESH_DEVICE = os.environ.get(_MESH_DEVICE_ENV, "T3K")
 
 
 @pytest.fixture
@@ -38,6 +55,24 @@ def default_moe_config():
     ],
 )
 @pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+            "BHGLX": (8, 4),
+        }.get(MESH_DEVICE, (1, 8))
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 245760, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
 def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
@@ -45,18 +80,24 @@ def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
     if real_weights:
         from transformers import AutoModelForCausalLM
 
-        model = (
-            AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash", trust_remote_code=True).model.layers[1].mlp
+        full_model = AutoModelForCausalLM.from_pretrained(
+            REAL_WEIGHTS_MODEL_PATH, torch_dtype=torch.bfloat16, trust_remote_code=True
         )
-        model = model.to(dtype=torch.bfloat16)
+        model = full_model.model.layers[REAL_WEIGHTS_LAYER_INDEX].mlp
+        hidden_size = full_model.config.hidden_size
     else:
-        model = Glm4MoeMoE(default_moe_config).to(dtype=torch.bfloat16)
+        model = Glm4MoeMoE(default_glm_config).to(dtype=torch.bfloat16)
+        hidden_size = default_glm_config.hidden_size
     model.eval()
     torch.set_grad_enabled(False)
     batch_size, seq_len = 1, 115
-    inputs = torch.randn((batch_size, seq_len, default_moe_config.hidden_size), dtype=torch.bfloat16)
+    inputs = torch.randn((batch_size, seq_len, hidden_size), dtype=torch.bfloat16)
     outputs_torch = model(inputs)
-    ttnn_model = TTNNMoE.from_torch(model)
+    # Qwen3NextSparseMoeBlock uses TTNNQwen3MoE; GLM-4/DeepSeek use TTNNMoE
+    if type(model).__name__ == "Qwen3NextSparseMoeBlock":
+        ttnn_model = TTNNQwen3MoE.from_torch(model)
+    else:
+        ttnn_model = TTNNMoE.from_torch(model)
     set_device(ttnn_model, mesh_device)
     outputs_ttnn = ttnn_model(inputs)
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Glm4MoeMoE")
