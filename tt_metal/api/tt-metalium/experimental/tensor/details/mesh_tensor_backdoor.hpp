@@ -5,7 +5,7 @@
 #pragma once
 
 /**
- * This header contains backdoor support for accmulation op to allow update of the underlying storage of a MeshTensor.
+ * This header contains backdoor support for accumulation op to allow update of the underlying storage of a MeshTensor.
  * This is a temporary solution for #37807 and should be quickly refactored out.
  */
 
