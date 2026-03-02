@@ -33,7 +33,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U08411R54Q2 # Chris Maryan
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
   ttsim: true
 
@@ -47,7 +47,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U08411R54Q2 # Chris Maryan
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
   ttsim: true
 
@@ -61,7 +61,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U08411R54Q2 # Chris Maryan
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
   ttsim: true
 
@@ -75,7 +75,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U08411R54Q2 # Chris Maryan
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
   ttsim: true
 
@@ -89,7 +89,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U08411R54Q2 # Chris Maryan
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
   ttsim: true
 
@@ -159,7 +159,7 @@
     bh_p150b_civ2:
       timeout: 40
   team: ttnn
-  owner_id: U06UEFWB4P9 # Colman Glagovich
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   merge_gate: false
   ttsim: true
 
