@@ -46,7 +46,8 @@ bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
         case TensorMemoryLayout::WIDTH_SHARDED:
-        case TensorMemoryLayout::BLOCK_SHARDED: return true;
+        case TensorMemoryLayout::BLOCK_SHARDED:
+        case TensorMemoryLayout::ND_SHARDED: return true;
         default: return false;
     }
 }
