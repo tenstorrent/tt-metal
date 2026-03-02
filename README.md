@@ -11,7 +11,7 @@
 
 <img src="https://raw.githubusercontent.com/tenstorrent/tt-metal/main/docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="180"/>
 
-**TT-NN** is a Python & C++ Neural Network OP library.
+**TT-NN** is a Python & C++ Neural Network OP library. :)
 
 <h3>
 
