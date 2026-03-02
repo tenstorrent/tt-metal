@@ -38,10 +38,6 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
         std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0u);  // num q heads + 2 * num_kv_heads
     const uint32_t elements_per_group =
         head_dim * total_heads_per_group;  // head_dim * (num q heads + 2 * num kv heads)
-    const uint32_t tiles_per_group =
-        elements_per_group / TILE_WIDTH;  // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
-
-    const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(
         elements_per_group != 0,
@@ -50,6 +46,12 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
         num_q_heads,
         num_kv_heads,
         head_dim);
+
+    const uint32_t tiles_per_group =
+        elements_per_group / TILE_WIDTH;  // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
+
+    const auto& input_shape = input_tensor.padded_shape();
+
     TT_FATAL(
         input_shape[3] % elements_per_group == 0,
         "flattened inner tensor dimension {} does not divide evenly into head dim {}, heads per group, and groups {}",
