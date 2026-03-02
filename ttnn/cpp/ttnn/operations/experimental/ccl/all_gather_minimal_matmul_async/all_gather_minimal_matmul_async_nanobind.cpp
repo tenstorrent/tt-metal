@@ -51,6 +51,22 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}.
             - Shape: [..., N] where all dims except the last are 1. The last dim must equal N.
 
+        scalar : Optional[float], default: None
+            Scalar constant multiplier for the addcmul operation.
+            Typically 1.0 in DiT transformer blocks.
+
+        addcmul_input_tensor1 : Optional[ttnn.Tensor]
+            Residual/base for addcmul.
+            - Layout: TILE (required).
+            - Device: same device as matmul tensors.
+            - Shape: [..., M, N] - must match matmul output shape.
+
+        addcmul_input_tensor2 : ttnn.Tensor
+            Gate/multiplier tensor for addcmul (broadcast like bias).
+            - Layout: TILE (required).
+            - Device: same device as matmul tensors.
+            - Shape: [..., 1, N] - broadcast row across all M rows.
+
         fused_activation : Optional[ttnn.operations.eltwise.unary.common.UnaryWithParam], default: None
             Optional fused unary activation applied per output tile during packing. See ttnn unary utilities
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
@@ -136,6 +152,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         - input_tensor: [..., M, K]
         - weight_tensor: [..., K, N]
         - bias_tensor (optional): [..., N] (row-broadcast)
+        - addcmul_input_tensor1: [..., M, N] (full output shape)
+        - addcmul_input_tensor2: [..., 1, N] (broadcast like bias)
         - output: [..., M, N]
         Note: All leading dims (dims < -2) are required to be 1 (no batching). Tensors are read/written in tile units;
         if logical sizes are not tile-aligned, padding is handled internally (reads fill zeros; writes skip outside
@@ -189,6 +207,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("weight_tensor"),
             nb::kw_only(),
             nb::arg("bias_tensor") = nb::none(),
+            nb::arg("scalar") = nb::none(),
+            nb::arg("addcmul_input_tensor1") = nb::none(),
+            nb::arg("addcmul_input_tensor2") = nb::none(),
             nb::arg("fused_activation") = nb::none(),
             nb::arg("config") = nb::none(),
             nb::arg("multi_device_global_semaphore"),
