@@ -24,6 +24,9 @@
 // Outer loop iterates over M-blocks of block_h rows. For each M-block, the
 // full K-loop runs once, reusing weight tiles across all block_h M rows.
 // This amortizes weight DRAM reads by block_h×.
+//
+// Performance-critical: mm_block_init_short and pack_reconfig_* are hoisted
+// out of the per-row loop to avoid redundant hardware reconfiguration.
 // ============================================================================
 
 constexpr uint32_t per_core_N = get_compile_time_arg_val(0);
@@ -45,18 +48,15 @@ constexpr auto cb_xw1_acc_idx = tt::CBIndex::c_3;
 constexpr auto cb_xw3_acc_idx = tt::CBIndex::c_4;
 constexpr auto cb_m_out_idx = tt::CBIndex::c_5;
 
-inline void matmul_one_row(
+// Matmul one row and pack to L1 accumulator — no init_short, no pack reconfig.
+inline void matmul_one_row_fast(
     const tt::CBIndex cb_x_idx,
     const tt::CBIndex cb_w_idx,
     const tt::CBIndex cb_acc_idx,
     const uint32_t x_row_offset,
     const uint32_t acc_offset,
-    const uint32_t k_block_size,
-    const bool first_k_block) {
+    const uint32_t k_block_size) {
     tile_regs_acquire();
-
-    mm_block_init_short(
-        cb_x_idx, cb_w_idx, /*transpose=*/false, /*ct_dim=*/block_size, /*rt_dim=*/1U, /*kt_dim=*/k_block_size);
 
     uint32_t in0_index = x_row_offset;
     uint32_t in1_index = 0U;
@@ -76,7 +76,11 @@ inline void matmul_one_row(
     }
 
     tile_regs_commit();
-    pack_l1_acc_block(cb_acc_idx, first_k_block, block_size, acc_offset);
+    tile_regs_wait();
+    for (uint32_t t = 0U; t < block_size; ++t) {
+        pack_tile</* out_of_order_output = */ true>(t, cb_acc_idx, acc_offset + t);
+    }
+    tile_regs_release();
 }
 
 inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
@@ -92,6 +96,27 @@ inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
     mul_binary_tile_init();
     mul_binary_tile(base_reg, base_reg + 2U, base_reg);
     mul_binary_tile(base_reg, base_reg + 1U, base_reg);
+}
+
+// Process block_h rows of matmul for one weight matrix (W1 or W3).
+// Hoists mm_block_init_short and pack_reconfig outside the row loop.
+inline void matmul_rows_for_weight(
+    const tt::CBIndex cb_w_idx,
+    const tt::CBIndex cb_acc_idx,
+    const uint32_t n_offset,
+    const uint32_t k_block_size,
+    const bool first_k_block) {
+    mm_block_init_short(
+        cb_in0_idx, cb_w_idx, /*transpose=*/false, /*ct_dim=*/block_size, /*rt_dim=*/1U, /*kt_dim=*/k_block_size);
+    pack_reconfig_data_format(cb_acc_idx);
+    pack_reconfig_l1_acc(first_k_block ? 0 : 1U);
+
+    for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
+        matmul_one_row_fast(
+            cb_in0_idx, cb_w_idx, cb_acc_idx, m_sub * block_size, m_sub * per_core_N_rounded + n_offset, k_block_size);
+    }
+
+    pack_reconfig_l1_acc(0);
 }
 
 void kernel_main() {
@@ -111,32 +136,12 @@ void kernel_main() {
             for (uint32_t n_sub = 0U; n_sub < num_n_blocks; ++n_sub) {
                 const uint32_t n_offset = n_sub * block_size;
 
-                // W1: read once, reuse across all block_h M rows
                 cb_wait_front(cb_w1_idx, tiles_per_batch);
-                for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
-                    matmul_one_row(
-                        cb_in0_idx,
-                        cb_w1_idx,
-                        cb_xw1_acc_idx,
-                        m_sub * block_size,
-                        m_sub * per_core_N_rounded + n_offset,
-                        k_block_size,
-                        first_k_block);
-                }
+                matmul_rows_for_weight(cb_w1_idx, cb_xw1_acc_idx, n_offset, k_block_size, first_k_block);
                 cb_pop_front(cb_w1_idx, tiles_per_batch);
 
-                // W3: read once, reuse across all block_h M rows
                 cb_wait_front(cb_w3_idx, tiles_per_batch);
-                for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
-                    matmul_one_row(
-                        cb_in0_idx,
-                        cb_w3_idx,
-                        cb_xw3_acc_idx,
-                        m_sub * block_size,
-                        m_sub * per_core_N_rounded + n_offset,
-                        k_block_size,
-                        first_k_block);
-                }
+                matmul_rows_for_weight(cb_w3_idx, cb_xw3_acc_idx, n_offset, k_block_size, first_k_block);
                 cb_pop_front(cb_w3_idx, tiles_per_batch);
             }
 
