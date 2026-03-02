@@ -87,7 +87,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 // Phase 2 signal target sem addresses: 8 targets starting at index 19,
                 // sem addr at offset +2 within each 3-element group
                 for (uint32_t s = 0; s < 8; s++) {
-                    worker_writer_runtime_args[19 + s * 3 + 2] = operation_attributes.barrier_semaphore.address();
+                    worker_writer_runtime_args[19 + (s * 3) + 2] = operation_attributes.barrier_semaphore.address();
                 }
 
                 core_idx++;
@@ -109,7 +109,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
             // Phase 2 signal target sem addresses: 8 targets starting at index 11,
             // sem addr at offset +2 within each 3-element group
             for (uint32_t s = 0; s < 8; s++) {
-                worker_writer_runtime_args[11 + s * 3 + 2] = operation_attributes.barrier_semaphore.address();
+                worker_writer_runtime_args[11 + (s * 3) + 2] = operation_attributes.barrier_semaphore.address();
             }
         }
 
@@ -731,7 +731,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 w_outer_dim_size);
 
             for (uint32_t w_direction = 0; w_direction < 2; w_direction++) {
-                uint32_t w_core_idx = w_link * 2 + w_direction;
+                uint32_t w_core_idx = (w_link * 2) + w_direction;
                 CoreCoord w_core = w_fabric_logical_cores[w_core_idx];
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
 
