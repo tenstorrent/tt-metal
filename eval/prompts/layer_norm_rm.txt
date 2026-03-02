@@ -30,4 +30,6 @@ process, including:
 - TDD pipeline results: which stages passed, how many attempts each took,
   any failure classifications encountered
 - Decisions made, deviations from specs, pain points
+- Infrastructure issues: any device access errors, device hangs, build
+  failures or delays, venv problems, or other environment issues encountered
 - Suggestions for improving the agent pipeline
