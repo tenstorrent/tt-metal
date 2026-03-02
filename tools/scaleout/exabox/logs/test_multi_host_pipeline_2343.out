@@ -153,7 +153,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,5]<stdout>: timeout method: signal
 [1,5]<stdout>: timeout func_only: False
 [1,5]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:21.073[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,5]<stdout>: [90m2026-02-27 23:09:21.089[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,5]<stdout>: [90m2026-02-27 23:09:21.090[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -208,7 +208,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,1]<stdout>: timeout method: signal
 [1,1]<stdout>: timeout func_only: False
 [1,1]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,2]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,2]<stdout>: cachedir: .pytest_cache
@@ -226,7 +226,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,6]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
 [1,6]<stdout>: rootdir: /data/dmadic/tt-metal
 [1,6]<stdout>: configfile: pytest.ini
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] plugins: split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, benchmark-5.1.0, cov-7.0.0, anyio-4.12.1
 [1,6]<stdout>: timeout: 300.0s
 [1,6]<stdout>: timeout method: signal
@@ -252,9 +252,9 @@ All 32 chips found in "/dev/tenstorrent"
 [1,7]<stdout>: timeout method: signal
 [1,7]<stdout>: timeout func_only: False
 [1,6]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,6]<stdout>: 
+[1,6]<stdout>:
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,4]<stdout>: 
+[1,4]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,3]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,3]<stdout>: cachedir: .pytest_cache
@@ -266,7 +266,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,3]<stdout>: timeout method: signal
 [1,3]<stdout>: timeout func_only: False
 [1,7]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,7]<stdout>: 
+[1,7]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,0]<stdout>: cachedir: .pytest_cache
@@ -278,12 +278,12 @@ All 32 chips found in "/dev/tenstorrent"
 [1,0]<stdout>: timeout method: signal
 [1,0]<stdout>: timeout func_only: False
 [1,3]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:24.880[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,1]<stdout>: [90m2026-02-27 23:09:24.896[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,1]<stdout>: [90m2026-02-27 23:09:24.897[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
 [1,0]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:09:24.941[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,1]<stdout>: [90m2026-02-27 23:09:24.957[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,2]<stdout>: [90m2026-02-27 23:09:25.014[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m

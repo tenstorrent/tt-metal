@@ -65,7 +65,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,12]<stdout>: timeout method: signal
 [1,12]<stdout>: timeout func_only: False
 [1,6]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,6]<stdout>: 
+[1,6]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,7]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,7]<stdout>: cachedir: .pytest_cache
@@ -77,11 +77,11 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,7]<stdout>: timeout method: signal
 [1,7]<stdout>: timeout func_only: False
 [1,5]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,13]<stdout>: 
+[1,13]<stdout>:
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,4]<stdout>: 
+[1,4]<stdout>:
 [1,14]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,14]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,14]<stdout>: cachedir: .pytest_cache
@@ -103,7 +103,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,11]<stdout>: timeout method: signal
 [1,11]<stdout>: timeout func_only: False
 [1,12]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,12]<stdout>: 
+[1,12]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,15]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,15]<stdout>: cachedir: .pytest_cache
@@ -115,7 +115,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,15]<stdout>: timeout method: signal
 [1,15]<stdout>: timeout func_only: False
 [1,7]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,7]<stdout>: 
+[1,7]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,1]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,1]<stdout>: cachedir: .pytest_cache
@@ -147,11 +147,11 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,10]<stdout>: timeout method: signal
 [1,10]<stdout>: timeout func_only: False
 [1,14]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,14]<stdout>: 
+[1,14]<stdout>:
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,11]<stdout>: 
+[1,11]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,15]<stdout>: 
+[1,15]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,8]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,8]<stdout>: cachedir: .pytest_cache
@@ -173,7 +173,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,9]<stdout>: timeout method: signal
 [1,9]<stdout>: timeout func_only: False
 [1,1]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,0]<stdout>: cachedir: .pytest_cache
@@ -185,7 +185,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,0]<stdout>: timeout method: signal
 [1,0]<stdout>: timeout func_only: False
 [1,2]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,3]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,3]<stdout>: cachedir: .pytest_cache
@@ -197,15 +197,15 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,3]<stdout>: timeout method: signal
 [1,3]<stdout>: timeout func_only: False
 [1,10]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,10]<stdout>: 
+[1,10]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,8]<stdout>: 
+[1,8]<stdout>:
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,9]<stdout>: 
+[1,9]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:28:31.638 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,6]<stdout>: 2026-03-01 12:28:31.654 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: 2026-03-01 12:28:31.655 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
@@ -589,7 +589,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,12]<stdout>: 2026-03-01 12:28:33.617 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
 [1,12]<stdout>: 2026-03-01 12:28:33.617 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)
 [1,1]<stdout>: ERROR2026-03-01 12:28:33.623 | info     |             UMD | Harvesting masks for chip 4 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
-[1,8]<stdout>: 
+[1,8]<stdout>:
 [1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:28:33.629 | info     |             UMD | Harvesting masks for chip 5 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:331)
 [1,1]<stdout>: 2026-03-01 12:28:33.633 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:277)
 [1,1]<stdout>: 2026-03-01 12:28:33.633 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:283)

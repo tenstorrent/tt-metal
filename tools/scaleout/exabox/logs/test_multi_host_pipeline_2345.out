@@ -153,7 +153,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,0]<stdout>: timeout method: signal
 [1,0]<stdout>: timeout func_only: False
 [1,0]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:00.471[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,0]<stdout>: [90m2026-02-27 23:21:00.491[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,0]<stdout>: [90m2026-02-27 23:21:00.493[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -201,7 +201,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,2]<stdout>: timeout func_only: False
 [1,0]<stdout>: [1mcollecting ... [0m[90m2026-02-27 23:21:03.577[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,2]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:03.605[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,7]<stdout>: [1m============================= test session starts ==============================[0m
 [1,7]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
@@ -225,7 +225,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,6]<stdout>: timeout method: signal
 [1,6]<stdout>: timeout func_only: False
 [1,7]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,7]<stdout>: 
+[1,7]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:03.658[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,3]<stdout>: [1m============================= test session starts ==============================[0m
 [1,3]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
@@ -238,7 +238,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,3]<stdout>: timeout method: signal
 [1,3]<stdout>: timeout func_only: False
 [1,6]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,6]<stdout>: 
+[1,6]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:03.680[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,1]<stdout>: [1m============================= test session starts ==============================[0m
 [1,1]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
@@ -252,7 +252,7 @@ All 32 chips found in "/dev/tenstorrent"
 [1,1]<stdout>: timeout func_only: False
 [1,3]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
 [1,0]<stdout>: [90m2026-02-27 23:21:03.703[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,4]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,4]<stdout>: cachedir: .pytest_cache
@@ -274,12 +274,12 @@ All 32 chips found in "/dev/tenstorrent"
 [1,5]<stdout>: timeout method: signal
 [1,5]<stdout>: timeout func_only: False
 [1,1]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:03.730[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,4]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,4]<stdout>: 
+[1,4]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:21:03.754[0m | [32minfo    [m | [35m            UMD[0m | [37mMapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000[0m [90m(silicon_sysmem_manager.cpp:331)[0m
 [1,2]<stdout>: [90m2026-02-27 23:21:03.813[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,2]<stdout>: [90m2026-02-27 23:21:03.830[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m

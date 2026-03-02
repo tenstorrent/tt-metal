@@ -7,7 +7,7 @@ Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/
 2026-03-01 12:10:13.599 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
 2026-03-01 12:10:13.599 | DEBUG    | ttnn.distributed.ttrun:get_rank_environment:318 - [tt-run] Auto-propagating 3 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_IMAGE, TT_METAL_SLOW_DISPATCH_MODE
 [1,0]<stderr>: docker: Error response from daemon: unable to find user container_app_user: no matching entries in passwd file
-[1,0]<stderr>: 
+[1,0]<stderr>:
 [1,0]<stderr>: Run 'docker run --help' for more information
 --------------------------------------------------------------------------
 prterun detected that one or more processes exited with non-zero status,

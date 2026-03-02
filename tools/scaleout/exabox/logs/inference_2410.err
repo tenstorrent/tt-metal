@@ -58,51 +58,51 @@ Config{cache_path=/home/dmadic/.cache/ttnn,model_cache_path=/home/dmadic/.cache/
 [1,0]<stderr>: Unable to find image 'ghcr.io/tenstorrent/tt-shield/tt-media-inference-server:0.9.0-816144975205affc5e962c7de31425a3467aacd5-e3eb9d9-65267833215' locally
 [1,9]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,9]<stderr>: unauthorized
-[1,9]<stderr>: 
+[1,9]<stderr>:
 [1,9]<stderr>: Run 'docker run --help' for more information
 [1,11]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,11]<stderr>: unauthorized
-[1,11]<stderr>: 
+[1,11]<stderr>:
 [1,11]<stderr>: Run 'docker run --help' for more information
 [1,10]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,10]<stderr>: unauthorized
-[1,10]<stderr>: 
+[1,10]<stderr>:
 [1,10]<stderr>: Run 'docker run --help' for more information
 [1,8]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,8]<stderr>: unauthorized
-[1,8]<stderr>: 
+[1,8]<stderr>:
 [1,8]<stderr>: Run 'docker run --help' for more information
 [1,1]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,1]<stderr>: unauthorized
-[1,1]<stderr>: 
+[1,1]<stderr>:
 [1,1]<stderr>: Run 'docker run --help' for more information
 [1,15]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,15]<stderr>: unauthorized
-[1,15]<stderr>: 
+[1,15]<stderr>:
 [1,15]<stderr>: Run 'docker run --help' for more information
 [1,0]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,0]<stderr>: unauthorized
-[1,0]<stderr>: 
+[1,0]<stderr>:
 [1,0]<stderr>: Run 'docker run --help' for more information
 [1,13]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,13]<stderr>: unauthorized
-[1,13]<stderr>: 
+[1,13]<stderr>:
 [1,13]<stderr>: Run 'docker run --help' for more information
 [1,2]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,2]<stderr>: unauthorized
-[1,2]<stderr>: 
+[1,2]<stderr>:
 [1,2]<stderr>: Run 'docker run --help' for more information
 [1,12]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,12]<stderr>: unauthorized
-[1,12]<stderr>: 
+[1,12]<stderr>:
 [1,12]<stderr>: Run 'docker run --help' for more information
 [1,3]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,3]<stderr>: unauthorized
-[1,3]<stderr>: 
+[1,3]<stderr>:
 [1,3]<stderr>: Run 'docker run --help' for more information
 [1,14]<stderr>: docker: Error response from daemon: error from registry: unauthorized
 [1,14]<stderr>: unauthorized
-[1,14]<stderr>: 
+[1,14]<stderr>:
 [1,14]<stderr>: Run 'docker run --help' for more information
 --------------------------------------------------------------------------
 prterun detected that one or more processes exited with non-zero status,

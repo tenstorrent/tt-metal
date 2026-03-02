@@ -13,7 +13,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,1]<stdout>: timeout method: signal
 [1,1]<stdout>: timeout func_only: False
 [1,1]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:15:04.206[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,1]<stdout>: [90m2026-02-27 23:15:04.222[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,1]<stdout>: [90m2026-02-27 23:15:04.223[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -68,7 +68,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,3]<stdout>: timeout method: signal
 [1,3]<stdout>: timeout func_only: False
 [1,3]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,0]<stdout>: cachedir: .pytest_cache
@@ -80,7 +80,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,0]<stdout>: timeout method: signal
 [1,0]<stdout>: timeout func_only: False
 [1,0]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,4]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,4]<stdout>: cachedir: .pytest_cache
@@ -124,9 +124,9 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,6]<stdout>: timeout method: signal
 [1,6]<stdout>: timeout func_only: False
 [1,2]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,7]<stdout>: 
+[1,7]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1m============================= test session starts ==============================[0m
 [1,5]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /data/dmadic/tt-metal/python_env/bin/python3
 [1,5]<stdout>: cachedir: .pytest_cache
@@ -138,9 +138,9 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,5]<stdout>: timeout method: signal
 [1,5]<stdout>: timeout func_only: False
 [1,6]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,6]<stdout>: 
+[1,6]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:15:07.947[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,3]<stdout>: [90m2026-02-27 23:15:07.962[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,3]<stdout>: [90m2026-02-27 23:15:07.963[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m

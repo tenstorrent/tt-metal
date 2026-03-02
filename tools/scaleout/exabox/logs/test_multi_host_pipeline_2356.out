@@ -15,7 +15,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,0]<stdout>: timeout method: signal
 [1,0]<stdout>: timeout func_only: False
 [1,0]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:37.165[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,0]<stdout>: [90m2026-02-27 23:34:37.208[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,0]<stdout>: [90m2026-02-27 23:34:37.212[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -70,7 +70,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,1]<stdout>: timeout method: signal
 [1,1]<stdout>: timeout func_only: False
 [1,1]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:44.040[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,1]<stdout>: [90m2026-02-27 23:34:44.065[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,1]<stdout>: [90m2026-02-27 23:34:44.067[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -124,8 +124,8 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,4]<stdout>: timeout func_only: False
 [1,5]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
 [1,4]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,4]<stdout>: 
-[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 
+[1,4]<stdout>:
+[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336]
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:48.087[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[31, 25, 23, 5, 14, 26, 29, 16] and remote chip ids {}[0m [90m(cluster.cpp:180)[0m
 [1,1]<stdout>: [90m2026-02-27 23:34:48.087[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:155)[0m
 [1,1]<stdout>: [90m2026-02-27 23:34:48.087[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:158)[0m
@@ -175,7 +175,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,3]<stdout>: timeout method: signal
 [1,3]<stdout>: timeout func_only: False
 [1,3]<stdout>: [1mcollecting ... [0m[1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:50.430[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,3]<stdout>: [90m2026-02-27 23:34:50.451[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,3]<stdout>: [90m2026-02-27 23:34:50.453[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -195,7 +195,7 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,4]<stdout>: [1mcollecting ... [0m[90m2026-02-27 23:34:50.606[0m | [32minfo    [m | [35m            UMD[0m | [37mInitializing iommu for sysmem (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:277)[0m
 [1,4]<stdout>: [90m2026-02-27 23:34:50.606[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
 [1,2]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:50.724[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,3]<stdout>: [90m2026-02-27 23:34:50.745[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,3]<stdout>: [90m2026-02-27 23:34:50.747[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:331)[0m
@@ -226,8 +226,8 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,5]<stdout>: [90m2026-02-27 23:34:50.850[0m | [32minfo    [m | [35m            UMD[0m | [37mAllocating sysmem without hugepages (size: 0x40000000).[0m [90m(silicon_sysmem_manager.cpp:283)[0m
 [1,7]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
 [1,6]<stdout>: [1mcollected 50 items / 38 deselected / 12 selected                               [0m
-[1,7]<stdout>: 
-[1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 
+[1,7]<stdout>:
+[1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336]
 [1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] [90m2026-02-27 23:34:50.933[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.5.0[0m [90m(topology_discovery.cpp:418)[0m
 [1,2]<stdout>: [90m2026-02-27 23:34:50.957[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole.[0m [90m(cluster_descriptor.cpp:984)[0m
 [1,2]<stdout>: [90m2026-02-27 23:34:50.959[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:222)[0m
@@ -470,12 +470,12 @@ bh-glx-c04u02.exabox.tenstorrent.com
 [1,6]<stdout>: [90m2026-02-27 23:36:01.735[0m | [1m[41mcritical[m | [35m         Always[0m | [37mTT_THROW: Timeout while waiting for chip info header from rank 0. Controller likely failed.[0m [90m(assert.hpp:104)[0m
 [1,7]<stdout>: [90m2026-02-27 23:36:01.738[0m | [1m[41mcritical[m | [35m         Always[0m | [37mTT_THROW: Timeout while waiting for chip info header from rank 0. Controller likely failed.[0m [90m(assert.hpp:104)[0m
 [1,6]<stdout>: [31mERROR[0m[31mERROR[0m[31mERROR[0m[31mERROR[0m[31mERROR[0m[31mERROR[0m[31mERROR[0m
-[1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
-[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
-[1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
-[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
-[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
-[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
+[1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
+[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
+[1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
+[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
 [1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] [90m2026-02-27 23:36:02.236[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto[0m [90m(metal_context.cpp:1056)[0m
 [1,7]<stdout>: [90m2026-02-27 23:36:02.237[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto[0m [90m(metal_context.cpp:1056)[0m
 [1,5]<stdout>: [90m2026-02-27 23:36:02.241[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /data/dmadic/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto[0m [90m(metal_context.cpp:1056)[0m

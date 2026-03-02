@@ -114,7 +114,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,12]<stdout>: timeout method: signal
 [1,12]<stdout>: timeout func_only: False
 [1,11]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,11]<stdout>: 
+[1,11]<stdout>:
 [1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,10]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,10]<stdout>: cachedir: .pytest_cache
@@ -146,7 +146,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,13]<stdout>: timeout method: signal
 [1,13]<stdout>: timeout func_only: False
 [1,14]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,14]<stdout>: 
+[1,14]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,8]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,8]<stdout>: cachedir: .pytest_cache
@@ -158,15 +158,15 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,8]<stdout>: timeout method: signal
 [1,8]<stdout>: timeout func_only: False
 [1,12]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,12]<stdout>: 
+[1,12]<stdout>:
 [1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,10]<stdout>: 
+[1,10]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,15]<stdout>: 
+[1,15]<stdout>:
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,13]<stdout>: 
+[1,13]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,8]<stdout>: 
+[1,8]<stdout>:
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ============================= test session starts ==============================
 [1,9]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
 [1,9]<stdout>: cachedir: .pytest_cache
@@ -178,7 +178,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,9]<stdout>: timeout method: signal
 [1,9]<stdout>: timeout func_only: False
 [1,9]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,9]<stdout>: 
+[1,9]<stdout>:
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:13.211 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,14]<stdout>: 2026-03-01 12:16:13.223 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,11]<stdout>: 2026-03-01 12:16:13.226 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
@@ -216,16 +216,16 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,9]<stdout>: 2026-03-01 12:16:13.356 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,15]<stdout>: 2026-03-01 12:16:13.360 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,13]<stdout>: ERROR2026-03-01 12:16:13.365 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,11]<stdout>: 
+[1,11]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:13.368 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,14]<stdout>: ERROR
 [1,12]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] ERRORERROR
-[1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
+[1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:13.411 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,15]<stdout>: ERRORERRORERROR
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:13.428 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,8]<stdout>: 
-[1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
+[1,8]<stdout>:
+[1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] ERROR
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:13.569 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,14]<stdout>: 2026-03-01 12:16:13.574 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -306,12 +306,12 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,10]<stdout>: 2026-03-01 12:16:14.051 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,9]<stdout>: 2026-03-01 12:16:14.061 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,8]<stdout>: ERROR2026-03-01 12:16:14.069 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
-[1,11]<stdout>: 
+[1,11]<stdout>:
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:14.077 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,9]<stdout>: 2026-03-01 12:16:14.078 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,15]<stdout>: 2026-03-01 12:16:14.079 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,8]<stdout>: ERROR2026-03-01 12:16:14.083 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,14]<stdout>: 
+[1,14]<stdout>:
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:14.090 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,15]<stdout>: 2026-03-01 12:16:14.096 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,12]<stdout>: ERROR
@@ -406,7 +406,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,9]<stdout>: 2026-03-01 12:16:14.785 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,9]<stdout>: 2026-03-01 12:16:14.786 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,8]<stdout>: ERROR2026-03-01 12:16:14.788 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,14]<stdout>: 
+[1,14]<stdout>:
 [1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-512-7168] ERROR
 [1,12]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-512-7168] ERROR
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-512-7168] 2026-03-01 12:16:14.814 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -460,14 +460,14 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,4]<stdout>: timeout method: signal
 [1,4]<stdout>: timeout func_only: False
 [1,7]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,7]<stdout>: 
+[1,7]<stdout>:
 [1,6]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,6]<stdout>: 
+[1,6]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] collected 50 items / 38 deselected / 12 selected
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:14.967 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,4]<stdout>: collected 50 items / 38 deselected / 12 selected
-[1,4]<stdout>: 
+[1,4]<stdout>:
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:14.982 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,11]<stdout>: 2026-03-01 12:16:14.983 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,14]<stdout>: 2026-03-01 12:16:14.996 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -521,7 +521,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,8]<stdout>: 2026-03-01 12:16:15.129 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,14]<stdout>: ERROR
 [1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] collected 50 items / 38 deselected / 12 selected
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:15.141 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,9]<stdout>: 2026-03-01 12:16:15.142 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,8]<stdout>: 2026-03-01 12:16:15.144 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
@@ -536,7 +536,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,1]<stdout>: timeout method: signal
 [1,1]<stdout>: timeout func_only: False
 [1,3]<stdout>: collecting ... collected 50 items / 38 deselected / 12 selected
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,10]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] ERROR
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] ============================= test session starts ==============================
 [1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /opt/venv/bin/python3
@@ -552,10 +552,10 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] 2026-03-01 12:16:15.175 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,13]<stdout>: 2026-03-01 12:16:15.178 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,1]<stdout>: collected 50 items / 38 deselected / 12 selected
-[1,1]<stdout>: 
+[1,1]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:15.187 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,0]<stdout>: collected 50 items / 38 deselected / 12 selected
-[1,0]<stdout>: 
+[1,0]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336] 2026-03-01 12:16:15.191 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,13]<stdout>: 2026-03-01 12:16:15.194 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: 2026-03-01 12:16:15.194 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -590,8 +590,8 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,14]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:15.344 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,6]<stdout>: ERRORERRORERROR
 [1,14]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:15.360 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,4]<stdout>: 
-[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
+[1,4]<stdout>:
+[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
 [1,14]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:15.361 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,10]<stdout>: 2026-03-01 12:16:15.362 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,12]<stdout>: 2026-03-01 12:16:15.366 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -653,7 +653,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,1]<stdout>: 2026-03-01 12:16:15.510 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,2]<stdout>: ERROR
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] ERROR2026-03-01 12:16:15.535 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:15.536 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,13]<stdout>: 2026-03-01 12:16:15.538 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,9]<stdout>: 2026-03-01 12:16:15.548 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -661,13 +661,13 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,7]<stdout>: 2026-03-01 12:16:15.551 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,7]<stdout>: 2026-03-01 12:16:15.552 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,13]<stdout>: ERROR2026-03-01 12:16:15.554 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,8]<stdout>: 
+[1,8]<stdout>:
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] 2026-03-01 12:16:15.564 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: 2026-03-01 12:16:15.568 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,4]<stdout>: 2026-03-01 12:16:15.569 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,5]<stdout>: ERRORERROR2026-03-01 12:16:15.574 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
-[1,0]<stdout>: 
-[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 
+[1,0]<stdout>:
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168] 2026-03-01 12:16:15.583 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: 2026-03-01 12:16:15.584 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,4]<stdout>: 2026-03-01 12:16:15.584 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
@@ -678,7 +678,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,15]<stdout>: ERROR
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] ERROR
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] ERROR2026-03-01 12:16:15.616 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,9]<stdout>: 
+[1,9]<stdout>:
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] 2026-03-01 12:16:15.641 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,6]<stdout>: 2026-03-01 12:16:15.643 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,5]<stdout>: 2026-03-01 12:16:15.649 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -723,7 +723,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,12]<stdout>: 2026-03-01 12:16:15.792 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,0]<stdout>: 2026-03-01 12:16:15.795 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,0]<stdout>: ERROR2026-03-01 12:16:15.797 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
-[1,11]<stdout>: 
+[1,11]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336] 2026-03-01 12:16:15.803 | warning  |             UMD | Board 0x47100000000 has 1 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,1]<stdout>: 2026-03-01 12:16:15.803 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,1]<stdout>: 2026-03-01 12:16:15.804 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
@@ -755,7 +755,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,1]<stdout>: 2026-03-01 12:16:15.876 | warning  |             UMD | Board 0x47100000000 has 1 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,1]<stdout>: 2026-03-01 12:16:15.876 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,7]<stdout>: ERROR2026-03-01 12:16:15.885 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-1024-3584] 2026-03-01 12:16:15.886 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,3]<stdout>: ERROR
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-1024-3584] 2026-03-01 12:16:15.893 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -779,7 +779,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,5]<stdout>: 2026-03-01 12:16:15.962 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,5]<stdout>: 2026-03-01 12:16:15.963 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,9]<stdout>: ERRORERROR
-[1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336] 
+[1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336]
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336] ERROR
 [1,4]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336] 2026-03-01 12:16:15.996 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,11]<stdout>: 2026-03-01 12:16:15.997 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -806,7 +806,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,6]<stdout>: ERROR
 [1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:16.093 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,2]<stdout>: ERROR2026-03-01 12:16:16.096 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
-[1,5]<stdout>: 
+[1,5]<stdout>:
 [1,8]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:16.105 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,3]<stdout>: 2026-03-01 12:16:16.108 | warning  |             UMD | Board 0x47100000000 has 4 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,3]<stdout>: 2026-03-01 12:16:16.108 | warning  |             UMD | Board 0x47131831011 has 4 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
@@ -858,10 +858,10 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,1]<stdout>: 2026-03-01 12:16:16.234 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,7]<stdout>: 2026-03-01 12:16:16.240 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,7]<stdout>: ERROR2026-03-01 12:16:16.241 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:16.245 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,8]<stdout>: ERRORERROR
-[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-512-7168] 
+[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-512-7168]
 [1,9]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792] 2026-03-01 12:16:16.249 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,13]<stdout>: 2026-03-01 12:16:16.255 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,15]<stdout>: 2026-03-01 12:16:16.261 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
@@ -878,7 +878,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,7]<stdout>: 2026-03-01 12:16:16.313 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: 2026-03-01 12:16:16.316 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,6]<stdout>: ERROR2026-03-01 12:16:16.317 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
-[1,9]<stdout>: 
+[1,9]<stdout>:
 [1,15]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-512-7168] ERROR
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-512-7168] 2026-03-01 12:16:16.323 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,5]<stdout>: 2026-03-01 12:16:16.324 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
@@ -950,7 +950,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,2]<stdout>: 2026-03-01 12:16:16.549 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,12]<stdout>: ERROR
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-1024-3584] ERROR2026-03-01 12:16:16.558 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,14]<stdout>: 
+[1,14]<stdout>:
 [1,13]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-1024-3584] 2026-03-01 12:16:16.559 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,0]<stdout>: 2026-03-01 12:16:16.562 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,10]<stdout>: ERROR
@@ -1095,7 +1095,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,7]<stdout>: ERROR
 [1,11]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] 2026-03-01 12:16:17.093 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,6]<stdout>: ERROR2026-03-01 12:16:17.099 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
-[1,4]<stdout>: 
+[1,4]<stdout>:
 [1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] 2026-03-01 12:16:17.103 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,11]<stdout>: 2026-03-01 12:16:17.108 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,10]<stdout>: 2026-03-01 12:16:17.112 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
@@ -1170,7 +1170,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,7]<stdout>: 2026-03-01 12:16:17.320 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,13]<stdout>: 2026-03-01 12:16:17.320 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,9]<stdout>: ERROR2026-03-01 12:16:17.328 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,2]<stdout>: 
+[1,2]<stdout>:
 [1,7]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584] 2026-03-01 12:16:17.335 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,13]<stdout>: 2026-03-01 12:16:17.337 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,0]<stdout>: ERROR
@@ -1195,7 +1195,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,3]<stdout>: 2026-03-01 12:16:17.509 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,2]<stdout>: 2026-03-01 12:16:17.537 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,6]<stdout>: ERRORERROR
-[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] 
+[1,5]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792]
 [1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792] 2026-03-01 12:16:17.549 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,2]<stdout>: 2026-03-01 12:16:17.553 | warning  |             UMD | Board 0x47100000000 has 1 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,2]<stdout>: 2026-03-01 12:16:17.553 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
@@ -1384,7 +1384,7 @@ ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-models-amd64:lates
 [1,4]<stdout>: 2026-03-01 12:16:18.697 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,4]<stdout>: 2026-03-01 12:16:18.698 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
 [1,0]<stdout>: ERROR2026-03-01 12:16:18.701 | warning  |             UMD | Board 0x47131831011 has 8 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
-[1,3]<stdout>: 
+[1,3]<stdout>:
 [1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-1024-3584] 2026-03-01 12:16:18.708 | info     |             UMD | Established firmware bundle version: 19.5.0 (topology_discovery.cpp:418)
 [1,1]<stdout>: 2026-03-01 12:16:18.724 | warning  |             UMD | Board 0x47100000000 has 1 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
 [1,1]<stdout>: 2026-03-01 12:16:18.724 | warning  |             UMD | Board 0x47131831011 has 7 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:984)
