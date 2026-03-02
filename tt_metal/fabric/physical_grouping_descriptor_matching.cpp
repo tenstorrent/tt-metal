@@ -1026,9 +1026,12 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
     for (const auto& grouping : groupings) {
+        log_info(tt::LogFabric, "Finding all in PSD for grouping: {}", grouping.name);
+        log_info(tt::LogFabric, "Grouping items: {}", grouping.items.size());
         auto flattened = is_flattened(grouping) ? std::vector<GroupingInfo>{grouping}
                                                 : build_flattened_adjacency_mesh(grouping, physical_system_descriptor);
         for (const auto& f : flattened) {
+            log_info(tt::LogFabric, "Flattened graph nodes: {}", f.adjacency_graph.get_nodes().size());
             if (!f.adjacency_graph.get_nodes().empty()) {
                 flat_meshes.push_back(f);
             }

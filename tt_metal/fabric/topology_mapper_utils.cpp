@@ -453,6 +453,11 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     log_info(
         tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
 
+    // Print all errors
+    for (const auto& error : errors) {
+        log_error(tt::LogFabric, "    grouping mapping error: {}", error);
+    }
+
     PhysicalMultiMeshGraph result;
     if (all_mesh_groupings.empty()) {
         log_warning(tt::LogFabric, "No mesh groupings found in PSD - returning empty graph");
