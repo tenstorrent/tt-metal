@@ -135,7 +135,13 @@ ttnn::Tensor manual_seed(
     }
 
     if (std::holds_alternative<int32_t>(seeds)) {
-        operation_attributes.seeds = std::get<int32_t>(seeds);
+        const int32_t seeds_val = std::get<int32_t>(seeds);
+        // Only -1 (skip) and non-negative seeds are supported; other negative values are rejected.
+        TT_FATAL(
+            seeds_val == -1 || seeds_val >= 0,
+            "manual_seed: Only -1 (skip) and non-negative int32_t seeds are supported, got {}",
+            seeds_val);
+        operation_attributes.seeds = seeds_val;
     }
     if (user_ids.has_value() && std::holds_alternative<uint32_t>(user_ids.value())) {
         operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());
