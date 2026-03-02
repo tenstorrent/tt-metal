@@ -120,6 +120,119 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
     }
 }
 
+TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (grid_size.x < 2) {
+            GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
+        }
+
+        const CoreCoord locker_core = {0, 0};
+        const CoreCoord writer_core = {1, 0};
+        Program program = CreateProgram();
+        distributed::MeshWorkload workload;
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+
+        uint32_t buffer_addr_a = unreserved_addr;
+        uint32_t num_elements_a = 8;
+        uint32_t buffer_addr_b = unreserved_addr + (alignment * 16);
+        uint32_t num_elements_b = 16;
+        uint32_t writer_buffer_addr = unreserved_addr + (alignment * 48);
+
+        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
+        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
+
+        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
+        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        KernelHandle locker_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_multi.cpp",
+            locker_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+        KernelHandle writer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_multi.cpp",
+            writer_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(
+            program,
+            locker_kernel,
+            locker_core,
+            {buffer_addr_a,
+             num_elements_a,
+             buffer_addr_b,
+             num_elements_b,
+             locker_sem_id,
+             writer_sem_id,
+             writer_virtual_core.x,
+             writer_virtual_core.y});
+
+        uint32_t write_size_a = num_elements_a * sizeof(uint32_t);
+        uint32_t write_size_b = num_elements_b * sizeof(uint32_t);
+        SetRuntimeArgs(
+            program,
+            writer_kernel,
+            writer_core,
+            {writer_buffer_addr,
+             write_size_a,
+             write_size_b,
+             locker_virtual_core.x,
+             locker_virtual_core.y,
+             buffer_addr_a,
+             buffer_addr_b,
+             writer_sem_id,
+             locker_sem_id,
+             locker_virtual_core.x,
+             locker_virtual_core.y});
+
+        workload.add_program(device_range, std::move(program));
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        std::vector<NOCDebugIssueType> locked_issues;
+        for (IDevice* device : mesh_device->get_devices()) {
+            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
+        }
+        ASSERT_GE(locked_issues.size(), 2u)
+            << "Expected at least 2 write-to-locked-buffer issues (one per locked region)";
+
+        bool found_issue_a = false;
+        bool found_issue_b = false;
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
+            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+
+            if (issue.issue_address == buffer_addr_a && issue.issue_size == write_size_a) {
+                found_issue_a = true;
+            }
+            if (issue.issue_address == buffer_addr_b && issue.issue_size == write_size_b) {
+                found_issue_b = true;
+            }
+        }
+        EXPECT_TRUE(found_issue_a) << "Missing write-to-locked issue for buffer A at addr 0x" << std::hex
+                                   << buffer_addr_a;
+        EXPECT_TRUE(found_issue_b) << "Missing write-to-locked issue for buffer B at addr 0x" << std::hex
+                                   << buffer_addr_b;
+    }
+}
+
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
     // inverted version of the test above
     for (auto& mesh_device : devices_) {
