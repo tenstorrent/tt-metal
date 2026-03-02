@@ -138,7 +138,7 @@ public:
 
     PageMapping get_bank_and_offset(uint32_t page_id) const {
         // Check that page_id is within bounds
-        ASSERT(page_id < dspec().tensor_volume());
+        ASSERT(page_id < dspec().tensor_volume(), 99);
         if (dspec().rank() >= 4) {
             return get_bank_and_offset_from_page_id(page_id);
         }
