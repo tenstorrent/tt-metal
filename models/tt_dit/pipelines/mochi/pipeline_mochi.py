@@ -301,7 +301,7 @@ class MochiPipeline(DiffusionPipeline):
         if ttnn.device.is_blackhole():
             if tuple(mesh_device.shape) != (2, 2):
                 logger.warning(
-                    f"Mochi has only been successfully tested on 2x2 configuration for Blackhole. Proceeding with the requested{mesh_device.shape} configuration."
+                    f"Mochi has only been successfully tested on 2x2 configuration for Blackhole. Proceeding with the requested {mesh_device.shape} configuration."
                 )
 
             default_config = {
