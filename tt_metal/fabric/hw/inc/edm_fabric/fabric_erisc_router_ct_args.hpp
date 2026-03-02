@@ -714,3 +714,11 @@ using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     MAX_NUM_RECEIVER_CHANNELS,
     MAX_NUM_SENDER_CHANNELS>;
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
+
+//-------------------------------- Credit Amortization --------------------------------//
+constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
+    get_named_compile_time_arg_val("SENDER_CREDIT_AMORTIZATION_FREQUENCY");
+constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
+    get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
+constexpr bool super_speedy_mode =
+    SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0 && RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0;
