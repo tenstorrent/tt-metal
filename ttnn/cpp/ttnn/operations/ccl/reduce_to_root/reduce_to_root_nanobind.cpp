@@ -67,7 +67,7 @@ void bind_reduce_to_root(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::reduce_to_root,
+            &ttnn::ccl::reduce_to_root,
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_s").noconvert(),
             nb::arg("input_tensor_m").noconvert(),
@@ -83,7 +83,7 @@ void bind_reduce_to_root(nb::module_& mod) {
 
     mod.def(
         "reduce_to_root_tensor_spec",
-        reduce_to_root_tensor_spec,
+        ttnn::ccl::reduce_to_root_tensor_spec,
         nb::arg("input_tensor_l"),
         nb::arg("input_tensor_s"),
         nb::arg("input_tensor_m"),

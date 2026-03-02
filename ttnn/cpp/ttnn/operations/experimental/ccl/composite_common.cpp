@@ -472,8 +472,8 @@ ttnn::Tensor composite_all_to_all(
 
     // Step 2: Slice out the index range each device cares about, along out_dim
     for (auto& broadcasted_tensor : broadcasted_tensors) {
-        temp_tensor =
-            ttnn::mesh_partition(broadcasted_tensor, out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
+        temp_tensor = ttnn::ccl::mesh_partition(
+            broadcasted_tensor, out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
         broadcasted_tensor.deallocate();
         broadcasted_tensor = temp_tensor;
     }

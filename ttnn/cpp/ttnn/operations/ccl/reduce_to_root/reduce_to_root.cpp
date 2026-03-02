@@ -6,6 +6,7 @@
 #include "reduce_to_root.hpp"
 
 namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 std::vector<ttnn::Tensor> reduce_to_root(
     const ttnn::Tensor& input_tensor_l,

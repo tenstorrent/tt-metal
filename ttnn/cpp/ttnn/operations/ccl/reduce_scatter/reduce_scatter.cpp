@@ -14,7 +14,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
@@ -37,7 +38,7 @@ ttnn::Tensor reduce_scatter(
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
             for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-                tensor = ttnn::reduce_scatter(
+                tensor = ttnn::ccl::reduce_scatter(
                     tensor,
                     dim,
                     i,
@@ -96,4 +97,4 @@ ttnn::Tensor reduce_scatter(
         .at(1);  // first is the intermediate tensor
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

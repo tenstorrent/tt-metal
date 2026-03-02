@@ -77,7 +77,7 @@ void bind_all_to_all_combine(nb::module_& mod) {
                 const std::optional<ttnn::Tensor>& output_tensor,
                 const std::optional<uint32_t> num_links,
                 const std::optional<tt::tt_fabric::Topology> topology) {
-                return ttnn::all_to_all_combine(
+                return ttnn::ccl::all_to_all_combine(
                     input_tensor,
                     expert_mapping_tensor,
                     expert_metadata_tensor,

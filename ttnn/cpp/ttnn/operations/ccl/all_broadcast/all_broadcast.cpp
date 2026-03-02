@@ -13,6 +13,7 @@
 #include <deque>
 
 namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
@@ -37,7 +38,7 @@ std::vector<ttnn::Tensor> all_broadcast(
                     auto tensor = std::move(tensors.front());
                     tensors.pop_front();
                     auto curr_tensors =
-                        ttnn::all_broadcast(tensor, axis, subdevice_id, memory_config, num_links, topology);
+                        ttnn::ccl::all_broadcast(tensor, axis, subdevice_id, memory_config, num_links, topology);
                     tensors.insert(tensors.end(), curr_tensors.begin(), curr_tensors.end());
                 }
             }
@@ -49,7 +50,7 @@ std::vector<ttnn::Tensor> all_broadcast(
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
-    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
+    uint32_t num_links_ = num_links.value_or(ttnn::ccl::common::get_num_links(*mesh_device, cluster_axis));
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
     return ttnn::prim::all_broadcast(input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_);

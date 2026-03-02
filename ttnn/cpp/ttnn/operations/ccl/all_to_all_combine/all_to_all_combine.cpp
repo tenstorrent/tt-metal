@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,

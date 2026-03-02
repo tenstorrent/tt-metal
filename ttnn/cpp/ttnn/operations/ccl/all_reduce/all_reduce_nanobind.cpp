@@ -54,7 +54,7 @@ void bind_all_reduce(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::all_reduce,
+            &ttnn::ccl::all_reduce,
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),

@@ -9,6 +9,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,

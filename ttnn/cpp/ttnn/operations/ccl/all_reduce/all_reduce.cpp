@@ -28,7 +28,7 @@ ttnn::Tensor all_reduce(
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
             for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-                tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
+                tensor = ttnn::ccl::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
             }
             return tensor;
         }

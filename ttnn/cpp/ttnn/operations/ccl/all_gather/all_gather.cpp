@@ -16,6 +16,7 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::ccl {
+using namespace ttnn::operations::ccl;
 
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
@@ -42,7 +43,7 @@ ttnn::Tensor all_gather(
             auto mesh_view = mesh_shape.view();
             for (auto it = mesh_view.rbegin(); it != mesh_view.rend(); ++it) {
                 auto axis = std::distance(mesh_view.begin(), it.base()) - 1;
-                tensor = ttnn::all_gather(
+                tensor = ttnn::ccl::all_gather(
                     tensor,
                     dim,
                     axis,

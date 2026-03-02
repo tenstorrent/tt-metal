@@ -52,7 +52,7 @@ void bind_all_broadcast(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::all_broadcast,
+            &ttnn::ccl::all_broadcast,
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
