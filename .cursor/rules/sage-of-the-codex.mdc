@@ -1,0 +1,191 @@
+---
+alwaysApply: false
+description: Use for Tensix architecture or instruction details
+---
+
+## Sage of the Codex - Master Orchestration Rule
+
+This rule instructs the master chat to orchestrate architecture-specific sage agents for Tensix/LLK questions.
+
+<IMPORTANT>
+Agents CANNOT call other agents. This rule makes YOU (the master chat) the orchestrator.
+When this rule triggers, YOU launch the sage follower agents directly.
+</IMPORTANT>
+
+### Activation Triggers
+
+This rule activates when the user asks about:
+- Instruction behavior (e.g., "How does MATMUL work?")
+- Architecture details (e.g., "What is L1 size?", "How does the FPU work?")
+- LLK implementation (e.g., "How does unpack handle Float16?")
+- Data flow through Tensix (e.g., "How does data move from L1 to SREG?")
+- Register files and memory (e.g., "What are SREG/DREG?")
+- Thread synchronization (e.g., "How do T0/T1/T2 coordinate?")
+- LLK types/enums (e.g., "What is BroadcastType?", "Explain ReduceDim")
+
+### Orchestration Workflow
+
+```
+User Question
+      │
+      ▼
+Master Chat (YOU) ─── applies this rule
+      │
+      ├──► Task(sage-wormhole)   ─┐
+      ├──► Task(sage-blackhole)  ─┼─► Launch in PARALLEL (max 3)
+      └──► Task(sage-quasar)     ─┘
+      │
+      ▼
+Wait for all responses
+      │
+      ▼
+Aggregate into final answer
+```
+
+### Step 1: Analyze the Query
+
+Determine which architectures are relevant:
+- **Specific architecture mentioned**: Launch ONLY that sage (e.g., "Wormhole" → sage-wormhole only)
+- **No architecture specified**: Launch ALL relevant sages in parallel (up to 3)
+- **Pure ISA question**: Use DeepWiki MCP directly for `tenstorrent/tt-isa-documentation`
+
+### Step 2: Launch Sage Agents
+
+<IMPORTANT>
+Launch sage agents using the Task tool with subagent_type parameter.
+Launch up to 3 agents IN PARALLEL in a SINGLE message with multiple Task tool calls.
+</IMPORTANT>
+
+**Available sage agents:**
+- `sage-wormhole`: Searches `tt_llk_wormhole_b0/` for Wormhole B0 implementations
+- `sage-blackhole`: Searches `tt_llk_blackhole/` for Blackhole implementations
+- `sage-quasar`: Searches `tt_llk_quasar/` for Quasar implementations
+
+**Prompt template for each sage:**
+```
+User question: "[EXACT USER QUESTION]"
+
+Search your architecture folder for information about this topic.
+Find:
+1. Relevant enum/type/function definitions
+2. Where and how it's used in LLK code
+3. Any architecture-specific behavior or constraints
+4. Code snippets with file paths
+
+Follow quality principles:
+- Explain WHY (hardware constraints), not just WHAT
+- Identify default behavior vs variants
+- Cover all data format paths
+- Document constraints and edge cases
+
+Return a structured response with findings and code references.
+```
+
+### Step 3: Wait and Aggregate
+
+After all sage agents return:
+1. **Identify commonalities**: What's consistent across architectures
+2. **Highlight differences**: Architecture-specific variations
+3. **Synthesize**: Combine into unified explanation
+4. **Validate**: Check against quality principles below
+
+### Data Sources (Priority Order)
+
+#### 1. Primary: DeepWiki MCP
+Repository: `tenstorrent/tt-isa-documentation`
+
+Use for:
+- Instruction bit-level details
+- Architecture specifications
+- Tensix unit behavior
+- Register definitions
+
+#### 2. Secondary: Sage Agent Searches
+Each sage searches their architecture folder:
+- `tt_llk_wormhole_b0/` (sage-wormhole)
+- `tt_llk_blackhole/` (sage-blackhole)
+- `tt_llk_quasar/` (sage-quasar)
+
+#### 3. Tertiary: Tests folder
+`tests/python_tests/` for golden models and test patterns
+
+#### 4. Fallback: TT-METAL Documentation
+- https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html
+
+<IMPORTANT>Use ONLY when sage agents and DeepWiki fail to answer.</IMPORTANT>
+
+### Answer Quality Standards
+
+Every response MUST follow these principles:
+
+#### Principle 1: Explain WHY, Not Just WHAT
+Don't just describe what the code does—explain the hardware constraints that drive the implementation.
+
+#### Principle 2: Distinguish Default Paths from Variants
+- Clearly identify which is the "default/normal path"
+- Present variants as modifications TO the default
+
+#### Principle 3: Cover All Data Format Paths
+Different data precisions often require fundamentally different implementation paths.
+
+#### Principle 4: Identify Hardware Constraints
+Hardware constraints are the ROOT CAUSE of implementation decisions.
+
+### Response Template
+
+```markdown
+## [Question Topic]
+
+### Summary
+[Direct answer in 2-3 sentences. State which architectures were analyzed.]
+
+### Hardware Rationale
+[The hardware constraints that drove this implementation]
+
+### Default Path vs Variants (if applicable)
+**Default behavior**: [Baseline case]
+**Variants**: [How each mode modifies the default]
+
+### Detailed Explanation
+[Combined explanation from sage findings]
+
+### Architecture Details
+
+#### Wormhole B0
+[Findings from sage-wormhole]
+
+#### Blackhole
+[Findings from sage-blackhole]
+
+#### Quasar
+[Findings from sage-quasar]
+
+### Edge Cases & Constraints
+- [Hardware limitations]
+- [Data format gotchas]
+
+### Code References
+| Architecture | File | Key Function |
+|--------------|------|--------------|
+| Wormhole B0 | `path/file.h:123` | `function_name()` |
+
+### Related Topics
+- [Related concepts]
+```
+
+### Quality Checklist
+
+Before finalizing, verify:
+- [ ] **WHY explained**: Hardware constraints documented
+- [ ] **Default identified**: Baseline vs variants distinguished
+- [ ] **All paths covered**: Different data format paths explained
+- [ ] **Constraints listed**: Hardware limitations documented
+- [ ] **Code traced**: Implementation path with file references
+
+### Forbidden Actions
+
+- NEVER launch more than 3 sage agents at once
+- NEVER explain code without hardware constraints
+- NEVER describe default as a variant
+- NEVER omit architecture-specific differences
+- NEVER guess instruction behavior without ISA documentation
