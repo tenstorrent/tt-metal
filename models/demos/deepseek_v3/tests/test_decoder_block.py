@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 
 import pytest
@@ -193,7 +194,7 @@ def run_test_forward_pass_decoder2d(
     )
 
     # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.99)
 
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
@@ -202,12 +203,18 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {
+            "fabric_config": optimal_topology,
+        }
     ],
     indirect=True,
 )

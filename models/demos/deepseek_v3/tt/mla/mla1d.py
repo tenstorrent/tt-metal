@@ -1744,11 +1744,6 @@ class MLA1D(AbstractModule):
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Shard in0 to L1 WIDTH sharded for qkv_a matmul
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            x.shape,
-            **cfg["wq_kv_a_in0_memory_config"],
-        )
-        x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
 
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
@@ -2024,7 +2019,6 @@ class MLA1D(AbstractModule):
         # Shard in0 to L1 WIDTH sharded for wo matmul
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-        out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # 1,1,32,896 width sharded 7x4 [32,32]
         return out

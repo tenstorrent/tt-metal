@@ -243,12 +243,30 @@ def run_test_forward_pass_mla2d(
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
+    # Create input memory config using the new pattern
+    if mode == "decode":
+        # Calculate per-device shape after ShardTensor2dMesh with dims=(-2, -1)
+        # dims=(-2, -1) means the last two dimensions are sharded
+        full_shape = torch_input.unsqueeze(0).shape  # [1, batch, seq_len, hidden_size]
+        per_device_shape = (
+            full_shape[0],
+            full_shape[1],
+            full_shape[2] // mesh_device.shape[0],  # seq_len (dim -2) sharded across mesh rows
+            full_shape[3] // mesh_device.shape[1],  # hidden_size (dim -1) sharded across mesh cols
+        )
+        input_memory_config = ttnn.create_sharded_memory_config(
+            per_device_shape,
+            **run_config["mla1d"]["wq_kv_a_in0_memory_config"],
+        )
+    else:
+        input_memory_config = run_config["input_memory_config"]
+
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -275,6 +293,9 @@ def run_test_forward_pass_mla2d(
         tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
     else:
         tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+
+    # Convert to interleaved to match model behavior and avoid implicit conversion in to_torch
+    tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
