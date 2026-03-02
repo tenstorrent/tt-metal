@@ -1,7 +1,21 @@
-# Sequential Fusion Architecture
+# Parallel and Sequential Fusion Architecture
 
 ## TL;DR
+This document details the implementation of `Sequential` and `Parallel`, two building blocks for creating fused ops from arbitrary `ProgramDescriptor` objects. This allows for combined temporal (`Sequential`) and spatial (`Parallel`) fusion of complex dependencies from generic, reusable ops using a simple, expressive Python interface:
 
+<img src="images/overview.png" style="width:1000px;"/>
+
+The above dependency graph is expressed in Python as the following:
+
+```python
+# Each of these returns an OpDescriptor, which
+# is a thin wrapper around ProgramDescriptor with
+# some additional data for the fusion infrastructure
+op1_desc =
+```
+
+
+The temporal fusion is a strict stitching-together of the underlying kernels - there are no optimizations made to keep things in registers or L1, overlap dataflow with compute, etc. It simply constructs a unified kernel for each core type and implements the logic of each in turn with appropriate synchronization, CB reassignment, and state cleanup between ops.
 
 ## Table of Contents
 
@@ -10,6 +24,7 @@
   - [`Sequential`](#sequential) | [`Parallel`](#parallel)
 - [Glossary](#glossary)
   - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment)
+- [Opt-In Requirements](#opt-in-requirements)
 - [Representing Fused Op Structure](#representing-fused-op-structure)
   - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
 - [Synchronization Protocol](#synchronization-protocol)
@@ -131,6 +146,53 @@ core range (0-7), but the leaf uses cores 0-3, the path has two segments:
 segment 0 covers cores 0-7 (root + intermediate phases), segment 1 covers
 cores 0-3 (leaf phase).
 
+## Opt-In Requirements
+
+An op must satisfy the following requirements before it can participate in
+kernel fusion.  Each requirement exists to protect a specific invariant in
+the fusion pipeline — violating any of them will produce silent
+mis-compilation or a device hang.
+
+1. **Use `get_compile_time_arg_val()` for all compile-time argument access.**
+   Kernel sources must never index the raw `kernel_compile_time_args[]` array
+   directly.  The fusion system offsets literal indices in
+   `get_compile_time_arg_val(N)` calls via regex so that each phase reads
+   from its own slice of the concatenated CT arg array.  Direct array access
+   (e.g., `kernel_compile_time_args[13]`) bypasses this offset and reads the
+   wrong phase's values.  Prefer named compile-time args
+   (`get_named_compile_time_arg_val("name")`) where possible — named args
+   are handled via a phase-prefix mechanism that is immune to index
+   arithmetic issues.
+
+2. **Use named compile-time args (`cb_` prefix) for all CB indices.**
+   Every circular-buffer index must be passed as a named compile-time arg
+   whose name starts with `cb_` (e.g., `"cb_in"`, `"cb_ex_partial"`).  The
+   CB pool allocator remaps hardware CB slots across phases; the `cb_`
+   prefix tells the allocator which named args to update.  Hard-coded CB
+   indices (e.g., `constexpr uint32_t cb = tt::CBIndex::c_0`) or positional
+   CT args for CB indices will read stale slot numbers after remapping.
+
+3. **Use the standard RT arg API — `get_arg_val()` / `get_arg_addr()` —
+   for all runtime argument access.**  The fusion system concatenates
+   per-phase runtime args into a single flat array and emits `#define`
+   redirects (`get_arg_val` → `phase_N_get_arg_val`, `get_arg_addr` →
+   `phase_N_get_arg_addr`) that add the correct per-phase offset.  Any
+   code that bypasses these functions (e.g., direct `rta_l1_base[]` access)
+   will read the wrong phase's arguments.  The same applies to common
+   runtime args (`get_common_arg_val` / `get_common_arg_addr`).
+
+4. **All phases must use the same `fp32_dest_acc_en` setting.**
+   `DST_ACCUM_MODE` is a compile-time constant generated once per kernel
+   binary.  Mixing fp32 and fp16 destination accumulation modes across
+   phases is impossible — the builder validates this and raises an error
+   on mismatch.
+
+5. **Rectangular core grids only.**  The fusion system partitions cores
+   into groups by `(op_id, kernel_variant_key)` tuples and builds each
+   group independently.  Non-rectangular core grids (L-shapes, sparse
+   selections) break the column/row-based grouping logic.  The builder
+   validates grid rectangularity and raises an error otherwise.
+
 
 ## Representing Fused Op Structure
 
@@ -226,13 +288,45 @@ topology rules above require children to occupy disjoint subsets of their
 parent's cores. This spatial disjointness is what makes parallel execution
 safe — sibling branches never share a core.
 
-`allowed_core_range` (`OpNode.allowed_core_range`) extends this model. An op's
-*actual* core range (from its kernels) may be smaller than the region it is
-*allowed* to occupy. `_propagate_allowed_ranges()` computes allowed ranges
-bottom-up: a parent's allowed range is the union of its actual range and its
-children's allowed ranges. `_validate_topology()` uses allowed ranges for
-sibling disjointness and child-subset-of-parent checks. This lets a parent
-partially cover its children — uncovered cores simply skip the parent's phase.
+`_propagate_allowed_ranges()` computes allowed ranges bottom-up: leaves default
+to their actual kernel core range, and internal nodes get the union of their
+own range plus their children's.  `_validate_topology()` uses these propagated
+ranges for sibling disjointness and child-subset-of-parent checks.  This lets a
+parent partially cover its children — uncovered cores simply skip the parent's
+phase.
+
+> **Note:** `OpDescriptor.allowed_core_range` exists as an optional override but
+> is not used by any current op.  The default propagation from actual kernel
+> ranges is sufficient for topology validation.
+
+#### What "disjoint" means
+
+Topology validation enforces **kernel-disjointness**: sibling branches cannot
+run kernels on the same core.  Each core runs exactly one kernel binary, and
+the barrier coordinator must know which phase program a core is executing.
+This is what `_validate_topology()` checks — it compares coordinate sets
+derived from kernel core ranges.
+
+This does **not** cover L1 data access.  Some ops perform NOC reads/writes to
+L1 on cores outside their kernel range.  For example, DRAM-sharded matmul
+places kernels on scattered cores adjacent to DRAM banks but reads activation
+data from other worker cores' L1.  If a sibling branch's kernels run on those
+data-source cores, the NOC traffic could collide with the sibling's kernel
+execution.  This is the user's responsibility to avoid when constructing the
+topology — the infrastructure does not detect or prevent it.
+
+**DRAM-interleaved access is not a concern.**  DRAM banks are shared, stateless
+global memory.  Any number of ops can read the same DRAM tensor concurrently
+without conflict.  L1-access conflicts only arise with ops that do cross-core
+L1 reads/writes (e.g., DRAM-sharded matmul, multicast senders).
+
+#### Non-contiguous core grids
+
+The topology validation, barrier release, and CB allocation are all based on
+coordinate sets (`Set[Tuple[int, int]]`), not rectangular bounding boxes.  A
+`CoreRangeSet` with gaps (e.g., rows 0-1 + row 3 + row 5, skipping rows 2 and 4)
+works identically to a contiguous grid.  The barrier coordinator unicasts the
+release signal to each core individually, skipping gaps.
 
 ### Core Groups
 
