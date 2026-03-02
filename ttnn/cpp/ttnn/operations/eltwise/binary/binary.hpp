@@ -10,10 +10,9 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 
 namespace ttnn {
-
 namespace operations::binary {
 
-bool is_legacy_onlyf(
+bool is_legacy_only(
     const Tensor& lhs,
     const auto& rhs,
     const std::optional<MemoryConfig>& memory_config,
