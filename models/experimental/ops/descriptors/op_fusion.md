@@ -1,5 +1,8 @@
 # Sequential Fusion Architecture
 
+## TL;DR
+
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -25,7 +28,6 @@
 - [File Map](#file-map)
 
 
-## Overview
 
 Sequential fusion combines multiple operations into a single fused kernel that
 runs as one program dispatch. Instead of launching each op as a separate
@@ -307,8 +309,7 @@ void kernel_main() {
 
     phase_0::run();           // first op
 
-    barrier::phase::wait();   // local RISC sync
-    barrier::phase::reset();  // CB reset + rebind + cross-core barrier
+    barrier::sync();          // local RISC sync + CB reset + rebind + cross-core barrier
 
     phase_1::run();           // second op
 }
@@ -422,22 +423,32 @@ MultiBarrierSpec(
 )
 ```
 
-The generated C++ for Group A's kernel has two `segment_N` namespaces:
+The generated C++ for Group A's kernel has two `seg_N` namespaces inside
+`namespace group`:
 
 ```c++
 namespace barrier {
-    namespace segment_0 { /* 16 cores, arrive=0x1000, release=0x1004 */ }
-    namespace segment_1 { /* 8 left cores, arrive=0x2000, release=0x2004 */ }
-    namespace phase {
-        void reset() {
-            if (done == 1) { reset_cbs(phase_0_cbs); segment_0::sync(); }  // LN→GeLU
-            if (done == 2) { reset_cbs(phase_1_cbs); segment_1::sync(); }  // GeLU→RMS
+    namespace local {
+        void sync() {
+            done++;
+            // BRISC: drain NOC, wait followers, reset op sems, reset_cbs, rebind
+            // Followers: signal done, wait for BRISC reset_done
+            *reset_done = done;  // BRISC only
         }
     }
+    namespace group {
+        namespace seg_0 { /* 16 cores, arrive=0x1000, release=0x1004 */ }
+        namespace seg_1 { /* 8 left cores, arrive=0x2000, release=0x2004 */ }
+        void sync() {
+            if (done == 1) { seg_0::sync(); resync_cbs(phase_0_cbs); }  // LN→GeLU
+            if (done == 2) { seg_1::sync(); resync_cbs(phase_1_cbs); }  // GeLU→RMS
+        }
+    }
+    void sync() { local::sync(); group::sync(); }
 }
 ```
 
-Each `segment_N` namespace contains its own `num_cores`, `core0_phys_x/y`,
+Each `seg_N` namespace contains its own `num_cores`, `core0_phys_x/y`,
 `mcast_start/end` (all `constexpr` from named compile-time args), plus mutable
 `call_count`, `arrive`, and `release` pointers. The namespace provides
 compile-time isolation — the segment geometry is resolved to constants, not
@@ -477,9 +488,9 @@ For the example tree, the cache ends up with three entries:
 | `frozenset(8-right)` | Right branch | arrive=0x3000, release=0x3004 |
 
 When `_build_group_barriers()` runs for each group, it looks up the cache
-rather than allocating new semaphores. Both groups' segment_0 resolves to the
+rather than allocating new semaphores. Both groups' seg_0 resolves to the
 same `BarrierConfig` (the 16-core entry), so both kernel binaries emit
-`segment_0::sync()` calls that target the same L1 addresses. The 16 cores
+`seg_0::sync()` calls that target the same L1 addresses. The 16 cores
 converge on a single barrier despite running two different kernel binaries.
 
 ### Two-Level Barrier
@@ -494,77 +505,99 @@ Phase synchronization uses a two-level protocol:
 Both levels use monotonically increasing counters — never reset during kernel
 execution.
 
-**BRISC (reader/coordinator)** — owns `done`, waits on `compute_done` and
-`writer_done`, then resets CBs and runs the cross-core barrier:
+State variables live at `namespace barrier` scope, accessible by both
+`local` and `group` sub-namespaces:
 
 ```c++
-// barrier::phase — BRISC side
-namespace phase {
-    uint32_t done;                                  // local counter, incremented each phase
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore)
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore)
+namespace barrier {
+    uint32_t done;                                  // monotonic counter, incremented each transition
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore) — BRISC + compute
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore) — BRISC + writer
+    volatile tt_l1_ptr uint32_t* reset_done;        // L1 ptr (GlobalSemaphore) — all RISCs
+    ...
+}
+```
 
-    void wait() {
+**BRISC `local::sync()`** — drain NOC, wait followers, reset op sems + CBs,
+rebind, then signal `*reset_done = done` so followers know it's safe to proceed:
+
+```c++
+namespace local {
+    void sync() {
         done++;
         noc_async_full_barrier();                   // drain all outstanding NOC writes
         noc_semaphore_wait_min(compute_done, done); // spin until compute signals
         noc_semaphore_wait_min(writer_done, done);  // spin until writer signals
-    }
-
-    void reset() {
-        // Per-transition: reset CBs, rebind sharded addresses, cross-core sync
-        reset_cbs(phase_K_cbs);                     // equalize stream registers + FIFO ptrs
-        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
-        segment_N::sync();                          // cross-core NOC barrier
+        // Reset op semaphores (unconditional across all transitions)
+        // Per-done dispatch: reset_cbs(phase_K_cbs) + rebind_cbs(...)
+        *reset_done = done;                         // signal followers: reset complete
     }
 }
 ```
 
-**Compute** — signals `compute_done` after each phase, then waits on the
-cross-core barrier before resyncing local CB state:
+**BRISC `group::sync()`** — per-transition cross-core segment multicast:
 
 ```c++
-// barrier::phase — compute side
-namespace phase {
-    uint32_t done;                                  // local counter
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (same address BRISC reads)
+namespace group {
+    namespace seg_0 { ... }                         // multicast template per segment
+    void sync() {
+        if (done == 1) { seg_0::sync(); }           // cross-core NOC barrier
+    }
+}
+```
 
-    void wait() {
+**Compute `local::sync()`** — signal `compute_done`, wait for BRISC reset:
+
+```c++
+namespace local {
+    void sync() {
         done++;
         *compute_done = done;                       // signal BRISC
-    }
-
-    void reset() {
-        segment_N::sync();                          // wait for cross-core barrier
-        resync_cbs(phase_K_cbs);                    // TRISC0: sync tiles_acked via reg_read
-                                                    // TRISC2: sync tiles_received via reg_read
-        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+        while (*reset_done < done) {}               // wait for BRISC to finish reset
     }
 }
 ```
 
-**Writer (NCRISC)** — same pattern as compute but signals `writer_done` and
-drains NOC writes before signaling:
+**Compute `group::sync()`** — segment spinwait, resync CBs, rebind:
 
 ```c++
-// barrier::phase — writer side
-namespace phase {
-    uint32_t done;                                  // local counter
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (same address BRISC reads)
+namespace group {
+    namespace seg_0 { ... }                         // spinwait template per segment
+    void sync() {
+        if (done == 1) {
+            seg_0::sync();                          // wait for cross-core barrier
+            resync_cbs(phase_0_cbs);                // TRISC0: sync tiles_acked via reg_read
+                                                    // TRISC2: sync tiles_received via reg_read
+            rebind_cbs(rebind_slots_1, offset);     // update L1 addresses for sharded CBs
+        }
+    }
+}
+```
 
-    void wait() {
+**Writer (NCRISC)** — same structure as compute, but drains NOC writes
+before signaling `writer_done`:
+
+```c++
+namespace local {
+    void sync() {
         done++;
         noc_async_write_barrier();                  // drain outstanding writes first
         *writer_done = done;                        // signal BRISC
-    }
-
-    void reset() {
-        segment_N::sync();                          // wait for cross-core barrier
-        resync_cbs(phase_K_cbs);                    // reset FIFO pointers to CB start
-        rebind_cbs(rebind_slots_K, offset);         // update L1 addresses for sharded CBs
+        while (*reset_done < done) {}               // wait for BRISC to finish reset
     }
 }
 ```
+
+**Top-level `barrier::sync()`** — called from the dispatcher between phases:
+
+```c++
+void sync() { local::sync(); group::sync(); }
+```
+
+The `reset_done` semaphore is critical for correctness: without it, a fast
+follower can start the next phase's NOC multicast while a slow core's BRISC
+hasn't finished resetting op semaphores, clobbering in-flight
+`noc_semaphore_inc` operations.
 
 ### Cross-Core NOC Barrier
 
@@ -1359,17 +1392,24 @@ runtime args because they depend on tensor allocation.
 Every RISC that accesses CB memory must rebind — each maintains its own local
 copy of the CB interface. Rebinding always runs **last** in the reset sequence,
 after CB state reset/resync, so it overwrites the pointers that reset just
-set to the old CB start. The per-RISC ordering within `barrier::phase::reset()`
-is:
+set to the old CB start. The per-RISC ordering across `barrier::local::sync()`
+and `barrier::group::sync()` is:
 
-| Step | BRISC (coordinator) | Compute / Writer (followers) |
-|------|--------------------|-----------------------------|
-| 1 | `reset_cbs()` — equalize stream registers, reset FIFO ptrs | `segment_N::sync()` — wait for cross-core barrier |
-| 2 | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address | `resync_cbs()` — sync local copies from stream registers |
-| 3 | `segment_N::sync()` — cross-core barrier | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address |
+| Step | BRISC `local::sync()` | Follower `local::sync()` |
+|------|-----------------------|--------------------------|
+| 1 | `reset_cbs()` — equalize stream registers, reset FIFO ptrs | signal `*done_signal = done` |
+| 2 | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address | wait `*reset_done >= done` |
+| 3 | `*reset_done = done` — signal followers | *(proceed to `group::sync()`)* |
 
-BRISC prepares everything (reset + rebind) before signaling the barrier.
-Followers wait for the barrier, resync their local CB state, then rebind.
+| Step | BRISC `group::sync()` | Follower `group::sync()` |
+|------|-----------------------|--------------------------|
+| 1 | `seg_N::sync()` — cross-core barrier | `seg_N::sync()` — wait for cross-core barrier |
+| 2 | *(done)* | `resync_cbs()` — sync local copies from stream registers |
+| 3 | *(done)* | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address |
+
+BRISC prepares everything (reset + rebind) in `local::sync()` before signaling
+`reset_done`. Followers wait for `reset_done`, then cross-core sync in
+`group::sync()`, resync their local CB state, and rebind.
 On compute, rebinding is guarded by `#ifndef TRISC_MATH` — only TRISC0
 (unpack) and TRISC2 (pack) access CB memory; TRISC1 (math) does not.
 
@@ -1667,16 +1707,14 @@ void kernel_main() {
         DeviceZoneScopedN("LayerNorm");
         phase_0::run();
     }
-    barrier::phase::wait();
-    barrier::phase::reset();
+    barrier::sync();
 
     // Phase 1: Slice
     {
         DeviceZoneScopedN("Slice");
         phase_1::run();
     }
-    barrier::phase::wait();
-    barrier::phase::reset();
+    barrier::sync();
 
     // Phase 2: Matmul
     {
@@ -1716,11 +1754,23 @@ __attribute__((noinline)) void rebind_cbs(
 constexpr std::array<uint32_t, 3> phase_0_cbs = {0, 1, 4};
 constexpr std::array<uint32_t, 2> phase_1_cbs = {2, 4};
 
-// Per-segment namespaces (cross-core sync)
-namespace segment_0 { ... }
+// State variables (done counter, semaphore pointers)
+uint32_t done;
+volatile tt_l1_ptr uint32_t* compute_done;  // BRISC + compute
+volatile tt_l1_ptr uint32_t* writer_done;   // BRISC + writer
+volatile tt_l1_ptr uint32_t* reset_done;    // all RISCs
 
-// Phase namespace (wait + reset state machine)
-namespace phase { ... }
+// namespace local { void sync(); }   — per-core phase sync
+namespace local { ... }
+
+// namespace group { seg namespaces + void sync(); }  — cross-core segment sync
+namespace group {
+    namespace seg_0 { ... }
+    void sync() { ... }
+}
+
+// Top-level sync: local + group
+void sync() { local::sync(); group::sync(); }
 
 // init() — reads semaphore addresses from RT args, resets state
 void init();
@@ -1728,7 +1778,7 @@ void init();
 } // namespace barrier
 ```
 
-The barrier body — CB reset/resync, segment sync, phase wait/reset — is
+The barrier body — CB reset/resync, segment sync, local/group sync — is
 described in the **Circular Buffer Management** and **Synchronization
 Protocol** sections. The code generation details specific to the barrier
 namespace are:
@@ -1775,12 +1825,13 @@ runs independently for each RISC type:
                          namespace { source } → #undef all.
 
 7. Emit barrier          _generate_barrier_namespace(): CB reset/resync,
-                         per-phase CB arrays, segment namespaces, phase
-                         wait/reset, init.
+                         per-phase CB arrays, state vars, local::sync(),
+                         group { seg namespaces + sync() }, top-level sync(),
+                         init.
 
 8. Emit dispatcher       kernel_main(): barrier::init(), then for each phase:
                          phase_N::run() with DeviceZoneScopedN profiling,
-                         followed by barrier::phase::wait() + reset().
+                         followed by barrier::sync().
 ```
 
 
