@@ -43,6 +43,7 @@ void kernel_main() {
     // ========== CB indices ==========
     constexpr uint32_t cb_input = 0;
     constexpr uint32_t cb_scaler = 1;
+    constexpr uint32_t cb_eps = 2;
 
     // ========== Setup TensorAccessor ==========
     const uint32_t input_page_size = get_tile_size(cb_input);
@@ -55,6 +56,18 @@ void kernel_main() {
     // For mean: scaler = 1/W = 1/(Wt * 32)
     const float W_float = static_cast<float>(Wt * 32);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(1.0f / W_float);
+
+    // ========== Fill epsilon CB ==========
+    // Reinterpret packed float32 bits as a float, then use prepare_reduce_scaler
+    // which zeroes the tile and fills row 0 of all faces with the value.
+    // This produces a properly zeroed tile suitable for add_tiles_bcast_scalar
+    // (which reads [0,0] and broadcasts to all positions).
+    union {
+        uint32_t u;
+        float f;
+    } eps_conv;
+    eps_conv.u = eps_u32;
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(eps_conv.f);
 
     // ========== Read input tiles row by row ==========
     uint32_t tile_id = start_tile_id;
