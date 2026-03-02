@@ -164,8 +164,8 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
         MAX_FACE_C_DIM,
-        (num_faces < MAX_NUM_FACES_R_DIM) ? static_cast<uint8_t>(num_faces) : MAX_NUM_FACES_R_DIM,
-        (num_faces == MAX_NUM_FACES) ? MAX_NUM_FACES_C_DIM : static_cast<uint8_t>(1)};
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(1) : MAX_NUM_FACES_R_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, tensor_shape)));
 }
