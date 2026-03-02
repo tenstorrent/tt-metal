@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 // =============================================================================
 // Per-RISC includes
@@ -398,10 +399,8 @@ struct SdpaReduceWorker {
     template <
         uint32_t cbLocalL,
         uint32_t cbLocalMs,
-        uint32_t cbR1NeighborL,
-        uint32_t cbR1NeighborMs,
-        uint32_t cbR2NeighborL,
-        uint32_t cbR2NeighborMs,
+        uint32_t cbNeighborL,
+        uint32_t cbNeighborMs,
         uint32_t msTileSizeBytes,
         uint32_t lChunkSizeBytes,
         uint32_t numLChunks,
@@ -411,10 +410,8 @@ struct SdpaReduceWorker {
     struct ReaderCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_r1_neighbor_l = cbR1NeighborL;
-        static constexpr uint32_t cb_r1_neighbor_ms = cbR1NeighborMs;
-        static constexpr uint32_t cb_r2_neighbor_l = cbR2NeighborL;
-        static constexpr uint32_t cb_r2_neighbor_ms = cbR2NeighborMs;
+        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
         static constexpr uint32_t ms_tile_size_bytes = msTileSizeBytes;
         static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
         static constexpr uint32_t num_l_chunks = numLChunks;
@@ -479,14 +476,11 @@ struct SdpaReduceWorker {
     template <
         uint32_t cbLocalL,
         uint32_t cbLocalMs,
-        uint32_t cbR1NeighborL,
-        uint32_t cbR1NeighborMs,
+        uint32_t cbNeighborL,
+        uint32_t cbNeighborMs,
         uint32_t cbR1ResultL,
         uint32_t cbR1ResultMs,
-        uint32_t cbR2NeighborL,
-        uint32_t cbR2NeighborMs,
         uint32_t cbLOut,
-        uint32_t cbMsOut,
         uint32_t scaleFp32,
         uint32_t tilesPerLChunk,
         uint32_t numLChunks,
@@ -496,14 +490,11 @@ struct SdpaReduceWorker {
     struct ComputeCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_r1_neighbor_l = cbR1NeighborL;
-        static constexpr uint32_t cb_r1_neighbor_ms = cbR1NeighborMs;
+        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
         static constexpr uint32_t cb_r1_result_l = cbR1ResultL;
         static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
-        static constexpr uint32_t cb_r2_neighbor_l = cbR2NeighborL;
-        static constexpr uint32_t cb_r2_neighbor_ms = cbR2NeighborMs;
         static constexpr uint32_t cb_l_out = cbLOut;
-        static constexpr uint32_t cb_ms_out = cbMsOut;
         static constexpr uint32_t scale_fp32 = scaleFp32;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
         static constexpr uint32_t num_l_chunks = numLChunks;
@@ -579,15 +570,15 @@ struct SdpaReduceWorker {
         // ==================================================================
         FORCE_INLINE void prepare_ms_for_compute(
             uint32_t cb_ms, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t recv_buffer_addr) {
+            // The pointer doesn't matter for NCRISC, just need to reserve and push
             cb_reserve_back(cb_ms, 1);
             noc_semaphore_wait_min(sem_ptr, CTArgs::MS_SEM_THRESHOLD);
-            tt_memmove<true, false, false, 0>(
-                get_write_ptr(cb_ms), recv_buffer_addr + CTArgs::total_l_bytes, CTArgs::ms_tile_size_bytes);
             cb_push_back(cb_ms, 1);
         }
 
         FORCE_INLINE void prepare_l_chunk_for_compute(
             uint32_t cb_l, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t l_chunk_idx) {
+            // The pointer doesn't matter for NCRISC, just need to reserve and push
             cb_reserve_back(cb_l, CTArgs::tiles_per_l_chunk);
             noc_semaphore_wait_min(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + l_chunk_idx);
             cb_push_back(cb_l, CTArgs::tiles_per_l_chunk);
@@ -632,29 +623,23 @@ struct SdpaReduceWorker {
             // Prepare R1 neighbor data for compute
             if (r1_neighbor_valid) {
                 prepare_data_for_compute(
-                    CTArgs::cb_r1_neighbor_l,
-                    CTArgs::cb_r1_neighbor_ms,
-                    args.r1_neighbor_sem_addr,
-                    args.r1_recv_buffer_addr);
+                    CTArgs::cb_neighbor_l, CTArgs::cb_neighbor_ms, args.r1_neighbor_sem_addr, args.r1_recv_buffer_addr);
             } else {
-                cb_reserve_back(CTArgs::cb_r1_neighbor_ms, 1);
-                cb_push_back(CTArgs::cb_r1_neighbor_ms, 1);
-                cb_reserve_back(CTArgs::cb_r1_neighbor_l, CTArgs::out_tiles);
-                cb_push_back(CTArgs::cb_r1_neighbor_l, CTArgs::out_tiles);
+                cb_reserve_back(CTArgs::cb_neighbor_ms, 1);
+                cb_push_back(CTArgs::cb_neighbor_ms, 1);
+                cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
+                cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
             }
 
             // Prepare R2 neighbor data for compute
             if (r2_neighbor_r1_valid) {
                 prepare_data_for_compute(
-                    CTArgs::cb_r2_neighbor_l,
-                    CTArgs::cb_r2_neighbor_ms,
-                    args.r2_neighbor_sem_addr,
-                    args.r2_recv_buffer_addr);
+                    CTArgs::cb_neighbor_l, CTArgs::cb_neighbor_ms, args.r2_neighbor_sem_addr, args.r2_recv_buffer_addr);
             } else {
-                cb_reserve_back(CTArgs::cb_r2_neighbor_ms, 1);
-                cb_push_back(CTArgs::cb_r2_neighbor_ms, 1);
-                cb_reserve_back(CTArgs::cb_r2_neighbor_l, CTArgs::out_tiles);
-                cb_push_back(CTArgs::cb_r2_neighbor_l, CTArgs::out_tiles);
+                cb_reserve_back(CTArgs::cb_neighbor_ms, 1);
+                cb_push_back(CTArgs::cb_neighbor_ms, 1);
+                cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
+                cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
             }
         }
 #endif  // COMPILE_FOR_NCRISC
@@ -785,6 +770,23 @@ struct SdpaReduceWorker {
                 r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
                                     (position_id >= r2_neighbor_r1_neighbor_idx * chunk);
             }
+            UNPACK(DPRINT << (uint32_t)local_valid << ENDL());
+            UNPACK(DPRINT << (uint32_t)r1_neighbor_valid << ENDL());
+            UNPACK(DPRINT << (uint32_t)r2_neighbor_valid << ENDL());
+
+            uint32_t neighbor_cb_base_rd_ptr = 0;
+            uint32_t neighbor_cb_page_size = 0;
+            UNPACK(({
+                neighbor_cb_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_l);
+                neighbor_cb_page_size = unified_kernels::get_local_cb_page_size(CTArgs::cb_neighbor_l);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr + 0 * neighbor_cb_page_size);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_ms,
+                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size) * neighbor_cb_page_size);
+                DPRINT << (uint32_t)unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_l) << ENDL();
+                DPRINT << (uint32_t)unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_ms) << ENDL();
+            }));
 
             // ROUND 1: reduce(local, r1_neighbor) -> r1_result (unnormalized)
             sdpa_tail_streaming_conditional<
@@ -795,10 +797,10 @@ struct SdpaReduceWorker {
                 CTArgs::scale_fp32,
                 CTArgs::num_l_chunks,
                 vector_mode>(
-                CTArgs::cb_r1_neighbor_ms,
+                CTArgs::cb_neighbor_ms,
                 CTArgs::cb_local_ms,
                 CTArgs::cb_r1_result_ms,
-                CTArgs::cb_r1_neighbor_l,
+                CTArgs::cb_neighbor_l,
                 CTArgs::cb_local_l,
                 CTArgs::cb_r1_result_l,
                 r1_neighbor_valid,
@@ -809,8 +811,21 @@ struct SdpaReduceWorker {
             // cb_local_ms: BRISC reads via send_all() (L1 address, no cb_wait/pop)
             // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
             // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
-            cb_pop_front(CTArgs::cb_r1_neighbor_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_ms, 1);
             cb_pop_front(CTArgs::cb_local_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+
+            UNPACK(({
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_l,
+                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                unified_kernels::update_local_cb_rd_ptr(
+                    CTArgs::cb_neighbor_ms,
+                    neighbor_cb_base_rd_ptr +
+                        (2 * CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                DPRINT << (uint32_t)unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_l) << ENDL();
+                DPRINT << (uint32_t)unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_ms) << ENDL();
+            }));
 
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
             bool local_r1_valid = local_valid || r1_neighbor_valid;
@@ -826,10 +841,10 @@ struct SdpaReduceWorker {
                 CTArgs::scale_fp32,
                 CTArgs::num_l_chunks,
                 vector_mode>(
-                CTArgs::cb_r2_neighbor_ms,
+                CTArgs::cb_neighbor_ms,
                 CTArgs::cb_r1_result_ms,
-                CTArgs::cb_ms_out,
-                CTArgs::cb_r2_neighbor_l,
+                0,  // sdpa tail does not output MS when normalizing
+                CTArgs::cb_neighbor_l,
                 CTArgs::cb_r1_result_l,
                 CTArgs::cb_l_out,
                 r2_neighbor_r1_valid,
@@ -838,7 +853,12 @@ struct SdpaReduceWorker {
             // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
             // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
             // after send_streaming() reads it for R2 forwarding.
-            cb_pop_front(CTArgs::cb_r2_neighbor_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_ms, 1);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            UNPACK(({
+                unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr);
+                unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr);
+            }));
         }
 #endif  // COMPILE_FOR_TRISC
     };

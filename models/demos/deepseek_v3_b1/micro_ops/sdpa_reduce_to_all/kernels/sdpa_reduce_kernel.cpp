@@ -35,20 +35,14 @@ void kernel_main() {
         using ReaderCTArgs = Worker::ReaderCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("ms_tile_size_bytes"),
             get_named_compile_time_arg_val("l_chunk_size_bytes"),
             get_named_compile_time_arg_val("num_l_chunks"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size")>;
-
-        // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         uint32_t per_core_rta_arg_idx = 0;
         Worker::ReaderArgs reader_args{
@@ -57,7 +51,7 @@ void kernel_main() {
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
+        Worker::Op<ReaderCTArgs> op;
         op(reader_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
@@ -85,9 +79,6 @@ void kernel_main() {
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
-        // Dummy ReaderCT and ComputeCT - not used by BRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using WriterCTArgs = Worker::WriterCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
@@ -108,8 +99,6 @@ void kernel_main() {
             get_named_compile_time_arg_val("scatter_face_size"),
             get_named_compile_time_arg_val("scatter_row_face_size"),
             get_named_compile_time_arg_val("scatter_num_rows")>;
-
-        using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         uint32_t per_core_rta_arg_idx = 0;
         Worker::WriterArgs writer_args{
@@ -136,7 +125,7 @@ void kernel_main() {
             // scatter_arrival_enabled=0, so this is not used
             .scatter_arrival_sem_addr = 0,
         };
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
+        Worker::Op<WriterCTArgs> op;
         op(writer_args);
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
@@ -164,21 +153,14 @@ void kernel_main() {
     if constexpr (is_worker) {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
-        // Dummy ReaderCT and WriterCT - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using ComputeCTArgs = Worker::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
             get_named_compile_time_arg_val("cb_local_ms"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r1_neighbor_ms"),
+            get_named_compile_time_arg_val("cb_neighbor_l"),
+            get_named_compile_time_arg_val("cb_neighbor_ms"),
             get_named_compile_time_arg_val("cb_r1_result_l"),
             get_named_compile_time_arg_val("cb_r1_result_ms"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_l"),
-            get_named_compile_time_arg_val("cb_r2_neighbor_ms"),
             get_named_compile_time_arg_val("cb_l_out"),
-            get_named_compile_time_arg_val("cb_ms_out"),
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
@@ -190,7 +172,7 @@ void kernel_main() {
         deepseek_compute_kernel_init();
 
         Worker::ComputeArgs compute_args{};
-        Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> op;
+        Worker::Op<ComputeCTArgs> op;
         op(compute_args);
     }
     // else: forwarder TRISC is no-op
