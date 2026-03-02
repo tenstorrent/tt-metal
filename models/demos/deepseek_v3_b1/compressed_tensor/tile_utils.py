@@ -218,7 +218,7 @@ def pack_bfp_tile(tile: np.ndarray, mant_bits: int) -> np.ndarray:
         DEFAULT_TILE_HW,
     ), f"Expected ({DEFAULT_TILE_HW}, {DEFAULT_TILE_HW}), got {tile.shape}"
     pack_fn = _PACK_FN[mant_bits]
-    packed_u32 = np.asarray(pack_fn(tile.astype(np.float32).ravel()))
+    packed_u32 = np.asarray(pack_fn(tile.astype(np.float32).ravel(), row_major_input=True))
     return packed_u32.view(np.uint8)
 
 
@@ -226,7 +226,7 @@ def unpack_bfp_tile(packed: np.ndarray, mant_bits: int) -> np.ndarray:
     """Unpack raw BFP bytes back to a tile via C++ SIMD unpack."""
     unpack_fn = _UNPACK_FN[mant_bits]
     packed_u32 = packed.view(np.uint32)
-    unpacked = np.asarray(unpack_fn(packed_u32))
+    unpacked = np.asarray(unpack_fn(packed_u32, row_major_output=True))
     return unpacked.reshape(DEFAULT_TILE_HW, DEFAULT_TILE_HW)
 
 
