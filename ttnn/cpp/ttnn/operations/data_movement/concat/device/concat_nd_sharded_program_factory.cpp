@@ -159,6 +159,10 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
 
         uint32_t dim_pages{0};  // how many pages I need to write from every Tensor, sequentially
         uint32_t num_output_pages_per_block_total = 0;
+        uint32_t per_tensor_to_write =
+            num_output_pages_per_block_total * input_page_sizes[0];  // bytes to write from tensor
+        uint32_t per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
+
         std::vector<uint32_t> runtime_args;
         uint32_t scale_factor = 1;
 
@@ -190,31 +194,40 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
             dim_pages = input_t0.padded_shape()[dim] / scale_factor;
 
             num_output_pages_per_block_total += num_accum_pages * dim_pages;
+
+            per_tensor_to_write = num_output_pages_per_block_total * input_page_sizes[0];
+            per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
         };
 
         auto fill_for_raw_major_layout = [&]() {
-            std::cout << " --> Raw Major layout ";
+            std::cout << " --> Raw Major layout\n";
 
-            uint32_t num_accum_pages = 1;
-            for (uint32_t i = dim + 1; i < num_dims; ++i) {
-                num_accum_pages *= output.padded_shape()[i];
-                std::cout << "num_acum_pages at " << i << ": " << num_accum_pages;
+            std::cout << "dim " << dim << "\n";
+            // In RAW_MAJOR layout one page = one row (last dimension).
+            // num_output_pages_per_block_total = number of output pages for one input's block
+            // (i.e. the slice of the concatenated output that comes from a single input tensor).
+            for (uint32_t i = 0; i < num_dims; ++i) {
+                std::cout << " In pages at dimention " << i << ": " << input_t0.padded_shape()[i] << "\n";
+                std::cout << " Out pages at  dimention " << i << ": " << output.padded_shape()[i] << "\n";
             }
             std::cout << "\n";
 
-            if (num_dims > 1 && dim < num_dims - 1) {
-                num_accum_pages /= output.padded_shape()[-1];
-            }
-            std::cout << "result acum_pages: " << num_accum_pages << "\n";
+            num_output_pages_per_block_total = 1;
+            per_tensor_to_write = input_t0.element_size() * input_t0.padded_shape().volume();
+            per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
+            // just write everything sequentially
 
-            dim_pages = input_t0.padded_shape()[dim];
-            std::cout << "pages for dimention " << dim << "(input T 0): " << dim_pages << "\n";
-
-            if (dim == num_dims - 1) {
-                num_output_pages_per_block_total = 1;
-            } else {
-                num_output_pages_per_block_total += num_accum_pages * dim_pages;
+            // for 0 == dim - just write everything sequentially
+            // for other dimentions - by portions
+            for (uint32_t sub_dim = 0; sub_dim < dim; ++sub_dim) {
+                per_tensor_to_write /= input_t0.padded_shape()[sub_dim];
             }
+            per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
+            std::cout << " to write on dim " << dim << ":  " << per_tensor_to_write << "\n";
+            // num_output_pages_per_block_total = 64 * 4;
+            // per_tensor_to_write = num_output_pages_per_block_total * input_page_sizes[0]; // bytes to write from
+            // tensor per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
+            return;
         };
 
         if (rm_layout) {
@@ -228,8 +241,6 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
         runtime_args.push_back(scratch_l1_addr);
         runtime_args.push_back(output.buffer()->address());
 
-        const uint32_t per_tensor_to_write = num_output_pages_per_block_total * input_page_sizes[0];
-        const uint32_t per_tensor_to_skip = per_tensor_to_write * (num_input_tensors - 1);
         std::cout << "per tensor write " << per_tensor_to_write << "  per tensor to skip " << per_tensor_to_skip
                   << "\n";
 

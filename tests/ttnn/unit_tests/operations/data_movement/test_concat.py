@@ -361,21 +361,42 @@ def test_concat_1d(device, layout, dim, input_shapes):
 @pytest.mark.parametrize(
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
+        # simplest
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 64, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [1, 64, 96], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [2, 64, 96], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [2, 128, 96], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [3, 128, 96], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [2, 64, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         #
+        (7, [2, 256, 96], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         #
         # 2 tensors - basic ND sharding concat
         (2, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        (2, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        #        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on 1 dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on 2 dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (2, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
         # 3 tensors - ND sharding concat
         (3, [5, 192, 224], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
         (3, [5, 192, 224], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat on batch dim         # +
-        #        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
+        (3, [5, 192, 224], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # concat on batch dim         # +
         # 4 tensors - ND sharding concat
         (4, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 4 tensors on batch  # -
         (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
         (4, [1, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 4 tensors on width
-        #                (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),    # RM concat 4 tensors on batch
+        (4, [1, 64, 64], [1, 32, 32], 0, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
+        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
+        (4, [1, 64, 64], [1, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # RM concat 4 tensors on batch
+        # 5 tensors - ND sharding concat
+        (5, [2, 64, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 5 tensors on batch  # -
+        (5, [1, 64, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 5 tensors on height
+        (5, [1, 64, 64, 64], [1, 32, 32], 2, ttnn.TILE_LAYOUT),  # concat 5 tensors on width
+        (5, [1, 64, 64, 64], [1, 32, 32], 3, ttnn.TILE_LAYOUT),  # concat 5 tensors on ...
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
@@ -450,6 +471,20 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
 
     # Convert back to torch and compare
     actual_output = ttnn.to_torch(ttnn_output)
+    # Set print options to show all tensor data
+    # torch.set_printoptions(profile="full")
+    # ttnn.set_printoptions(profile="full")
+
+    # # Now printing the tensor will show all elements
+    # print("Normal")
+    # print(torch_output)
+    # print("First")
+    # print(ttnn_tensors[0])
+    # print("My")
+    # print(actual_output)
+    # print("-----")
+    # ttnn.set_printoptions(profile="default")
+    # torch.set_printoptions(profile="default")
 
     assert_with_pcc(torch_output, actual_output, 0.999)
 
