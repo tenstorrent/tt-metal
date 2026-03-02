@@ -10,7 +10,7 @@
 
 namespace ttnn::prim {
 
-struct TilizeWithValPaddingMultiCoreInterleavedFactory {
+struct TilizeWithValPaddingMultiCoreDefaultFactory {
     using shared_variables_t = shared_variables_interleaved;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
