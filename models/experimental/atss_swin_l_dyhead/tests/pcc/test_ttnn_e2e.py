@@ -25,6 +25,7 @@ import ttnn
 
 from loguru import logger
 from models.common.utility_functions import comp_pcc
+import tracy
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -65,6 +66,7 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tracy.signpost("start")
     ttnn_backbone_feats = ttnn_model.backbone(x_on_device)
 
     assert len(ref_backbone_feats) == len(ttnn_backbone_feats) == 3
@@ -116,6 +118,7 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
         ref_cls, ref_reg, ref_cent = atss_ref_model.head(tuple(ref_dy_feats))
 
     ttnn_cls, ttnn_reg, ttnn_cent = ttnn_model.forward_head(ttnn_dy_feats)
+    tracy.signpost("stop")
     ttnn_cls_rp = []
     ttnn_reg_rp = []
     ttnn_cent_rp = []

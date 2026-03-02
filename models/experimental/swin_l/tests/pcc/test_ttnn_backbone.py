@@ -9,7 +9,7 @@ This is a standalone, reusable Swin-L backbone test — anyone wanting to
 verify the TTNN Swin-L implementation can run this.
 
 Run with:
-  export PYTHONPATH=$TT_METAL_HOME:$HOME/.local/lib/python3.10/site-packages
+  export PYTHONPATH=/home/ubuntu/tt-metal:$HOME/.local/lib/python3.10/site-packages
   pytest models/experimental/swin_l/tests/pcc/test_ttnn_backbone.py -v
 """
 

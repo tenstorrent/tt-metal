@@ -546,17 +546,32 @@ def _enrich_ops_from_perf_csv(
                 host_trace_id = None
 
             candidates = perf_rows_by_key.get((op_id, host_trace_id))
-            if not candidates:
-                # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
-                candidates = []
-                for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
-                    if cand_op_id == op_id:
-                        candidates.extend(rows)
+            # if not candidates:
+            #     # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
+            #     candidates = []
+            #     for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
+            #         if cand_op_id == op_id:
+            #             candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            # assert candidates, (
+            #     f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+            #     f"for device {device_id} (trace_id={host_trace_id})"
+            # )
+            if not candidates:
+                # Host op has no device perf row (e.g. model op count exceeds profiler limit or DRAM capacity).
+                # Add op without device data so report generation can continue; downstream handles missing _device_perf_row.
+                logger.warning(
+                    "Device data missing: Op %s not present in %s for device %s (trace_id=%s); "
+                    "op will appear in report without device metrics.",
+                    op_id,
+                    PROFILER_CPP_DEVICE_PERF_REPORT,
+                    device_id,
+                    host_trace_id,
+                )
+                enriched_op = copy.deepcopy(host_op)
+                enriched_op["_device_perf_row"] = None
+                enriched_ops.append(enriched_op)
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
