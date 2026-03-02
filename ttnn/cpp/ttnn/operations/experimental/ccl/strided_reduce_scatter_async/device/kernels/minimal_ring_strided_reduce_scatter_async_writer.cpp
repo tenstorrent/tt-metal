@@ -52,7 +52,7 @@ constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
 
-constexpr uint32_t num_ct_args = 29;
+constexpr uint32_t num_ct_args = 28;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
