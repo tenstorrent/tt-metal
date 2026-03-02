@@ -597,13 +597,13 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
-#if defined(WATCHER_ENABLED)
-    // Memory fence to ensure NOC command buffer register writes are visible
-    // before subsequent sanitize reads in noc_async_read_one_packet_with_state.
-    // Without this fence, the sanitize can observe stale register values under
-    // certain timing conditions, causing spurious invalid coordinate errors.
-    asm volatile("fence" : : : "memory");
-#endif
+    // #if defined(WATCHER_ENABLED)
+    //     // Memory fence to ensure NOC command buffer register writes are visible
+    //     // before subsequent sanitize reads in noc_async_read_one_packet_with_state.
+    //     // Without this fence, the sanitize can observe stale register values under
+    //     // certain timing conditions, causing spurious invalid coordinate errors.
+    //     asm volatile("fence" : : : "memory");
+    // #endif
     WAYPOINT("NASD");
 }
 
