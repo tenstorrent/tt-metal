@@ -89,14 +89,14 @@ def test_vision_backbone_encode_only(device):
 
     This tests the ViT encoder and multi-scale feature extraction.
     """
+    from models.demos.molmo2.demo.demo import load_model_weights
     from models.demos.molmo2.tt.vision_backbone import VisionBackbone
 
-    model_id = "allenai/Molmo2-8B"
     hidden_dim = 1152
     num_patches = 729  # 27x27 for 378x378 image with patch_size=14
 
-    # Load weights
-    state_dict = get_vision_backbone_weights(model_id)
+    # Load weights using the demo's weight loading function
+    state_dict = load_model_weights()
 
     # Create TTNN backbone
     tt_backbone = VisionBackbone(

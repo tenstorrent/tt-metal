@@ -210,7 +210,9 @@ def test_embedding_pcc():
             0
         ].squeeze(0)
 
-        pcc, status = calculate_pcc(ref_hidden, ttnn_embed_torch)
+        # Squeeze ref_hidden to match ttnn_embed_torch shape
+        ref_hidden_squeezed = ref_hidden.squeeze(0)
+        pcc, status = calculate_pcc(ref_hidden_squeezed, ttnn_embed_torch)
         logger.info(f"Embedding PCC: {pcc:.6f} ({status})")
         assert pcc > 0.99, f"Embedding PCC {pcc} < 0.99"
 
@@ -289,12 +291,14 @@ def test_single_block_pcc():
             0
         )
 
-        pcc, status = calculate_pcc(ref_block_out, ttnn_out_torch)
+        # Squeeze ref_block_out to match ttnn_out_torch shape (remove batch dim)
+        ref_block_out_squeezed = ref_block_out.squeeze(0)
+        pcc, status = calculate_pcc(ref_block_out_squeezed, ttnn_out_torch)
         logger.info(f"Block 0 PCC: {pcc:.6f} ({status})")
 
         # Check top-k match at last position for generation relevance
-        ref_last = ref_block_out[0, -1, :]
-        ttnn_last = ttnn_out_torch[0, -1, :]
+        ref_last = ref_block_out_squeezed[-1, :]
+        ttnn_last = ttnn_out_torch[-1, :]
         last_pcc, _ = calculate_pcc(ref_last, ttnn_last)
         logger.info(f"Block 0 last position PCC: {last_pcc:.6f}")
 

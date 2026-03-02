@@ -121,19 +121,23 @@ class VisionBlock(LightweightModule):
 
         Returns:
             Output tensor of shape [1, 1, seq_len, hidden_dim]
+
+        Note: Does NOT deallocate the input tensor to allow multi-scale feature
+        extraction (hidden states from multiple layers are needed).
+        Following tt_transformers' pattern for traceable ViT.
         """
         # Pre-norm attention with residual
-        residual = x
-        x = self.attention_norm(x)
-        x = self.attention(x)
-        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(residual)
+        # Note: We don't deallocate input x - caller manages lifetime
+        attn_out = self.attention_norm(x)
+        attn_out = self.attention(attn_out)
+        res = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
 
         # Pre-norm MLP with residual
-        residual = x
-        x = self.ffn_norm(x)
-        x = self.feed_forward(x)
-        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(residual)
+        mlp_out = self.ffn_norm(res)
+        mlp_out = self.feed_forward(mlp_out)
+        out = ttnn.add(res, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(res)
 
-        return x
+        return out

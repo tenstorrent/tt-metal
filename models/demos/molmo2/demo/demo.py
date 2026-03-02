@@ -441,6 +441,11 @@ class Molmo2Generator:
         self.decode_trace_tensors = None
         self.decode_trace_output = None
 
+        # Vision trace state (ViT encoder)
+        self.vision_trace_id = None
+        self.vision_trace_tensors = None
+        self.vision_trace_outputs = None  # [feature_layer_18, feature_layer_24]
+
         # KV cache (initialized on first run)
         self.kv_caches = None
         self.current_pos = None
@@ -540,6 +545,300 @@ class Molmo2Generator:
 
         return hidden_states_ttnn, hidden_states_torch
 
+    def _prepare_vision_inputs_for_trace(
+        self,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+    ) -> dict:
+        """
+        Prepare vision inputs for traced execution.
+
+        Converts all inputs to TTNN tensors so the forward can be fully traced.
+
+        Args:
+            pixel_values: Raw pixel values [B, C, H, W]
+            pooled_patches_idx: Patch indices [B, N_out, K_pool]
+
+        Returns:
+            Dict with TTNN tensors and metadata for traced forward
+        """
+        batch_size = pooled_patches_idx.shape[0]
+        n_out = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
+
+        # 1. Patch embedding and positional embedding (CPU) - done before trace
+        vit = self.model.vision_backbone.image_vit
+        embedded = vit.patch_embed_cpu(pixel_values)  # [B, num_patches, hidden_dim]
+        pos_embed = vit.positional_embedding_torch
+        embedded = embedded + pos_embed.unsqueeze(0)
+        embedded = embedded.reshape(1, 1, -1, vit.hidden_dim)  # [1, 1, B*N, hidden_dim]
+
+        # 2. Prepare indices for TTNN gather
+        # Identify valid indices (>= 0) and clip negative to 0
+        valid = pooled_patches_idx >= 0  # [B, N_out, K_pool]
+        valid_token = torch.any(valid, dim=-1)  # [B, N_out]
+        clipped_idx = torch.clip(pooled_patches_idx, min=0)
+
+        # Flatten indices for embedding lookup: [B, N_out, K_pool] -> [1, B*N_out*K_pool]
+        flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+
+        # Create valid mask: [1, 1, B*N_out*K_pool, 1]
+        valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+        # 3. Convert to TTNN tensors
+        embedded_ttnn = ttnn.from_torch(
+            embedded,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        idx_ttnn = ttnn.from_torch(
+            flat_idx,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        valid_mask_ttnn = ttnn.from_torch(
+            valid_mask,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        valid_token_ttnn = ttnn.from_torch(
+            valid_token.flatten(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        return {
+            "embedded": embedded_ttnn,
+            "idx": idx_ttnn,
+            "valid_mask": valid_mask_ttnn,
+            "valid_token": valid_token_ttnn,
+            "valid_token_torch": valid_token,  # Keep torch version for final filtering
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+        }
+
+    def _allocate_vision_trace_tensors(
+        self,
+        num_patches: int = 729,
+        hidden_dim: int = 1152,
+        n_out: int = 169,
+        k_pool: int = 4,
+        pool_dim: int = 2304,
+        batch_size: int = 1,
+    ) -> dict:
+        """Allocate tensors for vision trace."""
+        # Input: embedded patches
+        trace_embedded = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Indices for gathering
+        trace_idx = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, batch_size * n_out * k_pool]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Valid mask
+        trace_valid_mask = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * n_out * k_pool, 1]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Valid token mask
+        trace_valid_token = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batch_size * n_out]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return {
+            "embedded": trace_embedded,
+            "idx": trace_idx,
+            "valid_mask": trace_valid_mask,
+            "valid_token": trace_valid_token,
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+        }
+
+    def _capture_vision_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """Capture vision trace for ViT + pooling + projection."""
+        logger.info("Capturing vision trace...")
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        visual_embeddings = self.model.vision_backbone.forward_ttnn(
+            images_embedded=trace_tensors["embedded"],
+            pooled_patches_idx_ttnn=trace_tensors["idx"],
+            valid_mask_ttnn=trace_tensors["valid_mask"],
+            valid_token_ttnn=trace_tensors["valid_token"],
+            n_out=trace_tensors["n_out"],
+            k_pool=trace_tensors["k_pool"],
+            batch_size=trace_tensors["batch_size"],
+        )
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Vision trace captured")
+
+        return trace_id, visual_embeddings
+
+    def _execute_vision_trace(
+        self,
+        trace_id: int,
+        trace_tensors: dict,
+        trace_output: ttnn.Tensor,
+        vision_inputs: dict,
+    ) -> ttnn.Tensor:
+        """Execute vision trace with new inputs."""
+        # Copy new inputs to trace tensors
+        ttnn.copy(vision_inputs["embedded"], trace_tensors["embedded"])
+        ttnn.copy(vision_inputs["idx"], trace_tensors["idx"])
+        ttnn.copy(vision_inputs["valid_mask"], trace_tensors["valid_mask"])
+        ttnn.copy(vision_inputs["valid_token"], trace_tensors["valid_token"])
+
+        # Execute trace
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return trace_output
+
+    def _prepare_text_inputs_traced(
+        self,
+        input_ids: torch.Tensor,
+        visual_embeddings_ttnn: ttnn.Tensor,
+        valid_token_torch: torch.Tensor,
+    ) -> Tuple[ttnn.Tensor, torch.Tensor]:
+        """
+        Prepare text inputs using traced vision output.
+
+        Fuses visual embeddings with text embeddings entirely on device.
+        Uses matmul with selector matrix to avoid CPU roundtrip.
+        """
+        batch_size, seq_len = input_ids.shape
+        hidden_dim = 4096
+        image_patch_id = 151938  # Molmo2 image patch token ID
+
+        # 1. Get text embeddings on device
+        input_ids_ttnn = ttnn.from_torch(
+            input_ids,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        text_embeddings_ttnn = self.model.text_model.embed_tokens(input_ids_ttnn)
+        ttnn.deallocate(input_ids_ttnn)
+
+        # 2. Filter visual embeddings by valid tokens (on device using ttnn.embedding as gather)
+        # valid_token_torch is [n_out] boolean, visual_embeddings_ttnn is [1, 1, n_out, hidden_dim]
+        valid_indices = valid_token_torch.flatten().nonzero(as_tuple=True)[0].to(torch.int32)
+        num_valid = len(valid_indices)
+
+        if num_valid > 0:
+            # Use ttnn.embedding as gather to select valid visual embeddings
+            valid_indices_ttnn = ttnn.from_torch(
+                valid_indices.unsqueeze(0),  # [1, num_valid]
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
+
+            # Reshape visual embeddings for gather: [1, 1, n_out, hidden_dim] -> [n_out, hidden_dim]
+            visual_for_gather = ttnn.reshape(visual_embeddings_ttnn, [1, -1, hidden_dim])
+
+            # Gather valid embeddings: [1, num_valid, hidden_dim]
+            valid_visual_ttnn = ttnn.embedding(valid_indices_ttnn, visual_for_gather)
+            ttnn.deallocate(valid_indices_ttnn)
+
+            # Reshape to 4D for matmul: [1, num_valid, hidden_dim] -> [1, 1, num_valid, hidden_dim]
+            valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
+
+            # 3. Create selector matrix for fusion (CPU - just positions, very fast)
+            # S[seq_pos, visual_idx] = 1.0 where seq_pos should get visual_idx embedding
+            image_positions = (input_ids[0] == image_patch_id).nonzero(as_tuple=True)[0]
+
+            if len(image_positions) == num_valid:
+                # Create sparse selector matrix
+                selector = torch.zeros(seq_len, num_valid, dtype=torch.bfloat16)
+                for i, pos in enumerate(image_positions):
+                    selector[pos, i] = 1.0
+
+                # Transfer selector to device
+                selector_ttnn = ttnn.from_torch(
+                    selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+
+                # 4. Compute visual contribution: selector @ visual_embeddings
+                # [1, 1, seq_len, num_valid] @ [1, 1, num_valid, hidden_dim] -> [1, 1, seq_len, hidden_dim]
+                visual_contribution = ttnn.matmul(selector_ttnn, valid_visual_ttnn)
+                ttnn.deallocate(selector_ttnn)
+                ttnn.deallocate(valid_visual_ttnn)
+
+                # 5. Fuse: text_embeddings + visual_contribution (on device)
+                fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_contribution)
+                ttnn.deallocate(text_embeddings_ttnn)
+                ttnn.deallocate(visual_contribution)
+            else:
+                logger.warning(
+                    f"Position mismatch: {len(image_positions)} placeholders vs {num_valid} visual tokens. "
+                    "Falling back to text-only."
+                )
+                fused_ttnn = text_embeddings_ttnn
+        else:
+            # No visual tokens - just use text embeddings
+            fused_ttnn = text_embeddings_ttnn
+
+        # Get torch version for prefill trace (needed for host tensor pattern)
+        # Shape should be [1, 1, seq_len, hidden_dim]
+        if self.is_mesh_device:
+            fused_torch = ttnn.to_torch(
+                fused_ttnn,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            )[0].clone()
+        else:
+            fused_torch = ttnn.to_torch(fused_ttnn).clone()
+
+        # Ensure 4D shape [1, 1, seq_len, hidden_dim]
+        if fused_torch.dim() == 3:
+            fused_torch = fused_torch.unsqueeze(0)
+
+        return fused_ttnn, fused_torch
+
     def _allocate_prefill_trace_tensors(
         self,
         seq_len: int,
@@ -637,6 +936,439 @@ class Molmo2Generator:
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return trace_output
+
+    # =========================================================================
+    # UNIFIED VISION + PREFILL TRACE (on-device fusion)
+    # =========================================================================
+
+    def _allocate_unified_trace_tensors(
+        self,
+        seq_len: int,
+        num_visual_tokens: int,
+        num_patches: int = 729,
+        vit_hidden_dim: int = 1152,
+        hidden_dim: int = 4096,
+        n_out: int = 169,
+        k_pool: int = 4,
+        batch_size: int = 1,
+    ) -> dict:
+        """Allocate all tensors needed for unified vision + prefill trace."""
+        # Vision inputs
+        trace_embedded = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * num_patches, vit_hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trace_idx = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, batch_size * n_out * k_pool]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trace_valid_mask = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * n_out * k_pool, 1]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trace_valid_token = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batch_size * n_out]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Text embeddings (pre-computed, kept on device)
+        trace_text_embed = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, seq_len, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Selector matrix for matmul-based fusion [1, 1, seq_len, num_visual_tokens]
+        # Each row has a 1 at the column corresponding to which visual token goes there
+        trace_selector_matrix = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, seq_len, num_visual_tokens]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Rotation matrices for prefill
+        rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
+        trace_cos = ttnn.allocate_tensor_on_device(
+            rot_mats[0].shape,
+            rot_mats[0].dtype,
+            rot_mats[0].layout,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trace_sin = ttnn.allocate_tensor_on_device(
+            rot_mats[1].shape,
+            rot_mats[1].dtype,
+            rot_mats[1].layout,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(rot_mats[0], trace_cos)
+        ttnn.copy(rot_mats[1], trace_sin)
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+
+        return {
+            # Vision inputs
+            "embedded": trace_embedded,
+            "idx": trace_idx,
+            "valid_mask": trace_valid_mask,
+            "valid_token": trace_valid_token,
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+            # Fusion inputs
+            "text_embed": trace_text_embed,
+            "selector_matrix": trace_selector_matrix,
+            "num_visual_tokens": num_visual_tokens,
+            # Prefill inputs
+            "cos": trace_cos,
+            "sin": trace_sin,
+            "seq_len": seq_len,
+        }
+
+    def _capture_unified_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """
+        Capture unified trace for Vision + On-Device Fusion + Text Prefill.
+
+        This eliminates the CPU roundtrip between vision and prefill by keeping
+        everything on device and using matmul with selector matrix for fusion.
+        """
+        logger.info("Capturing unified vision + prefill trace...")
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        # Step 1: Vision backbone (ViT + pooling + projection)
+        visual_embeddings = self.model.vision_backbone.forward_ttnn(
+            images_embedded=trace_tensors["embedded"],
+            pooled_patches_idx_ttnn=trace_tensors["idx"],
+            valid_mask_ttnn=trace_tensors["valid_mask"],
+            valid_token_ttnn=trace_tensors["valid_token"],
+            n_out=trace_tensors["n_out"],
+            k_pool=trace_tensors["k_pool"],
+            batch_size=trace_tensors["batch_size"],
+        )
+        # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
+
+        # Step 2: On-device fusion using matmul with selector matrix
+        # selector_matrix: [seq_len, num_visual_tokens] - one-hot rows indicating placement
+        # visual_part = selector_matrix @ visual_embeddings => [seq_len, 4096]
+        # fused = text_embed + visual_part
+        seq_len = trace_tensors["seq_len"]
+        num_visual_tokens = trace_tensors["num_visual_tokens"]
+
+        # Reshape for matmul: [1, 1, num_visual_tokens, 4096] -> [1, 1, num_visual_tokens, 4096]
+        # selector is [1, 1, seq_len, num_visual_tokens]
+        visual_part = ttnn.matmul(
+            trace_tensors["selector_matrix"],
+            visual_embeddings,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # visual_part: [1, 1, seq_len, 4096]
+
+        # Add visual part to text embeddings
+        fused_embed = ttnn.add(
+            trace_tensors["text_embed"],
+            visual_part,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Step 3: Text model prefill
+        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+        logits, _ = self.model.text_model.forward(
+            hidden_states=fused_embed,
+            start_pos=0,
+            attn_mask=None,
+            kv_caches=self.kv_caches,
+            rot_mats=rot_mats,
+        )
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Unified vision + prefill trace captured")
+
+        return trace_id, logits
+
+    def _prepare_unified_inputs(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+    ) -> dict:
+        """
+        Prepare all inputs for the unified trace.
+
+        Computes text embeddings and image indices on device, prepares vision inputs.
+        """
+        batch_size = 1
+        seq_len = input_ids.shape[1]
+
+        # Prepare vision inputs (same as before)
+        vit = self.model.vision_backbone.image_vit
+        embedded = vit.patch_embed_cpu(pixel_values)
+        pos_embed = vit.positional_embedding_torch
+        embedded = embedded + pos_embed.unsqueeze(0)
+        embedded = embedded.reshape(1, 1, -1, vit.hidden_dim)
+
+        n_out = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
+
+        valid = pooled_patches_idx >= 0
+        valid_token = torch.any(valid, dim=-1)
+        clipped_idx = torch.clip(pooled_patches_idx, min=0)
+        flat_idx = clipped_idx.reshape(1, -1).to(torch.int32)
+        valid_mask = valid.reshape(1, 1, -1, 1).float()
+
+        # Get number of valid visual tokens
+        num_visual_tokens = valid_token.flatten().sum().item()
+
+        # Find image token positions in input_ids (CPU - fast)
+        image_patch_id = self.model.image_patch_id
+        image_positions = (input_ids[0] == image_patch_id).nonzero(as_tuple=True)[0]
+
+        # Verify counts match
+        assert (
+            len(image_positions) == num_visual_tokens
+        ), f"Mismatch: {len(image_positions)} placeholders vs {num_visual_tokens} visual tokens"
+
+        # Create selector matrix for matmul-based fusion: [seq_len, num_visual_tokens]
+        # Row i has 1 at column j if position i should receive visual embedding j
+        selector_matrix = torch.zeros(seq_len, num_visual_tokens, dtype=torch.float32)
+        for j, pos in enumerate(image_positions):
+            selector_matrix[pos, j] = 1.0
+        # Reshape to [1, 1, seq_len, num_visual_tokens] for TTNN
+        selector_matrix = selector_matrix.unsqueeze(0).unsqueeze(0)
+
+        # Get text embeddings (TTNN - keep on device)
+        input_ids_ttnn = ttnn.from_torch(
+            input_ids,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        text_embed_ttnn = self.model.text_model.embed_tokens(input_ids_ttnn)
+        ttnn.deallocate(input_ids_ttnn)
+
+        # Convert other tensors to TTNN
+        embedded_ttnn = ttnn.from_torch(
+            embedded,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        idx_ttnn = ttnn.from_torch(
+            flat_idx,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        valid_mask_ttnn = ttnn.from_torch(
+            valid_mask,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        valid_token_ttnn = ttnn.from_torch(
+            valid_token.flatten().float(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        selector_ttnn = ttnn.from_torch(
+            selector_matrix,  # [1, 1, seq_len, num_visual_tokens]
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        return {
+            # Vision inputs
+            "embedded": embedded_ttnn,
+            "idx": idx_ttnn,
+            "valid_mask": valid_mask_ttnn,
+            "valid_token": valid_token_ttnn,
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+            # Fusion inputs
+            "text_embed": text_embed_ttnn,
+            "selector_matrix": selector_ttnn,
+            "num_visual_tokens": num_visual_tokens,
+            # Metadata
+            "seq_len": seq_len,
+        }
+
+    def _execute_unified_trace(
+        self,
+        trace_id: int,
+        trace_tensors: dict,
+        trace_output: ttnn.Tensor,
+        inputs: dict,
+    ) -> ttnn.Tensor:
+        """Execute unified trace with new inputs."""
+        # Copy vision inputs to trace tensors
+        ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
+        ttnn.copy(inputs["idx"], trace_tensors["idx"])
+        ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
+        ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
+
+        # Copy fusion inputs
+        ttnn.copy(inputs["text_embed"], trace_tensors["text_embed"])
+        ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
+
+        # Execute trace
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return trace_output
+
+    def _run_unified_prefill(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: torch.Tensor,
+        pooled_patches_idx: torch.Tensor,
+        timing: dict,
+    ) -> Tuple[ttnn.Tensor, dict]:
+        """
+        Run unified Vision + Fusion + Prefill in single trace.
+
+        This eliminates the CPU roundtrip between vision and prefill,
+        keeping everything on device using scatter_add for fusion.
+        """
+        seq_len = input_ids.shape[1]
+        logger.info("Running unified Vision + Prefill trace...")
+
+        # Prepare all inputs (vision + text embeddings + fusion indices)
+        prep_start = time.perf_counter()
+        inputs = self._prepare_unified_inputs(input_ids, pixel_values, pooled_patches_idx)
+        timing["prep_ms"] = (time.perf_counter() - prep_start) * 1000
+        logger.info(f"Input preparation: {timing['prep_ms']:.2f}ms")
+
+        # Check if we have a cached trace for this configuration
+        trace_key = (seq_len, inputs["num_visual_tokens"], inputs["n_out"], inputs["k_pool"])
+
+        if not hasattr(self, "unified_traces"):
+            self.unified_traces = {}
+
+        if trace_key not in self.unified_traces:
+            # First run: warmup + capture trace
+            logger.info("Running unified warmup (compile)...")
+            warmup_start = time.perf_counter()
+
+            # Run full pipeline once for compilation
+            visual_embeddings = self.model.vision_backbone.forward_ttnn(
+                images_embedded=inputs["embedded"],
+                pooled_patches_idx_ttnn=inputs["idx"],
+                valid_mask_ttnn=inputs["valid_mask"],
+                valid_token_ttnn=inputs["valid_token"],
+                n_out=inputs["n_out"],
+                k_pool=inputs["k_pool"],
+                batch_size=inputs["batch_size"],
+            )
+
+            # Fusion via matmul with selector matrix
+            # selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
+            visual_part = ttnn.matmul(
+                inputs["selector_matrix"],
+                visual_embeddings,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            fused_embed = ttnn.add(
+                inputs["text_embed"],
+                visual_part,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Text prefill
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
+            logits, _ = self.model.text_model.forward(
+                hidden_states=fused_embed,
+                start_pos=0,
+                attn_mask=None,
+                kv_caches=self.kv_caches,
+                rot_mats=rot_mats,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            timing["compile_ms"] = (time.perf_counter() - warmup_start) * 1000
+            logger.info(f"Unified compile completed in {timing['compile_ms']:.2f}ms")
+
+            # Deallocate warmup outputs
+            ttnn.deallocate(visual_embeddings)
+            ttnn.deallocate(visual_part)
+            ttnn.deallocate(fused_embed)
+            ttnn.deallocate(rot_mats[0])
+            ttnn.deallocate(rot_mats[1])
+
+            # Allocate trace tensors
+            logger.info("Allocating unified trace tensors...")
+            trace_tensors = self._allocate_unified_trace_tensors(
+                seq_len=seq_len,
+                num_visual_tokens=inputs["num_visual_tokens"],
+                n_out=inputs["n_out"],
+                k_pool=inputs["k_pool"],
+                batch_size=inputs["batch_size"],
+            )
+
+            # Copy initial data to trace tensors
+            ttnn.copy(inputs["embedded"], trace_tensors["embedded"])
+            ttnn.copy(inputs["idx"], trace_tensors["idx"])
+            ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
+            ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
+            ttnn.copy(inputs["text_embed"], trace_tensors["text_embed"])
+            ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
+
+            # Capture trace
+            trace_id, trace_output = self._capture_unified_trace(trace_tensors)
+            self.unified_traces[trace_key] = (trace_id, trace_tensors, trace_output)
+
+        trace_id, trace_tensors, trace_output = self.unified_traces[trace_key]
+
+        # Execute trace (actual timing measurement)
+        ttft_start = time.perf_counter()
+        logits = self._execute_unified_trace(trace_id, trace_tensors, trace_output, inputs)
+        ttnn.synchronize_device(self.mesh_device)
+        timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
+        timing["vision_ms"] = 0  # Included in ttft_ms for unified trace
+
+        logger.info(f"Unified TTFT: {timing['ttft_ms']:.2f}ms")
+
+        # Cleanup temporary input tensors (trace tensors are reused)
+        ttnn.deallocate(inputs["embedded"])
+        ttnn.deallocate(inputs["idx"])
+        ttnn.deallocate(inputs["valid_mask"])
+        ttnn.deallocate(inputs["valid_token"])
+        ttnn.deallocate(inputs["text_embed"])
+        ttnn.deallocate(inputs["selector_matrix"])
+
+        # Update position for decode
+        self.reset_kv_cache(seq_len)
+
+        return logits, timing
 
     def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
         """Allocate tensors needed for traced decode."""
@@ -821,9 +1553,19 @@ class Molmo2Generator:
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
         use_trace: bool = False,
+        use_vision_trace: bool = False,
+        use_unified_trace: bool = False,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
+
+        Args:
+            input_ids: Token IDs
+            pixel_values: Image tensor
+            pooled_patches_idx: Patch pooling indices
+            use_trace: Whether to trace text model prefill
+            use_vision_trace: Whether to trace vision backbone (ViT + pooling)
+            use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
 
         Returns:
             Tuple of (logits, timing_dict)
@@ -834,12 +1576,113 @@ class Molmo2Generator:
         seq_len = input_ids.shape[1]
         timing = {}
 
-        # Prepare inputs (vision processing) - outside trace
-        logger.info("Preparing inputs (vision processing)...")
-        vision_start = time.perf_counter()
-        hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
-        timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
-        logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
+        # Unified trace path: Vision + Fusion + Prefill in single trace
+        # NOTE: Currently not supported - trace capture fails with "Writes are not supported"
+        # error. This may be due to internal tensor allocations during the combined forward pass
+        # that are incompatible with trace capture. Using separate traces for now.
+        if use_unified_trace and pixel_values is not None:
+            logger.warning(
+                "Unified trace not yet supported (trace capture fails with write error). "
+                "Falling back to separate vision + prefill traces. "
+                "Use --use-vision-trace --use-trace for best performance."
+            )
+            # Fall through to use vision trace + prefill trace instead
+            use_vision_trace = True
+            use_trace = True
+
+        # Start end-to-end TTFT timer (vision + fusion + prefill)
+        e2e_ttft_start = None
+
+        if use_vision_trace and pixel_values is not None:
+            # Vision tracing path - uses forward_ttnn with TTNN-native gather
+            logger.info("Preparing vision inputs for tracing...")
+            vision_prep_start = time.perf_counter()
+            vision_inputs = self._prepare_vision_inputs_for_trace(pixel_values, pooled_patches_idx)
+            timing["vision_prep_ms"] = (time.perf_counter() - vision_prep_start) * 1000
+
+            # Check if we need to capture a new trace
+            if self.vision_trace_id is None:
+                # First run: warmup + capture trace
+                logger.info("Running vision warmup (compile)...")
+                warmup_start = time.perf_counter()
+                warmup_output = self.model.vision_backbone.forward_ttnn(
+                    images_embedded=vision_inputs["embedded"],
+                    pooled_patches_idx_ttnn=vision_inputs["idx"],
+                    valid_mask_ttnn=vision_inputs["valid_mask"],
+                    valid_token_ttnn=vision_inputs["valid_token"],
+                    n_out=vision_inputs["n_out"],
+                    k_pool=vision_inputs["k_pool"],
+                    batch_size=vision_inputs["batch_size"],
+                )
+                ttnn.synchronize_device(self.mesh_device)
+                timing["vision_compile_ms"] = (time.perf_counter() - warmup_start) * 1000
+                logger.info(f"Vision compile completed in {timing['vision_compile_ms']:.2f}ms")
+                ttnn.deallocate(warmup_output)
+
+                # Allocate trace tensors
+                logger.info("Allocating vision trace tensors...")
+                self.vision_trace_tensors = self._allocate_vision_trace_tensors(
+                    n_out=vision_inputs["n_out"],
+                    k_pool=vision_inputs["k_pool"],
+                    batch_size=vision_inputs["batch_size"],
+                )
+
+                # Copy initial data to trace tensors
+                ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
+                ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
+                ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
+                ttnn.copy(vision_inputs["valid_token"], self.vision_trace_tensors["valid_token"])
+
+                # Capture trace
+                self.vision_trace_id, self.vision_trace_outputs = self._capture_vision_trace(self.vision_trace_tensors)
+
+            # Execute vision trace - START of end-to-end TTFT measurement
+            e2e_ttft_start = time.perf_counter()
+            vision_trace_start = time.perf_counter()
+            # Copy new inputs to trace tensors
+            ttnn.copy(vision_inputs["embedded"], self.vision_trace_tensors["embedded"])
+            ttnn.copy(vision_inputs["idx"], self.vision_trace_tensors["idx"])
+            ttnn.copy(vision_inputs["valid_mask"], self.vision_trace_tensors["valid_mask"])
+            ttnn.copy(vision_inputs["valid_token"], self.vision_trace_tensors["valid_token"])
+            # Execute trace
+            ttnn.execute_trace(self.mesh_device, self.vision_trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.mesh_device)
+            timing["vision_trace_ms"] = (time.perf_counter() - vision_trace_start) * 1000
+            logger.info(f"Vision trace executed in {timing['vision_trace_ms']:.2f}ms")
+
+            # Get visual embeddings from trace output
+            visual_embeddings_ttnn = self.vision_trace_outputs
+
+            # Fuse visual embeddings with text embeddings
+            logger.info("Fusing visual and text embeddings...")
+            fuse_start = time.perf_counter()
+            hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs_traced(
+                input_ids, visual_embeddings_ttnn, vision_inputs["valid_token_torch"]
+            )
+            timing["fuse_ms"] = (time.perf_counter() - fuse_start) * 1000
+
+            # Cleanup temporary vision input tensors (trace tensors are reused)
+            ttnn.deallocate(vision_inputs["embedded"])
+            ttnn.deallocate(vision_inputs["idx"])
+            ttnn.deallocate(vision_inputs["valid_mask"])
+            ttnn.deallocate(vision_inputs["valid_token"])
+
+            # Total vision time
+            timing["vision_ms"] = (
+                timing.get("vision_prep_ms", 0) + timing.get("vision_trace_ms", 0) + timing.get("fuse_ms", 0)
+            )
+            logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms (traced)")
+        else:
+            # Original path - no vision tracing
+            # START of end-to-end TTFT measurement
+            e2e_ttft_start = time.perf_counter()
+            logger.info("Preparing inputs (vision processing)...")
+            vision_start = time.perf_counter()
+            hidden_states_ttnn, hidden_states_torch = self._prepare_text_inputs(
+                input_ids, pixel_values, pooled_patches_idx
+            )
+            timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
+            logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
 
         if use_trace:
             # Allocate trace tensors if needed
@@ -878,7 +1721,12 @@ class Molmo2Generator:
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
-        logger.info(f"TTFT: {timing['ttft_ms']:.2f}ms")
+        # Calculate end-to-end TTFT (vision start to prefill end)
+        if e2e_ttft_start is not None:
+            timing["e2e_ttft_ms"] = (time.perf_counter() - e2e_ttft_start) * 1000
+            logger.info(f"End-to-end TTFT (vision + fusion + prefill): {timing['e2e_ttft_ms']:.2f}ms")
+
+        logger.info(f"Prefill-only TTFT: {timing['ttft_ms']:.2f}ms")
 
         # Update position for decode
         self.reset_kv_cache(seq_len)
@@ -981,6 +1829,8 @@ class Molmo2Generator:
         max_new_tokens: int = 100,
         use_trace: bool = False,
         use_decode_trace: bool = False,
+        use_vision_trace: bool = False,
+        use_unified_trace: bool = False,
     ) -> Tuple[str, dict]:
         """
         Run full inference with autoregressive generation.
@@ -992,6 +1842,8 @@ class Molmo2Generator:
             use_trace: Whether to use tracing for prefill
             use_decode_trace: Whether to use tracing for decode (disabled by default
                               to avoid memory corruption from tensor allocation during trace)
+            use_vision_trace: Whether to use tracing for vision backbone (ViT + pooling)
+            use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
 
         Returns:
             Tuple of (output_text, perf_metrics)
@@ -1018,6 +1870,8 @@ class Molmo2Generator:
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
             use_trace=use_trace,
+            use_vision_trace=use_vision_trace,
+            use_unified_trace=use_unified_trace,
         )
 
         # Get first prediction from prefill
@@ -1072,8 +1926,15 @@ class Molmo2Generator:
 
         perf_metrics = {
             "vision_ms": prefill_timing.get("vision_ms", 0),
+            "vision_trace_ms": prefill_timing.get("vision_trace_ms", 0),
+            "compile_vision_ms": prefill_timing.get("compile_vision_ms", 0),
             "compile_prefill_ms": prefill_timing.get("compile_prefill_ms", 0),
             "ttft_ms": prefill_timing.get("ttft_ms", 0),
+            "e2e_ttft_ms": prefill_timing.get("e2e_ttft_ms", 0),  # End-to-end TTFT (vision + fusion + prefill)
+            # Unified trace specific metrics
+            "prep_ms": prefill_timing.get("prep_ms", 0),
+            "compile_ms": prefill_timing.get("compile_ms", 0),
+            # Decode metrics
             "avg_decode_ms": avg_decode_time,
             "total_decode_ms": total_decode_time,
             "input_tokens": input_ids.shape[1],
@@ -1099,6 +1960,8 @@ def run_demo(
     num_layers: Optional[int] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
+    use_vision_trace: bool = False,
+    use_unified_trace: bool = False,
 ):
     """
     Run the Molmo2 demo.
@@ -1109,7 +1972,10 @@ def run_demo(
         max_new_tokens: Maximum tokens to generate
         device_id: TTNN device ID
         num_layers: Number of text layers (default: 36)
-        use_trace: Whether to use tracing for performance
+        use_trace: Whether to use tracing for text prefill
+        use_decode_trace: Whether to use tracing for decode
+        use_vision_trace: Whether to use tracing for vision backbone
+        use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
     """
     if image_path is None:
         image_path = str(DEFAULT_IMAGE)
@@ -1163,13 +2029,31 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             use_trace=use_trace,
             use_decode_trace=use_decode_trace,
+            use_vision_trace=use_vision_trace,
+            use_unified_trace=use_unified_trace,
         )
 
         logger.info("\n" + "=" * 60)
         logger.info("Performance Metrics:")
-        logger.info(f"  Vision processing: {perf_metrics['vision_ms']:.2f}ms")
-        logger.info(f"  Prefill compile: {perf_metrics['compile_prefill_ms']:.2f}ms")
-        logger.info(f"  TTFT (Time to First Token): {perf_metrics['ttft_ms']:.2f}ms")
+        # Check if unified trace was actually used (indicated by prep_ms and compile_ms being set)
+        unified_trace_used = use_unified_trace and perf_metrics.get("prep_ms", 0) > 0
+        if unified_trace_used:
+            logger.info("  [Unified Vision+Prefill Trace]")
+            logger.info(f"    - Input preparation: {perf_metrics['prep_ms']:.2f}ms")
+            if perf_metrics.get("compile_ms", 0) > 0:
+                logger.info(f"    - Unified compile: {perf_metrics['compile_ms']:.2f}ms")
+            logger.info(f"  TTFT (Vision+Prefill): {perf_metrics['ttft_ms']:.2f}ms")
+        else:
+            logger.info(f"  Vision processing: {perf_metrics['vision_ms']:.2f}ms")
+            if perf_metrics.get("vision_trace_ms", 0) > 0:
+                logger.info(f"    - Vision trace execution: {perf_metrics['vision_trace_ms']:.2f}ms")
+            if perf_metrics.get("compile_vision_ms", 0) > 0:
+                logger.info(f"    - Vision compile: {perf_metrics['compile_vision_ms']:.2f}ms")
+            if perf_metrics.get("compile_prefill_ms", 0) > 0:
+                logger.info(f"  Prefill compile: {perf_metrics['compile_prefill_ms']:.2f}ms")
+            logger.info(f"  Prefill-only TTFT: {perf_metrics['ttft_ms']:.2f}ms")
+            if perf_metrics.get("e2e_ttft_ms", 0) > 0:
+                logger.info(f"  ** End-to-End TTFT (Vision+Fusion+Prefill): {perf_metrics['e2e_ttft_ms']:.2f}ms **")
         logger.info(f"  Avg decode time: {perf_metrics['avg_decode_ms']:.2f}ms")
         logger.info(f"  Total decode time: {perf_metrics['total_decode_ms']:.2f}ms")
         logger.info(f"  Input tokens: {perf_metrics['input_tokens']}")
@@ -1228,6 +2112,16 @@ def main():
         action="store_true",
         help="Enable tracing for decode (experimental - may cause memory corruption)",
     )
+    parser.add_argument(
+        "--use-vision-trace",
+        action="store_true",
+        help="Enable tracing for vision backbone (ViT + pooling)",
+    )
+    parser.add_argument(
+        "--use-unified-trace",
+        action="store_true",
+        help="[EXPERIMENTAL] Enable unified Vision+Prefill trace (not yet supported - vision backbone has internal writes)",
+    )
 
     args = parser.parse_args()
 
@@ -1239,6 +2133,8 @@ def main():
         num_layers=args.num_layers,
         use_trace=args.use_trace,
         use_decode_trace=args.use_decode_trace,
+        use_vision_trace=args.use_vision_trace,
+        use_unified_trace=args.use_unified_trace,
     )
 
 
