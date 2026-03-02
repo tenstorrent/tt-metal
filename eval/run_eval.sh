@@ -2,52 +2,51 @@
 # run_eval.sh - Repeatable agentic workflow evaluation
 #
 # Drop this script anywhere and run it. It clones tt-metal, builds, and
-# runs claude against a prompt file, then optionally runs a test.
+# runs claude against prompt file(s).
 #
 # Usage:
-#   ./run_eval.sh <prompt_file> --branch BRANCH [--runs N] [--test TEST_PATH] [--base-dir DIR]
+#   ./run_eval.sh <prompt_file_or_dir> [--runs N] [--base-dir DIR]
 #
-# Example:
-#   ./run_eval.sh prompts/create_reduce_avg.txt \
-#       --branch mstaletovic/NoPlanner \
-#       --runs 3 \
-#       --test tests/ttnn/unit_tests/operations/reduce_avg_w_rm/test_reduce_avg_w_rm.py
+# Run from the tt-metal repo root. The current branch is used as the starting point.
+#
+# Examples:
+#   # Single prompt (on whatever branch you're on)
+#   ./eval/run_eval.sh eval/prompts/create_reduce_avg.txt
+#
+#   # All prompts in a folder (one clone+run per .txt file)
+#   ./eval/run_eval.sh eval/prompts/ --runs 3
 #
 # Each run gets its own clone at:
-#   <base-dir>/eval_<branch>_<timestamp>_<run>_<random>/tt-metal/
+#   <base-dir>/eval_<branch>_<timestamp>_<prompt>_<run>/tt-metal/
 #
 # Results are collected into:
-#   <base-dir>/eval_results/<timestamp>/
+#   <base-dir>/eval_results/<branch>_<timestamp>/
 
 set -euo pipefail
 
-REPO_URL="https://github.com/tenstorrent/tt-metal.git"
 DEFAULT_RUNS=1
-DEFAULT_BASE_DIR="/localdev/mstaletovic"
+DEFAULT_BASE_DIR="/localdev/${USER}"
 
 # --- Parse arguments ---
-PROMPT_FILE=""
+PROMPT_PATH=""
 NUM_RUNS="$DEFAULT_RUNS"
-BRANCH=""
-TEST_PATH=""
 BASE_DIR="$DEFAULT_BASE_DIR"
 
 show_usage() {
-    echo "Usage: $0 <prompt_file> --branch BRANCH [--runs N] [--test TEST_PATH] [--base-dir DIR]" >&2
+    echo "Usage: $0 <prompt_file_or_dir> [--runs N] [--base-dir DIR]" >&2
+    echo "       Run from the tt-metal repo root." >&2
     exit 1
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --runs)      NUM_RUNS="$2"; shift 2 ;;
-        --branch)    BRANCH="$2"; shift 2 ;;
-        --test)      TEST_PATH="$2"; shift 2 ;;
         --base-dir)  BASE_DIR="$2"; shift 2 ;;
         -h|--help)   show_usage ;;
         -*)          echo "Unknown option: $1" >&2; show_usage ;;
         *)
-            if [[ -z "$PROMPT_FILE" ]]; then
-                PROMPT_FILE="$1"; shift
+            if [[ -z "$PROMPT_PATH" ]]; then
+                PROMPT_PATH="$1"; shift
             else
                 echo "Unexpected argument: $1" >&2; show_usage
             fi
@@ -55,34 +54,50 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$PROMPT_FILE" ]]; then
-    echo "Error: prompt file is required" >&2; show_usage
-fi
-if [[ -z "$BRANCH" ]]; then
-    echo "Error: --branch is required" >&2; show_usage
+if [[ -z "$PROMPT_PATH" ]]; then
+    echo "Error: prompt file or directory is required" >&2; show_usage
 fi
 
-# Resolve prompt file to absolute path before we cd anywhere
-PROMPT_FILE="$(cd "$(dirname "$PROMPT_FILE")" && pwd)/$(basename "$PROMPT_FILE")"
-if [[ ! -f "$PROMPT_FILE" ]]; then
-    echo "Error: Prompt file not found: $PROMPT_FILE" >&2
+# Infer branch and repo URL from the current git repo
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+REPO_URL="$(git remote get-url origin)"
+if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
+    echo "Error: Could not determine current branch. Are you in a git repo?" >&2
     exit 1
 fi
 
-PROMPT_CONTENT="$(cat "$PROMPT_FILE")"
+# --- Collect prompt files ---
+PROMPT_FILES=()
+
+if [[ -d "$PROMPT_PATH" ]]; then
+    PROMPT_DIR="$(cd "$PROMPT_PATH" && pwd)"
+    while IFS= read -r f; do
+        PROMPT_FILES+=("$f")
+    done < <(find "$PROMPT_DIR" -maxdepth 1 -name '*.txt' -type f | sort)
+    if [[ ${#PROMPT_FILES[@]} -eq 0 ]]; then
+        echo "Error: No .txt files found in $PROMPT_DIR" >&2
+        exit 1
+    fi
+elif [[ -f "$PROMPT_PATH" ]]; then
+    PROMPT_FILES+=("$(cd "$(dirname "$PROMPT_PATH")" && pwd)/$(basename "$PROMPT_PATH")")
+else
+    echo "Error: Not a file or directory: $PROMPT_PATH" >&2
+    exit 1
+fi
 
 # --- Setup results directory ---
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-# Sanitize branch name for use in directory names (replace / with _)
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/' '_')"
 RESULTS_DIR="${BASE_DIR}/eval_results/${BRANCH_SLUG}_${TIMESTAMP}"
 mkdir -p "$RESULTS_DIR"
 
 echo "=== Eval Configuration ==="
-echo "Prompt:    $PROMPT_FILE"
+echo "Prompts:   ${#PROMPT_FILES[@]} file(s)"
+for pf in "${PROMPT_FILES[@]}"; do
+    echo "           - $(basename "$pf")"
+done
 echo "Branch:    $BRANCH"
-echo "Runs:      $NUM_RUNS"
-echo "Test:      ${TEST_PATH:-<none - will check claude exit code>}"
+echo "Runs:      $NUM_RUNS per prompt"
 echo "Base dir:  $BASE_DIR"
 echo "Results:   $RESULTS_DIR"
 echo "=========================="
@@ -94,81 +109,100 @@ FAIL_COUNT=0
 ERROR_COUNT=0
 
 run_single() {
-    local run_id="$1"
-    local run_tag="${BRANCH_SLUG}_${TIMESTAMP}_run${run_id}_$$_${RANDOM}"
+    local prompt_file="$1"
+    local run_id="$2"
+    local prompt_name
+    prompt_name="$(basename "$prompt_file" .txt)"
+    local run_tag="${BRANCH_SLUG}_${TIMESTAMP}_${prompt_name}_run${run_id}_$$_${RANDOM}"
     local clone_dir="${BASE_DIR}/eval_${run_tag}/tt-metal"
-    local log_dir="${RESULTS_DIR}/run_${run_id}"
+    local log_dir="${RESULTS_DIR}/${prompt_name}/run_${run_id}"
     mkdir -p "$log_dir"
 
-    echo "--- Run ${run_id}/${NUM_RUNS} ---"
-    echo "[${run_id}] Clone dir: $clone_dir"
+    local prompt_content
+    prompt_content="$(cat "$prompt_file")"
 
-    # 1. Clone
-    echo "[${run_id}] Cloning ${BRANCH}..."
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$clone_dir" \
+    local start_time=$SECONDS
+
+    echo "--- ${prompt_name} run ${run_id}/${NUM_RUNS} ---"
+    echo "[${prompt_name}:${run_id}] Clone dir: $clone_dir"
+
+    # 1. Clone and create a unique branch from the source branch
+    local run_branch="eval/${prompt_name}_run${run_id}_${TIMESTAMP}"
+    echo "[${prompt_name}:${run_id}] Cloning ${BRANCH} -> ${run_branch}"
+    git clone --branch "$BRANCH" "$REPO_URL" "$clone_dir" \
         > "${log_dir}/clone.log" 2>&1
+    git -C "$clone_dir" checkout -b "$run_branch" \
+        >> "${log_dir}/clone.log" 2>&1
 
     # 2. Init submodules
-    echo "[${run_id}] Initializing submodules..."
+    echo "[${prompt_name}:${run_id}] Initializing submodules..."
     git -C "$clone_dir" submodule update --init --recursive \
         > "${log_dir}/submodules.log" 2>&1
 
-    # 3. Build
-    echo "[${run_id}] Building metal (this takes a while)..."
-    (cd "$clone_dir" && ./build_metal.sh --enable-ccache) \
-        > "${log_dir}/build.log" 2>&1
-
-    echo "[${run_id}] Creating python env..."
-    (cd "$clone_dir" && ./create_venv.sh --force) \
-        > "${log_dir}/venv.log" 2>&1
-
-    # 4. Run claude
-    echo "[${run_id}] Running claude..."
+    # 3. Build and run claude in an isolated env (mirrors .envrc)
+    #    Everything runs in a subshell so env vars don't leak between runs.
     local claude_exit=0
-    (cd "$clone_dir" && env -u CLAUDECODE claude -p \
-        --dangerously-skip-permissions \
-        --output-format json \
-        --max-turns 100 \
-        --model opus \
-        "$PROMPT_CONTENT" \
-    ) > "${log_dir}/claude_output.json" 2> "${log_dir}/claude_stderr.log" || claude_exit=$?
+    (
+        cd "$clone_dir"
+        export TT_METAL_HOME="$clone_dir"
+        export PYTHONPATH="$clone_dir"
+        export TT_METAL_ENV=dev
+        export TT_METAL_CACHE="$clone_dir/built"
+        export TT_METAL_CCACHE_KERNEL_SUPPORT=1
+        unset CLAUDECODE
 
-    echo "[${run_id}] Claude exited with code: $claude_exit"
+        echo "[${prompt_name}:${run_id}] Building metal (this takes a while)..."
+        if ! ./build_metal.sh --enable-ccache > "${log_dir}/build.log" 2>&1; then
+            echo "BUILD_FAIL" > "${log_dir}/result.txt"
+            exit 2
+        fi
 
-    # 5. Run test (if specified)
-    local test_exit=0
-    if [[ -n "$TEST_PATH" ]]; then
-        echo "[${run_id}] Running test: $TEST_PATH"
-        (cd "$clone_dir" && source python_env/bin/activate && \
-            ./tt-test.sh "$TEST_PATH" \
-        ) > "${log_dir}/test_output.log" 2>&1 || test_exit=$?
+        echo "[${prompt_name}:${run_id}] Creating python env..."
+        if ! ./create_venv.sh --force > "${log_dir}/venv.log" 2>&1; then
+            echo "VENV_FAIL" > "${log_dir}/result.txt"
+            exit 2
+        fi
 
-        echo "[${run_id}] Test exited with code: $test_exit"
+        echo "[${prompt_name}:${run_id}] Running claude..."
+        claude -p \
+            --dangerously-skip-permissions \
+            --output-format json \
+            --max-turns 100 \
+            --model opus \
+            "$prompt_content" \
+            > "${log_dir}/claude_output.json" 2> "${log_dir}/claude_stderr.log"
+    ) || claude_exit=$?
+
+    echo "[${prompt_name}:${run_id}] Exited with code: $claude_exit"
+
+    # 4. Record result
+    local elapsed=$(( SECONDS - start_time ))
+    local mins=$(( elapsed / 60 ))
+    local secs=$(( elapsed % 60 ))
+
+    local result
+    if [[ $claude_exit -eq 0 ]]; then
+        result="PASS"
+        PASS_COUNT=$((PASS_COUNT + 1))
+    elif [[ -f "${log_dir}/result.txt" ]] && grep -q "_FAIL" "${log_dir}/result.txt"; then
+        result="$(cat "${log_dir}/result.txt")"
+        ERROR_COUNT=$((ERROR_COUNT + 1))
     else
-        test_exit=$claude_exit
+        result="FAIL (exit $claude_exit)"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
-
-    # 6. Record result
-    if [[ $test_exit -eq 0 ]]; then
-        echo "PASS" > "${log_dir}/result.txt"
-        echo "[${run_id}] PASS"
-        ((PASS_COUNT++))
-    elif [[ $test_exit -eq 2 ]]; then
-        echo "HANG" > "${log_dir}/result.txt"
-        echo "[${run_id}] HANG"
-        ((ERROR_COUNT++))
-    else
-        echo "FAIL" > "${log_dir}/result.txt"
-        echo "[${run_id}] FAIL"
-        ((FAIL_COUNT++))
-    fi
+    echo "$result" > "${log_dir}/result.txt"
+    echo "[${prompt_name}:${run_id}] ${result} (${mins}m ${secs}s)"
+    echo "${elapsed}" > "${log_dir}/duration_seconds.txt"
 
     echo ""
 }
 
 # --- Run evaluations ---
-for i in $(seq 1 "$NUM_RUNS"); do
-    run_single "$i"
+for prompt_file in "${PROMPT_FILES[@]}"; do
+    for run in $(seq 1 "$NUM_RUNS"); do
+        run_single "$prompt_file" "$run"
+    done
 done
 
 # --- Summary ---
@@ -177,18 +211,18 @@ TOTAL=$((PASS_COUNT + FAIL_COUNT + ERROR_COUNT))
 cat > "${RESULTS_DIR}/summary.txt" <<EOF
 === Evaluation Summary ===
 Timestamp: $TIMESTAMP
-Prompt:    $PROMPT_FILE
+Prompts:   ${#PROMPT_FILES[@]} file(s)
 Branch:    $BRANCH
-Test:      ${TEST_PATH:-<claude exit code>}
+Runs:      $NUM_RUNS per prompt
 
 Results:   $PASS_COUNT/$TOTAL passed
   PASS:    $PASS_COUNT
   FAIL:    $FAIL_COUNT
-  ERROR:   $ERROR_COUNT
+  INFRA:   $ERROR_COUNT
 ===========================
 EOF
 
 cat "${RESULTS_DIR}/summary.txt"
 
 # Exit non-zero if any run failed
-[[ $FAIL_COUNT -eq 0 && $ERROR_COUNT -eq 0 ]]
+[[ $FAIL_COUNT -eq 0 ]]
