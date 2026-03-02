@@ -117,12 +117,12 @@ ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::crea
 }
 
 ttnn::Tensor manual_seed(
-    const std::variant<int32_t, Tensor>& seeds,
+    const std::variant<uint32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (std::holds_alternative<int32_t>(seeds)) {
-        TT_FATAL(device.has_value(), "Device must be provided when seeds is an int32_t value.");
+    if (std::holds_alternative<uint32_t>(seeds)) {
+        TT_FATAL(device.has_value(), "Device must be provided when seeds is a uint32_t value.");
     }
 
     using OperationType = ManualSeedDeviceOperation;
@@ -134,14 +134,8 @@ ttnn::Tensor manual_seed(
         operation_attributes.device = seeds_tensor.device();
     }
 
-    if (std::holds_alternative<int32_t>(seeds)) {
-        const int32_t seeds_val = std::get<int32_t>(seeds);
-        // Only -1 (skip) and non-negative seeds are supported; other negative values are rejected.
-        TT_FATAL(
-            seeds_val == -1 || seeds_val >= 0,
-            "manual_seed: Only -1 (skip) and non-negative int32_t seeds are supported, got {}",
-            seeds_val);
-        operation_attributes.seeds = seeds_val;
+    if (std::holds_alternative<uint32_t>(seeds)) {
+        operation_attributes.seeds = std::get<uint32_t>(seeds);
     }
     if (user_ids.has_value() && std::holds_alternative<uint32_t>(user_ids.value())) {
         operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());

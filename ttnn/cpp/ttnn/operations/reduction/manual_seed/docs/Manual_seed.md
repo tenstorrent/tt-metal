@@ -6,7 +6,7 @@ The TTNN Manual Seed operation is a device-level utility designed to initialize 
 
 ### Parameters
 
-- **seeds**: Either a scalar `int32_t` value or a `Tensor` of `uint32_t` values representing the seed(s) to initialize the random number generator(s). A scalar value of `-1` is a special value that skips `rand_tile_init`, leaving the PRNG state unchanged. Other negative values are not supported.
+- **seeds**: Either a scalar `uint32_t` value or a `Tensor` of `uint32_t` values representing the seed(s) to initialize the random number generator(s). A scalar value of `UINT32_MAX` (0xFFFFFFFF) is a special value that skips `rand_tile_init`, leaving the PRNG state unchanged.
 - **device**: The target device on which to set the seed(s). Required when seeds is a scalar value. Can be a single device or multi-chip mesh device
 - **user_ids**: Optional parameter that specifies which core(s) should receive the seed(s). Can be:
   - A scalar `uint32_t` representing a single core ID (valid range: 0-31)
@@ -22,9 +22,9 @@ The following table shows all valid combinations of input parameters and their b
 
 | Seeds Type | User IDs Type | Device Type | Behavior |
 |------------|---------------|-------------|----------|
-| `int32_t` | None | Single or Multi-chip | Push seed to all cores on all devices (single device or all devices in mesh_device). Pass `-1` to skip `rand_tile_init`. |
-| `int32_t` | `uint32_t` (core ID) | Single or Multi-chip | Push seed to the same core_id on each device in mesh_device (or single device based on input). Pass `-1` to skip `rand_tile_init`. |
-| `int32_t` | 1D Tensor (`uint32_t`) | Derived from tensor | Set same seed to all core IDs listed in user_ids tensor on the device(s) where the user_ids tensor is placed. Pass `-1` to skip `rand_tile_init`. |
+| `uint32_t` | None | Single or Multi-chip | Push seed to all cores on all devices (single device or all devices in mesh_device). Pass `UINT32_MAX` to skip `rand_tile_init`. |
+| `uint32_t` | `uint32_t` (core ID) | Single or Multi-chip | Push seed to the same core_id on each device in mesh_device (or single device based on input). Pass `UINT32_MAX` to skip `rand_tile_init`. |
+| `uint32_t` | 1D Tensor (`uint32_t`) | Derived from tensor | Set same seed to all core IDs listed in user_ids tensor on the device(s) where the user_ids tensor is placed. Pass `UINT32_MAX` to skip `rand_tile_init`. |
 | 1D Tensor (`uint32_t`) | 1D Tensor (`uint32_t`) | Derived from tensors | Elements in seeds tensor correspond to user_ids elements at matching indices; seeds are pushed to the relevant device(s) where the user_ids tensor is placed |
 
 **Notes:**
@@ -61,9 +61,9 @@ The TTNN Manual Seed operation provides four distinct strategies for initializin
 
 | Strategy                           | Seeds Input | User IDs Input | Description                                             | Use Case                                                    |
 | ---------------------------------- | ----------- | -------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
-| **Single Seed to All Cores**       | int32_t     | None           | Sets the same seed to all compute cores on the device   | Uniform random initialization across all cores              |
-| **Single Seed to Single Core**     | int32_t     | uint32_t       | Sets a seed to one specific core identified by core ID  | Targeted initialization of a single core                    |
-| **Single Seed to Set of Cores**    | int32_t     | Tensor         | Sets the same seed to multiple cores from a tensor list | Uniform seeding for a subset of cores                       |
+| **Single Seed to All Cores**       | uint32_t    | None           | Sets the same seed to all compute cores on the device   | Uniform random initialization across all cores              |
+| **Single Seed to Single Core**     | uint32_t    | uint32_t       | Sets a seed to one specific core identified by core ID  | Targeted initialization of a single core                    |
+| **Single Seed to Set of Cores**    | uint32_t    | Tensor         | Sets the same seed to multiple cores from a tensor list | Uniform seeding for a subset of cores                       |
 | **Multiple Seeds to Set of Cores** | Tensor      | Tensor         | Maps different seeds to different cores via tensors     | Fine-grained control with unique seeds per core             |
 
 ## Strategy Descriptions
@@ -87,7 +87,7 @@ This strategy sets the same seed value across all available compute cores on the
 3. **Seed Initialization**:
    * Each core executes the kernel, which calls `rand_tile_init(seed)`
    * This initializes the hardware random number generator with the specified seed
-   * If the seed value is `-1`, `rand_tile_init` is skipped and the PRNG state remains unchanged
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
 
 4. **No Runtime Arguments**:
    * All configuration is done at compile time
@@ -119,7 +119,7 @@ This strategy sets a seed to one specific compute core, identified by a core ID 
 3. **Seed Initialization**:
    * Only the targeted core executes the kernel
    * Calls `rand_tile_init(seed)` to initialize RNG state
-   * If the seed value is `-1`, `rand_tile_init` is skipped and the PRNG state remains unchanged
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
 
 4. **No Runtime Arguments**:
    * Similar to the all-cores strategy, everything is compile-time configured
@@ -155,7 +155,7 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 4. **Seed Initialization**:
    * The compute kernel reads the match result from the CB message
    * If matched, it calls `rand_tile_init(seed)` to initialize RNG
-   * If the seed value is `-1`, `rand_tile_init` is skipped and the PRNG state remains unchanged
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
    * Non-matching cores skip initialization and remain unmodified
 
 5. **Runtime Arguments**:
@@ -212,7 +212,7 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
    * The compute kernel reads the match result from the CB message
    * If matched, it reads the seed value from the CB message
    * Calls `rand_tile_init(seed)` with the matched seed value
-   * If the seed value is `0xFFFFFFFF` (i.e., `-1` when interpreted as `int32_t`), `rand_tile_init` is skipped and the PRNG state remains unchanged
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
    * Cores not listed in user_ids remain unmodified
 
 5. **Runtime Arguments**:

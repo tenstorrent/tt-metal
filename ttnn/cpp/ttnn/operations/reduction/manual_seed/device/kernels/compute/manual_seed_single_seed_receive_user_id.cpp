@@ -25,10 +25,9 @@ void kernel_main() {
     const uint32_t message = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/0);
     const bool is_core_id = (message != 0) ? true : false;
 
-    // A seed value of -1 (0xFFFFFFFF when interpreted as uint32_t) is a special value
+    // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
     // that skips rand_tile_init, leaving the PRNG state unchanged.
-    // Other negative int32_t values are not supported.
-    if (is_core_id && static_cast<int32_t>(seed) != -1) {
+    if (is_core_id && seed != UINT32_MAX) {
         rand_tile_init(seed);
     }
 
