@@ -70,7 +70,7 @@ struct Core {
 
     // Post SDPA
     // SDPA output cores 8 cores - run SDPA reduction and scatter
-    /*static constexpr bool is_sdpa_worker_core = get_named_compile_time_arg_val("is_sdpa_worker_core") == 1;
+    static constexpr bool is_sdpa_worker_core = get_named_compile_time_arg_val("is_sdpa_worker_core") == 1;
     // SDPA forwarder cores (6,9), (7,9) = 2 cores - forward fabric packets for SDPA CCL
     static constexpr bool is_sdpa_forwarder_core = get_named_compile_time_arg_val("is_sdpa_forwarder_core") == 1;
 
@@ -85,7 +85,7 @@ struct Core {
     // CCL sender core (11, 9) - reads from gather core, sends via fabric
     static constexpr bool is_ccl_sender_core = get_named_compile_time_arg_val("is_ccl_sender_core") == 1;
     // CCL receiver core = gather core (12, 9) - receives remote data, performs reduction
-    static constexpr bool is_ccl_receiver_core = get_named_compile_time_arg_val("is_ccl_receiver_core") == 1;*/
+    static constexpr bool is_ccl_receiver_core = get_named_compile_time_arg_val("is_ccl_receiver_core") == 1;
 };
 
 void kernel_main() {
@@ -318,29 +318,29 @@ void kernel_main() {
 
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
-    /* using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
-         get_named_compile_time_arg_val("sdpa_cb_local_l"),
-         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
-         get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
-         get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
-         get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
-         get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
-         get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
-         get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
-         get_named_compile_time_arg_val("sdpa_num_l_chunks"),
-         get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
-         get_named_compile_time_arg_val("sdpa_position_enabled"),
-         get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
+    using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
+        get_named_compile_time_arg_val("sdpa_cb_local_l"),
+        get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+        get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
+        get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
+        get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
+        get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
+        get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+        get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+        get_named_compile_time_arg_val("sdpa_position_enabled"),
+        get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
 
-     deepseek_b1_ops::SdpaReduceWorker::ReaderArgs sdpa_reduce_worker_reader_args;
-     if (constexpr is_sdpa_worker_core) {
-         sdpa_reduce_worker_reader_args = {
-             .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-         }
-     }
+    deepseek_b1_ops::SdpaReduceWorker::ReaderArgs sdpa_reduce_worker_reader_args;
+    if (constexpr is_sdpa_worker_core) {
+        sdpa_reduce_worker_reader_args = {
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        }
+    }
 
      using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
          get_named_compile_time_arg_val("sdpa_fwd_slots_per_round"),
@@ -428,7 +428,7 @@ void kernel_main() {
          get_named_compile_time_arg_val("ccl_receiver_num_standard_tiles"),
          get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
          get_named_compile_time_arg_val("ccl_receiver_has_residual"),
-         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;*/
+         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -646,55 +646,55 @@ void kernel_main() {
         get_named_compile_time_arg_val("vDHt"),
         get_named_compile_time_arg_val("mla_out_o_cb")>;
 
-    /* using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::WriterCTArgs<
-         get_named_compile_time_arg_val("sdpa_cb_local_l"),
-         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
-         get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
-         get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-         get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
-         get_named_compile_time_arg_val("sdpa_l1_alignment"),
-         get_named_compile_time_arg_val("sdpa_page_size_bytes"),
-         get_named_compile_time_arg_val("sdpa_slot_size"),
-         get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
-         get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
-         get_named_compile_time_arg_val("sdpa_num_l_chunks"),
-         get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
-         get_named_compile_time_arg_val("sdpa_cb_l_out"),
-         get_named_compile_time_arg_val("sdpa_scatter_num_tiles"),
-         get_named_compile_time_arg_val("sdpa_scatter_src_tile_size"),
-         get_named_compile_time_arg_val("sdpa_scatter_dst_tile_size"),
-         get_named_compile_time_arg_val("sdpa_scatter_face_size"),
-         get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
-         get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
-         1>;  // scatter_arrival_enabled=1 (signal matmul4 cores after each scatter row)
+    using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::WriterCTArgs<
+        get_named_compile_time_arg_val("sdpa_cb_local_l"),
+        get_named_compile_time_arg_val("sdpa_cb_local_ms"),
+        get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
+        get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
+        get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
+        get_named_compile_time_arg_val("sdpa_l1_alignment"),
+        get_named_compile_time_arg_val("sdpa_page_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_slot_size"),
+        get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
+        get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+        get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+        get_named_compile_time_arg_val("sdpa_cb_l_out"),
+        get_named_compile_time_arg_val("sdpa_scatter_num_tiles"),
+        get_named_compile_time_arg_val("sdpa_scatter_src_tile_size"),
+        get_named_compile_time_arg_val("sdpa_scatter_dst_tile_size"),
+        get_named_compile_time_arg_val("sdpa_scatter_face_size"),
+        get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
+        get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
+        1>;  // scatter_arrival_enabled=1 (signal matmul4 cores after each scatter row)
 
-     deepseek_b1_ops::SdpaReduceWorker::WriterArgs sdpa_reduce_worker_args;
-     if (constexpr Core::is_sdpa_worker_core) {
-         sdpa_reduce_worker_args = {
-             .r1_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .current_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .current_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-             .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
-             .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-             .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
-             // scatter_arrival_enabled=1, so we need to pass the semaphore address
-             .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
-         };
-     }
+    deepseek_b1_ops::SdpaReduceWorker::WriterArgs sdpa_reduce_worker_args;
+    if (constexpr Core::is_sdpa_worker_core) {
+        sdpa_reduce_worker_args = {
+            .r1_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_mesh_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_dst_chip_id = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_dst_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .current_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fwd_core_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r1_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r1_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_slot_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+            // scatter_arrival_enabled=1, so we need to pass the semaphore address
+            .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
+        };
+    }
 
      using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
          get_named_compile_time_arg_val("sdpa_fwd_slots_per_round"),
@@ -773,7 +773,7 @@ void kernel_main() {
          get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_y"),
          get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
          get_named_compile_time_arg_val("ccl_sender_num_connections")>;
-     */
+
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -994,7 +994,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("mla_out_ms_cb"),
         get_named_compile_time_arg_val("mla_out_final_cb")>;
 
-    /*using SdpaReduceWorkerCTArgs = SdpaReduceWorker::ComputeCTArgs<
+    using SdpaReduceWorkerCTArgs = SdpaReduceWorker::ComputeCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
         get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
@@ -1054,7 +1054,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
         get_named_compile_time_arg_val("ccl_receiver_cb_temp"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;*/
+        get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 
     deepseek_compute_kernel_init();
 #endif
@@ -1125,19 +1125,19 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
     }
 
-    /* if constexpr (Core::is_matmul4_core) {
-         constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
-         constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
-         constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
-         unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
-     }
+    if constexpr (Core::is_matmul4_core) {
+        constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
+        constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
+        constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
+    }
 
      if constexpr (Core::is_matmul5_core) {
          constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
          constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
          constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
          unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
-     }*/
+     }
 #endif
 
     DPRINT << " DONE ARGS" << ENDL();

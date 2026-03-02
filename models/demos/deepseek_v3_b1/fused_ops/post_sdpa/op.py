@@ -186,13 +186,6 @@ class PostSDPA:
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
         tile_32x32_size = TILE_32x32.get_tile_size(data_format)
 
-        # CCL intermediate tensor info (32x32 tiles, only when CCL is enabled)
-        if ccl_enabled:
-            intermediate_tensor_sample = intermediate_tensors_per_device[0]
-            intermediate_tile = intermediate_tensor_sample.tile
-            intermediate_tile_height, intermediate_tile_width = intermediate_tile.tile_shape
-            standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
-
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
         # ========================================================================
@@ -378,20 +371,20 @@ class PostSDPA:
         # ========================================================================
         # CB indices
         # ========================================================================
-        matmul4_in0_cb = 0  # Matmul4 input (kv_b2 grid)
-        matmul4_in1_cb = 1  # Matmul4 weights (kv_b2 grid)
-        matmul4_out_cb = 2  # Matmul4 output (kv_b2 grid)
-        gather2_dst_cb = 3  # Gather2 output = Mcast3 source (gather core)
-        matmul5_in0_cb = 4  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
-        matmul5_in1_cb = 5  # Matmul5 weights (112 active cores)
-        matmul5_out_cb = 6  # Matmul5 output (112 active cores)
-        gather3_dst_cb = 7  # Gather3 output = CCL local data (gather core)
-        ccl_sender_in_cb = 8  # CCL sender reads gather3 output (sender core)
-        ccl_remote_data_cb = 9  # CCL received remote data (receiver core)
-        ccl_residual_cb = 10  # CCL residual (receiver core)
-        ccl_temp_cb = 11  # CCL temp for compute (receiver core)
-        ccl_output_cb = 12  # CCL output (receiver core)
-        ccl_packet_header_cb = 13  # CCL packet headers (sender + receiver cores)
+        matmul4_in0_cb = 44  # Matmul4 input (kv_b2 grid)
+        matmul4_in1_cb = 45  # Matmul4 weights (kv_b2 grid)
+        matmul4_out_cb = 46  # Matmul4 output (kv_b2 grid)
+        gather2_dst_cb = 47  # Gather2 output = Mcast3 source (gather core)
+        matmul5_in0_cb = 48  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
+        matmul5_in1_cb = 49  # Matmul5 weights (112 active cores)
+        matmul5_out_cb = 50  # Matmul5 output (112 active cores)
+        gather3_dst_cb = 51  # Gather3 output = CCL local data (gather core)
+        ccl_sender_in_cb = 52  # CCL sender reads gather3 output (sender core)
+        ccl_remote_data_cb = 53  # CCL received remote data (receiver core)
+        ccl_residual_cb = 54  # CCL residual (receiver core)
+        ccl_temp_cb = 55  # CCL temp for compute (receiver core)
+        ccl_output_cb = 56  # CCL output (receiver core)
+        ccl_packet_header_cb = 57  # CCL packet headers (sender + receiver cores)
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
