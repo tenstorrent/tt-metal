@@ -1245,7 +1245,10 @@ class Generator(WarmupForwardMixin):
         read_events = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
-                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+                outputs = (
+                    tt_out[i][0].cpu(blocking=False),
+                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
+                )  # logits  # log-probs
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)
@@ -1265,18 +1268,19 @@ class Generator(WarmupForwardMixin):
 
         logits = []
         log_probs = []
+        has_log_probs = False
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
-                log_probs_i = (
-                    self.model[i].process_output_decode(
+                if tt_out[i][1] is not None:
+                    log_probs_i = self.model[i].process_output_decode(
                         tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
                     )
-                    if tt_out[i][1] is not None
-                    else torch.ones(logits_i.shape)
-                )
+                    has_log_probs = True
+                else:
+                    log_probs_i = None
                 logits.append(logits_i)
                 log_probs.append(log_probs_i)
             elif isinstance(tt_out[i], ttnn.Tensor):
@@ -1284,11 +1288,11 @@ class Generator(WarmupForwardMixin):
                     tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
                 logits.append(logits_i)
-                # add dummy tensor for log_probs
-                log_probs.append(torch.ones(logits_i.shape))
+                log_probs.append(None)
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
-        return (torch.cat(logits, 0), torch.cat(log_probs, 0))
+        combined_log_probs = torch.cat([lp for lp in log_probs if lp is not None], 0) if has_log_probs else None
+        return (torch.cat(logits, 0), combined_log_probs)
 
     def _decode_forward_no_trace(
         self,

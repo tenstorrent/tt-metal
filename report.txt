@@ -1,0 +1,69 @@
+Log Probs Update Report
+=======================
+
+Summary of Changes
+------------------
+
+The log_probs behavior has been updated so that LogProbsCalculator.calculate_log_probs()
+returns None instead of a device tensor (output_tensor) when:
+  - Log probs are not requested (enable_log_probs=False)
+  - The device count is not 8 or 32 (unsupported configuration)
+  - The number of devices for sharding is less than 2
+
+Previously, a tensor of ones was returned in all cases, wasting device-to-host bandwidth
+and making it impossible for consumers to distinguish "not computed" from actual values.
+
+Files Changed
+-------------
+
+1. models/common/sampling/tt_log_probs.py
+   - calculate_log_probs() now returns None for disabled/unsupported cases
+   - Added explicit num_devices check for 8 or 32
+
+2. models/tt_transformers/tt/generator.py
+   - read_decode_output(): Added None check in async path for log_probs
+   - process_decode_output_host(): Returns None for log_probs when not available
+     (instead of creating torch.ones dummy tensor)
+
+3. models/demos/llama3_70b_galaxy/tt/generator.py
+   - process_decode_output_host(): Returns None for log_probs when not available
+     (instead of creating torch.ones dummy tensor)
+
+4. /localdev/divanovic/vllm/vllm/v1/worker/tt_model_runner.py
+   - _get_output_tokens(): Removed assert for tt_log_probs is not None
+   - Now gracefully handles None tt_log_probs when logprobs were requested
+     but device doesn't support them (appends None to logprobs_per_dp)
+
+5. models/common/tests/test_sampling.py
+   - Added test_log_probs_returns_none_when_disabled: Verifies that
+     calculate_log_probs returns None when enable_log_probs is False,
+     and returns a tensor when enabled on supported devices.
+
+Tests to Execute
+----------------
+
+1. pytest models/common/tests/test_sampling.py::test_log_probs_calculation
+   - Tests that log-probs calculation produces correct results on T3K (8 devices)
+   - Verifies PCC against torch reference (F.log_softmax)
+   - Requires: 8-device mesh with FABRIC_1D
+
+2. pytest models/common/tests/test_sampling.py::test_log_probs_returns_none_when_disabled
+   - Tests that calculate_log_probs returns None when log_probs are disabled
+   - Tests that calculate_log_probs returns a tensor when enabled on supported devices
+   - Requires: 8-device mesh with FABRIC_1D
+
+3. pytest models/common/tests/test_sampling.py::test_log_probs_with_sub_core_grids_on_galaxy
+   - Tests log-probs with sub-core grid configuration on Galaxy (8,4) mesh
+   - Verifies PCC against torch reference
+   - Requires: (8,4) mesh device with FABRIC_1D_RING
+
+4. pytest models/demos/gpt_oss/tests/unit/test_sampling.py::test_gpt_oss_logprobs
+   - Integration test: log probability calculation with SamplingGenerator
+   - Verifies log probs are finite, <= 0, and not all identical
+   - Requires: (4,8) mesh device
+
+5. Manual verification:
+   - Run a decode forward pass with logprobs disabled and verify log_probs is None
+   - Run a decode forward pass with logprobs enabled on 8 or 32 devices and verify
+     log_probs is a valid tensor
+   - Verify vLLM model runner handles None logprobs without assertion errors

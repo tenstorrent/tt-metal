@@ -772,19 +772,20 @@ class Generator(WarmupForwardMixin):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
             if tt_log_probs is not None:
                 tt_log_probs = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
-            else:
-                tt_log_probs = torch.ones(tt_out.shape)
         else:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-            tt_log_probs = torch.ones(tt_out.shape)
+            tt_log_probs = None
         # Check if tensor is distributed across mesh devices (vocab_size // 8 indicates sharding)
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
             ttnn.synchronize_device(self.mesh_device)
-            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
+            return (
+                tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1),
+                tt_log_probs[0, 0, :, :] if tt_log_probs is not None else None,
+            )
 
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
+        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :] if tt_log_probs is not None else None
 
     def chat_completion(
         self,
