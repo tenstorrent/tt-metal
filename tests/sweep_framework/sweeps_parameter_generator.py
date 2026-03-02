@@ -20,9 +20,6 @@ from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 
-# DON'T import MasterConfigLoader here - it triggers lead_models_filter import
-# which reads environment variable. Import it later after env var is set.
-
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 
@@ -479,7 +476,7 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
 
 
 if __name__ == "__main__":
-    # CRITICAL: Parse --model-traced argument FIRST to set environment variable
+    # Parse --model-traced argument FIRST to set environment variable
     # This must happen BEFORE any other imports so sweep modules see the filter setting
     import sys
 
@@ -495,12 +492,10 @@ if __name__ == "__main__":
     # Set environment variable BEFORE any sweep modules are imported
     if model_traced_arg == "lead":
         os.environ["TTNN_LEAD_MODELS_ONLY"] = "1"
-        print("=" * 80, flush=True)
-        print("🔧 LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations", flush=True)
-        print(
-            f"🔧 Environment variable set: TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY')}", flush=True
-        )
-        print("=" * 80, flush=True)
+        logger.info("=" * 80)
+        logger.info("LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations")
+        logger.info(f"Environment variable set: TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY')}")
+        logger.info("=" * 80)
     else:
         os.environ["TTNN_LEAD_MODELS_ONLY"] = "0"
 
