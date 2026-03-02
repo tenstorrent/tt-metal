@@ -36,7 +36,7 @@ run_quad_galaxy_unit_tests() {
   # TODO: Currently failing on 1D/2D tests
   #tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy" ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
