@@ -61,6 +61,8 @@ class EltwiseAddCompressed:
         cb_in0_num_pages = num_tiles
         cb_in1_num_pages = num_tiles
 
+        assign_l1_addr = ct.get_assignment_l1_address()
+
         compile_time_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -68,6 +70,7 @@ class EltwiseAddCompressed:
             ("num_tiles", num_tiles),
             ("cb_in0_num_pages", cb_in0_num_pages),
             ("cb_in1_num_pages", cb_in1_num_pages),
+            ("assign_l1_addr", assign_l1_addr),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
