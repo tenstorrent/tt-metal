@@ -81,11 +81,19 @@ def run_unet_model(
     is_ci_env,
     is_ci_v2_env,
     sdxl_base_unet_location,
+    sdxl_inpainting_unet_location,
     iterations=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
+
+    # Select model location based on input channels
+    if input_shape[1] == 4:
+        model_location = sdxl_base_unet_location
+    else:
+        model_location = sdxl_inpainting_unet_location
+
     unet = UNet2DConditionModel.from_pretrained(
-        sdxl_base_unet_location,
+        model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
@@ -230,6 +238,7 @@ def test_unet(
     is_ci_env,
     is_ci_v2_env,
     sdxl_base_unet_location,
+    sdxl_inpainting_unet_location,
     reset_seeds,
 ):
     run_unet_model(
@@ -245,4 +254,5 @@ def test_unet(
         is_ci_env,
         is_ci_v2_env,
         sdxl_base_unet_location,
+        sdxl_inpainting_unet_location,
     )
