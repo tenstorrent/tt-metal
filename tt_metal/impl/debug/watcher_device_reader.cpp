@@ -684,20 +684,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
-        case dev_msgs::DebugSanitizeNocTargetInvalidXY: {
+        case dev_msgs::DebugSanitizeNocTargetInvalidXY:
             error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
-            // Debug: read the packed debug info from debug_insert_delays.feedback
-            // Format: my_x[noc_id] in [31:24], my_y[noc_id] in [23:16], target_x in [15:8], target_y in [7:0]
-            uint32_t debug_feedback = mbox_data_.watcher().debug_insert_delays().feedback();
-            error_msg += fmt::format(
-                " [DEBUG: my_x[noc]={}, my_y[noc]={}, sanitize_x={}, sanitize_y={}]",
-                (debug_feedback >> 24) & 0xFF,
-                (debug_feedback >> 16) & 0xFF,
-                (debug_feedback >> 8) & 0xFF,
-                debug_feedback & 0xFF);
             break;
-        }
         case dev_msgs::DebugSanitizeNocMulticastNonWorker:
             error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
