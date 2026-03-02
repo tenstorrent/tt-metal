@@ -625,6 +625,11 @@ def main():
         help="Generate configs and print plan without executing",
     )
     parser.add_argument(
+        "--list-names",
+        action="store_true",
+        help="Print experiment names (one per line) and exit. Respects --phases filter.",
+    )
+    parser.add_argument(
         "--skip-reset",
         action="store_true",
         help="Skip tt-smi board reset between experiments",
@@ -662,6 +667,11 @@ def main():
     if not exps:
         print("No experiments matched the filter.")
         sys.exit(1)
+
+    if args.list_names:
+        for e in exps:
+            print(e["name"])
+        return
 
     # Run directory
     if args.run_dir:
