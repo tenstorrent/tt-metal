@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "mesh_device_view_impl.hpp"

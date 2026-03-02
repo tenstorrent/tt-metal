@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 #include <algorithm>
@@ -41,9 +42,10 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
     TT_FATAL(producer_kernel != nullptr, "Producer kernel not found");
     TT_FATAL(consumer_kernel != nullptr, "Consumer kernel not found");
 
-    if (auto compute_producer = std::dynamic_pointer_cast<ComputeKernel>(producer_kernel)) {
+    if (auto compute_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(producer_kernel)) {
         TT_FATAL(dfb->config.num_producers == 1, "Only one Tensix is supported for now");
         dfb->config.producer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+        dfb->tensix_trisc_mask |= (1u << 2);  // Tensix producer uses trisc2
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
         const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
         for (DataMovementProcessor dm : producer_dm_riscvs) {
@@ -53,9 +55,10 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
         TT_FATAL(false, "Unsupported kernel type");
     }
 
-    if (auto compute_consumer = std::dynamic_pointer_cast<ComputeKernel>(consumer_kernel)) {
+    if (auto compute_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarComputeKernel>(consumer_kernel)) {
         TT_FATAL(dfb->config.num_consumers == 1, "Only one Tensix is supported for now");
         dfb->config.consumer_risc_mask = ::experimental::TENSIX_RISC_OFFSET;
+        dfb->tensix_trisc_mask |= (1u << 0);  // Default: Tensix consumer uses trisc0; use (1u << 3) for trisc3
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
         const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
@@ -205,7 +208,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     init.capacity = this->capacity;
     init.risc_mask_bits.dm_mask = this->risc_mask & 0xFF;
     init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
-    init.risc_mask_bits.reserved = 0;
+    init.risc_mask_bits.tensix_trisc_mask = this->tensix_trisc_mask & 0x0F;
     init.num_producers = this->config.num_producers;
     init.num_txn_ids = this->num_txn_ids;
     for (int i = 0; i < 4; i++) {
@@ -365,6 +368,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
 
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
+
     TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
         core_range_set.num_cores() == 1,

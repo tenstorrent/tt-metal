@@ -513,6 +513,8 @@ class FlashMLADecode:
         # =========================================================================
         q_df = input_tensor_q.dtype
         k_df = input_tensor_k.dtype
+        mask_df = ttnn.bfloat16
+        assert q_df == mask_df, "Q and mask must have the same data format"
         stats_df = ttnn.bfloat16
 
         # Create tile objects - Q uses tiny tiles, K/V use full tiles
@@ -533,6 +535,7 @@ class FlashMLADecode:
         # Tile sizes - use tile.get_tile_size(dtype) for proper sizing
         q_tile_size = q_tiny_tile.get_tile_size(q_df)
         k_tile_size = k_tile_obj.get_tile_size(k_df)
+        mask_tile_size = q_tile_size
         stats_tile_size = stats_tile.get_tile_size(stats_df)
 
         # =========================================================================
@@ -540,14 +543,14 @@ class FlashMLADecode:
         # =========================================================================
         cb_q_in = 0  # Q  input
         cb_k_in = 1  # K/V cache input
-        cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
-        cb_out_in = 3  # output input for tree reduction
-        # cb_index_id removed - position is now read directly from sharded L1
-        cb_out_o = 4  # output O from compute
-        cb_out_ms = 5  # output m/s stats from compute
-        cb_interm_out = 6  # intermediate output for tree reduction
-        cb_interm_ms = 7  # intermediate m/s stats for tree reduction
-        cb_out_final = 8  # final sharded output
+        cb_mask = 2  # Mask input
+        cb_ms_in = 3  # m/s stats input (from sender in tree reduction)
+        cb_out_in = 4  # output input for tree reduction
+        cb_out_o = 5  # output O from compute
+        cb_out_ms = 6  # output m/s stats from compute
+        cb_interm_out = 7  # intermediate output for tree reduction
+        cb_interm_ms = 8  # intermediate m/s stats for tree reduction
+        cb_out_final = 9  # final sharded output
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
@@ -652,6 +655,7 @@ class FlashMLADecode:
             ("receiver_ready_semaphore_id", receiver_ready_semaphore_id),
             ("cb_k_in", cb_k_in),
             ("cb_q_in", cb_q_in),
+            ("cb_mask", cb_mask),
             ("cb_out_in", cb_out_in),
             ("cb_ms_in", cb_ms_in),
             ("cb_out_o", cb_out_o),
@@ -673,6 +677,7 @@ class FlashMLADecode:
             ("dst_size", dst_size),
             ("cb_q_in", cb_q_in),
             ("cb_k_in", cb_k_in),
+            ("cb_mask", cb_mask),
             ("cb_interm_out", cb_interm_out),
             ("cb_interm_ms", cb_interm_ms),
             ("cb_out_in", cb_out_in),
@@ -698,6 +703,15 @@ class FlashMLADecode:
                 total_size=k_tiles * k_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[ttnn.CBFormatDescriptor(cb_k_in, k_df, k_tile_size)],
+            )
+        )
+
+        # cb_mask: Mask input
+        cb_descriptors.append(
+            ttnn.CBDescriptor(
+                total_size=mask_tile_size,
+                core_ranges=core_grid,
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_mask, mask_df, mask_tile_size)],
             )
         )
 
