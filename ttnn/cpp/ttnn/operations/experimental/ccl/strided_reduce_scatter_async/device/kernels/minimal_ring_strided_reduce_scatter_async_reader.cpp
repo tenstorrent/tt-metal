@@ -32,19 +32,15 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t dim = get_compile_time_arg_val(13);
 constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(14);
-constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(15);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(18);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-// [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
-// 0 = use computed formula (divisible case); >0 = wait for exactly this many mm blocks per chunk
-// (used when slice_Wt % mm_N_full_block_wt != 0 and the whole row is one chunk)
-constexpr uint32_t mm_blocks_sem_override = get_compile_time_arg_val(25);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(15);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(16);
+constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(17);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(18);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(19);
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
+constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
+// [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -60,8 +56,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 26;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via
-                                     // FUSE_MM_OP_SIGNALER define), [24]=slice_Ht, [25]=mm_blocks_sem_override
+    constexpr uint32_t ct_idx = 24;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -103,6 +99,10 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+#ifdef FUSE_MM_OP_SIGNALER
+    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t mm_sem_target = 0;
+#endif
     /**
     Iterate over chunks in the row-major order and reduce-scatter each chunk, one by one.
     In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
@@ -135,12 +135,23 @@ void kernel_main() {
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+#ifdef FUSE_MM_OP_SIGNALER
+                // Wait for matmul to finish writing the output blocks for this chunk.
+                // The matmul signals in a strided pattern: value k means k mm_blocks have been
+                // written in EACH N-full-block, so ceil(effective_chunk_width / mm_block_wt)
+                // signals guarantees all N-full-blocks covering this chunk are ready.
+                const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
+                mm_sem_target += sem_increment;
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+#endif
                 // Run a full ring reduce-scatter for the current chunk.
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 
+                    const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
+                        get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt);
                     // Wait for all chunk_piece_idx tiles for this ring iteration to be written by the neighboring
                     // device
                     if (do_reduce) {
@@ -197,20 +208,29 @@ void kernel_main() {
                                     mm_block_ht,
                                     chunk_width_in_tiles);
 
-                                if (slice_row < slice_Ht) {
+                                if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
+                                    slice_col < cols_before_actual_slice + slice_Wt) {
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
-                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                        slice_row,
+                                        slice_col - cols_before_actual_slice,
+                                        actual_slice_idx,
+                                        slice_Wt,
+                                        input_tensor_Wt);
                                     const uint32_t input_tile_id = global_tile_idx + batch_offset;
                                     noc_async_read(
                                         get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
-                                    l1_write_addr += page_size;
                                     if (do_reduce) {
                                         noc_async_read(
                                             get_noc_addr(global_tile_idx, intermediate_tensor_addrgen),
                                             intermediate_l1_write_addr,
                                             page_size);
-                                        intermediate_l1_write_addr += page_size;
                                     }
+                                }
+                                // Always advance: CB position i corresponds to iteration tile i,
+                                // so the writer can find valid tile data at the correct packet slot.
+                                l1_write_addr += page_size;
+                                if (do_reduce) {
+                                    intermediate_l1_write_addr += page_size;
                                 }
 
                                 get_next_tile_coordinates(
@@ -237,5 +257,10 @@ void kernel_main() {
         // Reset the semaphore before the next batch to avoid overflow
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
+
+#ifdef FUSE_MM_OP_SIGNALER
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_sem_target = 0;
+#endif
     }
 }

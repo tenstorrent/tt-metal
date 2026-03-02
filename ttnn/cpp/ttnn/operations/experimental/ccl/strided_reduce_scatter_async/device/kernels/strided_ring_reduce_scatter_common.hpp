@@ -11,6 +11,29 @@
  * Common utility functions for ring reduce scatter kernels.
  */
 
+/**
+ * Given the index of the slice being processed in this ring iteration, compute:
+ *   - mm_N_full_blocks_per_slice: the number of mm_N_full_block_wt-wide N-blocks that
+ *     cover the slice (may be more than 1 when the slice straddles an N-block boundary, or
+ *     fewer than the full N when slice_Wt < mm_N_full_block_wt).
+ *   - cols_before_actual_slice: the number of columns at the start of the first covering
+ *     N-block that lie to the LEFT of the slice (i.e. that must be skipped). Zero when
+ *     slice_Wt is divisible by mm_N_full_block_wt and the slice is aligned.
+ *
+ * Returns {mm_N_full_blocks_per_slice, cols_before_actual_slice}.
+ */
+FORCE_INLINE std::pair<uint32_t, uint32_t> get_slice_N_block_info(
+    const uint32_t actual_slice_idx, const uint32_t slice_Wt, const uint32_t mm_N_full_block_wt) {
+    const uint32_t slice_actual_begin = actual_slice_idx * slice_Wt;
+    const uint32_t slice_actual_end = slice_actual_begin + slice_Wt;
+    const uint32_t slice_N_begin = (slice_actual_begin / mm_N_full_block_wt) * mm_N_full_block_wt;
+    const uint32_t slice_N_end =
+        ((slice_actual_end + mm_N_full_block_wt - 1) / mm_N_full_block_wt) * mm_N_full_block_wt;
+    const uint32_t mm_N_full_blocks_per_slice = (slice_N_end - slice_N_begin) / mm_N_full_block_wt;
+    const uint32_t cols_before_actual_slice = slice_actual_begin - slice_N_begin;
+    return {mm_N_full_blocks_per_slice, cols_before_actual_slice};
+}
+
 FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool direction, const uint32_t ring_size) {
     /**
      * Wrap the slice index to the range [0, ring_size)
