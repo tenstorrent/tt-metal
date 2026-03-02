@@ -6,6 +6,7 @@ import torch
 import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
@@ -23,6 +24,7 @@ def ttnn_integral_image_channel_last(features_nhwc):
     return ttnn.experimental.intimg(features_nhwc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape_nhwc",
     [

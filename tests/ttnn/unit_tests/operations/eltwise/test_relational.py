@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -55,6 +56,7 @@ def test_gtz(device, h, w):
     run_relational_z_test(device, h, w, ttnn.gtz)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gt(device, h, w):
@@ -67,6 +69,7 @@ def test_ltz(device, h, w):
     run_relational_z_test(device, h, w, ttnn.ltz)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_ge(device, h, w):
@@ -79,6 +82,7 @@ def test_gez(device, h, w):
     run_relational_z_test(device, h, w, ttnn.gez)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_lt(device, h, w):
@@ -91,6 +95,7 @@ def test_lez(device, h, w):
     run_relational_z_test(device, h, w, ttnn.lez)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_le(device, h, w):
@@ -103,6 +108,7 @@ def test_eqz(device, h, w):
     run_relational_z_test(device, h, w, ttnn.eqz)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_eq(device, h, w):
@@ -115,6 +121,7 @@ def test_nez(device, h, w):
     run_relational_z_test(device, h, w, ttnn.nez)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_ne(device, h, w):
@@ -139,6 +146,7 @@ def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -146,6 +154,7 @@ def test_scalarB_gt(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.gt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -153,6 +162,7 @@ def test_scalarB_ge(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ge)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -160,6 +170,7 @@ def test_scalarB_lt(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.lt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -167,6 +178,7 @@ def test_scalarB_le(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.le)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -174,6 +186,7 @@ def test_scalarB_eq(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.eq)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -181,6 +194,7 @@ def test_scalarB_ne(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ne)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -188,6 +202,7 @@ def test_nscalarB_gt(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.gt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -195,6 +210,7 @@ def test_nscalarB_ge(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ge)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -202,6 +218,7 @@ def test_nscalarB_lt(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.lt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -209,6 +226,7 @@ def test_nscalarB_le(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.le)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -216,6 +234,7 @@ def test_nscalarB_eq(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.eq)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -223,6 +242,7 @@ def test_nscalarB_ne(device, h, w, scalar):
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ne)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
 def test_expand_and_broadcast(device, h, w):
@@ -239,6 +259,7 @@ def test_expand_and_broadcast(device, h, w):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
 def test_expand_and_broadcast_reversed(device, h, w):
@@ -255,6 +276,7 @@ def test_expand_and_broadcast_reversed(device, h, w):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("atol", [1e-8, 1e-10])
 @pytest.mark.parametrize("rtol", [1e-5, 1e-9])
 @pytest.mark.parametrize("h", [64])

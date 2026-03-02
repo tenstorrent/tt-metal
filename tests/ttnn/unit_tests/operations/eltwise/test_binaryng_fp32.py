@@ -7,6 +7,7 @@ import ttnn
 
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -156,6 +157,7 @@ def test_pow_fp32(device):
     assert status
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_hypot_multi_dtype(device, dtype):
     # Map ttnn dtypes to torch dtypes
@@ -176,6 +178,7 @@ def test_hypot_multi_dtype(device, dtype):
         assert_with_ulp(z_torch, z_tt_hypot, ulp_threshold=1)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_add_fp32_activ(device):
     x_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32)
     y_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32) * 4

@@ -7,13 +7,15 @@ import torch
 import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
-
+from models.common.utility_functions import skip_with_llk_assert, is_llk_assert_enabled
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.common.utility_functions import torch_random
+
 
 pytestmark = pytest.mark.use_module_device
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_sizes", [(1,)])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
@@ -348,6 +350,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
@@ -449,6 +452,7 @@ def test_resnet50_linear(device):
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shape_a,shape_b,shape_bias",
     [
@@ -782,6 +786,7 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
         _teardown_subdevice(device, sub_device_manager)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "batch_size, seq_len, k_size, n_size, fp32_dest_acc",
     [

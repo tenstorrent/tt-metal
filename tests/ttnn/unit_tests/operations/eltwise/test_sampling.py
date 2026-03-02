@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -181,6 +181,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -282,6 +283,7 @@ def test_sampling_callback(shape, k, p, seed, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shape",
     [

@@ -54,6 +54,7 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("matrix_size", [4, 8, 16, 32])
 @pytest.mark.parametrize("alpha", [-0.5, 0.5, 1.0, 1.5])
@@ -97,6 +98,7 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
     "matrix_dims",
@@ -153,6 +155,7 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("size", [4, 8, 16, 32, 64])
 @pytest.mark.parametrize("case_type", ["matrix_vector"])  # TODO "vector_matrix" not working
@@ -212,6 +215,7 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
     "shape",
@@ -269,6 +273,7 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_alpha_zero_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -304,6 +309,7 @@ def test_alpha_zero_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with alpha=0 should throw an error.")
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_input_tensor_with_invalid_shape_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -339,6 +345,7 @@ def test_input_tensor_with_invalid_shape_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with incompatible shapes should throw an error.")
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
     torch.manual_seed(0)
 
@@ -368,6 +375,7 @@ def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
     ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor, beta=0.0)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_cast_to_another_dtype(device):
     torch.manual_seed(0)
 
@@ -398,6 +406,7 @@ def test_cast_to_another_dtype(device):
     assert output_tensor.dtype == ttnn.float32, "Output tensor must be float32"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_unsupported_dtype_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -433,6 +442,7 @@ def test_unsupported_dtype_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with invalid dtype of input tensors should throw an error.")
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 def test_addmm_with_output_tensor_inplace_op(device, dtype):
     torch.manual_seed(0)
@@ -483,6 +493,7 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
     torch.manual_seed(0)
 

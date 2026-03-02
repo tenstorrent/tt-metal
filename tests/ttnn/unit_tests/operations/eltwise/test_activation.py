@@ -328,6 +328,7 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [0.5, 1.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

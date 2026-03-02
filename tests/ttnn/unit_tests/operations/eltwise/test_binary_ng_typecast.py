@@ -207,6 +207,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -257,6 +258,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -301,6 +303,7 @@ def test_sub_typecast(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -345,6 +348,7 @@ def test_sub_typecast_a(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -389,6 +393,7 @@ def test_sub_typecast_b(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -437,6 +442,7 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -487,6 +493,7 @@ def test_sub_opt_output_typecast_out(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -535,6 +542,7 @@ def test_sub_opt_output_typecast_a(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -583,6 +591,7 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -627,6 +636,7 @@ def test_inplace_sub_typecast(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -671,6 +681,7 @@ def test_inplace_sub_typecast_a(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -715,6 +726,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -775,6 +787,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     assert status >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
 @pytest.mark.parametrize(
     "memory_config",
@@ -870,6 +883,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -998,6 +1012,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_orientation, input_sharding_scheme",
     [

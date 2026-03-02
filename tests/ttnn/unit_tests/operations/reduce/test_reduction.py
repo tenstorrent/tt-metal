@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random, skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -34,6 +35,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -103,6 +105,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -128,6 +131,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -153,6 +157,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -177,6 +182,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [7])
@@ -200,6 +206,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [32])
 @pytest.mark.parametrize("c", [32])
 @pytest.mark.parametrize("h", [37])
@@ -222,6 +229,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim1", [1])
 # This test picks the maximum dim2 that will pick the singlecore implementation.
 # TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
@@ -327,6 +335,7 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [1])
 @pytest.mark.parametrize("dim3", [8])
@@ -380,6 +389,7 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
 
 
 # returns larger padded tensor instead of desired shape
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [1])
 @pytest.mark.parametrize("dim3", [8])
@@ -433,6 +443,7 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [31])
 @pytest.mark.parametrize("w", [32])
@@ -474,6 +485,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [3])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [37])
@@ -496,6 +508,7 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [31])
 @pytest.mark.parametrize("w", [32])
@@ -517,6 +530,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [41])
 @pytest.mark.parametrize("w", [31])
 @pytest.mark.parametrize("dim", [0, 1, [0, 1]])

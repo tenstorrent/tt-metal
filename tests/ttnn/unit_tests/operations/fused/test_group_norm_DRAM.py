@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_with_llk_assert
 
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
@@ -109,6 +109,7 @@ def run_group_norm_DRAM(
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -173,6 +174,7 @@ def test_group_norm_DRAM(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -189,6 +191,7 @@ def test_group_norm_no_input_mask_DRAM(device, N, C, H, W, num_groups, num_out_b
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_splits",

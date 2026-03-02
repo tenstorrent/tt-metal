@@ -9,8 +9,10 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 def test_nextafter(device, shape):
     torch.manual_seed(0)

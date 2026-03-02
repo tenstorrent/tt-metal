@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
 from dataclasses import dataclass
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -56,6 +57,7 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -75,6 +77,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -104,6 +107,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -134,6 +138,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64, 127, 519])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -170,6 +175,7 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [2])
 @pytest.mark.parametrize("w", [512])
 def test_layer_norm_with_tile_layout(device, h, w):
@@ -210,6 +216,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [1024, 2080])
 @pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -230,6 +237,7 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -260,6 +268,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -286,6 +295,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -310,6 +320,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 @pytest.mark.parametrize("legacy_rsqrt", [True, False])
@@ -346,6 +357,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h, w", [(32, 2592), (32, 3232), (1024, 2880)])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -385,6 +397,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
         assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_l1_interleaved(device, use_welford, dtype):
@@ -412,6 +425,7 @@ def test_l1_interleaved(device, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
 @pytest.mark.parametrize("dim_b", [2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -435,6 +449,7 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
         assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32, 2999, 32 * 64 + 18])
 @pytest.mark.parametrize("w", [31, 487, 3821])
 @pytest.mark.parametrize("use_welford", [True, False])

@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from models.common.utility_functions import torch_random
 from models.common.utility_functions import divup
-from models.common.utility_functions import is_llk_assert_enabled
+from models.common.utility_functions import is_llk_assert_enabled, skip_with_llk_assert
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -27,6 +27,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -61,6 +62,7 @@ def test_unequal_ranks(a_shape, b_shape, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a, b, c_golden",
     [
@@ -95,6 +97,7 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
     assert c.tolist() == c_golden
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -162,6 +165,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
@@ -241,6 +245,7 @@ def test_binary_sharded_bcast_no_identical(
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -299,6 +304,7 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -351,6 +357,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -419,6 +426,7 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -483,6 +491,7 @@ def test_binary_sharded_bcast_w_height_c(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -547,6 +556,7 @@ def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -612,6 +622,7 @@ def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -677,6 +688,7 @@ def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -739,6 +751,7 @@ def test_binary_sharded_bcast_hw_mixed_height(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -804,6 +817,7 @@ def test_binary_sharded_bcast_w_width(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -869,6 +883,7 @@ def test_binary_sharded_bcast_h_width(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -934,6 +949,7 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -1009,6 +1025,7 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_cor
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -1108,6 +1125,7 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     assert_with_pcc(out, expected)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([1, 5, 7, 2, 35]), torch.Size([1, 5, 7, 2, 35])),),
@@ -1154,6 +1172,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
@@ -1286,6 +1305,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
         assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 32, 64]), torch.Size([5, 7, 32, 64])),),
@@ -1332,6 +1352,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 32, 96]), torch.Size([5, 7, 32, 96])),),
@@ -1395,6 +1416,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [1.7, -0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
@@ -1530,6 +1552,7 @@ def test_binary_sharded_bcast_scalar_value(
         assert_with_pcc(out_tt_interleaved, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [1.7, -0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
@@ -1602,6 +1625,7 @@ def test_binary_sharded_bcast_scalar_value_uneven(
         assert_with_pcc(out_tt_interleaved, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
@@ -1652,6 +1676,7 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
         assert_with_pcc(tt_out, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [-0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
@@ -1687,6 +1712,7 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape, a_shard_size, b_shard_size, core_range",
     (
@@ -1762,6 +1788,7 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
     assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -1837,6 +1864,7 @@ def test_binary_sharded_invalid_row_major_layout(
         _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -1907,6 +1935,7 @@ def test_binary_sharded_row_major_layout_mixed(
     assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -1938,6 +1967,7 @@ def test_binary_subtile_no_bcast(a_shape, b_shape, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -1970,6 +2000,7 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -2011,6 +2042,7 @@ def test_binary_subtile_col_bcast(a_shape, b_shape, device):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -2047,6 +2079,7 @@ def test_binary_subtile_scalar_bcast(a_shape, b_shape, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -2091,6 +2124,7 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape_a",
     [
@@ -2142,6 +2176,7 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_yolov8_add_small(device):
     tor_a = torch.tensor(
         [
@@ -2263,6 +2298,7 @@ def rand_gen(shape, device, *, dtype, tt_dtype, min=0, max=1, memory_config):
     return pt, tt
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b",
     (
@@ -2288,6 +2324,7 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     assert compare_pcc([out_tt], [out_pt])
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_add_1m(device):
     torch.manual_seed(0)
     a = torch.ones(1, 1) * 1_000_000
@@ -2303,6 +2340,7 @@ def test_add_1m(device):
     assert_with_pcc(c, ttnn.to_torch(tc))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
@@ -2319,6 +2357,7 @@ def test_add_i32(device):
     assert torch.equal(torch_add, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -2356,6 +2395,7 @@ def test_sub_implicit_broadcast(device, shapes):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_small_fp32_multiply(device):
     # Scaling with 0.01 to get realistic values that appear during training.
     a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
@@ -2382,6 +2422,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2453,6 +2494,7 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2518,6 +2560,7 @@ def test_binary_sharded_bcast_h_block(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2583,6 +2626,7 @@ def test_binary_sharded_bcast_scalar_block(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2653,6 +2697,7 @@ height_sharded_memory_config = ttnn.create_sharded_memory_config(
 )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([1, 1, 16384, 4]), torch.Size([])),),
@@ -2701,6 +2746,7 @@ def test_binary_sharded_bcast_scalar_zero_dim(
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2760,6 +2806,7 @@ def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2802,6 +2849,7 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -2871,6 +2919,7 @@ def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_tt_sharded, out_pt)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -2937,6 +2986,7 @@ def test_binary_sharded_bcast_w_width_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3009,6 +3059,7 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3074,6 +3125,7 @@ def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3139,6 +3191,7 @@ def test_binary_sharded_bcast_h_width_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3204,6 +3257,7 @@ def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3269,6 +3323,7 @@ def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3334,6 +3389,7 @@ def test_binary_sharded_bcast_scalar_width_uneven(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3434,6 +3490,7 @@ def gen_tensor_for_dtype(shape, device, dtype_pt, dtype_tt, *, low=1, high=10, m
     return pt, tt
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -3467,6 +3524,7 @@ def test_binary_sfpu_row_bcast(a_shape, b_shape, device):
     assert_with_pcc(calculated, golden, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -3515,6 +3573,7 @@ def test_binary_sfpu_row_bcast_multi_dtype(a_shape, b_shape, dtype_pt, dtype_tt,
         assert_with_pcc(calculated, golden, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3604,6 +3663,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3700,6 +3760,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
 @pytest.mark.parametrize("is_legacy", [True, False])
 def test_add_sharded(device, input_shape, is_legacy):
@@ -3726,6 +3787,7 @@ def test_add_sharded(device, input_shape, is_legacy):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3820,6 +3882,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3892,6 +3955,7 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -3968,6 +4032,7 @@ def test_binary_sharded_bcast_identical_mixed_strategy(device, dtype_pt, dtype_t
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -4036,6 +4101,7 @@ def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device, dtype_pt, 
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -4102,6 +4168,7 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
     assert torch.equal(out, expected)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -4179,6 +4246,7 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     assert_with_pcc(out, expected)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -4246,6 +4314,7 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     assert_with_pcc(out, expected)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
@@ -4290,6 +4359,7 @@ def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
         assert_with_pcc(out_pt, out_tt_sharded)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_binary_reshard(device):
     torch.manual_seed(0)
     # Create input tensors (32x8192 = 1x256 tiles)
@@ -4332,6 +4402,7 @@ def test_binary_reshard(device):
     assert_with_pcc(expected, result)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "output_memory_config",
     [
@@ -4379,6 +4450,7 @@ def test_binary_sharded_half_mem_config(device, input_shard_orientation, output_
     assert_with_pcc(torch_output, output)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "output_memory_config",
     [
@@ -4419,6 +4491,7 @@ def test_binary_sharded_half_mem_config_scalar(device, output_memory_config, sca
     assert_with_pcc(torch_output, output)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_binary_bcast_sharded_output_half_mem_config(device):
     """Test binary broadcast with generic sharded memory config inheriting from sharded input"""
     torch.manual_seed(0)
@@ -4449,6 +4522,7 @@ def test_binary_bcast_sharded_output_half_mem_config(device):
     assert_with_pcc(torch_output, output)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "memory_config",
     [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
@@ -4475,6 +4549,7 @@ def test_binary_sharded_half_mem_config_interleaved(device, memory_config):
     assert_with_pcc(torch_output, ttnn_result)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_binary_sharded_output_uneven(device):
     h_dim = 544
     torch.manual_seed(0)

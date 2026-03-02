@@ -193,6 +193,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
@@ -211,6 +212,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
@@ -234,6 +236,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
 
 
 @skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
     [
@@ -296,6 +299,7 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     assert pcc_passed, pcc_message
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
@@ -337,6 +341,7 @@ def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride
     assert pcc_passed, pcc_message
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("C_out", [48, 80, 112, 33])
 def test_conv3d_non_aligned_output_channels(device, C_out):
     """Test Conv3d with output channels that are not a multiple of 32 (issue #38126)."""

@@ -64,6 +64,7 @@ def test_ttt_where_0d(device):
     _ttt_where_test_impl(device, ())
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [16, 32, 64, 65, 1024])
 def test_ttt_where_1d(device, h):
     if is_watcher_enabled():
@@ -71,6 +72,7 @@ def test_ttt_where_1d(device, h):
     _ttt_where_test_impl(device, (h))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [0, 16, 32, 64, 65, 1024])
 @pytest.mark.parametrize("w", [0, 16, 32, 64, 65, 1024])
 def test_ttt_where_2d(device, h, w):
@@ -79,6 +81,7 @@ def test_ttt_where_2d(device, h, w):
     _ttt_where_test_impl(device, (h, w))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("d4", [16])
 @pytest.mark.parametrize("d3", [16])
 @pytest.mark.parametrize("h", [16])
@@ -87,6 +90,7 @@ def test_ttt_where_4d(device, d4, d3, h, w):
     _ttt_where_test_impl(device, (d4, d3, h, w))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("d5", [16])
 @pytest.mark.parametrize("d4", [16])
 @pytest.mark.parametrize("d3", [16])
@@ -96,6 +100,7 @@ def test_ttt_where_5d(device, d5, d4, d3, h, w):
     _ttt_where_test_impl(device, (d5, d4, d3, h, w))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [tuple([32] * i) for i in range(6)])
 def test_ttt_where_shapes(device, shape):
     if is_watcher_enabled():
@@ -103,6 +108,7 @@ def test_ttt_where_shapes(device, shape):
     _ttt_where_test_impl(device, shape)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.xfail(reason="Integer data types are not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32])
 def test_ttt_where_int_types(device, tt_dtype):
@@ -111,6 +117,7 @@ def test_ttt_where_int_types(device, tt_dtype):
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_ttt_where_float_types(device, tt_dtype):
@@ -119,6 +126,7 @@ def test_ttt_where_float_types(device, tt_dtype):
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported.")
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_ttt_where_layouts(device, layout):

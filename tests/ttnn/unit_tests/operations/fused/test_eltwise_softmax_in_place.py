@@ -9,6 +9,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -65,6 +66,7 @@ test_sweep_args = [
 ]
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, data_seed",
     (test_sweep_args),

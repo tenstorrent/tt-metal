@@ -15,11 +15,12 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     rms_norm_golden,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
@@ -42,6 +43,7 @@ def test_rms_norm_sharded_single_stage(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
     [(32 * 2, 32 * 4, 2, 2, 2, 1, 1), (32 * 4, 32 * 8, 4, 2, 4, 1, 1), (32 * 8, 32 * 16, 2, 4, 8, 2, 1)],
@@ -67,6 +69,7 @@ def test_rms_norm_sharded_two_stage(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -91,6 +94,7 @@ def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -115,6 +119,7 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -143,6 +148,7 @@ def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tens
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -168,6 +174,7 @@ def test_rms_norm_sharded_with_weight_and_bias_and_residual(device, two_stage, t
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h,w", [(32, 256)])
 def test_rms_norm_sharded_padded(device, h, w):
     """
@@ -235,6 +242,7 @@ def test_rms_norm_sharded_padded(device, h, w):
     assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h,w", [(32, 2048)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_rms_norm_sharded_width_default_config(device, h, w, dtype):

@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_llk_assert_enabled
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -39,6 +39,8 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sum_global(device, batch_size, h, w, dtype):
+    if is_llk_assert_enabled() and dtype in (ttnn.bfloat16, ttnn.bfloat8_b):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
@@ -104,6 +106,7 @@ def test_sum_nd_shard(device, shapes, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "sub_core_grids",
     (

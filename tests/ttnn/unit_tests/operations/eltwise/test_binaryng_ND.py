@@ -8,10 +8,12 @@ import torch
 import random
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -103,6 +105,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shapes",
     [

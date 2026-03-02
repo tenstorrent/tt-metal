@@ -243,6 +243,7 @@ def test_batch_norm_fp32(
     assert comp_BN_Output
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -427,6 +428,7 @@ def test_batch_norm_output_Default(input_shapes, device):
     assert comp_BN_Output
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     [

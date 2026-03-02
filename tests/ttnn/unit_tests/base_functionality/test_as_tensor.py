@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.mark.parametrize("height", [7])
@@ -21,6 +22,7 @@ def test_as_tensor(device, height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("height", [2**15])
 @pytest.mark.parametrize("width", [2**16])
 def test_allocate_large_tensor(device, height, width):

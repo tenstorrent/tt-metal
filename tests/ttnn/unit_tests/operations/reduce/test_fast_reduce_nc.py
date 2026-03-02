@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
+from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc, skip_with_llk_assert
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -39,6 +39,7 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
     return tt_input, tt_output, torch_input
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -95,6 +96,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
 
 
 # Program caching test
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dims",
     ([0], [1], [0, 1]),

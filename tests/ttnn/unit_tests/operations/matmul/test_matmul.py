@@ -10,7 +10,13 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
+from models.common.utility_functions import (
+    comp_pcc,
+    is_blackhole,
+    is_llk_assert_enabled,
+    skip_with_llk_assert,
+    skip_for_blackhole,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -2420,6 +2426,7 @@ def test_small_matmul_pcc(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(32, 32)])
 def test_linear_with_optional_output_tensor(device, shape):
     torch.manual_seed(0)
@@ -2687,6 +2694,7 @@ def test_matmul_padding(
     assert torch.allclose(golden_output, output, atol=1e-6)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_shape", [(1576, 768)])
 @pytest.mark.parametrize("weight_shape", [(768, 768)])
 def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):

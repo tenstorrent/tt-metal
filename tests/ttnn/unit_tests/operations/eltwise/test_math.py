@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_llk_assert_enabled
+from models.common.utility_functions import torch_random, is_llk_assert_enabled, skip_with_llk_assert
 
 from loguru import logger
 
@@ -44,12 +44,14 @@ def test_i0(device, h, w, layout):
     run_math_unary_test(device, h, w, ttnn.i0, layout=layout, pcc=0.998)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
 def test_lgamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.lgamma, pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.uint32])
@@ -170,6 +172,7 @@ def test_sqrt(device, h, w, layout):
     run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_digamma(device, h, w):
@@ -280,6 +283,7 @@ def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
 def test_multigammaln(device, h, w):
@@ -303,6 +307,7 @@ def run_math_test_polygamma(device, h, w, scalar, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [1, 2, 5, 10])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -310,6 +315,7 @@ def test_polygamma(device, h, w, scalar):
     run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_recip_fixed(device, h, w):

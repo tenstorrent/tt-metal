@@ -92,6 +92,7 @@ def test_cumsum(size, dim, dtypes, device):
                 assert_allclose(expected_output, torch_output)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -152,6 +153,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert device.num_program_cache_entries() >= 1
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -202,6 +204,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
     assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout",
     [

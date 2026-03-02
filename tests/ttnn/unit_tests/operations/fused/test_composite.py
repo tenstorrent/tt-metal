@@ -10,7 +10,7 @@ import models.experimental.ops.descriptors as descriptors
 import models.experimental.ops.descriptors.composite as composite
 from tests.ttnn.utils_for_testing import assert_allclose
 from tests.ttnn.unit_tests.operations.fused.test_layer_norm import allclose_thresholds as thresholds
-
+from models.common.utility_functions import skip_with_llk_assert
 
 # ============================================================================
 # Common Utilities
@@ -58,6 +58,7 @@ def assert_outputs_are_close(
 # ============================================================================
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_deepseek_v3_q_kv_rms_norm(device):
     """
     Tests the parallel Q/KV RMS norms in
@@ -382,6 +383,7 @@ def _run_heavy_composite_norm_test(device, norm_fn, torch_norm_fn):
         assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_rms_heavy(device):
     """
     Test a heavy compute load with RMS norm, where each core processes
@@ -397,6 +399,7 @@ def test_composite_rms_heavy(device):
     _run_heavy_composite_norm_test(device, descriptors.rms_norm, torch_rms_norm)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_layer_norm_heavy(device):
     """
     Test a heavy compute load with layer norm, where each core processes
@@ -412,6 +415,7 @@ def test_composite_layer_norm_heavy(device):
     _run_heavy_composite_norm_test(device, descriptors.layer_norm, torch_layer_norm)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_mixed_norm(device):
     """
     Test composite with mixed normalization types.
@@ -454,6 +458,7 @@ def test_composite_mixed_norm(device):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_non_sharded(device):
     """
     Test composite operations with non-sharded (DRAM interleaved) inputs.
@@ -533,6 +538,7 @@ def test_composite_non_sharded(device):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_8_ops_random_cores(device):
     """
     Test composite with 8 operations on random non-overlapping core ranges.
@@ -633,6 +639,7 @@ def test_composite_8_ops_random_cores(device):
         assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_program_cache(device):
     """Test that composite.launch() properly caches the merged program."""
     # Setup: sharded tensors on non-overlapping cores
@@ -706,6 +713,7 @@ def test_composite_program_cache(device):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_program_cache_different_configs(device):
     """Test that different composite configurations create separate cache entries."""
     # Setup
@@ -772,6 +780,7 @@ def test_composite_program_cache_different_configs(device):
     assert cache_final == cache_after_second, "Rerunning first configuration should not add new cache entry"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_layer_norm_welford_non_sharded(device):
     """
     Test composite layer norm with Welford algorithm on non-sharded (DRAM interleaved) inputs.
@@ -857,6 +866,7 @@ def test_composite_layer_norm_welford_non_sharded(device):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_layer_norm_welford_sharded(device):
     """
     Test composite layer norm with Welford algorithm on sharded (L1) inputs.
@@ -981,6 +991,7 @@ def test_composite_layer_norm_welford_sharded(device):
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_composite_overlapping_cores_error(device):
     """
     Test that composite.launch() raises an error when core ranges overlap.

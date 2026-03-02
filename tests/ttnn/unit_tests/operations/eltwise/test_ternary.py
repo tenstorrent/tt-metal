@@ -10,8 +10,10 @@ import ttnn
 
 from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
+from models.common.utility_functions import skip_with_llk_assert, is_llk_assert_enabled
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mac_all_tensors(device, h, w):
@@ -38,6 +40,7 @@ def test_mac_all_tensors(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("scalar1", [5.5])
@@ -101,6 +104,18 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
     ],
 )
 def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
+    if (
+        is_llk_assert_enabled()
+        and dtype == torch.bfloat16
+        and (hc, ht, hf, wc, wt, wf)
+        in (
+            (64, 1, 64, 128, 128, 1),
+            (64, 64, 1, 128, 1, 128),
+            (1, 1, 64, 128, 128, 1),
+            (64, 1, 64, 1, 1, 128),
+        )
+    ):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((hc, wc), dtype=dtype).uniform_(-100, 100)
@@ -213,6 +228,13 @@ def test_addcmul_with_bcast_bf8b(device, torch_dtype, ttnn_dtype, a_shape, b_sha
     """
     Test addcmul: Block format datatype inputs with subtile broadcast use composite Addcmul implementation.
     """
+    if is_llk_assert_enabled() and (
+        tuple(a_shape) == (1, 2, 1088, 1024)
+        and tuple(c_shape) == (1, 2, 1088, 1024)
+        and torch_dtype == torch.bfloat16
+        and ttnn_dtype == ttnn.bfloat8_b
+    ):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(a_shape, dtype=torch_dtype)

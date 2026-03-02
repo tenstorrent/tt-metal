@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_llk_assert_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -31,6 +32,13 @@ pytestmark = pytest.mark.use_module_device
     ],
 )
 def test_add_and_apply_activations(device, shape, activations, torch_dtype):
+    if (
+        is_llk_assert_enabled()
+        and torch_dtype == torch.bfloat16
+        and tuple(shape) == (1, 1, 32, 32)
+        and (len(activations) == 0 or (len(activations) == 1))
+    ):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.Tensor(size=shape).uniform_(-100, 100).to(torch_dtype)

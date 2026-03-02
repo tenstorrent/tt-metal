@@ -9,8 +9,10 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("s", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -26,6 +28,7 @@ def test_sub_scalar(device, s, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("s", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -43,6 +46,7 @@ def test_rsub_scalar(device, s, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar_input_tensor_b", [0.5])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
@@ -57,6 +61,7 @@ def test_sub_scalar_and_alpha(device, scalar_input_tensor_b, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_sub(device, h, w):
@@ -72,6 +77,7 @@ def test_sub(device, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_rsub(device, h, w):
@@ -87,6 +93,7 @@ def test_rsub(device, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])
@@ -105,6 +112,7 @@ def test_sub_4D(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])

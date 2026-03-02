@@ -9,6 +9,7 @@ from tests.ttnn.utils_for_testing import assert_allclose
 from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_manual_seed_different_argument_calls(device):
     """
     Test that manual_seed accepts various valid argument configurations.
@@ -35,6 +36,7 @@ def test_manual_seed_different_argument_calls(device):
     ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=user_id_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_manual_tensors_wrong_config(device):
     """
     Test that manual_seed correctly rejects invalid argument combinations.
@@ -46,6 +48,7 @@ def test_manual_tensors_wrong_config(device):
         ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=7)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_manual_seed_base_functionality(device):
     """
     Test that manual_seed produces deterministic and reproducible results.

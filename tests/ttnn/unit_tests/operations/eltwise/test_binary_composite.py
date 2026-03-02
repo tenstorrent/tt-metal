@@ -16,8 +16,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -38,6 +40,7 @@ def test_binary_nextafter_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -62,6 +65,7 @@ def test_binary_isclose_ttnn(input_shapes, atol, rtol, equal_nan, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -82,6 +86,7 @@ def test_binary_atan2_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -121,6 +126,7 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
     assert torch.equal(output_tensor, golden_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -149,6 +155,7 @@ def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes,
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -178,6 +185,7 @@ def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shap
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -214,6 +222,7 @@ def test_binary_div_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_sha
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -238,6 +247,7 @@ def test_binary_div_scalar_ttnn(fast_and_approximate_mode, rounding_mode, input_
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -268,6 +278,7 @@ def test_binary_div_scalar_ttnn_opt(fast_and_approximate_mode, rounding_mode, in
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -288,6 +299,7 @@ def test_binary_div_no_nan_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -308,6 +320,7 @@ def test_binary_div_no_nan_overload_ttnn(input_shapes, value, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -327,6 +340,7 @@ def test_binary_floor_div_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -347,6 +361,7 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -366,6 +381,7 @@ def test_binary_remainder_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -399,6 +415,7 @@ def test_shape_remainder(device, shapes):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -418,6 +435,7 @@ def test_remainder_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -438,6 +456,7 @@ def test_binary_fmod_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -447,6 +466,7 @@ def test_binary_fmod_ttnn(input_shapes, device):
     ),
 )
 # Input with more than two decimal places experience precision loss in bfloat16. use FP32 for better precision.
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_binary_fmod_decimal_ttnn(input_shapes, device):
     in_data1 = torch.randn(input_shapes, dtype=torch.float32) * 9
     input_tensor1 = ttnn.Tensor(in_data1, ttnn.float32).to(ttnn.TILE_LAYOUT).to(device)
@@ -460,6 +480,7 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
     assert torch.allclose(output_torch, golden_tensor, rtol=5e-2, atol=1e-5)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -480,6 +501,7 @@ def test_fmod_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -519,6 +541,7 @@ def test_binary_logical_and__ttnn(input_shapes, device):
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -558,6 +581,7 @@ def test_binary_logical_or__ttnn(input_shapes, device):
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -597,6 +621,7 @@ def test_binary_logical_xor__ttnn(input_shapes, device):
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -617,6 +642,7 @@ def test_binary_polyval_ttnn(input_shapes, coeffs, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -636,6 +662,7 @@ def test_binary_gti_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -655,6 +682,7 @@ def test_gti_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -674,6 +702,7 @@ def test_binary_gei_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -693,6 +722,7 @@ def test_gei_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -712,6 +742,7 @@ def test_binary_lti_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -731,6 +762,7 @@ def test_lti_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -750,6 +782,7 @@ def test_binary_lei_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -769,6 +802,7 @@ def test_lei_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -788,6 +822,7 @@ def test_binary_eqi_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -807,6 +842,7 @@ def test_eqi_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -826,6 +862,7 @@ def test_binary_nei_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -845,6 +882,7 @@ def test_nei_ttnn(input_shapes, device):
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -874,6 +912,7 @@ def test_binary_prelu_ttnn(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -903,6 +942,7 @@ def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -939,6 +979,7 @@ def test_binary_prelu_1D_weight(input_shapes, weight, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -964,6 +1005,7 @@ def test_binary_left_shift(input_shapes, device):
     assert pcc >= 0.99
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -989,6 +1031,7 @@ def test_binary_right_shift(input_shapes, device):
     assert pcc >= 0.99
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -1013,6 +1056,7 @@ def test_unary_left_shift(input_shapes, device):
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (

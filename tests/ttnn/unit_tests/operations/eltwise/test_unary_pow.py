@@ -10,6 +10,7 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
     flush_subnormal_values_to_zero,
 )
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def generate_clean_bf16_tensor(dtype=torch.bfloat16):
@@ -65,6 +66,7 @@ def test_pow_arange_masking(exponent, device):
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "op_type,exponent",
     [

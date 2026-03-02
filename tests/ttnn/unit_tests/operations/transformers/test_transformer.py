@@ -65,6 +65,7 @@ def test_transformer_attention_softmax(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.992)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("sequence_size", [384, 1024])

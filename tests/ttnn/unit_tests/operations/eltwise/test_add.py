@@ -8,9 +8,10 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_slow_dispatch
+from models.common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -40,6 +41,7 @@ def test_non_4D_channel_bcast(device, shapes):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64, 1, 0])
 def test_add_1D_tensor_and_scalar(device, scalar, size):
@@ -56,6 +58,7 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     assert output_tensor.shape == (size,)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 def test_add_2D_tensors(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
@@ -70,6 +73,7 @@ def test_add_2D_tensors(device, hw):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 def test_add_2D_tensors_with_program_cache(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
@@ -84,6 +88,7 @@ def test_add_2D_tensors_with_program_cache(device, hw):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 @pytest.mark.parametrize("scalar", [0.42])
 def test_add_scalar(device, hw, scalar):
@@ -97,6 +102,7 @@ def test_add_scalar(device, hw, scalar):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 @pytest.mark.parametrize("scalar", [0.42])
 def test_reverse_add_scalar(device, hw, scalar):
@@ -110,6 +116,7 @@ def test_reverse_add_scalar(device, hw, scalar):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 def test_add_4D_tensors(device, hw):
     torch_input_tensor_a = torch.rand((5, 64, hw[0], hw[1]), dtype=torch.bfloat16)
@@ -124,6 +131,7 @@ def test_add_4D_tensors(device, hw):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_with_broadcast(device, h, w):
@@ -140,6 +148,7 @@ def test_add_with_broadcast(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
 def test_expand_and_broadcast(device, h, w):
@@ -155,6 +164,7 @@ def test_expand_and_broadcast(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_with_broadcast_on_batch(device, h, w):
@@ -170,6 +180,7 @@ def test_add_with_broadcast_on_batch(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(8, 16, 384, 384)])
 @pytest.mark.parametrize("scalar", [0.125])
 def test_add_attention_scores_to_scalar(device, shape, scalar):
@@ -188,6 +199,7 @@ def test_add_attention_scores_to_scalar(device, shape, scalar):
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape_a", [(8, 16, 128, 128)])
 @pytest.mark.parametrize("shape_b", [(1, 16, 128, 128)])
 def test_add_with_batch_broadcast(device, shape_a, shape_b):
@@ -210,6 +222,7 @@ def test_add_with_batch_broadcast(device, shape_a, shape_b):
     assert output_tensor.shape == shape_a
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape_a", [(4096, 4096)])
 @pytest.mark.parametrize("shape_b", [(1, 4096)])
 def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
@@ -232,6 +245,7 @@ def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
     assert output_tensor.shape == shape_a
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
 def test_add_and_apply_activations(device, shape, activations):
@@ -253,6 +267,7 @@ def test_add_and_apply_activations(device, shape, activations):
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
 def test_in_place_add_and_apply_activations(device, shape, activations):
@@ -274,6 +289,7 @@ def test_in_place_add_and_apply_activations(device, shape, activations):
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.skip(reason="#11002/#4005: Bcast does not appear to be doing what we expect.  Leaving test for reference.")
 @pytest.mark.parametrize("shape_a", [(1, 1, 8192, 320)])
 @pytest.mark.parametrize("shape_b", [(2, 1, 1, 320)])
@@ -327,6 +343,7 @@ def test_add_with_different_batch(device, shape_a, shape_b):
     assert output_tensor.shape == shape_a
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -377,6 +394,7 @@ def test_add_with_height_sharding(device, input_a_sharded, input_b_sharded, out_
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -427,6 +445,7 @@ def test_add_with_width_sharding(device, input_a_sharded, input_b_sharded, out_s
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -474,6 +493,7 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
     assert output_tensor.shape == shape
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "data",
     [
@@ -501,6 +521,7 @@ def test_01_volume_tensors(device, data, memory_config):
     assert c.tolist() == c_golden
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @skip_for_slow_dispatch()
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])

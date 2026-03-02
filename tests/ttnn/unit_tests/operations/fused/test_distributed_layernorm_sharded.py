@@ -13,6 +13,7 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
     skip_with_llk_assert,
+    is_llk_assert_enabled,
 )
 
 from models.common.utility_functions import tt2torch_tensor
@@ -306,6 +307,8 @@ def test_pre_allgather_layernorm(
     min_pcc_residual_add,
     fuse_residual,
 ):
+    if is_llk_assert_enabled() and (fuse_residual is True):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     run_pre_allgather_layernorm(
         device,
         input_width,

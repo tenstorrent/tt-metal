@@ -9,9 +9,10 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import torch_random, is_watcher_enabled
+from models.common.utility_functions import torch_random, is_watcher_enabled, skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
@@ -40,6 +41,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_vector",
     [
@@ -74,6 +76,7 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def run_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
@@ -116,6 +119,7 @@ def run_softmax_stable_with_program_cache(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 128])
 @pytest.mark.parametrize("w", [1024, 1500])
@@ -143,6 +147,7 @@ def test_softmax_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def run_softmax_sharded_stable(
     device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
@@ -208,6 +213,7 @@ def run_softmax_sharded_stable(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("num_heads", [4])
 @pytest.mark.parametrize("h", [384])
@@ -236,6 +242,7 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -256,6 +263,7 @@ def test_softmax(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)
@@ -268,6 +276,7 @@ def test_softmax_with_3D(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_softmax_with_padded_tile_layout(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 2, 2), -10, 10, dtype=torch.bfloat16)
@@ -282,6 +291,7 @@ def test_softmax_with_padded_tile_layout(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_softmax_with_padded_tile_layout_large(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 100, 1200), -10, 10, dtype=torch.bfloat16)
@@ -296,6 +306,7 @@ def test_softmax_with_padded_tile_layout_large(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
 def test_specific_tensor_combination(device):
     current_dir = os.path.dirname(os.path.realpath(__file__))
@@ -315,6 +326,7 @@ def test_specific_tensor_combination(device):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -338,6 +350,7 @@ def test_5d_softmax(device, input_shape, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("input_shape", [(16, 7, 7)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("dlayout", [ttnn.TILE_LAYOUT])
@@ -378,6 +391,7 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_softmax_sd(device):
     shape = (1, 16, 256, 256)
 
@@ -412,6 +426,7 @@ def test_softmax_sd(device):
     passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "shape, dim, dtype",
     [
@@ -445,6 +460,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     assert_with_pcc(torch_output, ttnn_output, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "fp32_acc_en, math_approx_mode, expected_ulp, numeric_stable",
     [
@@ -486,6 +502,7 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     assert_with_ulp(torch_output, output_torch, expected_ulp)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_softmax_4096x4096_fp32(device):
     if is_watcher_enabled():
         pytest.skip("Skipping test with watcher enabled, see #37269")

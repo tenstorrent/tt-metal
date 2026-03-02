@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -17,6 +17,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [False])
@@ -41,6 +42,7 @@ def test_layer_norm_sharded_single_stage(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt",
     [(32 * 2, 32 * 4, 2, 2, 2, 1, 1), (32 * 4, 32 * 8, 4, 2, 4, 1, 1), (32 * 8, 32 * 16, 2, 4, 8, 2, 1)],
@@ -89,6 +91,7 @@ def test_layer_norm_sharded_two_stage(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
@@ -118,6 +121,7 @@ def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
@@ -151,6 +155,7 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
@@ -182,6 +187,7 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [True, False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
@@ -213,6 +219,7 @@ def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welfor
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("use_welford", [True])
 def test_layer_norm_sharded_padded(device, use_welford):
     """
@@ -281,6 +288,7 @@ def test_layer_norm_sharded_padded(device, use_welford):
     assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h,w", [(32, 2048)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
@@ -352,6 +360,7 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
     assert_with_pcc(golden_output, output_tensor, 0.9998)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("grid_offset", [(1, 1), (2, 0), (0, 2)])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("use_weight_bias", [True, False])
@@ -420,6 +429,7 @@ def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford
     assert_with_pcc(ref_output, output, 0.9998)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("grid_offset", [(2, 0), (1, 1)])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_welford):

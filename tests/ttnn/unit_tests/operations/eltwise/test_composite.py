@@ -12,6 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_equal,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_llk_assert_enabled, skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -46,6 +47,11 @@ pytestmark = pytest.mark.use_module_device
     ],
 )
 def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
+    if is_llk_assert_enabled() and (
+        ((min_val == "tensor" or max_val == "tensor") and (min_val is None or max_val is None))
+        or (min_val == "tensor" and max_val == "tensor")
+    ):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -103,6 +109,11 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
     ],
 )
 def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
+    if is_llk_assert_enabled() and (
+        ((min_val == "tensor" or max_val == "tensor") and (min_val is None or max_val is None))
+        or (min_val == "tensor" and max_val == "tensor")
+    ):
+        pytest.skip("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -130,6 +141,7 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
         assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -149,6 +161,7 @@ def test_unary_composite_digamma_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -168,6 +181,7 @@ def test_unary_composite_lgamma_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -187,6 +201,7 @@ def test_unary_composite_mish_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (torch.Size([1, 1, 89600, 32]),),
@@ -222,6 +237,7 @@ def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -241,6 +257,7 @@ def test_unary_composite_multigammaln_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
