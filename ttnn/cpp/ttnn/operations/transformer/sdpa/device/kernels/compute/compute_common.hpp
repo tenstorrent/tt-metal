@@ -555,8 +555,14 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in1_cb has num_tiles consumed
 
     add_tiles_init(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
+    {
+        DeviceZoneScopedN("WAIT IN0");
+        cb_wait_front(in0_cb, num_tiles);
+    }
+    {
+        DeviceZoneScopedN("WAIT IN1");
+        cb_wait_front(in1_cb, num_tiles);
+    }
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         add_tiles(in0_cb, in1_cb, i, i, 0);
@@ -568,7 +574,11 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     if (pop_in1) {
         cb_pop_front(in1_cb, num_tiles);
     }
-    cb_reserve_back(in0_cb, num_tiles);
+
+    {
+        DeviceZoneScopedN("RESERVE IN0");
+        cb_reserve_back(in0_cb, num_tiles);
+    }
     cb_push_back(in0_cb, num_tiles);
 }
 
@@ -1228,7 +1238,7 @@ ALWI void matmul_blocks(
             tile_regs_acquire();
 
             {
-                DeviceZoneScopedN("@");
+                // DeviceZoneScopedN("@");
                 uint32_t dst_index = 0;
                 uint32_t in0_index = in0_index_offset;
                 uint32_t in1_index = in1_index_offset;
@@ -1265,7 +1275,7 @@ ALWI void matmul_blocks(
             tile_regs_wait();
 
             {
-                DeviceZoneScopedN("Packer");
+                // DeviceZoneScopedN("Packer");
                 uint32_t dst_idx = 0;
                 uint32_t out_col_offset = in1_subblock * subblock_w;
                 for (uint32_t r = 0; r < subblock_h; r++) {
