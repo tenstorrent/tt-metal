@@ -1100,7 +1100,7 @@ class TestConfig:
 
     def run(self, location="0,0"):
         self.generate_variant_hash()
-        logger.info(
+        logger.debug(
             "Running variant={} | location={}",
             self.variant_id[:12],
             location,

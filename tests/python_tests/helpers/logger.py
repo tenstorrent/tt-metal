@@ -100,11 +100,10 @@ def configure_logger(level: str = None):
 
     suffix = _xdist_worker_suffix()
 
-    # Propagate everything to stdlib logging at TRACE so pytest's --log-cli-level
-    # is the single level gatekeeper for the terminal — consistent with all other
-    # stdlib loggers (e.g. filelock). Loguru-specific level filtering is kept only
-    # for the file sinks below.
-    logger.add(_PropagateHandler(), format="{message}", level="TRACE")
+    # Propagate to stdlib logging so pytest's live logging (log_cli) can display
+    # loguru messages. Apply the same level filter here so debug messages are
+    # suppressed when a higher level is configured.
+    logger.add(_PropagateHandler(), format="{message}", level=level)
 
     # Session log - full log for this run (overwritten each session)
     logger.add(
@@ -123,6 +122,11 @@ def configure_logger(level: str = None):
         mode="a",
         colorize=False,
     )
+
+    # Silence noisy third-party stdlib loggers so only our own messages
+    # (routed through loguru) appear in pytest's live logging output.
+    for name in ("filelock", "matplotlib", "numpy"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     logger.debug(
         "Logger configured with level={}, worker={}", level, suffix or "controller"
