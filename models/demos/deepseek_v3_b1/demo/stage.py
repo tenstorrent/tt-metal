@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pod pipeline orchestration with StageKind interface (Embedding, LMHead, Passthrough).
-Shared by the demo CLI and persistent-mode tests (4-stage and 16-stage).
+Stage kinds for the pod pipeline: Embedding, LMHead, Passthrough.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSamp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import ttnn_dtype_from_torch_dtype
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 
-# Module-level constants (from persistent mode tests)
+# Constants used by stage kinds (same as pipeline module)
 token_page_size_bytes = 64
 token_fifo_size = 1024
 activation_dim = 7168
@@ -42,12 +41,6 @@ argmax_final_core = ttnn.CoreCoord(0, 0)
 lmhead_input_core = ttnn.CoreCoord(10, 9)
 
 
-def create_fabric_router_config(max_payload_size: int) -> Any:
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
-
-
 @dataclass
 class LMHeadWeights:
     """Torch tensors for LMHead stage (RMS norm gamma, weight matrix, vocab indices)."""
@@ -55,73 +48,6 @@ class LMHeadWeights:
     gamma: torch.Tensor  # [M, K]
     weight_matrix: torch.Tensor  # [K, n_total]
     indices: torch.Tensor  # [1, n_total]
-
-
-def create_synthetic_weights(
-    iterations: int,
-) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
-    """
-    Build deterministic synthetic weights and expected output indices.
-    Returns (embedding_tensor, lmhead_weights, expected_indices).
-    """
-    torch_gamma = torch.ones((M, K), dtype=torch.bfloat16)
-    row_indices = torch.arange(iterations, dtype=torch.int64) % K
-    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
-    torch_embedding_table[torch.arange(iterations), row_indices] = 1
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_indices = torch.stack(
-        [
-            LMHeadSampling.golden(
-                torch_embedding_table[iteration : iteration + 1].float(),
-                torch_gamma.float(),
-                torch_b.float().unsqueeze(0),
-                indices=torch_indices_flat,
-                k=1,
-                p=1.0,
-            ).to(torch.uint32)
-            for iteration in range(iterations)
-        ],
-        dim=0,
-    )
-    embedding_tensor = torch_embedding_table.reshape(iterations, 1, 1, K)
-    lmhead_weights = LMHeadWeights(
-        gamma=torch_gamma,
-        weight_matrix=torch_b,
-        indices=torch_indices_flat,
-    )
-    return embedding_tensor, lmhead_weights, torch_expected_indices
-
-
-def create_random_weights_single_iteration(
-    seed: int = 5449,
-) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
-    """
-    Build random weights for a single token iteration (e.g. 4-stage single-galaxy test).
-    Returns (embedding_tensor [1,1,1,K], lmhead_weights, expected_idx from golden).
-    """
-    torch.manual_seed(seed)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
-        torch_a.float(),
-        torch_gamma.float(),
-        torch_b.float().unsqueeze(0),
-        indices=torch_indices_flat,
-        k=1,
-        p=1.0,
-    ).to(torch.uint32)
-    embedding_tensor = torch_a.reshape(1, 1, 1, K)
-    lmhead_weights = LMHeadWeights(
-        gamma=torch_gamma,
-        weight_matrix=torch_b,
-        indices=torch_indices_flat,
-    )
-    return embedding_tensor, lmhead_weights, torch_expected_idx
 
 
 @dataclass
@@ -450,79 +376,3 @@ class LMHeadStage(StageKind):
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
         )
-
-
-def create_stage_kind(
-    my_mesh_id: int,
-    lmhead_stage: int,
-    *,
-    embedding_tensor: torch.Tensor | None = None,
-    lmhead_weights: LMHeadWeights | None = None,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-) -> StageKind:
-    """Factory: return the StageKind for the given mesh_id and topology."""
-    if my_mesh_id == 0:
-        if embedding_tensor is None:
-            raise ValueError("Stage 0 requires embedding_tensor")
-        return EmbeddingStage(embedding_tensor)
-    elif my_mesh_id == lmhead_stage:
-        if lmhead_weights is None:
-            raise ValueError(f"LMHead stage ({lmhead_stage}) requires lmhead_weights")
-        return LMHeadStage(
-            weights=lmhead_weights,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-        )
-    elif my_mesh_id > lmhead_stage:
-        return PassthroughStage(PassthroughPayload.TOKEN)
-    else:
-        return PassthroughStage(PassthroughPayload.ACTIVATION)
-
-
-class PodPipeline:
-    """Orchestrator for one pipeline stage; delegates to StageKind."""
-
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
-        self._mesh_device = mesh_device
-        self._stage_kind = stage_kind
-        self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-        self._ctx = StageContext(
-            mesh_device=mesh_device,
-            pipeline_config=self._pipeline_config,
-            my_mesh_id=self._my_mesh_id,
-        )
-        self._pipeline_block: PipelineBlock | None = None
-
-    @property
-    def my_mesh_id(self) -> int:
-        return self._my_mesh_id
-
-    def setup(self) -> None:
-        self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
-        self._stage_kind.setup(self._ctx, self._pipeline_block)
-
-    def run(self) -> None:
-        if self._pipeline_block is None:
-            raise RuntimeError("PodPipeline.setup() must be called before run()")
-        self._pipeline_block.run()
-        self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
-
-    def write_token(self, token_tensor: ttnn.Tensor) -> None:
-        if self._pipeline_block is None:
-            raise RuntimeError("PodPipeline.setup() must be called first")
-        self._pipeline_block.write_token(token_tensor)
-
-    def read_output(self, output_tensor: ttnn.Tensor) -> None:
-        if self._pipeline_block is None:
-            raise RuntimeError("PodPipeline.setup() must be called first")
-        self._pipeline_block.read_output(output_tensor)
-
-    def barrier(self) -> None:
-        ttnn.distributed_context_barrier()
-
-    def terminate(self) -> None:
-        """Terminate the pipeline block if it was created (e.g. for one-shot tests)."""
-        if self._pipeline_block is not None:
-            self._pipeline_block.terminate()
