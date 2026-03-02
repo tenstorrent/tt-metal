@@ -32,7 +32,7 @@ void kernel_main() {
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
                 // REDUCE_OP and REDUCE_DIM are expected to come from add_define
                 reduce_tile<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
