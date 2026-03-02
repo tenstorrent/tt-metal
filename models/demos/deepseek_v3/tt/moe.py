@@ -160,11 +160,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             HIDDEN_SIZE = hf_config.hidden_size
             TP_SIZE = mesh_device.shape[1]
 
-            input_output_memory_config = ttnn.create_sharded_memory_config(
-                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
-                core_grid=ttnn.CoreGrid(y=7, x=4),
-                strategy=ttnn.ShardStrategy.WIDTH,
-            )
+            input_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
             # Construct the config
             return {
@@ -313,7 +309,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Repeat + Permute Expert weights
 
-        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+        # topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
 
@@ -338,17 +334,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         return MoEGate.forward(x, cfg["moe_gate"])
 
     @classmethod
-    def _fwd_repeat_permute_expert_weights(
-        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
-    ) -> ttnn.Tensor:
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        return topk_experts_weights
-
-    @classmethod
     def _fwd_moe(
         cls,
         x: ttnn.Tensor,
@@ -359,100 +344,69 @@ class MoE(SharedStateAddOn, AbstractModule):
         batch_size: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        tokens = batch_size * seq_len
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = ttnn.reshape(
-            x_rm,
-            shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
-        )
-
-        topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_indices_rm = ttnn.reshape(
-            topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
-        )
-
         # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
         chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
         output_chunks: list[ttnn.Tensor] = []
 
-        def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
-            token_start = batch_start * seq_len
-            token_end = batch_end * seq_len
-            return ttnn.slice(
-                topk_experts_weights,
-                [0, 0, token_start, 0],
-                [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
-            )
+        batch_chunk = batch_size_per_device
+        batch_size_chunk = batch_chunk * cfg["num_dispatch_devices"]
 
-        for batch_start in range(0, batch_size_per_device, chunk_size):
-            batch_end = min(batch_start + chunk_size, batch_size_per_device)
-            batch_chunk = batch_end - batch_start
-            batch_size_chunk = batch_chunk * cfg["num_dispatch_devices"]
+        import pdb
 
-            x_chunk = ttnn.slice(
-                x_rm,
-                [batch_start, 0, 0, 0],
-                [batch_end, 1, seq_len, cfg["hidden_size"]],
-            )
-            topk_indices_chunk = ttnn.slice(
-                topk_experts_indices_rm,
-                [batch_start, 0, 0, 0],
-                [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
-            )
+        pdb.set_trace()
 
-            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
-                x_chunk,
-                topk_indices_chunk,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_dispatch"],
-            )
-            ttnn.deallocate(x_chunk)
-            ttnn.deallocate(topk_indices_chunk)
+        all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+            x,
+            topk_experts_indices,
+            cfg["expert_mapping_tensors"],
+            **cfg["all_to_all_dispatch"],
+        )
+        ttnn.deallocate(x_chunk)
+        ttnn.deallocate(topk_indices_chunk)
 
-            dispatch_chunk = ttnn.reshape(
-                all_to_all_dispatch_output_tensors,
-                shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
-            )
-            dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
-            dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(all_to_all_dispatch_output_tensors)
+        dispatch_chunk = ttnn.reshape(
+            all_to_all_dispatch_output_tensors,
+            shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
+        )
+        dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
+        dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(all_to_all_dispatch_output_tensors)
 
-            experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
-            ttnn.deallocate(dispatch_chunk)
+        experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
+        ttnn.deallocate(dispatch_chunk)
 
-            experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-            experts_output = ttnn.reshape(
-                experts_output, shape=(cfg["num_experts_per_device"], batch_size_chunk, seq_len, cfg["hidden_size"])
-            )
+        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+        experts_output = ttnn.reshape(
+            experts_output, shape=(cfg["num_experts_per_device"], batch_size_chunk, seq_len, cfg["hidden_size"])
+        )
 
-            all_to_all_dispatch_metadata_tensors = ttnn.reshape(
-                all_to_all_dispatch_metadata_tensors,
-                shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
-            )
+        all_to_all_dispatch_metadata_tensors = ttnn.reshape(
+            all_to_all_dispatch_metadata_tensors,
+            shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
+        )
 
-            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
-                experts_output,
-                all_to_all_dispatch_metadata_tensors,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_combine"],
-            )
-            ttnn.deallocate(experts_output)
-            ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
+        all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+            experts_output,
+            all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
+            **cfg["all_to_all_combine"],
+        )
+        ttnn.deallocate(experts_output)
+        ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
 
-            post_combine_output_tensor = ttnn.reshape(
-                all_to_all_combine_output_tensors,
-                shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
-            )
-            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+        post_combine_output_tensor = ttnn.reshape(
+            all_to_all_combine_output_tensors,
+            shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
+        )
+        post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
 
-            topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            post_combine_output_tensor = ttnn.mul(
-                post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
-            )
-            ttnn.deallocate(topk_weights_chunk)
+        post_combine_output_tensor = ttnn.mul(
+            post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
+        )
+        ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-            output_chunks.append(post_combine_output_tensor)
+        post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
             post_combine_output_tensor = output_chunks[0]
@@ -461,8 +415,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             for chunk in output_chunks:
                 ttnn.deallocate(chunk)
 
-        ttnn.deallocate(x_rm)
-        ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
 
     @classmethod
