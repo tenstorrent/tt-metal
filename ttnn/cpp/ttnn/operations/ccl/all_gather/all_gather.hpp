@@ -8,8 +8,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn {
-namespace operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
@@ -25,9 +24,4 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-}  // namespace operations::ccl
-
-// Export to ttnn namespace
-using operations::ccl::all_gather;
-
-}  // namespace ttnn
+}  // namespace ttnn::ccl

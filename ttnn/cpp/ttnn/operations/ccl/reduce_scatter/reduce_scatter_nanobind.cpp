@@ -15,7 +15,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 void bind_reduce_scatter(nb::module_& mod) {
     const auto* doc =
@@ -70,4 +70,4 @@ void bind_reduce_scatter(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()));
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

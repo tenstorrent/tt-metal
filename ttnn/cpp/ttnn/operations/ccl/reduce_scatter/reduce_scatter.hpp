@@ -9,8 +9,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn {
-namespace operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
@@ -27,9 +26,4 @@ ttnn::Tensor reduce_scatter(
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-}  // namespace operations::ccl
-
-// Export to ttnn namespace
-using operations::ccl::reduce_scatter;
-
-}  // namespace ttnn
+}  // namespace ttnn::ccl

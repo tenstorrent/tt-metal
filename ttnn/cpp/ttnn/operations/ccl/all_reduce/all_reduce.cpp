@@ -10,7 +10,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor all_reduce(
     const ttnn::Tensor& input_tensor,
@@ -55,4 +55,4 @@ ttnn::Tensor all_reduce(
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

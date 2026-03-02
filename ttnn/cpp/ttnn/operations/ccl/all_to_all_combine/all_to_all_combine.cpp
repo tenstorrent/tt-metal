@@ -13,7 +13,7 @@
 #include "ttnn/operations/full/full.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
@@ -84,4 +84,4 @@ ttnn::Tensor all_to_all_combine(
         shard_dim);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

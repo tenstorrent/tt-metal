@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     const ttnn::Tensor& input_tensor,
@@ -102,4 +102,4 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
         output_concat_dim_);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

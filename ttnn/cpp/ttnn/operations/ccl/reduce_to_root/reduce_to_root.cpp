@@ -5,7 +5,7 @@
 #include "device/reduce_to_root_op.hpp"
 #include "reduce_to_root.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 std::vector<ttnn::Tensor> reduce_to_root(
     const ttnn::Tensor& input_tensor_l,
@@ -54,4 +54,4 @@ std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
     return ReduceToRootOp::compute_output_specs(attrs, tensors).at(0);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

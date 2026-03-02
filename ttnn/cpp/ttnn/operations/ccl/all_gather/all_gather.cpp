@@ -15,7 +15,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
@@ -86,4 +86,4 @@ ttnn::Tensor all_gather(
         sub_core_grid);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

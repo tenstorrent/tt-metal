@@ -8,8 +8,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-namespace operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor broadcast(
     const ttnn::Tensor& input_tensor,
@@ -20,9 +19,4 @@ ttnn::Tensor broadcast(
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 
-}  // namespace operations::ccl
-
-// Export to ttnn namespace
-using operations::ccl::broadcast;
-
-}  // namespace ttnn
+}  // namespace ttnn::ccl

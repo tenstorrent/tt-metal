@@ -8,8 +8,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn {
-namespace operations::ccl {
+namespace ttnn::ccl {
 
 ttnn::Tensor all_reduce(
     const ttnn::Tensor& input_tensor,
@@ -19,9 +18,4 @@ ttnn::Tensor all_reduce(
     std::optional<uint32_t> num_links = std::nullopt,
     std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
 
-}  // namespace operations::ccl
-
-// Export to ttnn namespace
-using operations::ccl::all_reduce;
-
-}  // namespace ttnn
+}  // namespace ttnn::ccl

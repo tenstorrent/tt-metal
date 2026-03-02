@@ -12,7 +12,7 @@
 #include <vector>
 #include <deque>
 
-namespace ttnn::operations::ccl {
+namespace ttnn::ccl {
 
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
@@ -55,4 +55,4 @@ std::vector<ttnn::Tensor> all_broadcast(
     return ttnn::prim::all_broadcast(input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::ccl

@@ -10,8 +10,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn {
-namespace operations::ccl {
+namespace ttnn::ccl {
 
 std::vector<ttnn::Tensor> reduce_to_root(
     const ttnn::Tensor& input_tensor_l,
@@ -35,9 +34,4 @@ std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
     tt::tt_fabric::Topology topology,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores);
 
-}  // namespace operations::ccl
-
-// Export to ttnn namespace
-using operations::ccl::reduce_to_root;
-
-}  // namespace ttnn
+}  // namespace ttnn::ccl
