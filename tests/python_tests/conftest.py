@@ -330,7 +330,7 @@ def pytest_sessionfinish(session):
 # Define the possible custom command line options
 def pytest_addoption(parser):
     parser.addoption(
-        "--run_simulator", action="store_true", help="Run tests using the simulator."
+        "--run-simulator", action="store_true", help="Run tests using the simulator."
     )
     parser.addoption(
         "--port",
