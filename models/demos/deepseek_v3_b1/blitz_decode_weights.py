@@ -6,11 +6,10 @@
 Blitz decode weight overlapping infrastructure.
 
 "Overlapping" means fusing multiple weight tensors into a single
-width-sharded tensor so they share the same L1 base address on each core.
-For each core the individual shards are stitched together vertically,
-with tile-reshape applied when shard widths differ, producing one
-contiguous buffer per core.  Kernels locate each sub-weight at a known
-row offset within the fused shard.
+L1 buffer so they share the same base address on each core.
+For each core the individual shards are concatenated into one contiguous
+buffer, zero-padded to a common maximum byte size.  Kernels locate
+each sub-weight at a known byte offset within the fused shard.
 """
 
 from __future__ import annotations
@@ -191,8 +190,6 @@ QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = QAB_KVA_PROJ_SingleDeviceOverlapSpec()
 
 _GAMMA_CORE = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(12, 9), ttnn.CoreCoord(12, 9))])
 _KV_NORM_CORE = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(0, 8))])
-_ATTN_NORM_BYTES = 7168 * 2
-_Q_NORM_BYTES = 1536 * 2
 
 
 @dataclass(frozen=True)
@@ -248,7 +245,6 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 7168),
             dtype=ttnn.DataType.BFLOAT16,
-            byte_offset=0,
             tile_h=1,
             tile_w=32,
         )
@@ -258,7 +254,6 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 1536),
             dtype=ttnn.DataType.BFLOAT16,
-            byte_offset=_ATTN_NORM_BYTES,
             tile_h=1,
             tile_w=32,
         )
@@ -268,7 +263,6 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             core_range_set=_KV_NORM_CORE,
             raw_tensor_shape=(1, 512),
             dtype=ttnn.DataType.BFLOAT16,
-            byte_offset=0,
             tile_h=1,
             tile_w=32,
         )
@@ -278,7 +272,6 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 7168),
             dtype=ttnn.DataType.BFLOAT16,
-            byte_offset=_ATTN_NORM_BYTES + _Q_NORM_BYTES,
             tile_h=1,
             tile_w=32,
         )
@@ -512,8 +505,9 @@ class BlitzDecodeWeights:
     """Fuses weight tensors to share the same L1 base address per core.
 
     Methods take raw torch weight tensors, apply any required preprocessing
-    (packing, shuffling), stitch per-core shards, and return the result as
-    a device-resident ttnn.Tensor with WIDTH_SHARDED placement.
+    (packing, shuffling), and fuse them via ``overlap_tensors`` into a
+    single L1 buffer.  Each method returns a list of
+    ``OverlappedTensor`` views into the fused buffer.
 
     Args:
         device: The ttnn device (or MeshDevice) to place tensors on.
@@ -547,27 +541,17 @@ class BlitzDecodeWeights:
         *,
         move_to_device: bool = True,
     ) -> list[OverlappedTensor]:
-        """Fuse q_a_proj, q_b_proj, and kv_a_proj into one WIDTH_SHARDED tensor.
+        """Fuse q_a_proj, q_b_proj, and kv_a_proj via ``overlap_tensors``.
 
-        The fused tensor spans two core regions that share the same shard
-        width, giving every core a single base address:
+        The fused buffer spans two core regions (lanes):
 
-        * **Top region** (8x12 = 96 cores): q_a_proj packed + q_b_proj
-          shuffled, stitched per core.
-        * **Bottom region** (2x9 = 18 cores at offset (8,0)): kv_a_proj
-          with shard reordering, zero-padded to the same shard height as
-          the top region.
+        * **Lane 0** (8×12 = 96 cores): q_a_proj (packed) and q_b_proj
+          (shuffled) back-to-back within each core's shard.
+        * **Lane 1** (2×9 = 18 cores at offset (8,0)): kv_a_proj
+          with shard reordering, zero-padded to the same max byte size.
 
-        For multi-device (4x2 mesh, TP=2) the q_b_proj weights span all
-        TP devices (width ``mla_tp * per_device_width``).  Per-TP slices are
-        shuffled independently and stitched with the (replicated)
-        q_a_proj into separate per-TP fused tensors, which are
-        concatenated along width and distributed via
-        ``ShardTensor2dMesh`` across mesh columns.  q_a_proj and
-        kv_a_proj are replicated on every device.
-
-        MLA TP is inferred from the device topology: single-device ->
-        mla_tp=1, 4x2 mesh -> mla_tp=2.
+        q_b_proj is TP-sharded along mesh columns (``tp_dim=(None, 1)``).
+        q_a_proj and kv_a_proj are replicated on every device.
 
         Args:
             q_a_proj_weights: Raw q_a_proj tensor, shape ``(7168, 1536)``.
@@ -713,9 +697,9 @@ class BlitzDecodeWeights:
         *,
         move_to_device: bool = True,
     ) -> list[OverlappedTensor]:
-        """Fuse kv_b1_proj and kv_b2_proj into one HEIGHT_SHARDED tensor.
+        """Fuse kv_b1_proj and kv_b2_proj via ``overlap_tensors``.
 
-        Stitches ``kv_b1_proj (8192, 512)`` onto 64 cores and
+        Fuses ``kv_b1_proj (8192, 512)`` onto 64 cores and
         ``kv_b2_proj (512, 8192)`` (pre-transposed to ``(8192, 512)``)
         onto another 64 cores.  Both lanes are HEIGHT_SHARDED with
         shard ``(128, 512)`` as BFP8.

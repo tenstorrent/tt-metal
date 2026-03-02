@@ -18,11 +18,10 @@ _DTYPE_ELEMENT_BYTES = {
 class OverlappedShardSpec:
     """Describes one sub-tensor within a fused raw-byte buffer.
 
-    Multiple ``OverlappedShardSpec`` instances share a single device
-    allocation whose per-core shard is zero-padded to a common maximum
+    Multiple ``OverlappedShardSpec`` instances share a single L1
+    buffer whose per-core shard is zero-padded to a common maximum
     byte size.  Each spec carries the core range, logical tensor shape,
-    dtype, tile dimensions, and byte offset needed to address its
-    portion of the shard.
+    dtype, and tile dimensions needed to pack its portion of the shard.
 
     Tile byte sizes for BFP formats are computed from ``tile_h`` and
     ``tile_w`` rather than stored as constants, so non-standard tile
@@ -42,13 +41,9 @@ class OverlappedShardSpec:
     raw_tensor_shape: tuple[int, int]
     dtype: ttnn.DataType
     sharding: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    # byte offset within a core shard
-    byte_offset: int = 0
 
     tile_h: int = 32
     tile_w: int = 32
-    bfp8_tile_bytes: int = 1088
-    bfp4_tile_bytes: int = 576
 
     tp_dim: tuple[int | None, int | None] = (None, None)
 
@@ -105,9 +100,6 @@ class OverlappedShardSpec:
 
     def shard_bytes(self, mesh_shape: tuple[int, int]) -> int:
         return self.tiles_per_shard(mesh_shape) * self._tile_bytes()
-
-    def total_bytes(self, mesh_shape: tuple[int, int]) -> int:
-        return self.shard_bytes(mesh_shape) * self.core_range_set.num_cores()
 
 
 def max_shard_bytes(shard_specs: list[list[OverlappedShardSpec]], mesh_shape: tuple[int, int]) -> int:
@@ -374,112 +366,3 @@ def pack_bfloat16_1x32(data: torch.Tensor) -> bytes:
     float_bits = flat.view(np.uint32)
     bf16_bits = (float_bits >> 16).astype(np.uint16)
     return bf16_bits.tobytes()
-
-
-def stitch_width_sharded(
-    tensor1: torch.Tensor,
-    tensor2: torch.Tensor,
-    num_cores: int,
-    tile_h: int = 32,
-    tile_w: int = 32,
-) -> tuple[torch.Tensor, tuple[int, int]]:
-    """Stitch two width-sharded tensors into one fused tensor.
-
-    For every core the two shards are concatenated vertically.  When
-    the shard widths differ, the wider shard is tile-reshaped to match
-    the narrower one (preserving tile ordering) so the concatenation
-    is well-defined.
-
-    Args:
-        tensor1: First weight tensor (H1, W1).
-        tensor2: Second weight tensor (H2, W2).
-        num_cores: Total cores in the width-sharded grid.
-        tile_h: Tile height (default 32).
-        tile_w: Tile width (default 32).
-
-    Returns:
-        (fused_tensor, shard_shape) ready for WIDTH_SHARDED
-        placement on num_cores cores.
-    """
-    H1, W1 = tensor1.shape
-    H2, W2 = tensor2.shape
-
-    shard_w1 = W1 // num_cores
-    shard_w2 = W2 // num_cores
-
-    # Use the narrower shard width as target; tile-reshape the wider.
-    if shard_w1 <= shard_w2:
-        target_w = shard_w1
-        narrow, wide = tensor1, tensor2
-        narrow_h, wide_h = H1, H2
-        narrow_sw, wide_sw = shard_w1, shard_w2
-    else:
-        target_w = shard_w2
-        narrow, wide = tensor2, tensor1
-        narrow_h, wide_h = H2, H1
-        narrow_sw, wide_sw = shard_w2, shard_w1
-
-    # Height of each wide shard after tile-reshape to target_w
-    reshaped_h = wide_h * wide_sw // target_w
-
-    fused_shard_h = narrow_h + reshaped_h
-    fused = torch.zeros(fused_shard_h, target_w * num_cores, dtype=tensor1.dtype)
-
-    for core_idx in range(num_cores):
-        col_start = core_idx * target_w
-        col_end = col_start + target_w
-
-        # Narrow shard: already at target width, just copy.
-        n_start = core_idx * narrow_sw
-        n_end = n_start + narrow_sw
-        fused[:narrow_h, col_start:col_end] = narrow[:, n_start:n_end]
-
-        # Wide shard: tile-reshape from (wide_h, wide_sw) to
-        # (reshaped_h, target_w), then copy.
-        w_start = core_idx * wide_sw
-        w_end = w_start + wide_sw
-        w_shard = wide[:, w_start:w_end]
-        w_reshaped = tile_reshape(
-            w_shard,
-            src_shape=(wide_h, wide_sw),
-            dst_shape=(reshaped_h, target_w),
-            tile_h=tile_h,
-            tile_w=tile_w,
-        )
-        fused[narrow_h:, col_start:col_end] = w_reshaped
-
-    shard_shape = (fused_shard_h, target_w)
-    return fused, shard_shape
-
-
-def tile_reshape(
-    tensor: torch.Tensor,
-    src_shape: tuple[int, int],
-    dst_shape: tuple[int, int],
-    tile_h: int = 32,
-    tile_w: int = 32,
-) -> torch.Tensor:
-    """Reshape a 2-D tensor while preserving row-major tile ordering.
-
-    Data is stored as a grid of (tile_h x tile_w) tiles in row-major
-    order.  A naive torch.reshape changes which values land in each
-    tile.  This helper keeps every tile's contents unchanged by:
-
-    1. Splitting into the source tile grid.
-    2. Flattening to a 1-D tile sequence (row-major).
-    3. Re-gridding into the destination tile dimensions.
-
-    Total tile count must be identical for source and destination.
-    """
-    src_h, src_w = src_shape
-    dst_h, dst_w = dst_shape
-    src_tr, src_tc = src_h // tile_h, src_w // tile_w
-    dst_tr, dst_tc = dst_h // tile_h, dst_w // tile_w
-    assert src_tr * src_tc == dst_tr * dst_tc, f"Tile count mismatch: {src_tr * src_tc} vs {dst_tr * dst_tc}"
-    # (H, W) -> (tile_rows, tile_h, tile_cols, tile_w)
-    #         -> (tile_rows, tile_cols, tile_h, tile_w)
-    tiles = tensor.reshape(src_tr, tile_h, src_tc, tile_w).permute(0, 2, 1, 3)
-    # Flatten to 1-D tile sequence, re-grid to destination layout
-    tiles = tiles.reshape(-1, tile_h, tile_w).reshape(dst_tr, dst_tc, tile_h, tile_w)
-    # (dst_tr, dst_tc, tile_h, tile_w) -> (dst_H, dst_W)
-    return tiles.permute(0, 2, 1, 3).reshape(dst_h, dst_w)
