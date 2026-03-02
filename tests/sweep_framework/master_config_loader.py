@@ -21,6 +21,27 @@ from pathlib import Path
 from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
+# Add repo root and current dir to sys.path BEFORE dependent imports
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+
+# Inline lead_models_filter state (avoids dependency on untracked/separate module)
+class lead_models_filter:
+    _lead_models_only = os.environ.get("TTNN_LEAD_MODELS_ONLY", "").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        cls._lead_models_only = enabled
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1" if enabled else "0"
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        return cls._lead_models_only
+
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -30,21 +51,48 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        """Get the tt-metal base directory.
+
+        Resolution order:
+        1. Walk up from this script's location to find model_tracer/traced_operations
+        2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+        3. PYTHONPATH entries
+        4. Current working directory
+        """
+        _marker = os.path.join("model_tracer", "traced_operations")
+
+        def _walk_up(start_dir):
+            current = os.path.abspath(start_dir)
+            while current != "/":
+                if os.path.isdir(os.path.join(current, _marker)):
+                    return current
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+            return None
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        base = _walk_up(script_dir)
+        if base:
+            return base
+
+        tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+        if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+            return tt_metal_home
+
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
-            paths = pythonpath.split(":")
-            for path in paths:
-                if "tt-metal" in path:
-                    if path.endswith("tt-metal"):
-                        return path
-                    parts = path.split("tt-metal")
-                    if parts:
-                        return parts[0] + "tt-metal"
+            for path in pythonpath.split(":"):
+                base = _walk_up(path)
+                if base:
+                    return base
+
         current_dir = os.getcwd()
-        if "tt-metal" in current_dir:
-            parts = current_dir.split("tt-metal")
-            return parts[0] + "tt-metal"
+        base = _walk_up(current_dir)
+        if base:
+            return base
+
         return current_dir
 
 
@@ -97,12 +145,15 @@ class MasterConfigLoader:
             This must be called BEFORE importing sweep modules that use MasterConfigLoader,
             as the filtering happens at module load time when get_suite_parameters() is called.
         """
-        cls._lead_models_only = enabled
+        # Use shared global filter state
+        lead_models_filter.set_lead_models_filter(enabled)
+        cls._lead_models_only = enabled  # Keep for backwards compatibility
 
     @classmethod
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
-        return cls._lead_models_only
+        # Read from shared global filter state
+        return lead_models_filter.get_lead_models_filter()
 
     @classmethod
     def set_database_mode(cls, enabled: bool) -> None:
@@ -236,42 +287,48 @@ class MasterConfigLoader:
             # Convert new format (dict with source) to old format (list) for backward compatibility
             return self._normalize_configs(configs)
 
-        # Try with ttnn:: prefix
-        ttnn_op_name = f"ttnn::{operation_name}"
-        if ttnn_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with ttnn::experimental:: namespace (e.g., ttnn::experimental::create_qkv_heads)
-        experimental_full_op_name = f"ttnn::experimental::{operation_name}"
-        if experimental_full_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
-        if operation_name.startswith("experimental::"):
-            experimental_op_name = f"ttnn::{operation_name}"
-            if experimental_op_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+        # Try with ttnn:: prefix (V1 format) and ttnn. prefix (V2 format)
+        for sep in ["::", "."]:
+            ttnn_op_name = f"ttnn{sep}{operation_name}"
+            if ttnn_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
-        transformer_op_name = f"ttnn::transformer::{operation_name}"
-        if transformer_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
+        # Try with ttnn::experimental:: / ttnn.experimental. namespace
+        for sep in ["::", "."]:
+            experimental_full_op_name = f"ttnn{sep}experimental{sep}{operation_name}"
+            if experimental_full_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
 
-        # Try without prefix if it starts with ttnn::
-        if operation_name.startswith("ttnn::"):
-            base_name = operation_name[6:]  # Remove "ttnn::"
-            if base_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][base_name].get("configurations", [])
+        # Try with experimental:: / experimental. namespace prefix on operation name
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"experimental{sep}"):
+                experimental_op_name = f"ttnn{sep}{operation_name}"
+                if experimental_op_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+
+        # Try with transformer:: / transformer. namespace
+        for sep in ["::", "."]:
+            transformer_op_name = f"ttnn{sep}transformer{sep}{operation_name}"
+            if transformer_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
-            # Also try with transformer:: namespace
-            transformer_base = f"ttnn::transformer::{base_name}"
-            if transformer_base in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][transformer_base].get("configurations", [])
-                return self._normalize_configs(configs)
+
+        # Try without prefix if it starts with ttnn:: or ttnn.
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"ttnn{sep}"):
+                base_name = operation_name[len(f"ttnn{sep}") :]
+                if base_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][base_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+                # Also try with transformer:: / transformer. namespace
+                for sep2 in ["::", "."]:
+                    transformer_base = f"ttnn{sep2}transformer{sep2}{base_name}"
+                    if transformer_base in self.master_data.get("operations", {}):
+                        configs = self.master_data["operations"][transformer_base].get("configurations", [])
+                        return self._normalize_configs(configs)
 
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
@@ -288,8 +345,8 @@ class MasterConfigLoader:
             List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
-        # Uses class-level setting instead of environment variable for cleaner control
-        lead_models_only = MasterConfigLoader._lead_models_only
+        # Uses shared global filter state to work across V1 and V2 loaders
+        lead_models_only = lead_models_filter.get_lead_models_filter()
 
         normalized = []
         for config in configs:
@@ -297,8 +354,23 @@ class MasterConfigLoader:
                 # Extract config_hash if present (from database-generated JSON)
                 config_hash = config.get("config_hash", None)
 
+                # Check for V2 "executions" format first (most common in reconstructed JSON)
+                if "executions" in config:
+                    # V2 executions format: each execution is a separate source/machine pair
+                    arguments = config["arguments"]
+                    for execution in config["executions"]:
+                        source = execution.get("source", "unknown")
+                        machine_info = execution.get("machine_info", None)
+
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not self._source_matches_lead_models(source):
+                                # print(f"V1: Skipping {source[:50]}")  # Debug
+                                continue  # Skip this execution
+
+                        normalized.append((arguments, source, machine_info, config_hash))
                 # Check if this config has the new contexts format
-                if "contexts" in config:
+                elif "contexts" in config:
                     # New contexts format: expand each context into separate tuples
                     arguments = config["arguments"]
                     for context in config["contexts"]:
@@ -2937,6 +3009,9 @@ class MasterConfigLoader:
 
             for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
+                    # Debug: Check config structure
+                    # print(f"V1 concat: Processing config {config_idx}, config type: {type(config)}, len: {len(config) if isinstance(config, list) else 'N/A'}")
+
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
                     # Extract vector of tensors from arg0 (may be UnparsedElement)
                     tensor_configs = []
@@ -2995,6 +3070,10 @@ class MasterConfigLoader:
                                     tensor_configs = tensor_vector
 
                     # Extract shapes, dtypes, layouts, and memory_configs from tensor vector
+                    if not (tensor_configs and len(tensor_configs) >= 2 and dim is not None):
+                        # Debug: print why this config was skipped
+                        # print(f"V1 concat: Skip config - tensors={len(tensor_configs) if tensor_configs else 0}, dim={dim}")
+                        pass
                     if tensor_configs and len(tensor_configs) >= 2 and dim is not None:
                         # Build input_shape dict with all tensor shapes
                         input_shape_dict = {}

@@ -36,21 +36,39 @@ from pathlib import Path
 
 
 def get_base_dir():
-    """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+    """Get the tt-metal base directory.
+
+    Resolution order:
+    1. Walk up from this script's location to find model_tracer/traced_operations
+    2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+    3. PYTHONPATH entries containing 'tt-metal'
+    4. Current working directory
+    """
+    _marker = os.path.join("model_tracer", "traced_operations")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    current = script_dir
+    while current != "/":
+        if os.path.isdir(os.path.join(current, _marker)):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+    tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+    if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+        return tt_metal_home
+
     pythonpath = os.environ.get("PYTHONPATH", "")
     if pythonpath:
-        paths = pythonpath.split(":")
-        for path in paths:
-            if "tt-metal" in path:
-                if path.endswith("tt-metal"):
-                    return path
-                parts = path.split("tt-metal")
-                if parts:
-                    return parts[0] + "tt-metal"
+        for path in pythonpath.split(":"):
+            if os.path.isdir(os.path.join(path, _marker)):
+                return path
+
     current_dir = os.getcwd()
-    if "tt-metal" in current_dir:
-        parts = current_dir.split("tt-metal")
-        return parts[0] + "tt-metal"
+    if os.path.isdir(os.path.join(current_dir, _marker)):
+        return current_dir
     return current_dir
 
 
@@ -992,7 +1010,7 @@ Examples (Import existing traces):
         "--output-dir",
         "-o",
         default="./model_tracer/traced_operations",
-        help="Directory to save master JSON (default: ./model_tracer/traced_operations)",
+        help="Output path: directory (appends ttnn_operations_master.json) or full .json file path",
     )
     parser.add_argument(
         "--store", "--keep-traces", action="store_true", help="Keep individual trace files (default: delete them)"
@@ -1217,8 +1235,12 @@ Examples (Import existing traces):
                 print(f"   Fixed {fixed_count[0]} shard_spec entries in operations")
 
             # Update master JSON
-            os.makedirs(args.output_dir, exist_ok=True)
-            master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
+            if args.output_dir.endswith(".json"):
+                master_file = args.output_dir
+                os.makedirs(os.path.dirname(master_file) or ".", exist_ok=True)
+            else:
+                os.makedirs(args.output_dir, exist_ok=True)
+                master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
             new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")

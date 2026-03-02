@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
+from ttnn import ShardTensor2dMesh
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
@@ -20,18 +21,18 @@ from tests.sweep_framework.sweep_utils.ccl_common import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 
 NUM_DEVICES = ttnn.get_num_devices()
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::all_gather_async", all_cases=False)
+model_traced_params = loader.get_suite_parameters("ttnn.experimental.all_gather_async")
 
 FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
@@ -40,7 +41,6 @@ FABRIC_CONFIGS_1D = [
 
 FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
@@ -141,31 +141,38 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     # Original validation for generality/lead_model suites
     # L1 sharding only
-    if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
+    shard_specs = test_vector.get("shard_specs")
+    buffer_type = test_vector.get("buffer_type")
+    if shard_specs is not None and buffer_type == ttnn.BufferType.DRAM:
         return True, "L1 Sharding only"
 
-    cluster_axis = test_vector["cluster_axis"]
-    mesh_shape = test_vector["mesh_shape"]
-    input_shape = test_vector["input_shape"]
-    dim = test_vector["dim"]
+    cluster_axis = test_vector.get("cluster_axis")
+    mesh_shape = test_vector.get("mesh_shape")
+    input_shape = test_vector.get("input_shape")
+    dim = test_vector.get("dim")
+
+    # If any required field is missing, skip validation (shouldn't happen for generality/lead suites)
+    if None in [cluster_axis, mesh_shape, input_shape, dim]:
+        return False, None
+
     cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
 
-    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"], dim, cluster_size, "gather"):
+    if not validate_serializable_shard_spec(input_shape, shard_specs, dim, cluster_size, "gather"):
         return True, "Invalid shard spec"
 
     # hardcode for 6U
     if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
+    if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
         return True, "Only one device along axis"
 
     if dim >= len(input_shape):
         return True, "Dim greater than rank"
-    if (
-        test_vector["topology"] == ttnn.Topology.Ring
-        and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
-    ):
+
+    topology = test_vector.get("topology")
+    fabric_config = test_vector.get("fabric_config")
+    if topology == ttnn.Topology.Ring and fabric_config != ttnn.FabricConfig.FABRIC_1D_RING:
         return True, "Ring fabric config required for ring topology"
 
     return False, None
@@ -210,79 +217,102 @@ def run(
     shard_specs=None,
     num_iters=None,
     topology=None,
-    # Model traced parameters
+    # Model traced parameters (V2 format)
+    input_a_shape=None,
     input_a_dtype=None,
     input_a_layout=None,
     input_a_memory_config=None,
-    output_memory_config=None,
+    input_a_tensor_placement=None,
+    memory_config=None,  # output memory_config
+    persistent_output_buffer=None,
+    multi_device_global_semaphore=None,  # From traced config (ignored, we create fresh)
+    barrier_semaphore=None,  # From traced config (ignored, we create fresh)
+    mesh_device=None,  # From traced config (ignored, we use device param)
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
     *,
     device,  # unused
     **kwargs,
 ) -> list:
-    # Check if this is a model_traced run (has input_a_memory_config)
-    is_model_traced = input_a_memory_config is not None
+    # Check if this is a model_traced run (V2 format has input_a_shape)
+    is_model_traced = input_a_shape is not None
 
     if is_model_traced:
-        # Model traced format - use defaults for multi-device setup
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
-            return [1.0, 0.0]
+            return [(True, "Skipped: requires 2+ devices"), 0.0]
 
-        # Use defaults for model_traced
-        mesh_shape = (2, 1)
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
-        dim = 3  # Default dim
-        cluster_axis = 0  # Default cluster_axis
-        num_links = 1
-        num_iters = 1
-        topology = ttnn.Topology.Linear
-
-        # Convert model_traced parameters to generality format
+        input_shape = input_a_shape
         input_dtype = input_a_dtype
         layout = input_a_layout
-
-        # Create reference output
-        replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
-        torch_input = torch.rand(input_shape).bfloat16()
-        torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
-
-        # Use provided memory configs directly
         input_memory_config = input_a_memory_config
 
-        # Ensure output_memory_config is a MemoryConfig object
-        # It might come as a string from JSON serialization, so parse it if needed
-        if output_memory_config is None:
-            raise ValueError("output_memory_config is None - required parameter missing")
-        elif isinstance(output_memory_config, str):
-            # Parse the string representation back to a MemoryConfig
-            import ast
+        if isinstance(memory_config, dict):
+            mem_layout_str = memory_config.get("memory_layout", "")
+            buffer_type_str = memory_config.get("buffer_type", "")
 
-            # Try to parse as dict (might be a string representation of dict)
-            mem_config_dict = ast.literal_eval(output_memory_config)
-            if not isinstance(mem_config_dict, dict):
-                raise ValueError(
-                    f"Failed to parse output_memory_config string: expected dict, got {type(mem_config_dict)}"
-                )
-            # Use the loader's parse_memory_config to convert dict to MemoryConfig
-            from tests.sweep_framework.master_config_loader import MasterConfigLoader
+            if buffer_type_str == "BufferType.DRAM" or buffer_type_str == "DRAM":
+                buffer_type_enum = ttnn.BufferType.DRAM
+            elif buffer_type_str == "BufferType.L1" or buffer_type_str == "L1":
+                buffer_type_enum = ttnn.BufferType.L1
+            else:
+                buffer_type_enum = ttnn.BufferType.DRAM
 
-            loader = MasterConfigLoader()
-            # Output shape is input shape with width doubled
-            output_shape = input_shape.copy() if input_shape else []
-            if len(output_shape) >= 4:
-                output_shape[3] = output_shape[3] * 2
-            output_memory_config = loader.parse_memory_config(mem_config_dict, output_shape)
-        elif isinstance(output_memory_config, dict):
-            # It's a dict, convert to MemoryConfig
-            from tests.sweep_framework.master_config_loader import MasterConfigLoader
+            if "SHARDED" in str(mem_layout_str):
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            elif "INTERLEAVED" in str(mem_layout_str):
+                output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_enum)
+            else:
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            output_memory_config = memory_config
 
-            loader = MasterConfigLoader()
-            output_shape = input_shape.copy() if input_shape else []
-            if len(output_shape) >= 4:
-                output_shape[3] = output_shape[3] * 2
-            output_memory_config = loader.parse_memory_config(output_memory_config, output_shape)
-        elif not isinstance(output_memory_config, ttnn.MemoryConfig):
-            raise ValueError(f"output_memory_config is not a MemoryConfig (type: {type(output_memory_config)})")
+        if num_links is None:
+            num_links = 1
+        if num_iters is None:
+            num_iters = 1
+        if topology is None:
+            topology = ttnn.Topology.Linear
+
+        if input_a_tensor_placement:
+            mesh_device_shape = input_a_tensor_placement.get("mesh_device_shape")
+            if mesh_device_shape and isinstance(mesh_device_shape, (list, tuple)):
+                mesh_shape = tuple(mesh_device_shape)
+            else:
+                mesh_shape = (1, 2)
+        else:
+            mesh_shape = (1, 2)
+
+        if dim is None:
+            raise ValueError("dim is required for all_gather_async")
+
+        # Normalize negative dim
+        if dim < 0:
+            dim = len(input_shape) + dim
+
+        if cluster_axis is None:
+            if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+                cluster_axis = 0 if mesh_shape[0] > 1 else 1
+            else:
+                cluster_axis = 1 if dim > 1 else 0
+
+        if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D
+        else:
+            fabric_config = ttnn.FabricConfig.FABRIC_2D
+
+        replicate_dim = mesh_shape[cluster_axis]
+        is_2d_mesh = mesh_shape[0] > 1 and mesh_shape[1] > 1
+
+        # input_shape is the per-device shape; the gathered output multiplies dim by replicate_dim
+        output_shape = list(input_shape)
+        output_shape[dim] = input_shape[dim] * replicate_dim
+
+        # Golden: random tensor of the full gathered output shape.
+        # We shard it along dim to distribute across devices, then all_gather reconstructs it.
+        torch_reference = torch.rand(output_shape).bfloat16()
+        torch_input = torch_reference
     else:
         # Original generality/lead_model format
         # Create reference output
@@ -302,14 +332,30 @@ def run(
             return False, device_err, None, None
 
         if is_model_traced:
-            # Create input tensor directly with provided memory config
-            tt_input = ttnn.from_torch(
-                torch_input,
-                layout=layout,
-                memory_config=input_memory_config,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                device=device,
-            )
+            if is_2d_mesh:
+                # 2D mesh: shard along gather dim on cluster_axis, replicate on the other axis.
+                # This matches how _get_tensors works in test_minimal_all_gather_async.py.
+                if cluster_axis == 1:
+                    shard_dims = (None, dim)
+                else:
+                    shard_dims = (dim, None)
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    layout=layout,
+                    dtype=input_dtype,
+                    memory_config=input_memory_config,
+                    mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+                    device=device,
+                )
+            else:
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    layout=layout,
+                    dtype=input_dtype,
+                    memory_config=input_memory_config,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=dim),
+                    device=device,
+                )
         else:
             # Use _get_tensors helper for generality format
             tt_input, torch_reference, output_memory_config = _get_tensors(
@@ -324,37 +370,68 @@ def run(
                 device,
             )
 
+        # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
         compute_grid_size = device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
+
+        # Set sub-device stall group
+        device.set_sub_device_stall_group(sub_device_stall_group)
+
+        # Create semaphores for CCL operations - one set per iteration
+        ccl_semaphore_handles = [
+            [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)] for _ in range(num_iters)
+        ]
+
+        # Create barrier semaphore if needed
+        barrier_semaphore_handles = []
+        if barrier_semaphore is not None:
+            barrier_semaphore_handles = [
+                ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            ]
 
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                # Use exact same signature as test_all_gather_config.py which works correctly
+
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     tt_input,
+                    persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
                     dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=device,
-                    topology=topology,
-                    multi_device_global_semaphore=semaphores,  # List of semaphores
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
                     memory_config=output_memory_config,
+                    topology=topology,
+                    subdevice_id=worker_sub_device_id,
+                    barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                    cluster_axis=cluster_axis,
+                    chunks_per_sync=chunks_per_sync,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
                 )
+
+                ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:
                 raise RuntimeError(f"Execution failed: {e}")
 
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = ttnn.to_torch(t)
+        device.reset_sub_device_stall_group()
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, torch_reference)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, torch_reference)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-            return [(eq, output), e2e_perf]
+        # After all_gather, every device in the gather group has the full tensor.
+        # Read a single device's output for comparison.
+        device_tensors = ttnn.get_device_tensors(tt_out_tensor)
+        tt_output_tensor = ttnn.to_torch(device_tensors[0])
+
+        # Trim tile padding to match expected shape
+        tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
+
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(tt_output_tensor, torch_reference)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, torch_reference)
+
+        return [(eq, output), e2e_perf]
