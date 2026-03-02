@@ -5,6 +5,9 @@
 #include "simple_tls_check_defines.h"
 
 uint32_t shared_global_3 = 5;
+uint32_t uninitialized_global_3;
+thread_local uint32_t thread_local_3;
+thread_local uint32_t uninitialized_thread_local_3;
 
 void kernel_main() {
     const uintptr_t signal_address = get_arg_val<uint32_t>(0);
@@ -38,6 +41,19 @@ void kernel_main() {
     uint32_t global_end = shared_global_3;
     uint64_t global_addr = (uint64_t)(&shared_global_3);
 
+    uint32_t uninitialized_global_start = uninitialized_global_3;
+    uninitialized_global_3 = uninitialized_global_3 + 1;
+    uint32_t uninitialized_global_end = uninitialized_global_3;
+
+    uint32_t thread_local_start = thread_local_3;
+    thread_local_3 = thread_local_3 + 1;
+    uint32_t thread_local_end = thread_local_3;
+    uint64_t thread_local_addr = (uint64_t)(&thread_local_3);
+
+    uint32_t uninitialized_thread_local_start = uninitialized_thread_local_3;
+    uninitialized_thread_local_3 = uninitialized_thread_local_3 + 1;
+    uint32_t uninitialized_thread_local_end = uninitialized_thread_local_3;
+
     volatile tt_l1_ptr uint32_t* result = (tt_l1_ptr uint32_t*)((uintptr_t)l1_result_addr);
     result[TLS_CHECK_KERNEL_ID] = kernel_id;
     result[TLS_CHECK_NUM_KERNEL_THREADS] = get_num_kernel_threads();
@@ -48,6 +64,14 @@ void kernel_main() {
     result[TLS_CHECK_GLOBAL_END] = global_end;
     result[TLS_CHECK_GLOBAL_ADDR_LO] = (uint32_t)(global_addr & 0xFFFFFFFFu);
     result[TLS_CHECK_GLOBAL_ADDR_HI] = (uint32_t)(global_addr >> 32);
+    result[TLS_CHECK_UNINITIALIZED_GLOBAL_START] = uninitialized_global_start;
+    result[TLS_CHECK_UNINITIALIZED_GLOBAL_END] = uninitialized_global_end;
+    result[TLS_CHECK_THREAD_LOCAL_START] = thread_local_start;
+    result[TLS_CHECK_THREAD_LOCAL_END] = thread_local_end;
+    result[TLS_CHECK_THREAD_LOCAL_ADDR_LO] = (uint32_t)(thread_local_addr & 0xFFFFFFFFu);
+    result[TLS_CHECK_THREAD_LOCAL_ADDR_HI] = (uint32_t)(thread_local_addr >> 32);
+    result[TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_START] = uninitialized_thread_local_start;
+    result[TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END] = uninitialized_thread_local_end;
 
     uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_dst_address + slot_offset);
     noc_async_write(l1_result_addr, dram_noc_addr, TLS_CHECK_RESULT_SLOT_BYTES);
