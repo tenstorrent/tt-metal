@@ -377,7 +377,14 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     // Get kernel defines using helper
     auto kernel_defines = KernelDefines::build(
-        b.has_value(), gamma.has_value(), beta.has_value(), rms_norm, use_welford, skip_write_back);
+        b.has_value(),
+        gamma.has_value(),
+        beta.has_value(),
+        rms_norm,
+        use_welford,
+        skip_write_back,
+        operation_attributes.fused_activation,
+        tensor_return_value.dtype());
 
     // Get kernel paths using helper
     bool use_row_major_kernel = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
