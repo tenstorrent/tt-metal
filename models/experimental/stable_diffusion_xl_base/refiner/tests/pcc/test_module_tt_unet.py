@@ -80,20 +80,16 @@ def run_refiner_unet_model(
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     iterations=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
-    model_name = "stabilityai/stable-diffusion-xl-refiner-1.0"
-    model_location = model_location_generator(
-        "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     unet = UNet2DConditionModel.from_pretrained(
-        model_name if not is_ci_v2_env else model_location,
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
-        subfolder="unet" if not is_ci_v2_env else None,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -213,7 +209,7 @@ def test_unet(
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     reset_seeds,
 ):
     run_refiner_unet_model(
@@ -228,5 +224,5 @@ def test_unet(
         debug_mode,
         is_ci_env,
         is_ci_v2_env,
-        model_location_generator,
+        sdxl_refiner_unet_location,
     )

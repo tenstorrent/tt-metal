@@ -16,17 +16,14 @@ from loguru import logger
     "input_shape, module_path, num_channels", [((1,), "time_proj", 384), ((5,), "add_time_proj", 256)]
 )
 def test_timesteps(
-    device, input_shape, module_path, num_channels, is_ci_env, is_ci_v2_env, model_location_generator, reset_seeds
+    device, input_shape, module_path, num_channels, is_ci_env, is_ci_v2_env, sdxl_refiner_unet_location, reset_seeds
 ):
-    model_location = model_location_generator(
-        "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0" if not is_ci_v2_env else model_location,
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
-        subfolder="unet" if not is_ci_v2_env else None,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
 

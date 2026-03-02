@@ -24,7 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize("num_inference_steps", [5])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_euler_discrete_scheduler(
-    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, model_location_generator
+    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location
 ):
     try:
         from tracy import signpost
@@ -33,12 +33,8 @@ def test_euler_discrete_scheduler(
         def signpost(*args, **kwargs):
             pass
 
-    model_name = "stabilityai/stable-diffusion-xl-base-1.0"
-    model_location = model_location_generator(
-        "stable-diffusion-xl-base-1.0", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     pipe = DiffusionPipeline.from_pretrained(
-        model_name if not is_ci_v2_env else model_location,
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
@@ -126,14 +122,10 @@ def test_euler_discrete_scheduler(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("num_inference_steps", [20])
 def test_euler_discrete_scheduler_add_noise(
-    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, model_location_generator, reset_seeds
+    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location, reset_seeds
 ):
-    model_name = "stabilityai/stable-diffusion-xl-base-1.0"
-    model_location = model_location_generator(
-        "stable-diffusion-xl-base-1.0", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     pipe = DiffusionPipeline.from_pretrained(
-        model_name if not is_ci_v2_env else model_location,
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,

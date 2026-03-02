@@ -37,7 +37,8 @@ def run_unet_inference(
     ttnn_device,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompts,
     num_inference_steps,
@@ -63,23 +64,15 @@ def run_unet_inference(
     pcc_threshold = UNET_LOOP_PCC.get(resolution_key, {}).get(str(num_inference_steps), 0)
 
     # 1. Load components - use CIv2 LFC when available
-    base_model_name = "stabilityai/stable-diffusion-xl-base-1.0"
-    base_model_location = model_location_generator(
-        "stable-diffusion-xl-base-1.0", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     base = DiffusionPipeline.from_pretrained(
-        base_model_name if not is_ci_v2_env else base_model_location,
+        sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
     )
 
-    refiner_model_name = "stabilityai/stable-diffusion-xl-refiner-1.0"
-    refiner_model_location = model_location_generator(
-        "stable-diffusion-xl-refiner-1.0", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     pipeline = DiffusionPipeline.from_pretrained(
-        refiner_model_name if not is_ci_v2_env else refiner_model_location,
+        sdxl_refiner_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
@@ -390,12 +383,21 @@ def test_unet_loop(
     device,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
     return run_unet_inference(
-        device, is_ci_env, is_ci_v2_env, model_location_generator, image_resolution, prompt, loop_iter_num, debug_mode
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        sdxl_base_pipeline_location,
+        sdxl_refiner_pipeline_location,
+        image_resolution,
+        prompt,
+        loop_iter_num,
+        debug_mode,
     )

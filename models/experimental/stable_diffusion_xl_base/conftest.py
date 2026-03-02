@@ -5,6 +5,172 @@ import pytest
 from conftest import is_galaxy
 
 
+# =============================================================================
+# SDXL Model Location Fixtures (Session-scoped for CIv2 download efficiency)
+# =============================================================================
+# These fixtures download models once per pytest session and cache the location.
+# This prevents redundant downloads when running multiple SDXL tests.
+# =============================================================================
+
+# --- Base Model Locations ---
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_unet_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base UNet model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL base pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_vae_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base VAE model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/vae",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_text_encoder_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base text_encoder (CLIP) model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/text_encoder",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_text_encoder_2_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base text_encoder_2 (CLIP with projection) model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/text_encoder_2",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_tokenizer_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base tokenizer.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/tokenizer",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_base_tokenizer_2_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL base tokenizer_2.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-base-1.0/tokenizer_2",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-base-1.0"
+
+
+# --- Refiner Model Locations ---
+
+
+@pytest.fixture(scope="session")
+def sdxl_refiner_unet_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for SDXL refiner UNet model weights.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-refiner-1.0/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-refiner-1.0"
+
+
+@pytest.fixture(scope="session")
+def sdxl_refiner_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL refiner pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns MLPerf path or HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-refiner-1.0",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "stabilityai/stable-diffusion-xl-refiner-1.0"
+
+
 def pytest_configure(config):
     """Override global timeout setting for SDXL tests"""
     config.option.timeout = 0

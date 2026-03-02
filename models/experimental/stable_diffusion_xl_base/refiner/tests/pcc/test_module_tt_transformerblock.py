@@ -48,18 +48,15 @@ def test_transformerblock(
     block_type,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     reset_seeds,
 ):
-    model_location = model_location_generator(
-        "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0" if not is_ci_v2_env else model_location,
+        sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env or is_ci_v2_env,
-        subfolder="unet" if not is_ci_v2_env else None,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()
