@@ -331,10 +331,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
     // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
     const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    const bool use_streaming_compute =
-        !is_causal && !use_provided_mask && !use_attention_sink && sliding_window_size.value_or(0) == 0 &&
-        !is_chunked && !fp32_dest_acc_en && qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h == 1 &&
-        Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8 && !streaming_mask_unsupported;
+    const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
+                                       sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
+                                       qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 &&
+                                       !streaming_mask_unsupported;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values

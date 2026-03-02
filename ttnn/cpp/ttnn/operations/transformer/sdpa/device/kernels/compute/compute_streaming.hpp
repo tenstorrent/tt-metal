@@ -316,7 +316,9 @@ void mul_block_bcast_cols_acc(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock) {
     constexpr uint32_t tiles_per_row = SBH;
     constexpr uint32_t tiles_per_column = SBW;
-    static_assert(tiles_per_row * tiles_per_column <= 8, "SBH * SBW must fit in DST (max 8 tiles)");
+    // Process columns in batches that fit SBH rows in DST (8 tiles max).
+    constexpr uint32_t COL_BATCH = (8 / SBH < SBW) ? 8 / SBH : SBW;
+    static_assert(COL_BATCH >= 1, "SBH must be <= 8");
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -325,24 +327,29 @@ void mul_block_bcast_cols_acc(
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
     PACK((llk_pack_reconfig_l1_acc(1)));
-    tile_regs_acquire();
-    uint32_t dst_index = 0;
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + j;
-            mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, read_row_base + i, dst_index++);
+    for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += COL_BATCH) {
+        constexpr uint32_t last_batch = tiles_per_column % COL_BATCH;
+        const uint32_t cur_cols =
+            (col_base + COL_BATCH <= tiles_per_column) ? COL_BATCH : (last_batch > 0 ? last_batch : COL_BATCH);
+        tile_regs_acquire();
+        uint32_t dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            for (uint32_t j = 0; j < cur_cols; j++) {
+                uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + col_base + j;
+                mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, read_row_base + i, dst_index++);
+            }
         }
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    dst_index = 0;
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + j;
-            pack_tile<true>(dst_index++, out_cb, out_tile_index);
+        tile_regs_commit();
+        tile_regs_wait();
+        dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            for (uint32_t j = 0; j < cur_cols; j++) {
+                uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base + j;
+                pack_tile<true>(dst_index++, out_cb, out_tile_index);
+            }
         }
+        tile_regs_release();
     }
-    tile_regs_release();
     PACK((llk_pack_reconfig_l1_acc(false)));
 }
 
@@ -432,24 +439,29 @@ void normalize_row_streaming(
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
-        static_assert(head_dim_t_ <= 8, "head_dim_t must fit in DST (max 8 tiles)");
+        // Process in batches of up to 8 tiles (DST capacity for fp16b half-sync).
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "NORM_MUL_BCAST");
+            constexpr uint32_t BATCH = (head_dim_t_ < 8) ? head_dim_t_ : 8;
             mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
             cb_wait_front(cur_out_cb, head_dim_t_);
             cb_wait_front(scratch_cb, 1);
 
             cb_reserve_back(normalized_out_cb, head_dim_t_);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < head_dim_t_; ++j) {
-                mul_tiles_bcast_cols(cur_out_cb, scratch_cb, j, 0, j);
+            for (uint32_t base = 0; base < head_dim_t_; base += BATCH) {
+                constexpr uint32_t last_batch = head_dim_t_ % BATCH;
+                const uint32_t cur_batch = (base + BATCH <= head_dim_t_) ? BATCH : last_batch;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < cur_batch; ++j) {
+                    mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, 0, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < cur_batch; ++j) {
+                    pack_tile(j, normalized_out_cb);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < head_dim_t_; ++j) {
-                pack_tile(j, normalized_out_cb);
-            }
-            tile_regs_release();
             cb_push_back(normalized_out_cb, head_dim_t_);
 
             cb_pop_front(scratch_cb, 1);
@@ -573,12 +585,16 @@ void sdpa_inner_loop_step(
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
+                // Restore float16b UNPACK for sub_exp (early-exit if already float16b).
+                reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
                 sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                     cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
             }
 
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
+                // Setup matmul UNPACK (early-exit if already set, e.g., q_subblock==0 consecutive calls).
+                reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                     cb_q_in,
                     cb_kt_in,
@@ -590,6 +606,8 @@ void sdpa_inner_loop_step(
             }
             kt_index_offset += qkt_subblock_w;
         }
+        // Restore float16b for mask/reduce after Q@KT.
+        reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
 
         // Apply mask on last K chunk: only accumulate -inf onto padded K positions.
         // Skips zero-valued tiles to avoid Bfp4_b→Float16_b L1 acc round-trip artifacts.
@@ -693,6 +711,7 @@ void sdpa_inner_loop_step(
                     // Matmul — FPU overlaps with SFPU EXP
                     {
                         uint32_t v_index_offset = 0;
+                        reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
@@ -705,6 +724,7 @@ void sdpa_inner_loop_step(
                                 v_subblock * qktv_subblock_w);
                             v_index_offset += qktv_subblock_w;
                         }
+                        reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
                     }
 
                     if (kt_sub > 0) {
@@ -722,6 +742,7 @@ void sdpa_inner_loop_step(
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
                     uint32_t v_index_offset = 0;
+                    reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
@@ -734,6 +755,7 @@ void sdpa_inner_loop_step(
                             v_subblock * qktv_subblock_w);
                         v_index_offset += qktv_subblock_w;
                     }
+                    reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
                 }
             }
             qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
@@ -785,6 +807,7 @@ void sdpa_inner_loop_step(
             // Full matmul for current row
             {
                 uint32_t v_index_offset = 0;
+                reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
@@ -797,6 +820,7 @@ void sdpa_inner_loop_step(
                         v_subblock * qktv_subblock_w);
                     v_index_offset += qktv_subblock_w;
                 }
+                reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
             }
 
             // SALAD corrections + optional per-row normalization
