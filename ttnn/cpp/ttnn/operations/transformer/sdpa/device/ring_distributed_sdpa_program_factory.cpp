@@ -266,6 +266,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
+        0,      // arg 20: use_lightweight_mask (not used in ring mode)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
