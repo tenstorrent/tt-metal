@@ -88,28 +88,24 @@ class TextModel(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
-        # Token embedding
+        # Token embedding - pre-concatenate wte + new_embedding for trace compatibility
+        # This avoids ttnn.concat inside embed_tokens which fails during trace capture
         wte = state_dict[f"{state_dict_prefix}.wte.embedding"]
-        self.wte = ttnn.as_tensor(
-            wte.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wte.embedding"),
-        )
-
-        # Visual token embedding (for image tokens)
         new_embedding = state_dict[f"{state_dict_prefix}.wte.new_embedding"]
-        self.new_embedding = ttnn.as_tensor(
-            new_embedding.unsqueeze(0).unsqueeze(0),
+
+        # Concatenate on CPU: [vocab_size, hidden_dim] + [new_vocab_size, hidden_dim]
+        # Result: [full_vocab_size, hidden_dim]
+        full_embedding = torch.cat([wte, new_embedding], dim=0)
+
+        # Store as single tensor for trace-compatible embed_tokens
+        self.full_embedding = ttnn.as_tensor(
+            full_embedding.unsqueeze(0).unsqueeze(0),  # [1, 1, full_vocab_size, hidden_dim]
             dtype=ttnn.bfloat16,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wte.new_embedding"),
+            cache_file_name=cache_name("wte.full_embedding"),
         )
 
         # Rotary position embeddings (TTNN-native for prefill)
@@ -200,15 +196,12 @@ class TextModel(LightweightModule):
             Embeddings of shape [1, 1, seq_len, hidden_dim] in TILE layout
 
         Note:
-            Uses combined embedding table (wte + new_embedding) to handle
+            Uses pre-concatenated embedding table (wte + new_embedding) to handle
             both regular tokens and special tokens (image_patch_id, etc.)
+            The concatenation is done once during __init__ to enable tracing.
         """
-        # Concatenate base and new embeddings for full vocabulary
-        # This matches HuggingFace: F.embedding(x, torch.cat([self.embedding, self.new_embedding]))
-        full_embedding = ttnn.concat([self.wte, self.new_embedding], dim=2)
-
-        # Use TTNN embedding lookup with combined table
-        embeddings = ttnn.embedding(input_ids, full_embedding)
+        # Use pre-concatenated embedding table (no concat during trace)
+        embeddings = ttnn.embedding(input_ids, self.full_embedding)
         embeddings = ttnn.reshape(embeddings, [1, 1, -1, self.hidden_dim])
         # Convert to TILE layout for rest of model
         embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
