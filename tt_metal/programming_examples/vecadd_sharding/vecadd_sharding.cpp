@@ -16,6 +16,7 @@
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <cstddef>
 #include <cstdint>

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 
 import torch
@@ -36,6 +37,10 @@ from models.tt_transformers.tt.common import (
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
+
+
+def _deepseek_kvdbg_enabled() -> bool:
+    return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
 class Generator(WarmupForwardMixin):
@@ -146,8 +151,12 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -191,6 +200,7 @@ class Generator(WarmupForwardMixin):
         prefill_seq_len=None,
         **kwargs,
     ):
+        global_user_id = kwargs.get("global_user_id", None)
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -198,6 +208,7 @@ class Generator(WarmupForwardMixin):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                global_user_id=global_user_id,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -210,6 +221,7 @@ class Generator(WarmupForwardMixin):
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            global_user_id=global_user_id,
         )
 
         return tt_out_trace
@@ -223,8 +235,12 @@ class Generator(WarmupForwardMixin):
         user_id=0,
         page_table=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
@@ -306,7 +322,8 @@ class Generator(WarmupForwardMixin):
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
-            local_kwargs["global_user_id"] = user_id  # Pass global user_id for row-sharded page table targeting
+            if getattr(self.model[model_id], "users_row_sharded", False):
+                local_kwargs["global_user_id"] = user_id  # Row-sharded models need this for page table targeting
             sampling_enabled = (
                 sampling_on_device_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
@@ -344,6 +361,20 @@ class Generator(WarmupForwardMixin):
                 if page_table is not None
                 else None
             )
+            if page_table_user is not None and _deepseek_kvdbg_enabled():
+                sample = []
+                if page_table_user.numel():
+                    flat = page_table_user.reshape(-1)
+                    sample = flat[: min(16, flat.numel())].tolist()
+                logger.debug(
+                    "KVDBG deepseek prefill user global={} local={} seq_len={} cached={} page_table_shape={} sample={}",
+                    user_id,
+                    group_user_id,
+                    seq_len,
+                    num_cached_tokens,
+                    list(page_table_user.shape),
+                    sample,
+                )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
