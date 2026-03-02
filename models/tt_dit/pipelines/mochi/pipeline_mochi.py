@@ -298,8 +298,11 @@ class MochiPipeline(DiffusionPipeline):
         force_zeros_for_empty_prompt=False,
         reload_dit_model=None,
     ):
-        if ttnn.device.is_blackhole():
-            assert tuple(mesh_device.shape) in [(2, 4), (4, 8)], "Mochi has only been successfully tested on 2x2"
+        if ttnn.device.is_blackhole() and tuple(mesh_device.shape) != (2, 2):
+            logger.warning(
+                f"Mochi has only been successfully tested on 2x2 configuration for Blackhole. Proceeding with the requested{mesh_device.shape} configuration."
+            )
+
             default_config = {
                 (2, 2): {
                     "sp_axis": 0,
