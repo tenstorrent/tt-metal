@@ -206,6 +206,7 @@ def test_forward_pass(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
+<<<<<<< HEAD
 
     # TTNN forward pass - collective operations handled inside forward functions
     # SharedExpert needs handle_tensor_parallel=True for standalone testing to enable CCLs
@@ -214,6 +215,10 @@ def test_forward_pass(
         tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
     else:
         tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
+=======
+    # TTNN forward pass
+    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
+>>>>>>> 8c4d27d337 (refactor DeepSeek fused-op CI/perf workflow and local runners)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
