@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"

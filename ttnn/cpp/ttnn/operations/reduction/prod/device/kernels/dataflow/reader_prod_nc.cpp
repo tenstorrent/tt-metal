@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
@@ -19,7 +22,6 @@ void kernel_main() {
     constexpr auto dram_input_addrg_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
     union {
@@ -29,8 +31,10 @@ void kernel_main() {
     scaler.f = 1.0f;
     fill_cb_with_value(cb_id_in1, scaler.u);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);
+
+    uint32_t input_tile_bytes = get_tile_size(cb_in0.get_cb_id());
     const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr, input_tile_bytes);
 
     uint32_t read_tile_id_temp = (dim == 0) ? (start_id) : (start_id / HtWt * CHtWt) + (start_id % HtWt);
@@ -42,11 +46,10 @@ void kernel_main() {
             read_tile_id = i;
         }
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            cb_reserve_back(cb_id_in0, onetile);
-            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(read_tile_id, dram_input_addrg, l1_write_addr_in0);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
+            cb_in0.reserve_back(onetile);
+            noc.async_read(dram_input_addrg, cb_in0, input_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in0.push_back(onetile);
             read_tile_id += input_tile_offset;
         }
         if constexpr (dim != 0) {
