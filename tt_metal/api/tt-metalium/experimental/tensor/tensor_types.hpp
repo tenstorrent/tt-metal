@@ -53,7 +53,7 @@ consteval DataType convert_to_data_type() {
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
     } else {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
+        static_assert(sizeof(T) == 0, "Unsupported DataType!");
     }
 }
 

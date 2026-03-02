@@ -5,30 +5,30 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: SDPA Reduce-to-All + Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
+// Implements: SDPA Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
 //
 // SDPA Reduce-to-All Phase:
-// - SDPA Workers (8 cores): Reduce L/MS tensors across devices, scatter [1,512] to matmul1 cores
+// - SDPA Workers (8 cores): Reduce L/MS tensors across devices, scatter [1,512] to matmul4 cores
 // - SDPA Forwarders (2 cores): Forward fabric packets for SDPA CCL
 //
 // Post-SDPA Phases:
-// - Matmul1: [1, 512] x [512, 128] -> [1, 128] on 64 cores (kv_b2 grid: 5x8 + 12x2) - waits for scatter data
-// - Gather1: Collect [1, 128] from 64 cores to [1, 8192] on gather core
-// - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular)
-// - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
-// - Gather2: Collect [1, 64] from 112 active cores to [1, 7168] on gather core
+// - Matmul4: [1, 512] x [512, 128] -> [1, 128] on 64 cores (kv_b2 grid: 5x8 + 12x2) - waits for scatter data
+// - Gather2: Collect [1, 128] from 64 cores to [1, 8192] on gather core
+// - Mcast3: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular)
+// - Matmul5: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
+// - Gather3: Collect [1, 64] from 112 active cores to [1, 7168] on gather core
 // - CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 //
-// Note: Mcast grid (13x10=130) includes 18 inactive cores
-// which receive mcast data but skip matmul2 via is_matmul2_core=false
+// Note: Mcast3 grid (13x10=130) includes 18 inactive cores
+// which receive mcast3 data but skip matmul5 via is_matmul5_core=false
 //
 // SDPA Core Layout:
 // - SDPA Workers: (2,8)-(5,8), (2,9)-(5,9) = 8 cores
 // - SDPA Forwarders: (6,9), (7,9) = 2 cores
-// Note: Some SDPA cores overlap with matmul2 grid - they run SDPA first, then matmul2
+// Note: Some SDPA cores overlap with matmul5 grid - they run SDPA first, then matmul5
 //
 // CCL Core Layout:
-// - CCL Receiver = Gather core (12, 9): already has local data after Gather2
+// - CCL Receiver = Gather core (12, 9): already has local data after Gather3
 // - CCL Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
@@ -63,13 +63,13 @@ struct Core {
 
     // Post-SDPA cores
     // First matmul on kv_b2 grid (5x8 + 12x2 = 64 cores) - receives scatter data from SDPA workers
-    static constexpr bool is_matmul1_core = get_named_compile_time_arg_val("is_matmul1_core") == 1;
-    // Gather core (12, 9) - receives gather1, sends mcast, receives gather2, CCL receiver
+    static constexpr bool is_matmul4_core = get_named_compile_time_arg_val("is_matmul4_core") == 1;
+    // Gather core (12, 9) - receives gather2, sends mcast3, receives gather3, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
-    // Mcast receiver grid (13x10 = 130 cores) - receives mcast data
-    static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
-    // Active matmul2 cores (112 cores: o_proj grid 12x8 + 8x2)
-    static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
+    // Mcast3 receiver grid (13x10 = 130 cores) - receives mcast3 data
+    static constexpr bool is_mcast3_receiver_core = get_named_compile_time_arg_val("is_mcast3_receiver_core") == 1;
+    // Active matmul5 cores (112 cores: o_proj grid 12x8 + 8x2)
+    static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
     // CCL sender core (11, 9) - reads from gather core, sends via fabric
     static constexpr bool is_ccl_sender_core = get_named_compile_time_arg_val("is_ccl_sender_core") == 1;
     // CCL receiver core = gather core (12, 9) - receives remote data, performs reduction
@@ -83,51 +83,21 @@ void kernel_main() {
 // - SDPA worker reader (8 cores): push local L/MS, prepare R1/R2 neighbor data
 // - SDPA forwarder NCRISC (2 cores): forward BWD fabric packets
 // Post-SDPA Phase:
-// - Matmul1 reader (kv_b2 grid): setup sharded buffers (after scatter arrival)
-// - Gather1 sender (kv_b2 grid): send matmul1 output to gather core
-// - Mcast receiver (13x10 grid = 130 cores): receive mcast data
-// - Matmul2 reader (112 active cores): setup weights buffer
-// - Gather2 sender (112 active cores): send matmul2 output to gather core
-// - CCL sender (11, 9): read gather2 output from gather core
+// - Matmul4 reader (kv_b2 grid): setup sharded buffers (after scatter arrival)
+// - Gather2 sender (kv_b2 grid): send matmul4 output to gather core
+// - Mcast3 receiver (13x10 grid = 130 cores): receive mcast3 data
+// - Matmul5 reader (112 active cores): setup weights buffer
+// - Gather3 sender (112 active cores): send matmul5 output to gather core
+// - CCL sender (11, 9): read gather3 output from gather core
 // - CCL receiver (12, 9): wait for remote data, push to compute
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // Matmul1 CTArgs
-    using Matmul1CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul1_args{};
-
-    // Gather1 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather1_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
-    deepseek_b1_ops::Gather::SenderArgs gather1_args{
-        get_named_compile_time_arg_val("gather1_dest_noc_x"),
-        get_named_compile_time_arg_val("gather1_dest_noc_y"),
-        get_named_compile_time_arg_val("gather1_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather1_src_cb"),
-        get_named_compile_time_arg_val("gather1_src_num_pages"),
-        get_named_compile_time_arg_val("gather1_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather1_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather1_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather1_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather1_row_major"),
-        get_named_compile_time_arg_val("gather1_receiver_data_addr"),
-        get_named_compile_time_arg_val("gather1_sender_idx"),
-    };
-
-    // Mcast receiver args
-    using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
-    };
-
-    // Matmul2 CTArgs
-    using Matmul2CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul2_args{};
+    // Matmul4 CTArgs
+    using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
 
     // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather2_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
+    // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
     deepseek_b1_ops::Gather::SenderArgs gather2_args{
         get_named_compile_time_arg_val("gather2_dest_noc_x"),
         get_named_compile_time_arg_val("gather2_dest_noc_y"),
@@ -143,6 +113,36 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather2_receiver_data_addr"),
         get_named_compile_time_arg_val("gather2_sender_idx"),
     };
+
+    // Mcast3 receiver args
+    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
+        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast3_dst_cb"),
+        get_named_compile_time_arg_val("mcast3_dst_num_pages"),
+    };
+
+    // Matmul5 CTArgs
+    using Matmul5CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs matmul5_args{};
+
+    // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
+    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
+    deepseek_b1_ops::Gather::SenderArgs gather3_args{
+        get_named_compile_time_arg_val("gather3_dest_noc_x"),
+        get_named_compile_time_arg_val("gather3_dest_noc_y"),
+        get_named_compile_time_arg_val("gather3_data_size_bytes"),
+        get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
+        get_named_compile_time_arg_val("gather3_src_cb"),
+        get_named_compile_time_arg_val("gather3_src_num_pages"),
+        get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
+        get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
+        get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
+        get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
+        get_named_compile_time_arg_val("gather3_row_major"),
+        get_named_compile_time_arg_val("gather3_receiver_data_addr"),
+        get_named_compile_time_arg_val("gather3_sender_idx"),
+    };
 #ifndef SKIP_CCL
     // CCL Sender NCRISC CTArgs (reads from gather core)
     using CCLSenderReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<
@@ -153,7 +153,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_data_noc_y")>;
 
     // CCL Receiver NCRISC CTArgs (waits for remote data)
-    // Note: skip_local_push=1 because gather2 already pushed to CB7 (gather2_dst_cb)
+    // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
     using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
         get_named_compile_time_arg_val("ccl_receiver_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
@@ -168,49 +168,17 @@ void kernel_main() {
 #endif
 // ============================================================================
 // BRISC (Writer)
-// - Gather1 receiver (gather core): receive from kv_b2 grid
-// - Mcast sender (gather core): broadcast to 13x10 grid (130 cores)
-// - Gather2 receiver (gather core): receive from 112 active matmul2 cores
-// - CCL sender (11, 9): send gather2 output via fabric
+// - Gather2 receiver (gather core): receive from kv_b2 grid
+// - Mcast3 sender (gather core): broadcast to 13x10 grid (130 cores)
+// - Gather3 receiver (gather core): receive from 112 active matmul5 cores
+// - CCL sender (11, 9): send gather3 output via fabric
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
-    // Matmul1/2 CTArgs (BRISC is no-op for matmul)
-    using Matmul1CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    deepseek_b1_ops::Matmul::WriterArgs matmul1_args{};
-    deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
-
-    // Gather1 receiver args
-    deepseek_b1_ops::Gather::ReceiverArgs gather1_args{
-        get_named_compile_time_arg_val("gather1_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather1_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather1_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather1_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather1_dst_cb"),
-        get_named_compile_time_arg_val("gather1_dst_num_pages"),
-    };
-
-    // Mcast sender args
-    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast_num_cores"),
-        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
-        false>;  // loopback = false
-
-    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
-        get_write_ptr(mcast_dst_cb),  // CB 4 address (now allocated on gather core too)
-    };
+    // Matmul4/2 CTArgs (BRISC is no-op for matmul)
+    using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    deepseek_b1_ops::Matmul::WriterArgs matmul4_args{};
+    deepseek_b1_ops::Matmul::WriterArgs matmul5_args{};
 
     // Gather2 receiver args
     deepseek_b1_ops::Gather::ReceiverArgs gather2_args{
@@ -220,6 +188,38 @@ void kernel_main() {
         get_semaphore(get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("gather2_dst_cb"),
         get_named_compile_time_arg_val("gather2_dst_num_pages"),
+    };
+
+    // Mcast3 sender args
+    using Mcast3CTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast3_num_cores"),
+        get_named_compile_time_arg_val("mcast3_is_part_of_receiver_grid") == 1,
+        false>;  // loopback = false
+
+    constexpr uint32_t mcast3_src_cb = get_named_compile_time_arg_val("mcast3_src_cb");
+    constexpr uint32_t mcast3_dst_cb = get_named_compile_time_arg_val("mcast3_dst_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast3_args{
+        get_named_compile_time_arg_val("mcast3_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
+        get_semaphore(get_named_compile_time_arg_val("mcast3_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast3_data_size_bytes"),
+        mcast3_src_cb,
+        get_named_compile_time_arg_val("mcast3_src_num_pages"),
+        get_read_ptr(mcast3_src_cb),
+        get_write_ptr(mcast3_dst_cb),  // CB 4 address (now allocated on gather core too)
+    };
+
+    // Gather3 receiver args
+    deepseek_b1_ops::Gather::ReceiverArgs gather3_args{
+        get_named_compile_time_arg_val("gather3_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather3_noc1_num_senders"),
+        get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
+        get_named_compile_time_arg_val("gather3_dst_cb"),
+        get_named_compile_time_arg_val("gather3_dst_num_pages"),
     };
 
 #ifndef SKIP_CCL
@@ -240,40 +240,40 @@ void kernel_main() {
 #endif
 // ============================================================================
 // TRISC (Compute)
-// - Matmul1 compute (kv_b2 grid)
-// - Matmul2 compute (112 active cores)
+// - Matmul4 compute (kv_b2 grid)
+// - Matmul5 compute (112 active cores)
 // - CCL receiver compute (gather core): reduction (local + remote + residual)
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
-    // Matmul1 CTArgs
-    using Matmul1CTArgs =
-        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul1_out_w_per_core")>;
-    deepseek_b1_ops::Matmul::ComputeArgs matmul1_args{
-        get_named_compile_time_arg_val("matmul1_in0"),
-        get_named_compile_time_arg_val("matmul1_in1"),
-        get_named_compile_time_arg_val("matmul1_out"),
-        get_named_compile_time_arg_val("matmul1_k_num_tiles"),
-    };
-
-    // Gather1 compute args (no-op)
-    deepseek_b1_ops::Gather::ComputeArgs gather1_args{};
-
-    // Mcast CTArgs (no-op)
-    using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
-    deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
-
-    // Matmul2 CTArgs
-    using Matmul2CTArgs =
-        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul2_out_w_per_core")>;
-    deepseek_b1_ops::Matmul::ComputeArgs matmul2_args{
-        get_named_compile_time_arg_val("matmul2_in0"),
-        get_named_compile_time_arg_val("matmul2_in1"),
-        get_named_compile_time_arg_val("matmul2_out"),
-        get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+    // Matmul4 CTArgs
+    using Matmul4CTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul4_out_w_per_core")>;
+    deepseek_b1_ops::Matmul::ComputeArgs matmul4_args{
+        get_named_compile_time_arg_val("matmul4_in0"),
+        get_named_compile_time_arg_val("matmul4_in1"),
+        get_named_compile_time_arg_val("matmul4_out"),
+        get_named_compile_time_arg_val("matmul4_k_num_tiles"),
     };
 
     // Gather2 compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs gather2_args{};
+
+    // Mcast3 CTArgs (no-op)
+    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+    deepseek_b1_ops::Mcast::ComputeArgs mcast3_args{};
+
+    // Matmul5 CTArgs
+    using Matmul5CTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul5_out_w_per_core")>;
+    deepseek_b1_ops::Matmul::ComputeArgs matmul5_args{
+        get_named_compile_time_arg_val("matmul5_in0"),
+        get_named_compile_time_arg_val("matmul5_in1"),
+        get_named_compile_time_arg_val("matmul5_out"),
+        get_named_compile_time_arg_val("matmul5_k_num_tiles"),
+    };
+
+    // Gather3 compute args (no-op)
+    deepseek_b1_ops::Gather::ComputeArgs gather3_args{};
 
 #ifndef SKIP_CCL
     // CCL Receiver compute CTArgs (reduction)
@@ -294,7 +294,7 @@ void kernel_main() {
     // SDPA REDUCE-TO-ALL PHASE (using unified ops from sdpa_reduce_worker.hpp
     // and sdpa_reduce_forwarder.hpp)
     //
-    // SDPA worker cores (8): reduce L/MS across devices, scatter to matmul1 cores
+    // SDPA worker cores (8): reduce L/MS across devices, scatter to matmul4 cores
     // SDPA forwarder cores (2): forward fabric packets for SDPA CCL
     //
     // The unified SdpaReduceWorker::Op handles all three RISC processors:
@@ -326,10 +326,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_position_enabled"),
                 get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
 
-            // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
-            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
             uint32_t per_core_rta_arg_idx = 0;
             Worker::ReaderArgs reader_args{
                 .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -337,13 +333,10 @@ void kernel_main() {
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             };
-            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            Worker::Op<ReaderCTArgs> sdpa_worker;
             sdpa_worker(reader_args);
 
 #elif defined(COMPILE_FOR_BRISC)
-            // Dummy ReaderCT - not used by BRISC
-            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
             using WriterCTArgs = Worker::WriterCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -364,10 +357,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scatter_face_size"),
                 get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
                 get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
-                1>;  // scatter_arrival_enabled=1 (signal matmul1 cores after each scatter row)
-
-            // Dummy ComputeCT - not used by BRISC
-            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+                1>;  // scatter_arrival_enabled=1 (signal matmul4 cores after each scatter row)
 
             uint32_t per_core_rta_arg_idx = 0;
             Worker::WriterArgs writer_args{
@@ -395,14 +385,10 @@ void kernel_main() {
                 .scatter_arrival_sem_addr =
                     get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
             };
-            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            Worker::Op<WriterCTArgs> sdpa_worker;
             sdpa_worker(writer_args);
 
 #elif defined(COMPILE_FOR_TRISC)
-            // Dummy ReaderCT and WriterCT - not used by TRISC
-            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
             using ComputeCTArgs = Worker::ComputeCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -423,7 +409,7 @@ void kernel_main() {
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
             Worker::ComputeArgs compute_args{};
-            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
+            Worker::Op<ComputeCTArgs> sdpa_worker;
             sdpa_worker(compute_args);
 #endif
         }
@@ -456,11 +442,11 @@ void kernel_main() {
     // Setup sharded buffers (NCRISC only)
     // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // Matmul1 buffers (kv_b2 grid)
-    // NOTE: When SDPA is enabled, matmul1 waits for scatter data arrival before setup
-    if constexpr (Core::is_matmul1_core) {
+    // Matmul4 buffers (kv_b2 grid)
+    // NOTE: When SDPA is enabled, matmul4 waits for scatter data arrival before setup
+    if constexpr (Core::is_matmul4_core) {
 #ifndef SKIP_SDPA
-        // Wait for SDPA scatter to deliver data to matmul1_in0
+        // Wait for SDPA scatter to deliver data to matmul4_in0
         // Each SDPA worker signals this semaphore after scatter write completes
         constexpr uint32_t scatter_arrival_semaphore_id =
             get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
@@ -470,92 +456,92 @@ void kernel_main() {
         noc_semaphore_set(scatter_arrival_sem_addr, 0);
 #endif
 
-        constexpr uint32_t matmul1_in0 = get_named_compile_time_arg_val("matmul1_in0");
-        constexpr uint32_t matmul1_k_num_tiles = get_named_compile_time_arg_val("matmul1_k_num_tiles");
-        unified_kernels::setup_sharded_buffer(matmul1_in0, matmul1_k_num_tiles);
+        constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
+        constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
+        unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
 
-        constexpr uint32_t matmul1_in1 = get_named_compile_time_arg_val("matmul1_in1");
-        constexpr uint32_t matmul1_out_w_per_core = get_named_compile_time_arg_val("matmul1_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul1_in1, matmul1_k_num_tiles * matmul1_out_w_per_core);
+        constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
+        constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
     }
 
-    // Matmul2 buffers (112 active cores) - weights only, input comes from mcast
-    if constexpr (Core::is_matmul2_core) {
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
+    // Matmul5 buffers (112 active cores) - weights only, input comes from mcast3
+    if constexpr (Core::is_matmul5_core) {
+        constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
+        constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
+        constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
     }
 #endif
 
     // ========================================================================
-    // Matmul1: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
+    // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL1");
-        deepseek_b1_ops::Matmul::Op<Matmul1CTArgs, Core::is_matmul1_core, true, false> matmul1;
-        matmul1(matmul1_args);
+        deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
+        matmul4(matmul4_args);
     }
 
     // ========================================================================
-    // Gather1: matmul1 cores (kv_b2 grid) -> gather core (12, 9)
+    // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
     // Collects [1, 128] * 64 = [1, 8192]
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER1");
-        deepseek_b1_ops::Gather::Op<Core::is_matmul1_core, Core::is_gather_receiver_core, true, true> gather1;
-        gather1(gather1_args);
+        DeviceZoneScopedN("GATHER2");
+        deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
+        gather2(gather2_args);
     }
 
     // ========================================================================
-    // Mcast: gather core -> 13x10 mcast grid (130 cores)
-    // Broadcasts [1, 8192] to each core in mcast grid
-    // Source: gather1_dst_cb (CB 3), Destination: mcast_dst_cb = matmul2_in0 (CB 4)
-    // Note: 18 inactive grid cores only do semaphore handshake; only matmul2 cores do full CB receive
+    // Mcast3: gather core -> 13x10 mcast3 grid (130 cores)
+    // Broadcasts [1, 8192] to each core in mcast3 grid
+    // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
+    // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
     // ========================================================================
-    constexpr bool is_mcast_grid_core = Core::is_mcast_receiver_core && !Core::is_gather_receiver_core;
+    constexpr bool is_mcast3_grid_core = Core::is_mcast3_receiver_core && !Core::is_gather_receiver_core;
     deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_gather_receiver_core, is_mcast_grid_core, Core::is_matmul2_core, true>
-            mcast;
-    mcast.init(mcast_args);
+        Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
+            mcast3;
+    mcast3.init(mcast3_args);
     {
-        DeviceZoneScopedN("MCAST");
-        mcast(mcast_args);
+        DeviceZoneScopedN("MCAST3");
+        mcast3(mcast3_args);
     }
-    mcast.teardown();
+    mcast3.teardown();
 
     // ========================================================================
-    // Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
-    // Input: mcast_dst_cb (CB 4), Weights: matmul2_in1 (CB 5), Output: matmul2_out (CB 6)
-    // Only runs on 112 active cores (is_matmul2_core=true), 18 inactive cores skip
+    // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
+    // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
+    // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL2");
-        // pop_in0 = true (mcast output consumed), pop_in1 = false (weights persistent)
-        deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
-        matmul2(matmul2_args);
+        // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
+        deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
+        matmul5(matmul5_args);
     }
 
     // ========================================================================
-    // Gather2: 112 active matmul2 cores -> gather core (12, 9)
+    // Gather3: 112 active matmul5 cores -> gather core (12, 9)
     // Collects [1, 64] * 112 = [1, 7168]
     // ========================================================================
     {
-        DeviceZoneScopedN("GATHER2");
-        deepseek_b1_ops::Gather::Op<Core::is_matmul2_core, Core::is_gather_receiver_core, true, true> gather2;
-        gather2(gather2_args);
+        DeviceZoneScopedN("GATHER3");
+        deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
+        gather3(gather3_args);
     }
 
 #ifndef SKIP_CCL
 #if defined(COMPILE_FOR_BRISC)
-    // Signal CCL sender that gather2 is complete (gather receiver only)
+    // Signal CCL sender that gather3 is complete (gather receiver only)
     if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
-        constexpr uint32_t gather2_completion_semaphore_id =
-            get_named_compile_time_arg_val("gather2_completion_semaphore_id");
+        constexpr uint32_t gather3_completion_semaphore_id =
+            get_named_compile_time_arg_val("gather3_completion_semaphore_id");
         constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
         constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
         uint64_t ccl_sender_semaphore_addr =
-            get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather2_completion_semaphore_id));
+            get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id));
         noc_semaphore_inc(ccl_sender_semaphore_addr, 1);
         noc_async_atomic_barrier();
     }
@@ -563,24 +549,24 @@ void kernel_main() {
 
     // ========================================================================
     // CCL All-Reduce: Exchange [1, 7168] between devices
-    // - CCL Sender (11, 9): Reads gather2 output from gather core, sends via fabric
+    // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
     // - CCL Receiver (12, 9): Receives remote data, performs reduction
     //
     // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
-    // gather2 already pushed to CB7 (gather2_dst_cb). The receiver just
+    // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
     // needs to wait for remote data and perform the reduction.
     // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_ccl_sender_core) {
         DeviceZoneScopedN("CCL_SENDER_READ");
 
-        // Wait for gather2 to complete before reading from gather core
-        constexpr uint32_t gather2_completion_semaphore_id =
-            get_named_compile_time_arg_val("ccl_sender_gather2_completion_semaphore_id");
-        volatile tt_l1_ptr uint32_t* gather2_completion_semaphore_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather2_completion_semaphore_id));
-        noc_semaphore_wait(gather2_completion_semaphore_addr, 1);
-        noc_semaphore_set(gather2_completion_semaphore_addr, 0);
+        // Wait for gather3 to complete before reading from gather core
+        constexpr uint32_t gather3_completion_semaphore_id =
+            get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
+        volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
+        noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
+        noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
         // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
         using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
