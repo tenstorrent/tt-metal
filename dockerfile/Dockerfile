@@ -83,15 +83,14 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
 # must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    OMPI_TAG=v5.0.7 \
-    OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
-
-ENV PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH" \
-    LD_LIBRARY_PATH=${OMPI_PREFIX}/lib \
-    CPATH=${OMPI_PREFIX}/include \
-    PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig \
-    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ENV PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH"
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=cmake-layer /install/ /usr/local/
@@ -120,10 +119,9 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
 ENV PYTHON_ENV_DIR=/opt/venv
-
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
-    CCACHE_TEMPDIR=/tmp/ccache
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
@@ -279,9 +277,8 @@ ARG PYTHON_VERSION
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
@@ -315,12 +312,11 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 ARG PYTHON_VERSION
 
 # Set up virtual environment and TT_METAL_HOME
-ENV PYTHON_ENV_DIR=/opt/venv \
-    TT_METAL_HOME=/tt-metal \
-    PYTHONPATH=/tt-metal
-
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Accept git reference argument
 ARG GIT_REF=main
@@ -341,14 +337,9 @@ WORKDIR /tt-metal
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
-    && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache" && \
     umask 002 && \
     echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \

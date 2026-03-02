@@ -47,12 +47,11 @@ ARG PYTHON_VERSION
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHON_ENV_DIR=/opt/venv
-
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
-    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
