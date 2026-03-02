@@ -154,10 +154,9 @@ def run_neighbor_pad_1d_impl(
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     ##### Perform the TT ops #####
-    tt_neighbor_pad_out_tensor_list = []
 
     def run_op(i):
-        tt_neighbor_pad_out_tensor = ttnn.experimental.neighbor_pad_async(
+        return ttnn.experimental.neighbor_pad_async(
             input_tensor_mesh_list[i],
             [halo_shard_dim],
             [padding_left],
@@ -172,7 +171,17 @@ def run_neighbor_pad_1d_impl(
             persistent_output_buffer=persistent_output_buffer,
         )
 
-        return tt_neighbor_pad_out_tensor
+    def verify(tt_out_tensor, golden_idx):
+        tt_np_out = ttnn.from_device(tt_out_tensor)
+        dims[cluster_axis] = halo_shard_dim
+        dims[1 - cluster_axis] = other_shard_dim
+        tt_np_out = ttnn.to_torch(
+            tt_np_out,
+            mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+        )
+        eq, output = comp_pcc(tt_np_out, np_output_tensor_goldens_list[golden_idx], 1)
+        logger.info(f"{output}, iteration {golden_idx}")
+        assert eq, f"{golden_idx} FAILED np: {output}"
 
     if enable_trace:
         # Compile the op
@@ -191,28 +200,14 @@ def run_neighbor_pad_1d_impl(
         for i in range(num_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            tt_neighbor_pad_out_tensor_list.append(tt_neighbor_pad_out_tensor)
+            verify(tt_neighbor_pad_out_tensor, 0)
         logger.info(f"Done executing trace")
     else:
         for i in range(num_iters):
             tt_neighbor_pad_out_tensor = run_op(i)
-            tt_neighbor_pad_out_tensor_list.append(tt_neighbor_pad_out_tensor)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            verify(tt_neighbor_pad_out_tensor, i)
             logger.info(f"Done iteration {i}")
-
-    for i in range(num_iters):
-        tt_np_out_tensor = tt_neighbor_pad_out_tensor_list[i]
-        torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
-        tt_np_out = ttnn.from_device(tt_np_out_tensor)
-        dims[cluster_axis] = halo_shard_dim
-        dims[1 - cluster_axis] = other_shard_dim
-        tt_np_out = ttnn.to_torch(
-            tt_np_out,
-            mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
-        )
-        eq, output = comp_pcc(tt_np_out, torch_np_out_tensor, 1)
-        logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED np: {output}"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
