@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import json
 from typing import Callable, Union
 from loguru import logger
 import pathlib
@@ -10,9 +11,9 @@ import graphviz
 
 from ttnn._ttnn.graph import (
     RunMode,
-    begin_graph_capture,
+    begin_graph_capture as _cpp_begin_graph_capture,
     end_graph_capture,
-    end_graph_capture_to_file,
+    end_graph_capture_to_file as _cpp_end_graph_capture_to_file,
     get_current_report,
     REPORT_VERSION,
     extract_calltrace,
@@ -29,6 +30,9 @@ from ttnn._ttnn.graph import (
     enable_buffer_pages,
     disable_buffer_pages,
     is_buffer_pages_enabled,
+    is_graph_capture_active,
+    track_function_start,
+    track_function_end,
 )
 
 from ttnn.graph_report import (
@@ -36,6 +40,58 @@ from ttnn.graph_report import (
     extract_total_duration_from_graph,
     extract_operation_durations,
 )
+
+
+# ---------------------------------------------------------------------------
+# Python-level I/O tracking
+# ---------------------------------------------------------------------------
+# The C++ graph trace does not capture Python function arguments or return
+# values.  The decorator records them here so that end_graph_capture_to_file
+# can embed them in the JSON report.  The offline importer then uses them
+# to set correct input_tensors / output_tensors associations.
+
+_python_io_data: list = []
+
+
+def _collect_tensor_ids(value) -> list:
+    """Recursively extract tensor_id ints from ttnn.Tensor objects."""
+    import ttnn
+
+    ids: list[int] = []
+    if isinstance(value, ttnn.Tensor):
+        tid = getattr(value, "tensor_id", None)
+        if tid is not None:
+            ids.append(int(tid))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            ids.extend(_collect_tensor_ids(item))
+    return ids
+
+
+def begin_graph_capture(run_mode=None):
+    """Wrapper that clears Python I/O state before starting C++ capture."""
+    global _python_io_data
+    _python_io_data = []
+    if run_mode is None:
+        return _cpp_begin_graph_capture()
+    return _cpp_begin_graph_capture(run_mode)
+
+
+def end_graph_capture_to_file(report_path):
+    """Wrapper that appends Python I/O data to the JSON report."""
+    result = _cpp_end_graph_capture_to_file(report_path)
+    if _python_io_data:
+        _merge_python_io_into_report(report_path)
+    return result
+
+
+def _merge_python_io_into_report(report_path):
+    report_path = pathlib.Path(report_path)
+    with open(report_path, "r") as f:
+        report = json.load(f)
+    report["python_io"] = _python_io_data
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
 
 
 class ExitStackWithPop(contextlib.ExitStack):
