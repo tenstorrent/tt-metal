@@ -952,7 +952,10 @@ class Molmo2Generator:
         k_pool: int = 4,
         batch_size: int = 1,
     ) -> dict:
-        """Allocate all tensors needed for unified vision + prefill trace."""
+        """Allocate all tensors needed for unified vision + prefill trace.
+
+        This includes input_ids so embed_tokens can be called inside the trace.
+        """
         # Vision inputs
         trace_embedded = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, batch_size * num_patches, vit_hidden_dim]),
@@ -983,11 +986,11 @@ class Molmo2Generator:
             ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Text embeddings (pre-computed, kept on device)
-        trace_text_embed = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, seq_len, hidden_dim]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
+        # Input IDs for embed_tokens (called INSIDE trace)
+        trace_input_ids = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, seq_len]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
             self.mesh_device,
             ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1032,8 +1035,8 @@ class Molmo2Generator:
             "n_out": n_out,
             "k_pool": k_pool,
             "batch_size": batch_size,
-            # Fusion inputs
-            "text_embed": trace_text_embed,
+            # Text inputs (for embed_tokens inside trace)
+            "input_ids": trace_input_ids,
             "selector_matrix": trace_selector_matrix,
             "num_visual_tokens": num_visual_tokens,
             # Prefill inputs
@@ -1044,10 +1047,14 @@ class Molmo2Generator:
 
     def _capture_unified_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
         """
-        Capture unified trace for Vision + On-Device Fusion + Text Prefill.
+        Capture unified trace for Vision + embed_tokens + Fusion + Text Prefill.
 
         This eliminates the CPU roundtrip between vision and prefill by keeping
-        everything on device and using matmul with selector matrix for fusion.
+        everything on device:
+        1. Vision backbone (ViT + pooling + projection)
+        2. Text embeddings via embed_tokens (INSIDE trace)
+        3. Fusion via matmul with selector matrix
+        4. Text model forward (transformer layers + lm_head)
         """
         logger.info("Capturing unified vision + prefill trace...")
 
@@ -1065,15 +1072,14 @@ class Molmo2Generator:
         )
         # visual_embeddings shape: [1, 1, num_visual_tokens, 4096]
 
-        # Step 2: On-device fusion using matmul with selector matrix
-        # selector_matrix: [seq_len, num_visual_tokens] - one-hot rows indicating placement
-        # visual_part = selector_matrix @ visual_embeddings => [seq_len, 4096]
-        # fused = text_embed + visual_part
-        seq_len = trace_tensors["seq_len"]
-        num_visual_tokens = trace_tensors["num_visual_tokens"]
+        # Step 2: Text embeddings (INSIDE trace - this is key for performance)
+        text_embeddings = self.model.text_model.embed_tokens(trace_tensors["input_ids"])
+        # text_embeddings shape: [1, 1, seq_len, 4096]
 
-        # Reshape for matmul: [1, 1, num_visual_tokens, 4096] -> [1, 1, num_visual_tokens, 4096]
-        # selector is [1, 1, seq_len, num_visual_tokens]
+        # Step 3: On-device fusion using matmul with selector matrix
+        # selector_matrix: [1, 1, seq_len, num_visual_tokens] - one-hot rows indicating placement
+        # visual_part = selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
+        # fused = text_embeddings + visual_part
         visual_part = ttnn.matmul(
             trace_tensors["selector_matrix"],
             visual_embeddings,
@@ -1083,7 +1089,7 @@ class Molmo2Generator:
 
         # Add visual part to text embeddings
         fused_embed = ttnn.add(
-            trace_tensors["text_embed"],
+            text_embeddings,
             visual_part,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1112,7 +1118,8 @@ class Molmo2Generator:
         """
         Prepare all inputs for the unified trace.
 
-        Computes text embeddings and image indices on device, prepares vision inputs.
+        Note: embed_tokens is called INSIDE the trace, not here.
+        This just prepares input_ids and other tensors for copying to trace tensors.
         """
         batch_size = 1
         seq_len = input_ids.shape[1]
@@ -1153,7 +1160,7 @@ class Molmo2Generator:
         # Reshape to [1, 1, seq_len, num_visual_tokens] for TTNN
         selector_matrix = selector_matrix.unsqueeze(0).unsqueeze(0)
 
-        # Get text embeddings (TTNN - keep on device)
+        # Convert input_ids to TTNN (embed_tokens called inside trace)
         input_ids_ttnn = ttnn.from_torch(
             input_ids,
             device=self.mesh_device,
@@ -1162,8 +1169,6 @@ class Molmo2Generator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
-        text_embed_ttnn = self.model.text_model.embed_tokens(input_ids_ttnn)
-        ttnn.deallocate(input_ids_ttnn)
 
         # Convert other tensors to TTNN
         embedded_ttnn = ttnn.from_torch(
@@ -1216,8 +1221,8 @@ class Molmo2Generator:
             "n_out": n_out,
             "k_pool": k_pool,
             "batch_size": batch_size,
-            # Fusion inputs
-            "text_embed": text_embed_ttnn,
+            # Text inputs (embed_tokens called inside trace)
+            "input_ids": input_ids_ttnn,
             "selector_matrix": selector_ttnn,
             "num_visual_tokens": num_visual_tokens,
             # Metadata
@@ -1238,8 +1243,8 @@ class Molmo2Generator:
         ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
         ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
 
-        # Copy fusion inputs
-        ttnn.copy(inputs["text_embed"], trace_tensors["text_embed"])
+        # Copy text/fusion inputs
+        ttnn.copy(inputs["input_ids"], trace_tensors["input_ids"])
         ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
 
         # Execute trace
@@ -1280,7 +1285,8 @@ class Molmo2Generator:
             logger.info("Running unified warmup (compile)...")
             warmup_start = time.perf_counter()
 
-            # Run full pipeline once for compilation
+            # Run full pipeline once for compilation (same ops as trace)
+            # Step 1: Vision
             visual_embeddings = self.model.vision_backbone.forward_ttnn(
                 images_embedded=inputs["embedded"],
                 pooled_patches_idx_ttnn=inputs["idx"],
@@ -1291,20 +1297,22 @@ class Molmo2Generator:
                 batch_size=inputs["batch_size"],
             )
 
-            # Fusion via matmul with selector matrix
-            # selector_matrix @ visual_embeddings => [1, 1, seq_len, 4096]
+            # Step 2: Text embeddings (compile embed_tokens)
+            text_embeddings = self.model.text_model.embed_tokens(inputs["input_ids"])
+
+            # Step 3: Fusion via matmul with selector matrix
             visual_part = ttnn.matmul(
                 inputs["selector_matrix"],
                 visual_embeddings,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             fused_embed = ttnn.add(
-                inputs["text_embed"],
+                text_embeddings,
                 visual_part,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # Text prefill
+            # Step 4: Text prefill
             rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
             logits, _ = self.model.text_model.forward(
                 hidden_states=fused_embed,
@@ -1319,10 +1327,12 @@ class Molmo2Generator:
 
             # Deallocate warmup outputs
             ttnn.deallocate(visual_embeddings)
+            ttnn.deallocate(text_embeddings)
             ttnn.deallocate(visual_part)
             ttnn.deallocate(fused_embed)
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
+            ttnn.deallocate(logits)
 
             # Allocate trace tensors
             logger.info("Allocating unified trace tensors...")
@@ -1339,8 +1349,11 @@ class Molmo2Generator:
             ttnn.copy(inputs["idx"], trace_tensors["idx"])
             ttnn.copy(inputs["valid_mask"], trace_tensors["valid_mask"])
             ttnn.copy(inputs["valid_token"], trace_tensors["valid_token"])
-            ttnn.copy(inputs["text_embed"], trace_tensors["text_embed"])
+            ttnn.copy(inputs["input_ids"], trace_tensors["input_ids"])
             ttnn.copy(inputs["selector_matrix"], trace_tensors["selector_matrix"])
+
+            # Synchronize before trace capture to ensure all copies are complete
+            ttnn.synchronize_device(self.mesh_device)
 
             # Capture trace
             trace_id, trace_output = self._capture_unified_trace(trace_tensors)
@@ -1362,7 +1375,7 @@ class Molmo2Generator:
         ttnn.deallocate(inputs["idx"])
         ttnn.deallocate(inputs["valid_mask"])
         ttnn.deallocate(inputs["valid_token"])
-        ttnn.deallocate(inputs["text_embed"])
+        ttnn.deallocate(inputs["input_ids"])
         ttnn.deallocate(inputs["selector_matrix"])
 
         # Update position for decode
@@ -1576,19 +1589,17 @@ class Molmo2Generator:
         seq_len = input_ids.shape[1]
         timing = {}
 
-        # Unified trace path: Vision + Fusion + Prefill in single trace
-        # NOTE: Currently not supported - trace capture fails with "Writes are not supported"
-        # error. This may be due to internal tensor allocations during the combined forward pass
-        # that are incompatible with trace capture. Using separate traces for now.
+        # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
+        # This eliminates CPU roundtrip between vision and text prefill
         if use_unified_trace and pixel_values is not None:
+            # NOTE: Unified trace is currently disabled due to a TTNN trace capture issue.
+            # The ttnn.embedding operation fails with "Writes are not supported during trace capture"
+            # when used after text model warmup. This needs further investigation.
+            # For now, fall back to separate vision + prefill traces.
             logger.warning(
-                "Unified trace not yet supported (trace capture fails with write error). "
-                "Falling back to separate vision + prefill traces. "
-                "Use --use-vision-trace --use-trace for best performance."
+                "Unified trace is disabled due to TTNN trace capture limitations. "
+                "Using separate vision + prefill traces instead."
             )
-            # Fall through to use vision trace + prefill trace instead
-            use_vision_trace = True
-            use_trace = True
 
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
