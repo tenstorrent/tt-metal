@@ -39,10 +39,26 @@ target_sources(
         conv_transpose2d/prepare_conv_transpose2d_weights.cpp
         conv2d/prepare_conv2d_weights.cpp
         conv1d/conv1d.cpp
+        # NOC estimator sources
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/data_movement/noc_estimator/noc_estimator.cpp
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/data_movement/noc_estimator/common/interpolation.cpp
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/data_movement/noc_estimator/loader/yaml_loader.cpp
 )
 
-target_include_directories(ttnn_op_conv PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_conv PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_include_directories(
+    ttnn_op_conv
+    PRIVATE
+        ${FixmeOpIncDirs}
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/data_movement/noc_estimator
+)
+target_link_libraries(
+    ttnn_op_conv
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        yaml-cpp
+)
 
 install(
     TARGETS
