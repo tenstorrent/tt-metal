@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        (
+        pytest.param(
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -39,8 +39,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             },
             1,
             ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
+            id="linear-2",
         ),
-        (
+        pytest.param(
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -48,8 +50,21 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             },
             1,
             ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+            id="linear-4",
         ),
-        (
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="ring-4",
+        ),
+        pytest.param(
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -57,8 +72,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             },
             1,
             ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
         ),
-        (
+        pytest.param(
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -66,9 +83,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             },
             1,
             ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="ring-8",
         ),
     ],
-    ids=["linear-2", "linear-4", "linear-8", "ring-8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
