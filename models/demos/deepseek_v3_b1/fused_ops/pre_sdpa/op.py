@@ -18,7 +18,11 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor, float_to_uint32
+from models.demos.deepseek_v3_b1.utils import (
+    cb_descriptor_from_overlapped_tensor,
+    cb_descriptor_from_overlapped_tensors,
+    float_to_uint32,
+)
 
 
 class PreSDPA:
@@ -535,7 +539,7 @@ class PreSDPA:
         gamma_cb = 1
         rmsnorm_output_cb = 2
         # Matmul1 + gather-reduce + RMSNorm2 path
-        matmul_weights_cb = 3
+        matmul_weights_cb_overlapped = 3
         matmul_output_cb = 4
         matmul_input_cb = 5
         rmsnorm2_gamma_cb = 6  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
@@ -544,7 +548,6 @@ class PreSDPA:
         rmsnorm2_output_cb = 9  # Output CB for RMSNorm2
         # Matmul2 + Matmul3 + QRoPE/CreateQHeads path
         matmul2_input_cb = 10  # Input CB for second matmul (1x1536 with 1x32 tiles)
-        matmul2_weights_cb = 11  # Weights CB for second matmul (width sharded, 4 tiles per core)
         matmul2_output_cb = 12  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
         matmul3_weights_cb = 13  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 14  # Output CB for third matmul (Qnope final output)
@@ -557,7 +560,6 @@ class PreSDPA:
         qrope_cos_interm_cb = 21  # Cos intermediate CB for RoPE
         qrope_sin_interm_cb = 22  # Sin intermediate CB for RoPE
         # KV cache branch
-        dkv_matmul_weights_cb = 23  # DKV Matmul weights CB
         dkv_matmul_output_cb = 24  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
         kv_rmsnorm_input_cb = 25  # Input CB for KV Cache Branch RMSNorm
         kv_rmsnorm_gamma_cb = 26  # Gamma CB for KV Cache Branch RMSNorm
@@ -658,9 +660,8 @@ class PreSDPA:
         matmul_k_offset_half1 = matmul_k_per_core
 
         # Matmul compile-time args (different per RISC, only pass what's used)
-        # NCRISC: in1, k_per_core (for setup_sharded_buffer)
         matmul_ncrisc_named_compile_time_args = [
-            ("matmul_in1", matmul_weights_cb),
+            ("matmul_in1", matmul_weights_cb_overlapped),
             ("matmul_k_per_core", matmul_k_per_core),
             ("matmul_out_w_per_core", matmul_out_w),
         ]
@@ -671,7 +672,7 @@ class PreSDPA:
         # TRISC: KNSlicedMatmul args
         matmul_trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
-            ("matmul_in1", matmul_weights_cb),
+            ("matmul_in1", matmul_weights_cb_overlapped),
             ("matmul_out", matmul_output_cb),
             ("matmul_out_w_per_core", matmul_out_w),
             ("matmul_grid_start_x", matmul_bbox.start.x),
@@ -688,7 +689,7 @@ class PreSDPA:
         # NCRISC: in1, num_tiles, rmsnorm2_output_cb (for copy to matmul2_input)
         matmul2_ncrisc_named_compile_time_args = [
             ("matmul2_in0", matmul2_input_cb),
-            ("matmul2_in1", matmul2_weights_cb),
+            ("matmul2_in1", matmul_weights_cb_overlapped),
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
@@ -702,7 +703,7 @@ class PreSDPA:
         # TRISC: in0, in1, out, num_tiles, out_w_per_core
         matmul2_trisc_named_compile_time_args = [
             ("matmul2_in0", matmul2_input_cb),
-            ("matmul2_in1", matmul2_weights_cb),
+            ("matmul2_in1", matmul_weights_cb_overlapped),
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
@@ -945,7 +946,7 @@ class PreSDPA:
         # KV Cache Branch
         # DKV Matmul (9x2)
         dkv_matmul_ncrisc_named_compile_time_args = [
-            ("dkv_matmul_in1", dkv_matmul_weights_cb),
+            ("dkv_matmul_in1", matmul_weights_cb_overlapped),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
         ]
@@ -954,7 +955,7 @@ class PreSDPA:
                 "dkv_matmul_in0",
                 matmul_input_cb,
             ),  # Inputs are multicasted from the main branch, same input as first matmul
-            ("dkv_matmul_in1", dkv_matmul_weights_cb),
+            ("dkv_matmul_in1", matmul_weights_cb_overlapped),
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
@@ -1427,9 +1428,11 @@ class PreSDPA:
                     )
                 ]
 
-                # CB: Matmul weights (backed by fused overlapped tensor)
-                matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-                    matmul_weights_cb, matmul_weights_tensor, fused_weights_tensor_device
+                # CB: Fused matmul weights (single CB backing matmul1, matmul2, dkv_matmul)
+                fused_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensors(
+                    matmul_weights_cb_overlapped,
+                    [matmul_weights_tensor, matmul2_weights_tensor, dkv_matmul_weights_tensor],
+                    fused_weights_tensor_device,
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
@@ -1557,11 +1560,6 @@ class PreSDPA:
                     )
                 ]
                 sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
-
-                # CB: Matmul2 weights (backed by fused overlapped tensor)
-                matmul2_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-                    matmul2_weights_cb, matmul2_weights_tensor, fused_weights_tensor_device
-                )
 
                 # CB 12: Matmul2 output buffer — overlap with sdpa_out_interm L1 buffer
                 # at offset 12352 B. This CB is consumed before SDPA runs.
@@ -1759,11 +1757,6 @@ class PreSDPA:
                             create_q_heads_out_tile_descriptor,
                         )
                     ],
-                )
-
-                # CB: DKV Matmul weights buffer (backed by fused overlapped tensor)
-                dkv_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
@@ -2177,16 +2170,25 @@ class PreSDPA:
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
                 position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
 
+                # Compute address overrides for each matmul's weights within the fused buffer
+                fused_weights_base_addr = fused_weights_tensor_device.buffer_address()
+                matmul_weights_addr = fused_weights_base_addr + matmul_weights_tensor.byte_offset
+                matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
+                dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
+
                 # TRISC common runtime args (shared scalar values)
                 trisc_common_runtime_args = [
                     epsilon_packed,  # idx 0
                     scalar_packed,  # idx 1
                     scalar2_packed,  # idx 2
                     kv_scalar_packed,  # idx 3
-                    kv_cache_input_cb,
-                    kv_cache_output_cb,
-                    kv_cache_intermed_cb,
-                    position_ids_tensor_addr,
+                    kv_cache_input_cb,  # idx 4
+                    kv_cache_output_cb,  # idx 5
+                    kv_cache_intermed_cb,  # idx 6
+                    position_ids_tensor_addr,  # idx 7
+                    matmul_weights_addr,  # idx 8
+                    matmul2_weights_addr,  # idx 9
+                    dkv_matmul_weights_addr,  # idx 10
                 ]
 
                 qrope_ncrisc_addr_args = [
@@ -2356,7 +2358,7 @@ class PreSDPA:
                 cbs_list = [
                     gamma_cb_descriptor,
                     rmsnorm_output_cb_descriptor,
-                    matmul_weights_cb_descriptor,
+                    fused_matmul_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
                     rmsnorm2_gamma_cb_descriptor,
@@ -2364,7 +2366,6 @@ class PreSDPA:
                     gather_reduce_half1_scratch_cb_descriptor,
                     rmsnorm2_output_cb_descriptor,
                     matmul2_input_cb_descriptor,
-                    matmul2_weights_cb_descriptor,
                     matmul2_output_cb_descriptor,
                     matmul3_weights_cb_descriptor,
                     matmul3_output_cb_descriptor,
@@ -2376,7 +2377,6 @@ class PreSDPA:
                     qrope_rotated_input_interm_cb_descriptor,
                     qrope_cos_interm_cb_descriptor,
                     qrope_sin_interm_cb_descriptor,
-                    dkv_matmul_weights_cb_descriptor,
                     dkv_matmul_output_cb_descriptor,
                     kv_rmsnorm_input_cb_descriptor,
                     kv_rmsnorm_gamma_cb_descriptor,

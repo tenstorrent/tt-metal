@@ -569,6 +569,7 @@ uint32_t per_core_rta_arg_idx = 0;
         k_offset,
         get_named_compile_time_arg_val("matmul_k_per_core"),
         get_named_compile_time_arg_val("matmul_act_total_tiles"),
+        get_common_arg_val<uint32_t>(8),  // matmul_weights_addr
     };
 
     // Gather reduce compute args
@@ -594,6 +595,7 @@ uint32_t per_core_rta_arg_idx = 0;
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        get_common_arg_val<uint32_t>(9),  // matmul2_weights_addr
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -640,12 +642,13 @@ uint32_t per_core_rta_arg_idx = 0;
     using DKV_MatmulCTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("dkv_matmul_out_w_per_core")>;
 
-    // Matmul compute args (from compile-time args, passed to op as runtime args)
+    // DKV Matmul compute args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Matmul::ComputeArgs dkv_matmul_args{
         get_named_compile_time_arg_val("dkv_matmul_in0"),
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+        get_common_arg_val<uint32_t>(10),  // dkv_matmul_weights_addr
     };
 
     // Gather compute args (no-op for TRISC)
@@ -751,22 +754,6 @@ uint32_t per_core_rta_arg_idx = 0;
         constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
     }
-    if constexpr (Core::is_matmul_core) {
-        // Matmul weights
-        constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_per_core");
-        constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);
-    }
-    if constexpr (Core::is_matmul2_core) {
-        // Matmul2 CB indices and parameters from named compile-time args
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Matmul2 weights (on all cores in main grid, 4 tiles per core)
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
-    }
     if constexpr (Core::is_qnope_core) {
         // Matmul3 CB indices and parameters from named compile-time args
         constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
@@ -780,14 +767,6 @@ uint32_t per_core_rta_arg_idx = 0;
     if constexpr (Core::is_qrope_core) {
         constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
         unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
-    }
-
-    if constexpr (Core::is_dkv_matmul_core) {
-        // Matmul weights (in1)
-        constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
-        constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
-        constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
-        unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
     }
 
     if constexpr (Core::is_kv_rmsnorm_core) {
