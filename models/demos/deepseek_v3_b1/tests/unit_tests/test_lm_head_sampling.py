@@ -23,10 +23,10 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pod_pipeline import (
-    PodPipeline,
-    create_random_weights_single_iteration,
-    create_stage_kind,
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    LMHeadWeights,
+    create_single_galaxy_pipeline_configuration,
+    create_single_pod_pipeline_configuration,
     create_synthetic_weights,
     token_page_size_bytes,
 )
@@ -40,6 +40,34 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _create_random_weights_single_iteration(
+    seed: int = 5449,
+) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
+    """Random weights for one token (4-stage single-galaxy one-shot test)."""
+    M, K = 1, 7168
+    n_total = 101 * 160
+    torch.manual_seed(seed)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
+    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    torch_expected_idx = LMHeadSampling.golden(
+        torch_a.float(),
+        torch_gamma.float(),
+        torch_b.float().unsqueeze(0),
+        indices=torch_indices_flat,
+        k=1,
+        p=1.0,
+    ).to(torch.uint32)
+    embedding_tensor = torch_a.reshape(1, 1, 1, K)
+    lmhead_weights = LMHeadWeights(
+        gamma=torch_gamma,
+        weight_matrix=torch_b,
+        indices=torch_indices_flat,
+    )
+    return embedding_tensor, lmhead_weights, torch_expected_idx
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -1841,24 +1869,20 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    my_mesh_id = mesh_device.get_system_mesh_id()
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    embedding_tensor, lmhead_weights, torch_expected_idx = create_random_weights_single_iteration(seed=5449)
-    stage_kind = create_stage_kind(
-        my_mesh_id,
-        lmhead_stage=1,
+    embedding_tensor, lmhead_weights, torch_expected_idx = _create_random_weights_single_iteration(seed=5449)
+    config = create_single_galaxy_pipeline_configuration(
         embedding_tensor=embedding_tensor,
         lmhead_weights=lmhead_weights,
         fp32_dest_acc_en=use_fp32,
         persistent_mode=False,
     )
-    pipeline = PodPipeline(mesh_device, stage_kind)
+    pipeline = config.build_pipeline(mesh_device)
     try:
-        pipeline.setup()
-        pipeline.run()
+        pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
             torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
@@ -1908,26 +1932,23 @@ def test_persistent_mode(mesh_device, use_fp32):
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    my_mesh_id = mesh_device.get_system_mesh_id()
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
     embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights(iterations)
-    stage_kind = create_stage_kind(
-        my_mesh_id,
-        lmhead_stage=1,
+    config = create_single_galaxy_pipeline_configuration(
         embedding_tensor=embedding_tensor,
         lmhead_weights=lmhead_weights,
         fp32_dest_acc_en=use_fp32,
     )
-    pipeline = PodPipeline(mesh_device, stage_kind)
-    pipeline.setup()
-    pipeline.run()
+    pipeline = config.build_pipeline(mesh_device)
+    pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
+            logger.info(f"Writing token for iteration {iteration}")
             torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -1977,23 +1998,19 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    my_mesh_id = mesh_device.get_system_mesh_id()
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs != 16:
         pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
     iterations = 100
     embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights(iterations)
-    stage_kind = create_stage_kind(
-        my_mesh_id,
-        lmhead_stage=14,
+    config = create_single_pod_pipeline_configuration(
         embedding_tensor=embedding_tensor,
         lmhead_weights=lmhead_weights,
         fp32_dest_acc_en=use_fp32,
     )
-    pipeline = PodPipeline(mesh_device, stage_kind)
-    pipeline.setup()
-    pipeline.run()
+    pipeline = config.build_pipeline(mesh_device)
+    pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
