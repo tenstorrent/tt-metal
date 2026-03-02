@@ -4,6 +4,7 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
 #include <optional>
