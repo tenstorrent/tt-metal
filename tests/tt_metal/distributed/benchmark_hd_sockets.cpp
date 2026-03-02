@@ -34,8 +34,9 @@ constexpr uint32_t kWarmupIters = 5;
 constexpr uint32_t kLatencyIters = 100;
 
 // Sweep parameters for single-chip throughput benchmarks.
-const std::vector<int64_t> kThroughputPageSizes = {32768, 65536, 131072, 262144};
-const std::vector<int64_t> kThroughputTotalData = {512LL << 20, 1024LL << 20};
+const std::vector<int64_t> kThroughputPageSizes = {
+    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
+const std::vector<int64_t> kThroughputTotalData = {1LL << 20, 16LL << 20, 512LL << 20, 1024LL << 20};
 
 // D2H FIFOs live in host memory (hugepages), so they can be large.
 const std::vector<int64_t> kD2HThroughputFifoSizes = {
@@ -71,7 +72,8 @@ const std::vector<int64_t> kH2DThroughputFifoSizes = {
 };
 
 // Sweep parameters for single-chip latency benchmarks.
-const std::vector<int64_t> kLatencyPageSizes = {32768, 65536, 131072, 262144};
+const std::vector<int64_t> kLatencyPageSizes = {
+    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
 
 // D2H latency FIFOs can be large (host memory).
 const std::vector<int64_t> kD2HLatencyFifoSizes = {1024, 4096, 16384, 65536, 262144, 524288, 512LL << 20};
@@ -84,8 +86,8 @@ const std::vector<int64_t> kPingPageSizes = {64};
 const std::vector<int64_t> kPingFifoSizes = {4096};
 
 // Shared sweep parameters for D2H multi-chip throughput benchmarks.
-const std::vector<int64_t> kMultiChipD2HFifoSizes = {256LL << 20};
-const std::vector<int64_t> kMultiChipH2DFifoSizes = {1LL << 20};
+const std::vector<int64_t> kMultiChipD2HFifoSizes = {1LL << 20, 4LL << 20, 16LL << 20, 64LL << 20, 256LL << 20};
+const std::vector<int64_t> kMultiChipH2DFifoSizes = {1LL << 18, 1LL << 19, 1LL << 20};
 const std::vector<int64_t> kMultiChipPageSizes = {262144};
 const std::vector<int64_t> kMultiChipTotalData = {1LL << 30};
 

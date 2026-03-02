@@ -191,6 +191,23 @@ def _load_gbench_latency(path, name_prefix):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col])
 
+    # Fallback for CSVs that only include real_time/cpu_time without latency counters.
+    if "p50_us" not in df.columns and "real_time" in df.columns:
+        unit_to_us = {"ns": 1e-3, "us": 1.0, "ms": 1e3, "s": 1e6}
+        scales = df.get("time_unit", pd.Series(["ns"] * len(df), index=df.index)).map(unit_to_us).fillna(1e-3)
+        rt_us = pd.to_numeric(df["real_time"], errors="coerce") * scales
+        df["p50_us"] = rt_us
+        df["avg_us"] = rt_us
+        df["min_us"] = rt_us
+        df["max_us"] = rt_us
+        df["p99_us"] = rt_us
+        df["avg_cycles"] = rt_us * CYCLES_PER_US
+        df["min_cycles"] = rt_us * CYCLES_PER_US
+        df["max_cycles"] = rt_us * CYCLES_PER_US
+
+    if "num_iterations" not in df.columns and "iterations" in df.columns:
+        df["num_iterations"] = pd.to_numeric(df["iterations"], errors="coerce")
+
     return df
 
 
@@ -281,6 +298,7 @@ def run_gbench(path, prefix=""):
         df = load_gbench_d2h_throughput_csv(path)
         d2h_tp_print_report(df)
         d2h_tp_plot(df, out=f"{prefix}d2h_throughput.png")
+        d2h_tp_plot_mean(df, out=f"{prefix}d2h_throughput_mean.png")
         d2h_tp_plot_vs_fifo(df, out=f"{prefix}d2h_tp_vs_fifo.png")
         d2h_tp_plot_heatmap_grid(df, out=f"{prefix}d2h_tp_heatmap_grid.png")
         d2h_tp_export_csv(df, out=f"{prefix}d2h_throughput_summary.csv")
@@ -289,33 +307,29 @@ def run_gbench(path, prefix=""):
         df = loader(path)
         d2h_lat_print_report(df)
         d2h_lat_plot(df, out=f"{prefix}d2h_latency.png")
-        d2h_lat_plot_breakdown(df, out=f"{prefix}d2h_latency_breakdown.png")
         _export_latency_csv(df, out=f"{prefix}d2h_latency_summary.csv")
     elif detected == "BM_H2DSocketThroughput":
         df = load_gbench_h2d_throughput_csv(path)
         h2d_tp_print_report(df)
         h2d_tp_plot(df, out=f"{prefix}h2d_throughput.png")
+        h2d_tp_plot_mean(df, out=f"{prefix}h2d_throughput_mean.png")
         h2d_tp_plot_vs_fifo(df, out=f"{prefix}h2d_tp_vs_fifo.png")
-        h2d_tp_plot_at_max_fifo(df, out=f"{prefix}h2d_tp_at_max_fifo.png")
         h2d_tp_export_csv(df, out=f"{prefix}h2d_throughput_summary.csv")
     elif detected in ("BM_H2DSocketLatency", "BM_H2DSocketPing"):
         loader = load_gbench_h2d_latency_csv if detected == "BM_H2DSocketLatency" else load_gbench_h2d_ping_csv
         df = loader(path)
         h2d_lat_print_report(df)
         h2d_lat_plot(df, out=f"{prefix}h2d_latency.png")
-        h2d_lat_plot_breakdown(df, out=f"{prefix}h2d_latency_breakdown.png")
         _export_latency_csv(df, out=f"{prefix}h2d_latency_summary.csv", mode_col="h2d_mode")
     elif detected == "BM_D2HSocketMultiChipThroughput":
         df = load_gbench_d2h_multichip_csv(path)
         mc_print_report(df, direction="D2H")
-        mc_plot_throughput_vs_fifo(df, out=f"{prefix}d2h_mc_throughput_vs_fifo.png", direction="D2H")
         mc_plot_bar_comparison(df, out=f"{prefix}d2h_mc_throughput_bar.png", direction="D2H")
         mc_plot_heatmap(df, out=f"{prefix}d2h_mc_throughput_heatmap.png", direction="D2H")
         mc_export_csv(df, out=f"{prefix}d2h_mc_throughput_summary.csv")
     elif detected == "BM_H2DSocketMultiChipThroughput":
         df = load_gbench_h2d_multichip_csv(path)
         mc_print_report(df, direction="H2D")
-        mc_plot_throughput_vs_fifo(df, out=f"{prefix}h2d_mc_throughput_vs_fifo.png", direction="H2D")
         mc_plot_bar_comparison(df, out=f"{prefix}h2d_mc_throughput_bar.png", direction="H2D")
         mc_plot_heatmap(df, out=f"{prefix}h2d_mc_throughput_heatmap.png", direction="H2D")
         mc_export_csv(df, out=f"{prefix}h2d_mc_throughput_summary.csv")
@@ -337,6 +351,15 @@ def _median_over_fifo(df, extra_groups=()):
             throughput_gbps=("throughput_gbps", "median"),
             per_page_us=("per_page_us", "median"),
         )
+        .reset_index()
+    )
+
+
+def _fifo_summary(df, group_keys, value_col):
+    """Aggregate a metric across FIFO sizes using min/median/mean/max."""
+    return (
+        df.groupby(group_keys)[value_col]
+        .agg(fifo_min="min", fifo_median="median", fifo_mean="mean", fifo_max="max")
         .reset_index()
     )
 
@@ -403,6 +426,13 @@ def _resolve_input_path(path):
     return Path(path).expanduser().resolve()
 
 
+def _first_available_col(df, candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  D2H THROUGHPUT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -457,22 +487,47 @@ def d2h_tp_print_report(df):
 
 
 def d2h_tp_plot(df, out="d2h_throughput.png"):
-    fs_max = df.socket_fifo_size.max()
-    sub = df[df.socket_fifo_size == fs_max]
+    td_max = df.total_data.max()
+    sub = df[df.total_data == td_max]
+    agg = _fifo_summary(sub, ["page_size"], "throughput_gbps").sort_values("page_size")
+
     fig, ax = plt.subplots(figsize=(12, 6))
-    for td in sorted(sub.total_data.unique()):
-        g = sub[sub.total_data == td].sort_values("page_size")
-        ax.plot(g.page_size, g.throughput_gbps, "o-", label=f"{human_bytes(td)}", ms=5, lw=2)
+    ax.plot(agg.page_size, agg.fifo_min, "o--", label="Min over FIFO sizes", ms=5, lw=1.7)
+    ax.plot(agg.page_size, agg.fifo_median, "o-", label="Median over FIFO sizes", ms=5, lw=2.2)
+    ax.plot(agg.page_size, agg.fifo_mean, "o-.", label="Mean over FIFO sizes", ms=5, lw=1.9)
+    ax.plot(agg.page_size, agg.fifo_max, "o-", label="Max over FIFO sizes", ms=5, lw=2)
     ax.set(
         xscale="log",
         xlabel="Page Size",
         ylabel="Throughput (GB/s)",
-        title=f"D2H Throughput vs Page Size — FIFO={human_bytes(fs_max)} (max), each line = one total transfer size",
+        title=f"D2H Throughput vs Page Size — total={human_bytes(td_max)} (min/median/mean/max across FIFO sizes)",
     )
-    _set_size_ticks(ax, sorted(sub.page_size.unique()))
+    _set_size_ticks(ax, sorted(agg.page_size.unique()))
     ax.set_ylim(bottom=0)
     ax.grid(alpha=0.25)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=9)
+    ax.legend(loc="best", fontsize=9)
+    _save_fig(fig, out)
+
+
+def d2h_tp_plot_mean(df, out="d2h_throughput_mean.png"):
+    """Mean throughput across FIFO sizes, plotted vs page size."""
+    td_max = df.total_data.max()
+    sub = df[df.total_data == td_max]
+    agg = _fifo_summary(sub, ["page_size"], "throughput_gbps").sort_values("page_size")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(agg.page_size, agg.fifo_mean, "o-", label="Mean over FIFO sizes", ms=5, lw=2.3)
+    ax.fill_between(agg.page_size, agg.fifo_min, agg.fifo_max, alpha=0.15, label="Min..Max envelope")
+    ax.set(
+        xscale="log",
+        xlabel="Page Size",
+        ylabel="Throughput (GB/s)",
+        title=f"D2H Throughput vs Page Size — total={human_bytes(td_max)} (mean across FIFO sizes)",
+    )
+    _set_size_ticks(ax, sorted(agg.page_size.unique()))
+    ax.set_ylim(bottom=0)
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best", fontsize=9)
     _save_fig(fig, out)
 
 
@@ -561,6 +616,7 @@ def run_d2h_throughput(path, prefix=""):
     df = load_gbench_d2h_throughput_csv(path)
     d2h_tp_print_report(df)
     d2h_tp_plot(df, out=f"{prefix}d2h_throughput.png")
+    d2h_tp_plot_mean(df, out=f"{prefix}d2h_throughput_mean.png")
     d2h_tp_plot_vs_fifo(df, out=f"{prefix}d2h_tp_vs_fifo.png")
     d2h_tp_plot_heatmap_grid(df, out=f"{prefix}d2h_tp_heatmap_grid.png")
     d2h_tp_export_csv(df, out=f"{prefix}d2h_throughput_summary.csv")
@@ -575,7 +631,11 @@ def d2h_lat_print_report(df):
     print(f"\n{'='*70}\n  D2H Round-Trip Latency  ({len(df)} rows)\n{'='*70}")
     print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
     print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
-    print(f"  Iterations : {int(df.num_iterations.iloc[0])}")
+    iter_col = _first_available_col(df, ("num_iterations", "iterations"))
+    if iter_col is not None:
+        print(f"  Iterations : {int(pd.to_numeric(df[iter_col], errors='coerce').iloc[0])}")
+    else:
+        print("  Iterations : n/a")
 
     fifos = sorted(df.socket_fifo_size.unique())
     hdr = f"  {'page':>6}" + "".join(f"{human_bytes(f):>10}" for f in fifos)
@@ -601,20 +661,20 @@ def d2h_lat_print_report(df):
 
 
 def d2h_lat_plot(df, out="d2h_latency.png"):
+    agg = _fifo_summary(df, ["page_size"], "p50_us").sort_values("page_size")
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    for fs in sorted(df.socket_fifo_size.unique()):
-        g = df[df.socket_fifo_size == fs].sort_values("page_size")
-        color = ax.plot(g.page_size, g.p50_us, "o-", label=f"FIFO={human_bytes(fs)}", ms=5, lw=2)[0].get_color()
-        ax.plot(g.page_size, g.min_us, "--", color=color, lw=0.8, alpha=0.5)
-        ax.plot(g.page_size, g.max_us, "--", color=color, lw=0.8, alpha=0.5)
+    ax.plot(agg.page_size, agg.fifo_min, "o--", label="Min over FIFO sizes", ms=5, lw=1.7)
+    ax.plot(agg.page_size, agg.fifo_median, "o-", label="Median over FIFO sizes", ms=5, lw=2.2)
+    ax.plot(agg.page_size, agg.fifo_max, "o-", label="Max over FIFO sizes", ms=5, lw=2)
     ax.set(
         xscale="log",
         yscale="log",
         xlabel="Page Size (bytes)",
         ylabel="Latency (us)",
-        title="D2H Round-Trip Latency (p50 solid, min/max dashed)",
+        title="D2H Round-Trip Latency (p50 us) — min/median/max across FIFO sizes",
     )
-    _set_size_ticks(ax, sorted(df.page_size.unique()))
+    _set_size_ticks(ax, sorted(agg.page_size.unique()))
     ax.grid(alpha=0.25)
     ax.legend(fontsize=9)
     _save_fig(fig, out)
@@ -650,7 +710,6 @@ def run_d2h_latency(path, prefix=""):
     df = load_gbench_d2h_latency_csv(path)
     d2h_lat_print_report(df)
     d2h_lat_plot(df, out=f"{prefix}d2h_latency.png")
-    d2h_lat_plot_breakdown(df, out=f"{prefix}d2h_latency_breakdown.png")
     _export_latency_csv(df, out=f"{prefix}d2h_latency_summary.csv")
 
 
@@ -724,26 +783,73 @@ def h2d_tp_print_report(df):
 
 def h2d_tp_plot(df, out="h2d_throughput.png"):
     td_max = df.total_data.max()
-    fs_max = df.socket_fifo_size.max()
-    sub = df[(df.total_data == td_max) & (df.socket_fifo_size == fs_max)]
+    sub = df[df.total_data == td_max]
     modes = sorted(sub.h2d_mode.unique())
-    agg = sub.groupby(["h2d_mode", "page_size"]).agg(throughput_gbps=("throughput_gbps", "median")).reset_index()
+    agg = _fifo_summary(sub, ["h2d_mode", "page_size"], "throughput_gbps")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for mode in modes:
+    fig, axes = plt.subplots(1, len(modes), figsize=(8 * len(modes), 6), sharey=True)
+    if len(modes) == 1:
+        axes = [axes]
+
+    for idx, mode in enumerate(modes):
+        ax = axes[idx]
         g = agg[agg.h2d_mode == mode].sort_values("page_size")
-        ax.plot(g.page_size, g.throughput_gbps, "o-", label=mode, ms=5, lw=2)
-    ax.set(
-        xscale="log",
-        xlabel="Page Size",
-        ylabel="GB/s",
-        title=f"H2D Throughput vs Page Size — FIFO={human_bytes(fs_max)} (max), total={human_bytes(td_max)} (max)",
+        ax.plot(g.page_size, g.fifo_min, "o--", label="Min over FIFO sizes", ms=5, lw=1.7)
+        ax.plot(g.page_size, g.fifo_median, "o-", label="Median over FIFO sizes", ms=5, lw=2.2)
+        ax.plot(g.page_size, g.fifo_mean, "o-.", label="Mean over FIFO sizes", ms=5, lw=1.9)
+        ax.plot(g.page_size, g.fifo_max, "o-", label="Max over FIFO sizes", ms=5, lw=2)
+        ax.set(
+            xscale="log",
+            xlabel="Page Size",
+            ylabel="Throughput (GB/s)" if idx == 0 else "",
+            title=f"H2D mode: {mode}",
+        )
+        _set_size_ticks(ax, sorted(g.page_size.unique()))
+        ax.set_ylim(bottom=0)
+        ax.grid(alpha=0.25)
+        ax.legend(loc="best", fontsize=9)
+
+    fig.suptitle(
+        f"H2D Throughput vs Page Size — total={human_bytes(td_max)} (min/median/mean/max across FIFO sizes)",
+        fontsize=13,
+        fontweight="bold",
     )
-    _set_size_ticks(ax, sorted(agg.page_size.unique()))
-    ax.set_ylim(bottom=0)
-    ax.grid(alpha=0.25)
-    ax.legend(loc="best", fontsize=10)
-    _save_fig(fig, out)
+    _save_fig(fig, out, rect=[0, 0, 1, 0.95])
+
+
+def h2d_tp_plot_mean(df, out="h2d_throughput_mean.png"):
+    """Mean throughput across FIFO sizes, plotted vs page size for each H2D mode."""
+    td_max = df.total_data.max()
+    sub = df[df.total_data == td_max]
+    modes = sorted(sub.h2d_mode.unique())
+    agg = _fifo_summary(sub, ["h2d_mode", "page_size"], "throughput_gbps")
+
+    fig, axes = plt.subplots(1, len(modes), figsize=(8 * len(modes), 6), sharey=True)
+    if len(modes) == 1:
+        axes = [axes]
+
+    for idx, mode in enumerate(modes):
+        ax = axes[idx]
+        g = agg[agg.h2d_mode == mode].sort_values("page_size")
+        ax.plot(g.page_size, g.fifo_mean, "o-", label="Mean over FIFO sizes", ms=5, lw=2.3)
+        ax.fill_between(g.page_size, g.fifo_min, g.fifo_max, alpha=0.15, label="Min..Max envelope")
+        ax.set(
+            xscale="log",
+            xlabel="Page Size",
+            ylabel="Throughput (GB/s)" if idx == 0 else "",
+            title=f"H2D mode: {mode}",
+        )
+        _set_size_ticks(ax, sorted(g.page_size.unique()))
+        ax.set_ylim(bottom=0)
+        ax.grid(alpha=0.25)
+        ax.legend(loc="best", fontsize=9)
+
+    fig.suptitle(
+        f"H2D Throughput vs Page Size — total={human_bytes(td_max)} (mean across FIFO sizes)",
+        fontsize=13,
+        fontweight="bold",
+    )
+    _save_fig(fig, out, rect=[0, 0, 1, 0.95])
 
 
 def h2d_tp_plot_vs_fifo(df, out="h2d_tp_vs_fifo.png"):
@@ -845,8 +951,8 @@ def run_h2d_throughput(path, prefix=""):
     df = load_gbench_h2d_throughput_csv(path)
     h2d_tp_print_report(df)
     h2d_tp_plot(df, out=f"{prefix}h2d_throughput.png")
+    h2d_tp_plot_mean(df, out=f"{prefix}h2d_throughput_mean.png")
     h2d_tp_plot_vs_fifo(df, out=f"{prefix}h2d_tp_vs_fifo.png")
-    h2d_tp_plot_at_max_fifo(df, out=f"{prefix}h2d_tp_at_max_fifo.png")
     h2d_tp_export_csv(df, out=f"{prefix}h2d_throughput_summary.csv")
 
 
@@ -861,7 +967,11 @@ def h2d_lat_print_report(df):
     print(f"  Modes      : {modes}")
     print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
     print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
-    print(f"  Iterations : {int(df.num_iterations.iloc[0])}")
+    iter_col = _first_available_col(df, ("num_iterations", "iterations"))
+    if iter_col is not None:
+        print(f"  Iterations : {int(pd.to_numeric(df[iter_col], errors='coerce').iloc[0])}")
+    else:
+        print("  Iterations : n/a")
 
     fs_max = df.socket_fifo_size.max()
     print(f"\n  p50 latency (us) at FIFO={human_bytes(fs_max)}:")
@@ -899,24 +1009,23 @@ def h2d_lat_print_report(df):
 
 
 def h2d_lat_plot(df, out="h2d_latency.png"):
-    fs_max = df.socket_fifo_size.max()
-    sub = df[df.socket_fifo_size == fs_max]
-    modes = sorted(sub.h2d_mode.unique())
+    modes = sorted(df.h2d_mode.unique())
+    agg = _fifo_summary(df, ["h2d_mode", "page_size"], "p50_us")
 
     fig, ax = plt.subplots(figsize=(10, 6))
     for mode in modes:
-        g = sub[sub.h2d_mode == mode].sort_values("page_size")
-        color = ax.plot(g.page_size, g.p50_us, "o-", label=f"{mode} (p50)", ms=6, lw=2.5)[0].get_color()
-        ax.plot(g.page_size, g.min_us, "--", color=color, lw=1, alpha=0.4, label=f"{mode} (min/max)")
-        ax.plot(g.page_size, g.max_us, "--", color=color, lw=1, alpha=0.4)
+        g = agg[agg.h2d_mode == mode].sort_values("page_size")
+        color = ax.plot(g.page_size, g.fifo_median, "o-", label=f"{mode} median", ms=6, lw=2.2)[0].get_color()
+        ax.plot(g.page_size, g.fifo_min, "--", color=color, lw=1.3, alpha=0.8, label=f"{mode} min/max")
+        ax.plot(g.page_size, g.fifo_max, "--", color=color, lw=1.3, alpha=0.8)
     ax.set(
         xscale="log",
         yscale="log",
         xlabel="Page Size (bytes)",
         ylabel="Latency (us)",
-        title=f"H2D Round-Trip Latency: HOST_PUSH vs DEVICE_PULL (FIFO={human_bytes(fs_max)})",
+        title="H2D Round-Trip Latency (p50 us) — min/median/max across FIFO sizes",
     )
-    _set_size_ticks(ax, sorted(sub.page_size.unique()))
+    _set_size_ticks(ax, sorted(df.page_size.unique()))
     ax.grid(alpha=0.25)
     ax.legend(fontsize=10)
     _save_fig(fig, out)
@@ -977,8 +1086,6 @@ def run_h2d_latency(path, prefix=""):
     df = load_gbench_h2d_latency_csv(path)
     h2d_lat_print_report(df)
     h2d_lat_plot(df, out=f"{prefix}h2d_latency.png")
-    h2d_lat_plot_breakdown(df, out=f"{prefix}h2d_latency_breakdown.png")
-    h2d_lat_plot_fifo_impact(df, out=f"{prefix}h2d_latency_vs_fifo.png")
     _export_latency_csv(df, out=f"{prefix}h2d_latency_summary.csv", mode_col="h2d_mode")
 
 
@@ -1222,7 +1329,6 @@ def mc_export_csv(df, out="mc_throughput_summary.csv"):
 def run_d2h_multichip(path, prefix="d2h_mc_"):
     df = load_gbench_d2h_multichip_csv(path)
     mc_print_report(df, direction="D2H")
-    mc_plot_throughput_vs_fifo(df, out=f"{prefix}throughput_vs_fifo.png", direction="D2H")
     mc_plot_bar_comparison(df, out=f"{prefix}throughput_bar.png", direction="D2H")
     mc_plot_heatmap(df, out=f"{prefix}throughput_heatmap.png", direction="D2H")
     mc_export_csv(df, out=f"{prefix}throughput_summary.csv")
@@ -1231,7 +1337,6 @@ def run_d2h_multichip(path, prefix="d2h_mc_"):
 def run_h2d_multichip(path, prefix="h2d_mc_"):
     df = load_gbench_h2d_multichip_csv(path)
     mc_print_report(df, direction="H2D")
-    mc_plot_throughput_vs_fifo(df, out=f"{prefix}throughput_vs_fifo.png", direction="H2D")
     mc_plot_bar_comparison(df, out=f"{prefix}throughput_bar.png", direction="H2D")
     mc_plot_heatmap(df, out=f"{prefix}throughput_heatmap.png", direction="H2D")
     mc_export_csv(df, out=f"{prefix}throughput_summary.csv")
