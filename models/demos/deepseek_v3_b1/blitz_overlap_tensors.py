@@ -16,7 +16,7 @@ _DTYPE_ELEMENT_BYTES = {
 
 @dataclass
 class OverlappedShardSpec:
-    """Describes one sub-tensor within a fused WIDTH_SHARDED raw-byte buffer.
+    """Describes one sub-tensor within a fused raw-byte buffer.
 
     Multiple ``OverlappedShardSpec`` instances share a single device
     allocation whose per-core shard is zero-padded to a common maximum
@@ -29,11 +29,19 @@ class OverlappedShardSpec:
     shapes (e.g. 1x32, 16x32) are handled automatically.
 
     Shape tuples follow (height, width) convention.
+
+    ``sharding`` controls how cores partition the per-device tensor:
+
+    - ``WIDTH_SHARDED``: each core gets a column slice (full height,
+      partial width).  ``num_cores`` divides the width.
+    - ``HEIGHT_SHARDED``: each core gets a row slice (partial height,
+      full width).  ``num_cores`` divides the height.
     """
 
     core_range_set: ttnn.CoreRangeSet
     raw_tensor_shape: tuple[int, int]
     dtype: ttnn.DataType
+    sharding: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     # byte offset within a core shard
     byte_offset: int = 0
 
@@ -82,10 +90,18 @@ class OverlappedShardSpec:
     def per_device_width(self, mesh_shape: tuple[int, int]) -> int:
         return self.raw_tensor_shape[1] // self._dim_tp(1, mesh_shape)
 
-    def tiles_per_shard(self, mesh_shape: tuple[int, int]) -> int:
+    def shard_shape(self, mesh_shape: tuple[int, int]) -> tuple[int, int]:
+        pdh = self.per_device_height(mesh_shape)
         pdw = self.per_device_width(mesh_shape)
-        shard_w = pdw // self.core_range_set.num_cores()
-        return (self.per_device_height(mesh_shape) // self.tile_h) * (shard_w // self.tile_w)
+        num_cores = self.core_range_set.num_cores()
+        if self.sharding == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            return (pdh, pdw // num_cores)
+        else:
+            return (pdh // num_cores, pdw)
+
+    def tiles_per_shard(self, mesh_shape: tuple[int, int]) -> int:
+        sh, sw = self.shard_shape(mesh_shape)
+        return (sh // self.tile_h) * (sw // self.tile_w)
 
     def shard_bytes(self, mesh_shape: tuple[int, int]) -> int:
         return self.tiles_per_shard(mesh_shape) * self._tile_bytes()
@@ -140,7 +156,13 @@ def overlap_tensors(
     device: ttnn.Device,
     move_to_device: bool = True,
 ) -> list[OverlappedTensor]:
-    """Overlap a list of tensors into a single fused WIDTH_SHARDED tensor.
+    """Overlap a list of tensors into a single fused tensor.
+
+    The fused tensor is always stored as WIDTH_SHARDED on the device
+    (one flat shard per core).  Individual sub-tensors within the fused
+    buffer can be either WIDTH_SHARDED or HEIGHT_SHARDED — the
+    ``sharding`` field on each ``OverlappedShardSpec`` controls how the
+    per-device tensor is sliced across cores before tilization.
 
     Args:
         tensors: A list of "lanes".  Each lane is a list of
@@ -168,6 +190,10 @@ def overlap_tensors(
             assert len(spec.tp_dim) == 2 and all(
                 d is None or d in (0, 1) for d in spec.tp_dim
             ), "tp_dim must be a 2-tuple of None, 0, or 1"
+            assert spec.sharding in (
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ), f"sharding must be WIDTH_SHARDED or HEIGHT_SHARDED, got {spec.sharding}"
 
     def _core_set(crs: ttnn.CoreRangeSet) -> set[tuple[int, int]]:
         cores = set()
@@ -212,9 +238,13 @@ def overlap_tensors(
                             h_idx * per_dev_h : (h_idx + 1) * per_dev_h,
                             w_idx * per_dev_w : (w_idx + 1) * per_dev_w,
                         ]
-                        shard_w = per_dev_w // num_cores
-                        shard_col = device_slice[:, core_idx * shard_w : (core_idx + 1) * shard_w].contiguous()
-                        shard_raw = tilize_and_pack(shard_col, spec)
+                        if spec.sharding == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+                            shard_w = per_dev_w // num_cores
+                            core_slice = device_slice[:, core_idx * shard_w : (core_idx + 1) * shard_w]
+                        else:
+                            shard_h = per_dev_h // num_cores
+                            core_slice = device_slice[core_idx * shard_h : (core_idx + 1) * shard_h, :]
+                        shard_raw = tilize_and_pack(core_slice.contiguous(), spec)
                         assert len(shard_raw) == spec.shard_bytes(mesh_shape)
                         byte_offsets[id(spec)] = len(shard_data)
                         shard_data.extend(shard_raw)
@@ -262,16 +292,14 @@ def overlap_tensors(
 
     result = []
     for lane in tensors:
-        num_cores = lane[0][1].core_range_set.num_cores()
         for tensor, spec in lane:
             pdh = spec.per_device_height(mesh_shape)
             pdw = spec.per_device_width(mesh_shape)
-            shard_w = pdw // num_cores
             result.append(
                 OverlappedTensor(
                     fused_tensor=fused,
                     tensor_shape=(pdh, pdw),
-                    shard_shape=(pdh, shard_w),
+                    shard_shape=spec.shard_shape(mesh_shape),
                     core_range_set=spec.core_range_set,
                     dtype=spec.dtype,
                     tile_shape=(spec.tile_h, spec.tile_w),
