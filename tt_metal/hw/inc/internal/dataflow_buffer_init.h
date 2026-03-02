@@ -95,6 +95,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->num_entries_per_txn_id_per_tc;
 
             dfb_interface.tc_idx = 0;
+            dfb_interface.tensix_trisc_mask = init_ptr->risc_mask_bits.tensix_trisc_mask;
 
             // DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(per_risc_ptr->flags.remapper_pair_index) << ENDL();
 
@@ -172,7 +173,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     uint8_t tc_id = get_counter_id(ptc);
 
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id) << " initializing tc : " << static_cast<uint32_t>(tc_id) << ENDL();
                     ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
