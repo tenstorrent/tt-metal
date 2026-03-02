@@ -414,12 +414,12 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        dm_processors_(dm_processors.begin(), dm_processors.end()) {
+        dm_processors_(dm_processors_.begin(), dm_processors_.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_threads_per_cluster == dm_processors.size(),
+            config.num_threads_per_cluster == dm_processors_.size(),
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
@@ -486,6 +486,7 @@ public:
     ~QuasarComputeKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
