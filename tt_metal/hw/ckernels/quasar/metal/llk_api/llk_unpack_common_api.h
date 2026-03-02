@@ -13,7 +13,6 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_unpack_common.h"
-#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON
@@ -29,7 +28,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id
+    // Program buffer descriptors for all 32 circular buffers
     for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
         const DataFormat l1_data_format = static_cast<DataFormat>(unpack_src_format[i]);
 
@@ -37,9 +36,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
             continue;
         }
 
-        // TODO: with multiple TCs are there multiple descriptors?
         buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = g_dfb_interface[i].tc_slots[0].base_addr;
+        bd_val.f.l1_addr_16B = get_local_cb_interface(i).fifo_limit - get_local_cb_interface(i).fifo_size;
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
         bd_val.f.x_dim = unpack_tile_face_r_dim[i];
         bd_val.f.y_dim = ckernel::trisc::FACE_C_DIM;
