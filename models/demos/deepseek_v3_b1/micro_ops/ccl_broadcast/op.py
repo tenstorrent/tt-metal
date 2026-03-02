@@ -10,7 +10,10 @@ broadcasts data to all other devices in a mesh using a neighbor-exchange topolog
 
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
+
+MAX_NUM_LINKS = 2
 
 
 class BroadcastConfig:
@@ -20,7 +23,7 @@ class BroadcastConfig:
         input_tensor_mesh,
         output_tensor,
         root_coord,
-        semaphore,
+        semaphores,
         chunk_size_bytes=None,
         cb_start_offset=0,
         num_links=1,
@@ -31,9 +34,17 @@ class BroadcastConfig:
         self.output_tensor = output_tensor
         self.root_row = int(root_coord[0])
         self.root_col = int(root_coord[1])
-        self.semaphore = semaphore
+        if not isinstance(semaphores, (list, tuple)):
+            semaphores = [semaphores]
+        self.semaphores = list(semaphores)
         self.cb_start_offset = cb_start_offset
-        self.num_links = num_links
+        self.num_links = int(num_links)
+        if self.num_links <= 0:
+            raise ValueError("num_links must be greater than zero")
+        if self.num_links > MAX_NUM_LINKS:
+            raise ValueError(f"num_links ({self.num_links}) exceeds MAX_NUM_LINKS ({MAX_NUM_LINKS})")
+        if len(self.semaphores) != self.num_links:
+            raise ValueError(f"Expected {self.num_links} semaphores, got {len(self.semaphores)}")
         self.num_iterations = num_iterations
 
         self.mesh_rows = mesh_device.shape[0]
@@ -44,30 +55,26 @@ class BroadcastConfig:
 
         input_sample = self.input_tensors_per_device[0]
         tile_height, tile_width = input_sample.tile.tile_shape
-        element_size = 2
+        element_size = dtype_size(input_sample.dtype)
         self.tensor0_page_size = tile_height * tile_width * element_size
         shard_spec = input_sample.memory_config().shard_spec
-        self.num_pages_to_read = shard_spec.shape[1] // tile_width
+        shard_height, shard_width = shard_spec.shape
+        if shard_height % tile_height != 0 or shard_width % tile_width != 0:
+            raise ValueError(
+                f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
+            )
+        self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
         self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
 
         self._resolve_chunk_size(chunk_size_bytes)
         self._setup_fabric_rt_arg_count = None
-        self._per_connection_extra_rt_arg_names = ("dst_mesh_id", "dst_chip_id")
         self._compute_topology_and_args()
 
     @property
     def num_cbs_needed(self):
         return len(self.get_cb_descriptors(0, 0))
-
-    def num_per_core_rt_args(self, row, col):
-        if self._setup_fabric_rt_arg_count is None:
-            raise RuntimeError(
-                "num_per_core_rt_args is available after append_per_core_rt_args has been called at least once"
-            )
-        per_connection = self._setup_fabric_rt_arg_count + len(self._per_connection_extra_rt_arg_names)
-        return self._per_device[(row, col)]["num_connections"] * per_connection
 
     def _resolve_chunk_size(self, chunk_size_bytes):
         max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
@@ -136,7 +143,6 @@ class BroadcastConfig:
         return dst_coords
 
     def _compute_topology_and_args(self):
-        sem_addr = int(ttnn.get_global_semaphore_address(self.semaphore))
         self._per_device = {}
         for row in range(self.mesh_rows):
             for col in range(self.mesh_cols):
@@ -158,7 +164,7 @@ class BroadcastConfig:
 
                 self._per_device[(row, col)] = {
                     "is_root": row == self.root_row and col == self.root_col,
-                    "num_connections": len(dst_nodes),
+                    "num_neighbors": len(dst_nodes),
                     "dst_nodes": dst_nodes,
                     "dst_mesh_ids": [int(node.mesh_id) for node in dst_nodes],
                     "dst_chip_ids": [int(node.chip_id) for node in dst_nodes],
@@ -167,7 +173,6 @@ class BroadcastConfig:
                     "my_noc_x": my_noc_x,
                     "my_noc_y": my_noc_y,
                     "tensor_address0": int(output_tensor_device.buffer_address()),
-                    "sem_bank_addr": sem_addr,
                     "input_tensor_device": input_tensor_device,
                     "my_fabric_node_id": self.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)),
                 }
@@ -179,7 +184,8 @@ class BroadcastConfig:
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
-            ("bcast_num_connections", d["num_connections"]),
+            ("bcast_num_neighbors", d["num_neighbors"]),
+            ("bcast_num_links", self.num_links),
             ("bcast_is_root", 1 if d["is_root"] else 0),
             ("bcast_chunk_size_bytes", self.chunk_size_bytes),
             ("bcast_last_chunk_size_bytes", self.last_chunk_size_bytes),
@@ -189,24 +195,41 @@ class BroadcastConfig:
 
     def get_common_rt_args(self, row, col):
         d = self._per_device[(row, col)]
-        return [d["tensor_address0"], d["sem_bank_addr"], d["my_noc_x"], d["my_noc_y"]]
+        sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.semaphores]
+        sem_addrs += [0] * (MAX_NUM_LINKS - len(sem_addrs))
+        return [
+            d["tensor_address0"],  # index 0
+            d["my_noc_x"],  # index 1
+            d["my_noc_y"],  # index 2
+            sem_addrs[0],  # index 3 (link 0)
+            sem_addrs[1],  # index 4 (link 1 or dummy)
+        ]
 
     def append_per_core_rt_args(self, row, col, program, kernel_idx, core):
         d = self._per_device[(row, col)]
-        if d["num_connections"] == 0:
-            return
+        if d["num_neighbors"] == 0:
+            return 0
 
         writer_rt_args_ref = program.kernels[kernel_idx].runtime_args[core.x][core.y]
         src_node = d["my_fabric_node_id"]
         before_len = len(writer_rt_args_ref)
-        for i, dst_node in enumerate(d["dst_nodes"]):
-            setup_args = ttnn.setup_fabric_connection(src_node, dst_node, 0, program, core)
-            if self._setup_fabric_rt_arg_count is None:
-                self._setup_fabric_rt_arg_count = len(setup_args)
-            writer_rt_args_ref.extend(setup_args)
+
+        # Neighbor-blocked RT arg layout:
+        # for each neighbor: append dst ids first, then all link setup args.
+        for i in range(d["num_neighbors"]):
             writer_rt_args_ref.append(d["dst_mesh_ids"][i])
             writer_rt_args_ref.append(d["dst_chip_ids"][i])
-        d["per_core_rt_args_count"] = len(writer_rt_args_ref) - before_len
+            dst_node = d["dst_nodes"][i]
+            for link_idx in range(self.num_links):
+                setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
+                if self._setup_fabric_rt_arg_count is None:
+                    self._setup_fabric_rt_arg_count = len(setup_args)
+                else:
+                    assert (
+                        len(setup_args) == self._setup_fabric_rt_arg_count
+                    ), "setup_fabric_connection arg width changed across calls"
+                writer_rt_args_ref.extend(setup_args)
+        return len(writer_rt_args_ref) - before_len
 
     def get_cb_descriptors(self, row, col):
         d = self._per_device[(row, col)]
@@ -244,18 +267,20 @@ class DeepseekMinimalBroadcast:
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        semaphore,
+        semaphores=None,
         chunk_size_bytes=None,
         cb_start_offset=0,
         num_links=1,
         num_iterations=1,
     ):
+        if semaphores is None:
+            raise ValueError("Expected semaphore(s) via `semaphores`")
         return BroadcastConfig(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
             output_tensor=output_tensor,
             root_coord=sender_coord,
-            semaphore=semaphore,
+            semaphores=semaphores,
             chunk_size_bytes=chunk_size_bytes,
             cb_start_offset=cb_start_offset,
             num_links=num_links,
@@ -267,7 +292,7 @@ class DeepseekMinimalBroadcast:
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        semaphore,
+        semaphores=None,
         chunk_size_bytes=None,
         num_links=1,
         num_iterations=1,
@@ -278,20 +303,22 @@ class DeepseekMinimalBroadcast:
             input_tensor_mesh: Input tensor mesh (sender has data, others have zeros)
             output_tensor: Pre-allocated output tensor mesh
             sender_coord: ttnn.MeshCoordinate of the sender device
-            semaphore: Global semaphore used for chunk arrival signaling
+            semaphores: Per-link global semaphores used for chunk arrival signaling
             num_links: Number of links to use (default 1)
         Returns:
             Output tensor with broadcast data on all devices
         """
         mesh_device = input_tensor_mesh.device()
         mesh_rows, mesh_cols = mesh_device.shape
+        if semaphores is None:
+            raise ValueError("Expected semaphore(s) via `semaphores`")
 
         config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
             output_tensor=output_tensor,
             sender_coord=sender_coord,
-            semaphore=semaphore,
+            semaphores=semaphores,
             chunk_size_bytes=chunk_size_bytes,
             cb_start_offset=0,
             num_links=num_links,

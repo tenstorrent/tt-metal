@@ -19,7 +19,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_connections"),
+        get_named_compile_time_arg_val("bcast_num_neighbors"),
+        get_named_compile_time_arg_val("bcast_num_links"),
         get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
         get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
@@ -27,10 +28,10 @@ void kernel_main() {
 
     // Writer runtime args
     Broadcast::WriterArgs bcast_args{
-        get_common_arg_val<uint32_t>(0),  // tensor_address0
-        get_common_arg_val<uint32_t>(1),  // sem_bank_addr
-        get_common_arg_val<uint32_t>(2),  // my_noc_x
-        get_common_arg_val<uint32_t>(3),  // my_noc_y
+        get_common_arg_val<uint32_t>(0),                                     // tensor_address0
+        get_common_arg_val<uint32_t>(1),                                     // my_noc_x
+        get_common_arg_val<uint32_t>(2),                                     // my_noc_y
+        {get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4)},  // sem_bank_addrs[0..1]
     };
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -46,7 +47,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC: Compute args unused for broadcast
     Broadcast::ComputeArgs bcast_args{};
-    Broadcast::ComputeCTArgs BcastCTArgs = {};
+    using BcastCTArgs = Broadcast::ComputeCTArgs;
 #endif
 
     // Execute ccl broadcast op

@@ -37,6 +37,8 @@ namespace deepseek_b1_ops {
 
 // Unified kernel for CCL Broadcast operation
 struct Broadcast {
+    static constexpr uint32_t MAX_NUM_LINKS = 2;
+
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
@@ -58,7 +60,8 @@ struct Broadcast {
         uint32_t cb0Id,
         uint32_t NumPagesToRead,
         uint32_t tensorPageSize,
-        uint32_t numConnections,
+        uint32_t numNeighbors,
+        uint32_t numLinks,
         uint32_t isRoot,
         uint32_t chunkSizeBytes,
         uint32_t lastChunkSizeBytes,
@@ -67,17 +70,21 @@ struct Broadcast {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
         static constexpr uint32_t tensor0_page_size = tensorPageSize;
-        static constexpr uint32_t num_connections = numConnections;
+        static constexpr uint32_t num_neighbors = numNeighbors;
+        static constexpr uint32_t num_links = numLinks;
+        static constexpr uint32_t num_connections = num_neighbors * num_links;
         static constexpr bool is_root = isRoot != 0;
         static constexpr uint32_t chunk_size_bytes = chunkSizeBytes;
         static constexpr uint32_t last_chunk_size_bytes = lastChunkSizeBytes;
         static constexpr uint32_t num_chunks = numChunks;
+        static_assert(num_links <= Broadcast::MAX_NUM_LINKS, "num_links exceeds MAX_NUM_LINKS");
+        static_assert(num_chunks > 0, "num_chunks must be greater than 0");
     };
     struct WriterArgs {
         uint32_t tensor_address0;
-        uint32_t sem_bank_addr;
         uint32_t my_noc_x;
         uint32_t my_noc_y;
+        std::array<uint32_t, MAX_NUM_LINKS> sem_bank_addrs;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -130,35 +137,43 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
-                static_assert(CTArgs::num_chunks > 0, "num_chunks must be greater than 0");
                 PacketHeaderPool::reset();
 
                 std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
                 std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
-                std::array<uint32_t, CTArgs::num_connections> dst_mesh_ids;
-                std::array<uint32_t, CTArgs::num_connections> dst_chip_ids;
-
                 size_t arg_idx = 0;
-                for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                    connections[i] =
-                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                    dst_mesh_ids[i] = get_arg_val<uint32_t>(arg_idx++);
-                    dst_chip_ids[i] = get_arg_val<uint32_t>(arg_idx++);
-                    connections[i].open();
-                    headers[i] = PacketHeaderPool::allocate_header();
-                    fabric_set_unicast_route(headers[i], dst_chip_ids[i], dst_mesh_ids[i]);
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx] =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                arg_idx);
+                        connections[connection_idx].open();
+                        headers[connection_idx] = PacketHeaderPool::allocate_header();
+                        fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                    }
                 }
 
-                const uint64_t sem_noc = safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addr, 0);
                 const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
-                volatile tt_l1_ptr uint32_t* sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addr);
+                std::array<uint64_t, CTArgs::num_links> sem_nocs;
+                std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
+                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    sem_nocs[link_idx] =
+                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
+                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
+                }
 
                 auto send_chunk =
-                    [&](uint32_t connection_idx, uint32_t src_base_addr, uint32_t chunk_idx, uint32_t size) {
+                    [&](uint32_t connection_idx,
+                        uint32_t link_idx,
+                        uint32_t src_base_addr,
+                        uint32_t chunk_idx,
+                        uint32_t size) {
                         headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                dst_noc_base + chunk_idx * CTArgs::chunk_size_bytes, sem_noc, 1, false},
+                                dst_noc_base + chunk_idx * CTArgs::chunk_size_bytes, sem_nocs[link_idx], 1, false},
                             size);
                         connections[connection_idx].wait_for_empty_write_slot();
                         connections[connection_idx].send_payload_without_header_non_blocking_from_address(
@@ -167,39 +182,58 @@ struct Broadcast {
                             reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
                     };
 
+                std::array<uint32_t, CTArgs::num_links> link_counters = {};
+                auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
+                    uint32_t current_link = 0;
+
+                    for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
+                        link_counters[current_link]++;
+                        wait_for_link_chunk(current_link, link_counters[current_link]);
+
+                        const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
+                                                        ? CTArgs::chunk_size_bytes
+                                                        : CTArgs::last_chunk_size_bytes;
+
+                        for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                            const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
+                            send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
+                        }
+
+                        if (++current_link == CTArgs::num_links) {
+                            current_link = 0;
+                        }
+                    }
+                };
+
+                // Roles:
+                // - Root node: no semaphore wait, sources chunks from local CB read pointer.
+                // - Non-root node: waits for chunk arrival and forwards from local output tensor storage.
+                //   Non-root can be either:
+                //   * forwarding node (num_neighbors > 0), or
+                //   * leaf node (num_neighbors == 0), where forwarding loops are no-ops.
+                // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
+                // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
+
                 if constexpr (CTArgs::is_root) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                     constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
-
-                    // Step 1: process first (num_chunks - 1) full-size chunks.
-                    for (uint32_t chunk = 0; chunk < CTArgs::num_chunks - 1; chunk++) {
-                        for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                            send_chunk(i, src, chunk, CTArgs::chunk_size_bytes);
-                        }
-                    }
-                    // Step 2: process the final chunk (may be smaller on remainder case).
-                    for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                        send_chunk(i, src, CTArgs::num_chunks - 1, CTArgs::last_chunk_size_bytes);
-                    }
+                    auto no_wait = [&](uint32_t, uint32_t) {};
+                    forward_chunks(src, no_wait);
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 } else {
                     const uint32_t src = args.tensor_address0;
-                    // Step 1: wait+forward first (num_chunks - 1) full-size chunks.
-                    for (uint32_t chunk = 0; chunk < CTArgs::num_chunks - 1; chunk++) {
-                        noc_semaphore_wait_min(sem_ptr, chunk + 1);
-                        for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                            send_chunk(i, src, chunk, CTArgs::chunk_size_bytes);
+                    auto sem_wait = [&](uint32_t link_idx, uint32_t link_threshold) {
+                        noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
+                    };
+                    forward_chunks(src, sem_wait);
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        if (link_counters[link_idx] > 0) {
+                            unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
                     }
-                    // Step 2: wait+forward final chunk (may be smaller on remainder case).
-                    noc_semaphore_wait_min(sem_ptr, CTArgs::num_chunks);
-                    for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
-                        send_chunk(i, src, CTArgs::num_chunks - 1, CTArgs::last_chunk_size_bytes);
-                    }
-                    unified_kernels::semaphore_dec(sem_ptr, CTArgs::num_chunks);
                 }
 
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {

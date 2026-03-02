@@ -6,9 +6,7 @@
 CCL TP/SP Broadcast Test
 
 Tests the deepseek_minimal_broadcast operation implemented using the generic op infrastructure.
-This test validates dual-axis broadcast on a 2D mesh where:
-1. Sender broadcasts across secondary axis to create a secondary sender
-2. Both sender and secondary sender broadcast along primary axis to their columns
+This test validates neighbor-exchange broadcast correctness on a 2D mesh.
 """
 
 import pytest
@@ -17,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -26,6 +25,28 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration_idx):
+    """
+    Build a sender tensor where each chunk has a distinct value.
+    This catches stale-iteration forwarding when host launches multiple iterations.
+    """
+    total_elems = output_shape[0] * output_shape[1]
+    elems_per_chunk = chunk_size_bytes // 2  # bf16 = 2 bytes
+    sender = torch.zeros(output_shape, dtype=torch.bfloat16)
+
+    offset = 0
+    chunk_idx = 0
+    # Keep values small enough to stay well-behaved in bf16.
+    base = (iteration_idx % 8) * 16
+    while offset < total_elems:
+        chunk_elems = min(elems_per_chunk, total_elems - offset)
+        sender.view(-1)[offset : offset + chunk_elems] = float(base + chunk_idx)
+        offset += chunk_elems
+        chunk_idx += 1
+
+    return sender
 
 
 @pytest.mark.parametrize(
@@ -44,7 +65,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -57,8 +77,8 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
-def test_ccl_broadcast_dual_axis(
-    mesh_device,
+def test_ccl_broadcast(
+    bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,
     sender_row,
@@ -71,14 +91,17 @@ def test_ccl_broadcast_dual_axis(
     num_iters,
     num_warmup_iter,
 ):
+    if is_slow_dispatch():
+        pytest.skip("Skipping trace mode in slow dispatch")
+
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -140,6 +163,18 @@ def test_ccl_broadcast_dual_axis(
     # Run broadcast operation
     logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    bcast_config = DeepseekMinimalBroadcast.configure(
+        mesh_device=submesh,
+        input_tensor_mesh=input_tensor_mesh,
+        output_tensor=output_tensor,
+        sender_coord=sender_coord,
+        semaphores=semaphore,
+    )
+    assert (
+        bcast_config.chunk_size_bytes,
+        bcast_config.last_chunk_size_bytes,
+        bcast_config.num_chunks,
+    ) == (14336, 14336, 1), "Unexpected broadcast chunk tuple for neighbor-exchange test configuration"
 
     profiler = BenchmarkProfiler()
 
@@ -149,7 +184,7 @@ def test_ccl_broadcast_dual_axis(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        semaphore=semaphore,
+        semaphores=semaphore,
     )
     ttnn.synchronize_device(submesh)
 
@@ -161,7 +196,7 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            semaphore=semaphore,
+            semaphores=semaphore,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -174,7 +209,7 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            semaphore=semaphore,
+            semaphores=semaphore,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -221,10 +256,8 @@ def test_ccl_broadcast_dual_axis(
         else:
             logger.info(f"Device {device_idx}: PASSED")
 
-    assert all_passed, f"Not all devices received the correct broadcast data)"
-
     assert all_passed, "Not all devices received the correct broadcast data"
-    logger.info("CCL broadcast dual-axis test passed!")
+    logger.info("CCL broadcast neighbor-exchange test passed!")
 
 
 @pytest.mark.parametrize(
@@ -236,6 +269,7 @@ def test_ccl_broadcast_dual_axis(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
@@ -253,6 +287,7 @@ def test_ccl_broadcast_loop(
     layout,
     input_dtype,
     num_iters,
+    num_links,
 ):
     """
     Test CCL broadcast called multiple times without trace.
@@ -296,7 +331,7 @@ def test_ccl_broadcast_loop(
 
     num_cores = compute_grid_size.x * compute_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(num_links)]
     ttnn.synchronize_device(submesh)
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
@@ -307,7 +342,8 @@ def test_ccl_broadcast_loop(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        semaphore=semaphore,
+        semaphores=semaphores,
+        num_links=num_links,
         num_iterations=num_iters,
     )
     ttnn.synchronize_device(submesh)
@@ -324,3 +360,106 @@ def test_ccl_broadcast_loop(
         logger.info(f"Device {device_idx}: PASSED")
 
     logger.info(f"CCL broadcast loop test PASSED! ({num_iters} iterations)")
+
+
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_host_iters", [8])
+@pytest.mark.parametrize("chunk_size_bytes", [1024])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
+    indirect=True,
+)
+def test_ccl_broadcast_host_iter_stamped_chunks(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_host_iters,
+    chunk_size_bytes,
+    num_links,
+):
+    """
+    Host-driven iteration correctness test.
+    Launches num_host_iters times with num_iterations=1 and iteration-stamped chunk payloads.
+    Detects stale-iteration forwarding that output-value-only random tests can miss.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    compute_grid_size = submesh.compute_with_storage_grid_size()
+
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+
+    output_tensor = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16),
+        device=submesh,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(num_links)]
+    ttnn.synchronize_device(submesh)
+
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    slice_size = output_shape[0]
+
+    for host_iter in range(num_host_iters):
+        sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)
+        device_tensors = []
+        for row in range(mesh_rows):
+            device_tensors.append(sender_tensor if row == sender_row else torch.zeros_like(sender_tensor))
+
+        mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
+        input_tensor_mesh = ttnn.from_torch(
+            torch.cat(device_tensors, dim=0),
+            device=submesh,
+            layout=layout,
+            tile=ttnn.Tile((1, 32)),
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        )
+
+        ttnn_result = DeepseekMinimalBroadcast.op(
+            input_tensor_mesh,
+            output_tensor,
+            sender_coord,
+            semaphores=semaphores,
+            chunk_size_bytes=chunk_size_bytes,
+            num_links=num_links,
+            num_iterations=1,
+        )
+        ttnn.synchronize_device(submesh)
+
+        output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        for device_idx in range(num_devices):
+            start = device_idx * slice_size
+            end = start + slice_size
+            received = output_tensor_torch[start:end, :]
+            assert torch.allclose(
+                received, sender_tensor, rtol=1e-3, atol=1e-3
+            ), f"Host-iter {host_iter}: device {device_idx} received stale/incorrect chunked broadcast data"
