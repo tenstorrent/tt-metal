@@ -422,7 +422,7 @@ class MoeRoutedExpertOp:
         core_ranges=None,
         cb_in1_index=None,
         cb_out_index=None,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         num_subblocks_k=4,
     ):
         """
@@ -1105,7 +1105,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1118,7 +1118,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1186,7 +1186,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=2,
         )
 
@@ -1728,7 +1728,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
             ("gate_proj_fuse_silu", 1),
-            ("gate_proj_fp32_dest_acc_en", 1),
+            ("gate_proj_fp32_dest_acc_en", 0),
             # up_proj compute
             ("up_proj_cb_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else ctx.gate_mm_input_cb),
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
@@ -1738,7 +1738,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
             ("up_proj_fuse_silu", 0),
-            ("up_proj_fp32_dest_acc_en", 1),
+            ("up_proj_fp32_dest_acc_en", 0),
             ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
@@ -1746,7 +1746,7 @@ class MoeRoutedExpertOp:
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
-            ("mul_fp32_dest_acc_en", 1),
+            ("mul_fp32_dest_acc_en", 0),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             # down_proj compute
             ("down_proj_cb_in0", ctx.down_proj_mcast_dst_cb),
@@ -1758,7 +1758,7 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),
-            ("down_proj_fp32_dest_acc_en", 1),
+            ("down_proj_fp32_dest_acc_en", 0),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
