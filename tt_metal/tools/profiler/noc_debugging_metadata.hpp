@@ -6,8 +6,6 @@
 
 #include <cstdint>
 
-// Metadata for NOC debugging / scoped lock events (device records via RECORD_SCOPED_LOCK_EVENT).
-// Static ID for host/device to identify these markers (same pattern as PERF_COUNTER_PROFILER_ID in perf_counters.hpp).
 struct alignas(uint64_t) NocDebuggingEventMetadata {
     enum class NocDebugEventType : unsigned char {
         CB_LOCK = 0,

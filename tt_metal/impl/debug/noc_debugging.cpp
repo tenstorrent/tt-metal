@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <map>
 #include <type_traits>
+#include <enchantum/enchantum.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
@@ -66,9 +67,8 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
 
     // Multiple writes from the same source address without a barrier in between
     // Source data potentially overwritten before being flushed
-    if (posted && state.posted_writes_pending[noc_id].contains(src_addr)) {
-        issue_found = true;
-    } else if (!posted && state.nonposted_writes_pending[noc_id].contains(src_addr)) {
+    if ((posted && state.posted_writes_pending[noc_id].contains(src_addr)) ||
+        (!posted && state.nonposted_writes_pending[noc_id].contains(src_addr))) {
         issue_found = true;
     }
 
@@ -313,9 +313,9 @@ void NOCDebugState::print_aggregated_errors() const {
                     core_issues.has_read_barrier = true;
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
                     core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
-                } else if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM) {
-                    core_issues.locked_buffer_issues.push_back(get_issue_description(issue_type));
-                } else if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) {
+                } else if (
+                    issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM ||
+                    issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) {
                     core_issues.locked_buffer_issues.push_back(get_issue_description(issue_type));
                 }
             }
@@ -397,6 +397,8 @@ void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor
 }
 
 void NOCDebugState::process_accumulated_events_all_chips() {
+    std::lock_guard<std::mutex> cores_lock{cores_mutex};
+
     // Store them immediately because the main thread will still insert events while we are
     // processing the current batch
     std::vector<PendingEvent> to_process;

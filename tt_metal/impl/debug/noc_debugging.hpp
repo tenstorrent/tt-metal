@@ -118,6 +118,10 @@ struct NOCDebugIssueType {
         base_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER),
         issue_address(0),
         issue_size(0),
+        src_x(0),
+        src_y(0),
+        dst_x(0),
+        dst_y(0),
         is_mcast(false),
         is_semaphore(false) {}
 

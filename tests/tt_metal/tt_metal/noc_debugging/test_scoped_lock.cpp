@@ -47,7 +47,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
         uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
 
         uint32_t locker_buffer_addr = unreserved_addr;
-        uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
+        uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
         uint32_t num_elements = 8;
 
         auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
@@ -135,7 +135,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
         uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
 
         uint32_t locker_buffer_addr = unreserved_addr;
-        uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
+        uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
         uint32_t num_elements = 8;
 
         auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
@@ -217,7 +217,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
         uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
-        uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
+        uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
 
         constexpr uint8_t cb_buffer_index = 0;
         uint32_t cb_page_size = 32;
@@ -308,7 +308,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
         uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
-        uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;
+        uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
 
         constexpr uint8_t cb_buffer_index = 0;
         uint32_t cb_page_size = 32;
