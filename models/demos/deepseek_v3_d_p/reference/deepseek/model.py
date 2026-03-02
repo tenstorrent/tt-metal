@@ -10,7 +10,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
-from .kernel import act_quant, fp8_gemm, weight_dequant
+# from .kernel import act_quant, fp8_gemm, weight_dequant
 
 world_size = 1
 rank = 0
@@ -78,17 +78,18 @@ class ParallelEmbedding(nn.Module):
 
 
 def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
-    if weight.element_size() > 1:
-        return F.linear(x, weight, bias)
-    elif gemm_impl == "bf16":
-        weight = weight_dequant(weight, weight.scale)
-        return F.linear(x, weight, bias)
-    else:
-        x, scale = act_quant(x, block_size)
-        y = fp8_gemm(x, scale, weight, weight.scale)
-        if bias is not None:
-            y += bias
-        return y
+    # if weight.element_size() > 1:
+    #     return F.linear(x, weight, bias)
+    # elif gemm_impl == "bf16":
+    #     weight = weight_dequant(weight, weight.scale)
+    #     return F.linear(x, weight, bias)
+    # else:
+    #     x, scale = act_quant(x, block_size)
+    #     y = fp8_gemm(x, scale, weight, weight.scale)
+    #     if bias is not None:
+    #         y += bias
+    #     return y
+    return x @ weight
 
 
 class Linear(nn.Module):

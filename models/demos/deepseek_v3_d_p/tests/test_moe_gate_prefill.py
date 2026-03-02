@@ -12,9 +12,9 @@ import ttnn
 from models.common.tensor_utils import get_padded_hidden_dim, pad_to_shape
 
 # Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.reference.deepseek.model import Gate as ReferenceMoEGate2
-from models.demos.deepseek_v3.reference.deepseek.model import linear as referenceLinear
-from models.demos.deepseek_v3.tt.moe_gate_prefill import MoEGatePrefill
+from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate2
+from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
+from models.demos.deepseek_v3_d_p.tt.moe_gate_prefill import MoEGatePrefill
 from tests.ttnn.utils_for_testing import comp_pcc
 
 random.seed(42)
