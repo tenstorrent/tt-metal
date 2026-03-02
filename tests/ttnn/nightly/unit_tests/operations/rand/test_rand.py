@@ -140,6 +140,36 @@ def test_rand_with_memory_config(device, mem_config):
     assert tuple(tensor.shape) == tuple(DEFAULT_SHAPE)
 
 
+def test_rand_different_from_to_values(device):
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    dtype = ttnn.float32
+
+    low_1, high_1 = 0.0, 1.0
+    tensor_1 = ttnn.rand(shape, device=device, dtype=dtype, low=low_1, high=high_1)
+    data_1 = ttnn.to_torch(tensor_1).float()
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Expected 1 cache entry after first rand, got {device.num_program_cache_entries()}"
+
+    low_2, high_2 = 5.0, 10.0
+    tensor_2 = ttnn.rand(shape, device=device, dtype=dtype, low=low_2, high=high_2)
+    data_2 = ttnn.to_torch(tensor_2).float()
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Expected 1 cache entry after second rand (cache hit; from/to runtime-only), got {device.num_program_cache_entries()}"
+
+    for torch_tensor, value_range in ((data_1, (low_1, high_1)), (data_2, (low_2, high_2))):
+        assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
+        assert check_uniform_distribution(
+            torch_tensor, value_range=value_range, is_discrete=False
+        ), "The distribution of random values is not uniform!"
+
+    device.clear_program_cache()
+
+
 def test_rand_invalid_args(device):
     """
     Passing invalid args should raise TypeError.
