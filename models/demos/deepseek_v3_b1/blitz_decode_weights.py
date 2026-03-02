@@ -21,12 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import (
-    OverlappedShardSpec,
-    OverlappedTensor,
-    max_shard_bytes,
-    overlap_tensors,
-)
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec, OverlappedTensor, overlap_tensors
 
 
 def shuffle_weights_for_interleaved_qnope_qrope(
@@ -105,9 +100,6 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     qnope_head_dim: int = 128
     qrope_head_dim: int = 64
     heads_per_row: int = 8
-    knope_dim: int = 512
-    krope_dim: int = 64
-
     # Raw tensor shapes for input validation (height, width)
     q_a_proj_shape: tuple[int, int] = (7168, 1536)
     q_b_proj_shape: tuple[int, int] = (1536, 12288)
@@ -141,24 +133,6 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     # the physical core layout matches the logical split expected by the
     # KV cache branch kernel.
     kv_a_proj_shard_order: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17)
-
-    # --- derived properties ---------------------------------------------------
-
-    @property
-    def q_ab_core_range_set(self) -> ttnn.CoreRangeSet:
-        return self.q_a_shard_spec.core_range_set
-
-    @property
-    def kv_core_range_set(self) -> ttnn.CoreRangeSet:
-        return self.kv_a_shard_spec.core_range_set
-
-    @property
-    def packed_h(self) -> int:
-        return self.q_a_proj_shape[0] // 2
-
-    @property
-    def packed_w(self) -> int:
-        return self.q_a_proj_shape[1] * 2
 
     # --- weight shuffles ------------------------------------------------------
 
@@ -202,7 +176,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     def shuffle_kv_a(self, weights: torch.Tensor) -> torch.Tensor:
         """Reorder kv_a_proj shards for the KV cache branch core layout."""
         kv_h, kv_w = weights.shape
-        kv_num_cores = self.kv_core_range_set.num_cores()
+        kv_num_cores = self.kv_a_shard_spec.core_range_set.num_cores()
         shards = weights.reshape(kv_h, kv_num_cores, kv_w // kv_num_cores)
         return shards[:, list(self.kv_a_proj_shard_order), :].reshape(kv_h, kv_w)
 
@@ -305,19 +279,6 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
         )
     )
 
-    # --- derived properties ---------------------------------------------------
-
-    @property
-    def max_shard_bytes(self) -> int:
-        return max_shard_bytes(
-            [
-                [self.o_proj],
-                [self.gate_mm],
-                [self.attn_norm, self.q_norm, self.ffn_norm],
-                [self.kv_norm],
-            ]
-        )
-
 
 O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
 
@@ -356,27 +317,6 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
 
     kv_b1_proj_shape: tuple[int, int] = (8192, 512)
     kv_b2_proj_shape: tuple[int, int] = (512, 8192)
-
-    tile_h: int = 32
-    tile_w: int = 32
-    bfp8_tile_bytes: int = 1088
-
-    # --- derived properties ---------------------------------------------------
-
-    @property
-    def shard_shape(self) -> tuple[int, int]:
-        """HEIGHT_SHARDED shard: (128, 512) -- same for both sub-tensors."""
-        num_cores = self.kv_b1_core_range_set.num_cores()
-        return (self.kv_b1_proj_shape[0] // num_cores, self.kv_b1_proj_shape[1])
-
-    @property
-    def tiles_per_shard(self) -> int:
-        sh, sw = self.shard_shape
-        return (sh // self.tile_h) * (sw // self.tile_w)
-
-    @property
-    def shard_bytes(self) -> int:
-        return self.tiles_per_shard * self.bfp8_tile_bytes
 
     # --- weight shuffles ------------------------------------------------------
 
@@ -459,10 +399,6 @@ class GATE_UP_PROJ_SingleDeviceOverlapSpec:
     k_parallel: int = 8
     n_parallel: int = 8
 
-    tile_h: int = 32
-    tile_w: int = 32
-    bfp4_tile_bytes: int = 576
-
     # --- derived properties ---------------------------------------------------
 
     @property
@@ -475,19 +411,6 @@ class GATE_UP_PROJ_SingleDeviceOverlapSpec:
         """Shape of the stacked (per-sub-tensor) representation."""
         sh, sw = self.shard_shape
         return (self.gate_core_range_set.num_cores() * sh, sw)
-
-    @property
-    def tiles_per_shard(self) -> int:
-        sh, sw = self.shard_shape
-        return (sh // self.tile_h) * (sw // self.tile_w)
-
-    @property
-    def shard_bytes(self) -> int:
-        return self.tiles_per_shard * self.bfp4_tile_bytes
-
-    @property
-    def max_shard_bytes(self) -> int:
-        return self.shard_bytes
 
     @staticmethod
     def _crs_shard_permutation(core_range_set: ttnn.CoreRangeSet) -> tuple[int, ...]:
@@ -662,8 +585,8 @@ class BlitzDecodeWeights:
 
         # -- Validate device grid ----------------------------------------
         device_grid = self._device.compute_with_storage_grid_size()
-        q_ab_bb = cfg.q_ab_core_range_set.bounding_box()
-        kv_bb = cfg.kv_core_range_set.bounding_box()
+        q_ab_bb = cfg.q_a_shard_spec.core_range_set.bounding_box()
+        kv_bb = cfg.kv_a_shard_spec.core_range_set.bounding_box()
         required_rows = max(q_ab_bb.end.y, kv_bb.end.y) + 1
         required_cols = max(q_ab_bb.end.x, kv_bb.end.x) + 1
         assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
@@ -690,8 +613,8 @@ class BlitzDecodeWeights:
         ]
         q_b_preprocessed = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
 
-        q_ab_cores = cfg.q_ab_core_range_set
-        kv_cores = cfg.kv_core_range_set
+        q_ab_cores = cfg.q_a_shard_spec.core_range_set
+        kv_cores = cfg.kv_a_shard_spec.core_range_set
 
         return overlap_tensors(
             [
@@ -788,8 +711,9 @@ class BlitzDecodeWeights:
         """Fuse kv_b1_proj and kv_b2_proj into one HEIGHT_SHARDED tensor.
 
         Stitches ``kv_b1_proj (8192, 512)`` onto 64 cores and
-        ``kv_b2_proj (512, 8192)`` onto another 64 cores into a
-        single HEIGHT_SHARDED buffer with shard ``(128, 512)``.
+        ``kv_b2_proj (512, 8192)`` (pre-transposed to ``(8192, 512)``)
+        onto another 64 cores.  Both lanes are HEIGHT_SHARDED with
+        shard ``(128, 512)`` as BFP8.
 
         Layout::
 
@@ -797,10 +721,9 @@ class BlitzDecodeWeights:
             kv_b1_proj (8192, 512) as bfloat8_b, shard (128, 512)
 
             -- kv_b2 region: 64 remaining cores (5x8 + 12x2) --
-            kv_b2_proj (512, 8192) as bfloat8_b, shard (512, 128)
-            tile-shuffled into (128, 512) shape
+            kv_b2_proj (8192, 512) as bfloat8_b, shard (128, 512)
 
-            combined: 128 cores, HEIGHT_SHARDED, shard (128, 512)
+            combined: 128 cores, fused buffer
 
         Args:
             kv_b1_proj_weights: shape ``(8192 * mla_tp, 512)``.
@@ -824,78 +747,43 @@ class BlitzDecodeWeights:
             tuple(kv_b2_proj_weights.shape) == expected_b2_shape
         ), f"kv_b2 expected {expected_b2_shape}, got {tuple(kv_b2_proj_weights.shape)}"
 
-        per_device_b1_h = cfg.kv_b1_proj_shape[0]
         per_device_b2_w = cfg.kv_b2_proj_shape[1]
-
-        per_tp_combined = []
+        b2_shuffled = []
         for tp_idx in range(mla_tp):
-            b1_slice = kv_b1_proj_weights[tp_idx * per_device_b1_h : (tp_idx + 1) * per_device_b1_h, :]
             b2_slice = kv_b2_proj_weights[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
-            b2_physical = cfg.shuffle_kv_b2(b2_slice)
-            per_tp_combined.append(torch.cat([b1_slice, b2_physical], dim=0))
+            b2_shuffled.append(cfg.shuffle_kv_b2(b2_slice))
+        kv_b2_preprocessed = torch.cat(b2_shuffled, dim=0) if mla_tp > 1 else b2_shuffled[0]
 
-        combined = torch.cat(per_tp_combined, dim=0) if mla_tp > 1 else per_tp_combined[0]
-
-        # -- Place on device as HEIGHT_SHARDED --------------------------
-        combined_crs = ttnn.CoreRangeSet(
-            list(cfg.kv_b1_core_range_set.ranges()) + list(cfg.kv_b2_core_range_set.ranges())
+        return overlap_tensors(
+            [
+                [
+                    (
+                        kv_b1_proj_weights,
+                        OverlappedShardSpec(
+                            core_range_set=cfg.kv_b1_core_range_set,
+                            raw_tensor_shape=tuple(kv_b1_proj_weights.shape),
+                            dtype=ttnn.bfloat8_b,
+                            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tp_dim=(None, 0),
+                        ),
+                    ),
+                ],
+                [
+                    (
+                        kv_b2_preprocessed,
+                        OverlappedShardSpec(
+                            core_range_set=cfg.kv_b2_core_range_set,
+                            raw_tensor_shape=tuple(kv_b2_preprocessed.shape),
+                            dtype=ttnn.bfloat8_b,
+                            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tp_dim=(None, 0),
+                        ),
+                    ),
+                ],
+            ],
+            device=self._device,
+            move_to_device=move_to_device,
         )
-        sh, sw = cfg.shard_shape
-        shard_spec = ttnn.ShardSpec(
-            combined_crs,
-            (sh, sw),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        )
-
-        if mla_tp == 1:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self._device)
-        else:
-            mesh_shape = (self._device.shape[0], self._device.shape[1])
-            mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 0))
-        device_for_torch = self._device if move_to_device else None
-
-        fused = ttnn.from_torch(
-            combined,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device_for_torch,
-            memory_config=mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
-        # -- Build OverlappedTensor views --------------------------------
-        tile = fused.get_tile()
-        tile_shape = tuple(tile.tile_shape)
-        num_b2_cores = cfg.kv_b2_core_range_set.num_cores()
-        kv_b2_shard = (cfg.kv_b2_proj_shape[0], cfg.kv_b2_proj_shape[1] // num_b2_cores)
-
-        return [
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.kv_b1_proj_shape,
-                shard_shape=cfg.shard_shape,
-                core_range_set=cfg.kv_b1_core_range_set,
-                dtype=ttnn.bfloat8_b,
-                tile_shape=tile_shape,
-                byte_offset=0,
-                total_size=cfg.shard_bytes,
-            ),
-            OverlappedTensor(
-                fused_tensor=fused,
-                tensor_shape=cfg.kv_b2_proj_shape,
-                shard_shape=kv_b2_shard,
-                core_range_set=cfg.kv_b2_core_range_set,
-                dtype=ttnn.bfloat8_b,
-                tile_shape=tile_shape,
-                byte_offset=0,
-                total_size=cfg.shard_bytes,
-            ),
-        ]
 
     # ------------------------------------------------------------------
     # MOE weight loading
@@ -965,63 +853,67 @@ class BlitzDecodeWeights:
             tuple(up_proj_weights.shape) == expected_up_shape
         ), f"up_proj must be {expected_up_shape}, got {tuple(up_proj_weights.shape)}"
 
+        mesh_rows = self._device.shape[0]
+        mesh_cols = self._device.shape[1]
         per_device_n = cfg.gate_proj_shape[1]
-        gu_per_tp = []
+        stacked_h, stacked_w = cfg.stacked_shape
+
+        gate_stacked_list = []
+        up_stacked_list = []
         for tp_idx in range(moe_tp):
             gate_slice = gate_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
             up_slice = up_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
-            gate_stacked = cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set)
-            up_stacked = cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set)
-            gu_per_tp.append(torch.cat([gate_stacked, up_stacked], dim=0))
-
-        combined_crs = ttnn.CoreRangeSet(list(cfg.gate_core_range_set.ranges()) + list(cfg.up_core_range_set.ranges()))
-        sh, sw = cfg.shard_shape
-        gu_shard_spec = ttnn.ShardSpec(combined_crs, (sh, sw), ttnn.ShardOrientation.ROW_MAJOR)
-        gu_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_shard_spec)
+            gate_stacked_list.append(cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set))
+            up_stacked_list.append(cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set))
 
         if moe_tp == 1:
-            gu_combined = gu_per_tp[0]
-            gu_mapper = ttnn.ReplicateTensorToMesh(self._device)
+            gate_preprocessed = gate_stacked_list[0]
+            up_preprocessed = up_stacked_list[0]
         else:
-            mesh_rows = self._device.shape[0]
-            mesh_cols = self._device.shape[1]
-            rows = []
-            for r in range(mesh_rows):
-                rows.append(torch.cat(gu_per_tp[r * mesh_cols : (r + 1) * mesh_cols], dim=1))
-            gu_combined = torch.cat(rows, dim=0)
-            gu_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
-        device_gu = self._device if move_to_device else None
+            gate_preprocessed = (
+                torch.stack(gate_stacked_list)
+                .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
+                .permute(0, 2, 1, 3)
+                .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
+                .contiguous()
+            )
+            up_preprocessed = (
+                torch.stack(up_stacked_list)
+                .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
+                .permute(0, 2, 1, 3)
+                .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
+                .contiguous()
+            )
 
-        fused = ttnn.from_torch(
-            gu_combined,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device_gu,
-            memory_config=gu_mem,
-            mesh_mapper=gu_mapper,
-        )
-
-        tile = fused.get_tile()
-        ts = tuple(tile.tile_shape)
-        gate_ov = OverlappedTensor(
-            fused_tensor=fused,
-            tensor_shape=cfg.gate_proj_shape,
-            shard_shape=cfg.shard_shape,
-            core_range_set=cfg.gate_core_range_set,
-            dtype=ttnn.bfloat4_b,
-            tile_shape=ts,
-            byte_offset=0,
-            total_size=cfg.shard_bytes,
-        )
-        up_ov = OverlappedTensor(
-            fused_tensor=fused,
-            tensor_shape=cfg.up_proj_shape,
-            shard_shape=cfg.shard_shape,
-            core_range_set=cfg.up_core_range_set,
-            dtype=ttnn.bfloat4_b,
-            tile_shape=ts,
-            byte_offset=0,
-            total_size=cfg.shard_bytes,
+        gate_ov, up_ov = overlap_tensors(
+            [
+                [
+                    (
+                        gate_preprocessed,
+                        OverlappedShardSpec(
+                            core_range_set=cfg.gate_core_range_set,
+                            raw_tensor_shape=tuple(gate_preprocessed.shape),
+                            dtype=ttnn.bfloat4_b,
+                            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tp_dim=(0, 1),
+                        ),
+                    ),
+                ],
+                [
+                    (
+                        up_preprocessed,
+                        OverlappedShardSpec(
+                            core_range_set=cfg.up_core_range_set,
+                            raw_tensor_shape=tuple(up_preprocessed.shape),
+                            dtype=ttnn.bfloat4_b,
+                            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            tp_dim=(0, 1),
+                        ),
+                    ),
+                ],
+            ],
+            device=self._device,
+            move_to_device=move_to_device,
         )
 
         # ==================================================================
