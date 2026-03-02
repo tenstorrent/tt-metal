@@ -1797,6 +1797,7 @@ void DeviceProfiler::readDeviceMarkerData(
 
     updateFirstTimestamp(timestamp);
 
+#if defined(TRACY_ENABLE)
     if ((timer_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
         NOCDebugState* noc_debug_state = MetalContext::instance().noc_debug_state().get();
         if (noc_debug_state) {
@@ -1817,6 +1818,7 @@ void DeviceProfiler::readDeviceMarkerData(
             noc_debug_state->push_event(device_id, timestamp, get_processor_id(risc_type), NOCDebugEvent{scoped_ev});
         }
     }
+#endif
 }
 
 void DeviceProfiler::readTsData16BMarkerData(
