@@ -109,6 +109,7 @@ def create_fabric_router_config(max_payload_size):
 def compute_forwarder_scratch_size(
     l_width: int,
     num_cores: int,
+    max_payload_size: int = None,
     tile_height: int = 8,
     tile_width: int = 32,
     bytes_per_element: int = 2,
@@ -116,14 +117,20 @@ def compute_forwarder_scratch_size(
     """
     Compute the required forwarder scratch buffer size in bytes.
 
-    The forwarder needs slots for packets sent by workers:
-    - Each worker sends: 1 MS packet + num_l_chunks L chunk packets
-    - For both R1 and R2 rounds
-    - For both BRISC (FWD direction) and NCRISC (BWD direction)
+    The forwarder needs slots for packets sent by workers.
+    Two modes are supported, selected based on max_payload_size vs total_l_bytes:
+
+    Single-shot mode (total_l_bytes <= max_payload_size):
+        Each worker sends: 1 MS packet + 1 full L packet = 2 slots
+
+    Chunked streaming mode (total_l_bytes > max_payload_size, or default):
+        Each worker sends: 1 MS packet + num_l_chunks L chunks = (1 + num_l_chunks) slots
 
     Args:
         l_width: Width of L tensor per core in elements
         num_cores: Number of worker cores
+        max_payload_size: Max fabric packet payload size in bytes.
+            If None, assumes chunked mode (default fabric config).
         tile_height: Tile height (default 8)
         tile_width: Tile width (default 32)
         bytes_per_element: Bytes per element (default 2 for bfloat16)
@@ -131,32 +138,38 @@ def compute_forwarder_scratch_size(
     Returns:
         Total buffer size in bytes (conservative estimate)
     """
-    # Hardware constraint: max tiles per SDPA block (DST register limit)
-    MAX_TILES_PER_CHUNK = 8
-
-    # Conservative header estimate - no API to query actual size (~32 bytes)
+    # Conservative header estimate - no API to query actual size (~96 bytes)
     # Using 256 bytes to be safe
     PACKET_HEADER_SIZE_BYTES_ESTIMATE = 256
 
     # L1 alignment requirement
     L1_ALIGNMENT = 16
 
-    # Calculate tiles per core for L data
-    tiles_per_core_l = l_width // tile_width
+    # Calculate total L bytes per core
+    out_tiles = l_width // tile_width
+    total_l_bytes = out_tiles * tile_height * tile_width * bytes_per_element
 
-    # Conservative chunk estimate: use hardware max constraint
-    # Actual chunking determined by program factory, we use worst-case
-    num_l_chunks = (tiles_per_core_l + MAX_TILES_PER_CHUNK - 1) // MAX_TILES_PER_CHUNK
+    # Determine transfer mode
+    single_shot = max_payload_size is not None and total_l_bytes <= max_payload_size
 
-    # Slots per round: each worker sends MS (1 slot) + L chunks
-    slots_per_worker = 1 + num_l_chunks
+    if single_shot:
+        # Single-shot: 2 slots per worker (MS + full L)
+        slots_per_worker = 2
+        max_slot_payload = total_l_bytes
+    else:
+        # Chunked: (1 + num_l_chunks) slots per worker
+        max_tiles_per_chunk = 8
+        min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
+        num_l_chunks = max(min_num_l_chunks, 4)
+        tiles_per_l_chunk = out_tiles // num_l_chunks
+        l_chunk_size_bytes = tiles_per_l_chunk * tile_height * tile_width * bytes_per_element
+        slots_per_worker = 1 + num_l_chunks
+        max_slot_payload = l_chunk_size_bytes
+
     slots_per_round = num_cores * slots_per_worker
 
-    # Slot size: header + largest payload (L chunk)
-    # L chunk is larger than MS, so use L chunk size
-    tiles_per_chunk = (tiles_per_core_l + num_l_chunks - 1) // num_l_chunks  # ceil
-    l_chunk_size_bytes = tiles_per_chunk * tile_height * tile_width * bytes_per_element
-    slot_size_bytes = PACKET_HEADER_SIZE_BYTES_ESTIMATE + l_chunk_size_bytes
+    # Slot size: header + largest payload per slot
+    slot_size_bytes = PACKET_HEADER_SIZE_BYTES_ESTIMATE + max_slot_payload
 
     # Align slot size to L1 alignment
     slot_size_bytes = ((slot_size_bytes + L1_ALIGNMENT - 1) // L1_ALIGNMENT) * L1_ALIGNMENT
@@ -168,22 +181,35 @@ def compute_forwarder_scratch_size(
     return forwarder_buffer_size_bytes
 
 
+def _make_device_params(max_payload_size):
+    """Build device_params dict, conditionally including fabric_router_config."""
+    params = {
+        "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        "trace_region_size": 548880,
+    }
+    if max_payload_size is not None:
+        params["fabric_router_config"] = create_fabric_router_config(max_payload_size)
+    return params
+
+
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, max_payload_size",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "trace_region_size": 548880,
-                # "fabric_router_config": create_fabric_router_config(15232),
-            }
+        pytest.param(
+            _make_device_params(None),
+            None,
+            id="default_chunked",
+        ),
+        pytest.param(
+            _make_device_params(15232),
+            15232,
+            id="single_shot_15232",
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_2d_trace"],
 )
-def test_reduce_to_all_with_trace(bh_1d_mesh_device):
+def test_reduce_to_all_with_trace(bh_2d_mesh_device, max_payload_size):
     """Test reduce_to_all operation with trace capture and replay for performance testing."""
 
     print("\n=== Testing reduce_to_all with TRACE ===")
@@ -205,8 +231,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     # Create submesh device
     # Mesh topology parameter uses 2D fabric routing (configured by FABRIC_2D)
     # but logical device arrangement can be 1D [4,1] for reduce_to_all's neighbor exchange pattern
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor config
     dtype = ttnn.bfloat16
@@ -334,6 +360,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     forwarder_buffer_size_bytes = compute_forwarder_scratch_size(
         l_width=l_width,
         num_cores=num_cores,
+        max_payload_size=max_payload_size,
         tile_height=tile_height,
         tile_width=tile_width,
         bytes_per_element=bytes_per_element,

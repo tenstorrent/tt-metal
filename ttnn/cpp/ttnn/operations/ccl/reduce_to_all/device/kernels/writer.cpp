@@ -14,14 +14,23 @@
 //   - Type B: R1 sends via BWD forwarder, R2 sends via FWD forwarder
 // This balances FWD/BWD traffic in each round.
 //
-// PACKET ORDER AND BUFFER LAYOUT:
-// To enable streaming:
-// - MS packet sent FIRST (slot 0) → written to buffer END (offset total_l_bytes)
-// - L chunks sent after (slots 1..num_l_chunks) → written contiguously from offset 0
-// Buffer layout on receiver: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
-// This allows:
-// - L CB to be aliased at buffer base (offset 0)
-// - Receiver can start compute after MS arrives, stream L chunks during compute
+// TWO TRANSFER MODES (selected at compile time via single_shot_l flag):
+//
+// Single-shot mode (single_shot_l = 1):
+//   When the full L tensor fits in one fabric packet (total_l_bytes <= max_fabric_payload).
+//   Each worker sends 2 packets per round:
+//   - MS packet (slot 0) → written to buffer END (offset total_l_bytes)
+//   - Full L packet (slot 1) → written contiguously from offset 0
+//
+// Chunked streaming mode (single_shot_l = 0):
+//   When L is too large for one packet, it is split into num_l_chunks chunks.
+//   Each worker sends 1 + num_l_chunks packets per round:
+//   - MS packet (slot 0) → written to buffer END (offset total_l_bytes)
+//   - L chunks (slots 1..num_l_chunks) → written contiguously from offset 0
+//   R2 uses streaming: sends each L chunk as soon as compute produces it.
+//
+// Buffer layout on receiver (both modes): [L_data][MS]
+// L CB is aliased at buffer base (offset 0) for zero-copy receive.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -43,13 +52,17 @@ static constexpr uint32_t l1_alignment = get_compile_time_arg_val(5);
 static constexpr uint32_t page_size_bytes = get_compile_time_arg_val(6);
 static constexpr uint32_t slot_size = get_compile_time_arg_val(7);
 static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(8);
-static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(9);
-static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(10);
-static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);
+static constexpr uint32_t single_shot_l = get_compile_time_arg_val(9);   // 0 = chunked, 1 = single-shot
+static constexpr uint32_t total_l_bytes = get_compile_time_arg_val(10);  // Full L size (always valid)
+static constexpr uint32_t out_tiles = get_compile_time_arg_val(11);      // Total L tiles (always valid)
+// Chunked mode parameters (only meaningful when single_shot_l == 0)
+static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(12);
+static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(13);
+static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(14);
 
 static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-// Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
+// Slot indices: MS = slot 0, L = slot 1 (single-shot) or slots 1..num_l_chunks (chunked)
 static constexpr uint32_t MS_SLOT_OFFSET = 0;
 static constexpr uint32_t L_SLOT_OFFSET = 1;
 
@@ -91,20 +104,27 @@ struct RoundConfig {
 };
 
 // =============================================================================
-// ChunkSender - templated packet sender with precomputed addresses
+// PacketSender - unified sender supporting both single-shot and chunked modes
 // =============================================================================
 
 /**
  * Packet sender with cached core coordinates and round configuration.
+ * Supports two transfer modes selected at compile time:
+ * - Single-shot: sends full L tensor as one fabric packet
+ * - Chunked: sends L as num_l_chunks separate packets, streaming in R2
+ *
  * Template parameters encode size constants for zero-overhead abstraction.
  */
 template <
     uint32_t slot_size,
     uint32_t ms_tile_size_bytes,
+    uint32_t total_l_bytes,
+    uint32_t out_tiles,
+    uint32_t single_shot_l,
     uint32_t l_chunk_size_bytes,
     uint32_t num_l_chunks,
     uint32_t tiles_per_l_chunk>
-struct ChunkSender {
+struct PacketSender {
     // Core coordinates (constant across rounds)
     uint32_t current_core_x;
     uint32_t current_core_y;
@@ -120,9 +140,6 @@ struct ChunkSender {
 
     // Cached header address (set once per round, reused for all packets)
     uint32_t header_addr;
-
-    // Derived constants
-    static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
 
     // =========================================================================
     // Round setup and teardown
@@ -176,12 +193,19 @@ struct ChunkSender {
      * Compute forwarder destination addresses for a packet.
      * fwd_sem_noc is precomputed and constant per round.
      *
-     * @tparam is_ms True for MS packet (slot 0), false for L chunk (slot 1+i)
-     * @param l_chunk_idx L chunk index (ignored when is_ms=true)
+     * @tparam is_ms True for MS packet (slot 0), false for L packet
+     * @param l_chunk_idx L chunk index (only used in chunked mode for is_ms=false)
      */
     template <bool is_ms>
     FORCE_INLINE ForwarderDest get_forwarder_dest(uint32_t l_chunk_idx = 0) const {
-        uint32_t slot_offset = is_ms ? MS_SLOT_OFFSET : (L_SLOT_OFFSET + l_chunk_idx);
+        uint32_t slot_offset;
+        if constexpr (is_ms) {
+            slot_offset = MS_SLOT_OFFSET;
+        } else if constexpr (single_shot_l) {
+            slot_offset = L_SLOT_OFFSET;
+        } else {
+            slot_offset = L_SLOT_OFFSET + l_chunk_idx;
+        }
         uint32_t slot_idx = cfg.base_slot_idx + slot_offset;
         uint32_t fwd_slot_addr = cfg.fwd_slot_addr + slot_offset * slot_size;
         return {
@@ -241,8 +265,20 @@ struct ChunkSender {
     }
 
     /**
-     * Send L chunk packet (slots 1..num_l_chunks).
-     * L chunks are written contiguously from buffer offset 0.
+     * Send full L tensor as a single packet (slot 1).
+     * Only used in single-shot mode.
+     */
+    FORCE_INLINE void send_full_l() const {
+        uint32_t dst_addr = cfg.dst_base_addr;
+        uint32_t src_addr = get_read_ptr(cfg.cb_l);
+        auto fabric_dest = get_fabric_dest(dst_addr);
+        auto fwd_dest = get_forwarder_dest<false>();
+        send_packet(fabric_dest, fwd_dest, src_addr, total_l_bytes);
+    }
+
+    /**
+     * Send one L chunk packet (slots 1..num_l_chunks).
+     * Only used in chunked streaming mode.
      *
      * @param l_chunk_idx L chunk index (0 to num_l_chunks-1)
      */
@@ -255,36 +291,52 @@ struct ChunkSender {
     }
 
     /**
-     * Send all packets for a round (MS first, then all L chunks).
+     * Send all packets for a round (MS first, then L).
      * Used when all data is ready (R1 with local input).
      */
     FORCE_INLINE void send_all() const {
         send_ms();
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            send_l_chunk(i);
+        if constexpr (single_shot_l) {
+            send_full_l();
+        } else {
+            for (uint32_t i = 0; i < num_l_chunks; i++) {
+                send_l_chunk(i);
+            }
         }
     }
 
     /**
-     * Send packets with streaming waits (R2 with compute results).
-     * Overlaps fabric transfer with R1 compute by waiting for each chunk.
+     * Wait for compute output, then send all packets.
+     * In single-shot mode: wait for MS, send MS, wait for all L, send full L.
+     * In chunked mode: wait for MS, send MS, then stream L chunks as produced.
      */
-    FORCE_INLINE void send_streaming() const {
-        // Wait for MS (produced early in R1 compute, after MS reduction phase)
+    FORCE_INLINE void send_all_after_wait() const {
         cb_wait_front(cfg.cb_ms, 1);
         send_ms();
-
-        // Stream L chunks: wait for each chunk as compute produces it
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            // Cumulative wait: cb_wait_front waits for total tiles in CB
-            cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
-            send_l_chunk(i);
+        if constexpr (single_shot_l) {
+            cb_wait_front(cfg.cb_l, out_tiles);
+            send_full_l();
+        } else {
+            // Stream L chunks: wait for each chunk as compute produces it
+            for (uint32_t i = 0; i < num_l_chunks; i++) {
+                // Cumulative wait: cb_wait_front waits for total tiles in CB
+                cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
+                send_l_chunk(i);
+            }
         }
     }
 };
 
 // Type alias for convenience
-using Sender = ChunkSender<slot_size, ms_tile_size_bytes, l_chunk_size_bytes, num_l_chunks, tiles_per_l_chunk>;
+using Sender = PacketSender<
+    slot_size,
+    ms_tile_size_bytes,
+    total_l_bytes,
+    out_tiles,
+    single_shot_l,
+    l_chunk_size_bytes,
+    num_l_chunks,
+    tiles_per_l_chunk>;
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -341,11 +393,13 @@ void kernel_main() {
     }
 
     // ==========================================================================
-    // ROUND 2: Send R1 result to R2 neighbor via forwarder (STREAMING)
-    // Overlap R2 fabric transfer with R1 compute by sending as data is produced
+    // ROUND 2: Send R1 result to R2 neighbor via forwarder
+    // Wait for R1 compute output, then send.
+    // In chunked mode: streams L chunks as compute produces them.
+    // In single-shot mode: waits for all L tiles then sends as one packet.
     // ==========================================================================
     {
-        DeviceZoneScopedN("R2-SEND-STREAMING");
+        DeviceZoneScopedN("R2-SEND");
         sender.setup_round(
             {cb_r1_result_l,
              cb_r1_result_ms,
@@ -356,7 +410,7 @@ void kernel_main() {
              r2_fwd_slot_addr,
              r2_fwd_sem_addr,
              r2_base_slot_idx});
-        sender.send_streaming();
+        sender.send_all_after_wait();
         sender.finish_round();
     }
 

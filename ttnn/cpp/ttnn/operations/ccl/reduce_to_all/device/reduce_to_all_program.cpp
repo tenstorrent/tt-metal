@@ -92,25 +92,26 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
 
     // =========================================================================
-    // Chunking configuration
+    // Fabric payload configuration
     // =========================================================================
-    // Chunking hides fabric transfer latency by overlapping data transfer with compute.
-    // - MS packet sent first (slot 0)
-    // - L chunks sent after (slots 1..num_l_chunks)
-    // Buffer layout on receiver: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
+    // Two transfer modes, selected based on fabric max payload size:
     //
-    // Chunking and SDPA block size:
-    // - tiles_per_l_chunk = SDPA block size (each chunk = one SDPA block)
-    // - Hardware constraint: tiles_per_l_chunk <= 8 (DST register limit)
-    // - This means: num_l_chunks >= ceil(out_tiles / 8)
+    // Single-shot mode (total_l_bytes <= max_fabric_payload):
+    //   Full L tensor sent as one fabric packet. 2 slots per worker (MS + full L).
     //
-    // For out_tiles=16: num_l_chunks >= 2 (tiles_per_l_chunk=8)
+    // Chunked streaming mode (total_l_bytes > max_fabric_payload):
+    //   L split into num_l_chunks packets. (1 + num_l_chunks) slots per worker.
+    //   R2 streams L chunks as compute produces them.
+    //
+    // Buffer layout on receiver (both modes): [L_data][MS]
+    // Compute-side chunking (tiles_per_l_chunk / num_l_chunks) is always present
+    // for SDPA block processing constraints, independent of fabric transfer mode.
+    const uint32_t total_l_bytes = out_tiles * input_page_size_bytes;
+
+    // Compute-side chunking (always needed for SDPA hardware constraint)
+    // tiles_per_l_chunk <= 8 (DST register limit)
     constexpr uint32_t max_tiles_per_chunk = 8;  // DST register limit
     const uint32_t min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) / max_tiles_per_chunk;
-
-    // Configure num_l_chunks (must satisfy hardware constraint)
-    // Heuristic: num_l_chunks = 4 provides good balance of streaming overlap vs overhead.
-    // This op will be fused in production; chunk factor can be exposed as parameter if needed.
     const uint32_t num_l_chunks = std::max(min_num_l_chunks, 4u);
 
     TT_FATAL(num_l_chunks >= 1, "num_l_chunks must be at least 1");
@@ -130,15 +131,22 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         max_tiles_per_chunk,
         min_num_l_chunks);
 
-    // Slot sizing: largest packet is L chunk (MS is smaller)
-    // All slots sized for L chunk to simplify buffer management
+    // Determine transfer mode based on fabric max payload size
     const size_t max_fabric_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const uint32_t max_chunk_payload_size = l_chunk_size_bytes;
-    TT_FATAL(
-        max_chunk_payload_size <= max_fabric_payload_size,
-        "L chunk payload ({} bytes) exceeds fabric max ({})",
-        max_chunk_payload_size,
-        max_fabric_payload_size);
+    const bool single_shot_l = (total_l_bytes <= max_fabric_payload_size);
+
+    // In chunked mode, each L chunk must fit in a fabric packet
+    if (!single_shot_l) {
+        TT_FATAL(
+            l_chunk_size_bytes <= max_fabric_payload_size,
+            "L chunk payload ({} bytes) exceeds fabric max payload ({}). "
+            "Increase max_packet_payload_size_bytes or reduce L tensor size.",
+            l_chunk_size_bytes,
+            max_fabric_payload_size);
+    }
+
+    // Largest payload determines slot size (full L in single-shot, L chunk in chunked)
+    const uint32_t max_payload_per_slot = single_shot_l ? total_l_bytes : l_chunk_size_bytes;
 
     // Scale encoding
     union {
@@ -267,9 +275,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             .set_tile_dims(cb_packet_slot, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
 
-    // Forwarder slot size: header + largest payload (L chunk)
-    // Used for forwarder buffer allocation (separate from header CB)
-    const uint32_t slot_size = tt::round_up(packet_header_size_bytes + max_chunk_payload_size, l1_alignment);
+    // Forwarder slot size: header + largest payload per slot
+    // Single-shot: header + full L; Chunked: header + L chunk
+    const uint32_t slot_size = tt::round_up(packet_header_size_bytes + max_payload_per_slot, l1_alignment);
 
     // =========================================================================
     // Setup forwarder cores and config
@@ -287,9 +295,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t workers_per_type = num_workers_per_link / 2;
 
     // Two-semaphore design: each forwarder instance has R1 and R2 semaphores
-    // Slots per worker: 1 MS + num_l_chunks L chunks = (1 + num_l_chunks)
-    // Slots per semaphore (R1 or R2): workers_per_type * (1 + num_l_chunks)
-    const uint32_t slots_per_worker = 1 + num_l_chunks;
+    // Single-shot: 1 MS + 1 full L = 2 slots per worker
+    // Chunked:     1 MS + num_l_chunks L chunks = (1 + num_l_chunks) slots per worker
+    const uint32_t slots_per_worker = single_shot_l ? 2 : (1 + num_l_chunks);
     const uint32_t slots_per_round = workers_per_type * slots_per_worker;
 
     // Validate semaphore bit capacity
@@ -313,10 +321,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // forwarder buffer layout per core (shared by BRISC and NCRISC):
     // - BRISC region (offset 0): slots for FWD direction
     //   - R1 slots: 0 to slots_per_round-1
-    //   - R2 slots: slots_per_round to 2*slots_per_round-1 (separate region for streaming overlap)
+    //   - R2 slots: slots_per_round to 2*slots_per_round-1
     // - NCRISC region: same layout, offset after BRISC
-    // Each slot = packet header + chunk payload (slot_size already computed and L1-aligned above)
-    // R1 and R2 use SEPARATE buffer regions to support streaming (R2 can start while R1 forwarding)
+    // Each slot = packet header + max payload (slot_size already computed and L1-aligned above)
+    // R1 and R2 use SEPARATE buffer regions
     const uint32_t r2_buffer_offset = slots_per_round * slot_size;       // R2 slots start after R1 slots
     const uint32_t brisc_buffer_size = 2 * slots_per_round * slot_size;  // R1 + R2 slots
     const uint32_t ncrisc_buffer_offset = brisc_buffer_size;  // NCRISC starts after BRISC region
@@ -373,35 +381,41 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // =========================================================================
 
     // Reader compile-time args
-    // Buffer layout: [L_chunk0][L_chunk1]...[MS] (L at offset 0, MS at end)
+    // Buffer layout: [L_data][MS] (L at offset 0, MS at end)
     std::vector<uint32_t> reader_ct_args = {
-        cb_local_l,          // 0
-        cb_local_ms,         // 1
-        cb_r1_neighbor_l,    // 2
-        cb_r1_neighbor_ms,   // 3
-        cb_r2_neighbor_l,    // 4
-        cb_r2_neighbor_ms,   // 5
-        ms_tile_size_bytes,  // 6 - MS tile size
-        l_chunk_size_bytes,  // 7 - L chunk size
-        num_l_chunks,        // 8 - number of L chunks
-        tiles_per_l_chunk,   // 9 - tiles per L chunk
+        cb_local_l,               // 0
+        cb_local_ms,              // 1
+        cb_r1_neighbor_l,         // 2
+        cb_r1_neighbor_ms,        // 3
+        cb_r2_neighbor_l,         // 4
+        cb_r2_neighbor_ms,        // 5
+        ms_tile_size_bytes,       // 6: MS tile size
+        single_shot_l ? 1u : 0u,  // 7: single_shot_l flag
+        total_l_bytes,            // 8: total L bytes (always valid)
+        out_tiles,                // 9: total L tiles (always valid)
+        l_chunk_size_bytes,       // 10: L chunk size (chunked mode)
+        num_l_chunks,             // 11: number of L chunks (chunked mode)
+        tiles_per_l_chunk,        // 12: tiles per L chunk (chunked mode)
     };
 
     // Writer compile-time args
-    // Buffer layout: [L_chunk0][L_chunk1]...[MS] (L at offset 0, MS at end)
+    // Buffer layout: [L_data][MS] (L at offset 0, MS at end)
     std::vector<uint32_t> writer_ct_args = {
-        cb_local_l,             // 0
-        cb_local_ms,            // 1
-        cb_r1_result_l,         // 2
-        cb_r1_result_ms,        // 3
-        cb_packet_slot,         // 4: Unified packet slot CB (header + payload)
-        l1_alignment,           // 5
-        input_page_size_bytes,  // 6
-        slot_size,              // 7: forwarder slot size (L1-aligned)
-        ms_tile_size_bytes,     // 8: MS tile size
-        l_chunk_size_bytes,     // 9: L chunk size
-        num_l_chunks,           // 10: number of L chunks
-        tiles_per_l_chunk,      // 11: tiles per L chunk
+        cb_local_l,               // 0
+        cb_local_ms,              // 1
+        cb_r1_result_l,           // 2
+        cb_r1_result_ms,          // 3
+        cb_packet_slot,           // 4: Unified packet slot CB (header + payload)
+        l1_alignment,             // 5
+        input_page_size_bytes,    // 6
+        slot_size,                // 7: forwarder slot size (L1-aligned)
+        ms_tile_size_bytes,       // 8: MS tile size
+        single_shot_l ? 1u : 0u,  // 9: single_shot_l flag
+        total_l_bytes,            // 10: full L payload size (always valid)
+        out_tiles,                // 11: total L tiles (always valid)
+        l_chunk_size_bytes,       // 12: L chunk size (chunked mode)
+        num_l_chunks,             // 13: number of L chunks (chunked mode)
+        tiles_per_l_chunk,        // 14: tiles per L chunk (chunked mode)
     };
 
     // Compute compile-time args
@@ -596,10 +610,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 fwd_core_noc.y,  // 11: forwarder_core_y
                 r1_slot_addr,    // 12: R1 forwarder slot address
                 r1_cfg.r1_sem,   // 13: R1 forwarder semaphore
-                r1_slot_idx,     // 14: R1 BASE slot index (chunk i signals: 1 << (base + i))
+                r1_slot_idx,     // 14: R1 BASE slot index (MS=base+0, L=base+1..)
                 r2_slot_addr,    // 15: R2 forwarder slot address
                 r2_cfg.r2_sem,   // 16: R2 forwarder semaphore
-                r2_slot_idx,     // 17: R2 BASE slot index (chunk i signals: 1 << (base + i))
+                r2_slot_idx,     // 17: R2 BASE slot index (MS=base+0, L=base+1..)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);

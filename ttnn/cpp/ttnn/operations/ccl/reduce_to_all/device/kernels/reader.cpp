@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// BUFFER LAYOUT AND PACKET ORDER:
-// Buffer: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
+// BUFFER LAYOUT:
+// Buffer: [L_data][MS]
 // - L data at offset 0 (contiguous) - CB aliased for zero-copy
 // - MS at offset total_l_bytes (end of buffer) - copied to cb_ms
 //
-// Packet arrival order: MS first, then L chunks
-// Semaphore increments: sem >= 1 for MS, sem >= 2 for L_chunk0, sem >= (2+i) for L_chunk_i
+// TWO TRANSFER MODES (selected at compile time via single_shot_l flag):
 //
-// This allows:
-// - L CB to be aliased at buffer base
-// - Compute can start after MS arrives, stream L chunks during compute
+// Single-shot mode (single_shot_l = 1):
+//   Packet arrival order: MS first (sem >= 1), then full L (sem >= 2)
+//   Reader waits for 2 semaphore increments total.
+//
+// Chunked streaming mode (single_shot_l = 0):
+//   Packet arrival order: MS first (sem >= 1), then L chunks (sem >= 2, 3, ...)
+//   Reader streams L chunks to compute as they arrive.
 
 #include "api/dataflow/dataflow_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -32,14 +35,17 @@ static constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(4);
 static constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(5);
 
 static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(6);
-static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(7);
-static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(8);
-static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(9);
+static constexpr uint32_t single_shot_l = get_compile_time_arg_val(7);  // 0 = chunked, 1 = single-shot
+static constexpr uint32_t total_l_bytes = get_compile_time_arg_val(8);  // Full L size (always valid)
+static constexpr uint32_t out_tiles = get_compile_time_arg_val(9);      // Total L tiles (always valid)
+// Chunked mode parameters (only meaningful when single_shot_l == 0)
+static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(10);
+static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(11);
+static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(12);
 
-static constexpr uint32_t out_tiles = num_l_chunks * tiles_per_l_chunk;
-static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
-
-// Semaphore thresholds: MS = 1, L_chunk_i = 2 + i
+// Semaphore thresholds:
+// MS = 1 (always first)
+// L base = 2 (single-shot: just 2; chunked: 2 + chunk_idx)
 static constexpr uint32_t MS_SEM_THRESHOLD = 1;
 static constexpr uint32_t L_SEM_BASE_THRESHOLD = 2;
 
@@ -64,25 +70,9 @@ FORCE_INLINE void prepare_ms_for_compute(
 }
 
 /**
- * Prepare L chunk for compute.
- * L chunks arrive after MS (sem >= 2 + chunk_idx).
- * L CB is aliased to buffer base, so just push (zero-copy).
- *
- * @param l_chunk_idx L chunk index (0 to num_l_chunks-1)
- */
-FORCE_INLINE void prepare_l_chunk_for_compute(
-    uint32_t cb_l, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t l_chunk_idx) {
-    cb_reserve_back(cb_l, tiles_per_l_chunk);
-
-    // Wait for this L chunk (sem >= 2 + l_chunk_idx)
-    noc_semaphore_wait_min(sem_ptr, L_SEM_BASE_THRESHOLD + l_chunk_idx);
-
-    // L CB is aliased to buffer, just push (zero-copy)
-    cb_push_back(cb_l, tiles_per_l_chunk);
-}
-
-/**
- * Prepare all data for one round (MS first, then L chunks).
+ * Prepare all data for one round (MS first, then L).
+ * In single-shot mode: waits for full L as one packet (sem >= 2).
+ * In chunked mode: streams L chunks as they arrive (sem >= 2, 3, ...).
  */
 FORCE_INLINE void prepare_data_for_compute(
     uint32_t cb_l, uint32_t cb_ms, uint32_t sem_addr, uint32_t recv_buffer_addr) {
@@ -91,9 +81,20 @@ FORCE_INLINE void prepare_data_for_compute(
     // MS first (sem >= 1)
     prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
 
-    // L chunks (sem >= 2, 3, 4, ...)
-    for (uint32_t i = 0; i < num_l_chunks; i++) {
-        prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
+    if (single_shot_l) {
+        // Single-shot: wait for full L (sem >= 2), zero-copy
+        cb_reserve_back(cb_l, out_tiles);
+        noc_semaphore_wait_min(sem_ptr, L_SEM_BASE_THRESHOLD);
+        cb_push_back(cb_l, out_tiles);
+    } else {
+        // Chunked: stream L chunks as they arrive
+        for (uint32_t i = 0; i < num_l_chunks; i++) {
+            cb_reserve_back(cb_l, tiles_per_l_chunk);
+            // Wait for this L chunk (sem >= 2 + i)
+            noc_semaphore_wait_min(sem_ptr, L_SEM_BASE_THRESHOLD + i);
+            // L CB is aliased to buffer, just push (zero-copy)
+            cb_push_back(cb_l, tiles_per_l_chunk);
+        }
     }
 
     noc_semaphore_set(sem_ptr, 0);
