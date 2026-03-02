@@ -65,6 +65,7 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
+    using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
         if (params.processor_class == HalProcessorClassType::DM) {
@@ -478,7 +479,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
 
     this->noc_y_id_translate_table_ = {};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>(*this);
 }
 
 }  // namespace tt::tt_metal

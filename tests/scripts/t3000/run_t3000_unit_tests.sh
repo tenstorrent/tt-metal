@@ -163,13 +163,19 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
   # Re-enable this test when we have more T3K availability
   # tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
+}
+
+run_t3000_ttnn_multiprocess_slow_tests() {
+  local mpi_args="--allow-run-as-root"
+  local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
+
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
 }
 
 run_t3000_falcon7b_tests() {
@@ -628,8 +634,17 @@ run_t3000_tt_dit_tests() {
 
   echo "LOG_METAL: Running run_t3000_tt_dit_tests"
 
+  #Timestep Encoding (Currently used in Wan2.2)
+  pytest models/tt_dit/tests/unit/test_embeddings.py::test_timestep_encoding ; fail+=$?
+
+  #Wan2.2 Time Text Image Embedding
+  pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "t3k" ; fail+=$?
+
   #T5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
+
+  #UMT5 Encoder
+  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
 
   #Clip Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
@@ -688,6 +703,17 @@ run_t3000_tttv2_fast_unit_tests() {
     --tb=short \
     --durations=10 \
     --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run Rope1D tests
+  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
+  pytest models/common/tests/modules/rope/test_rope_1d.py \
+    -m "not slow" \
+    --durations=10 \
+    --tb=short \
+    --cov=models.common.modules.rope.rope_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 

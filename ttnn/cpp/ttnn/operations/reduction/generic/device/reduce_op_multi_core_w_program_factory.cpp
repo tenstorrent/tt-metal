@@ -86,8 +86,25 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    if (operation_attributes.negate) {
+        uint32_t acc_cb_index = tt::CBIndex::c_4;
+        uint32_t num_acc_tiles = 1;
+        tt_metal::CircularBufferConfig cb_acc_config =
+            tt_metal::CircularBufferConfig(num_acc_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+                .set_page_size(acc_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
+
+        uint32_t inv_cb_index = tt::CBIndex::c_5;
+        uint32_t num_inv_tiles = 1;
+        tt_metal::CircularBufferConfig cb_inv_config =
+            tt_metal::CircularBufferConfig(num_inv_tiles * dst_single_tile_size, {{inv_cb_index, dst_cb_data_format}})
+                .set_page_size(inv_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_inv_config);
+    }
+
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
+
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -107,9 +124,13 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         1,                          // NC
     };
 
+    const std::string compute_kernel =
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w") +
+        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+        compute_kernel,
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -126,7 +147,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+            compute_kernel,
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

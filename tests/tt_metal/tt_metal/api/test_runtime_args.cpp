@@ -177,7 +177,7 @@ std::pair<distributed::MeshWorkload, std::vector<KernelHandle>> initialize_progr
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
             core_range_set,
             tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dm_processors_per_kernel, .defines = dm_defines});
+                .num_threads_per_cluster = dm_processors_per_kernel, .defines = dm_defines});
     }
 
     workload.add_program(device_range, std::move(program));
