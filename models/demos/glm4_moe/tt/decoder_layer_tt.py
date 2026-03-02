@@ -458,14 +458,10 @@ class Glm4MoeDecoderLayer:
             ttnn.deallocate(shared_out_partial, force=False)
             ttnn.deallocate(routed_out_partial, force=False)
 
-            # 2-step all_reduce: axis=0 (TP=8) then axis=1 (DP=4) = full 32-way
-            mlp_out = _simple_all_reduce(combined, device, cluster_axis=0,
-                                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                                         ccl=self.tt_ccl)
+            # Full 32-way all_reduce (no cluster_axis) — avoids 2-step axis-sequential
+            # reduce_scatter which crashes on TG 2D mesh with "forward_coord is null".
+            mlp_out = ttnn.all_reduce(combined, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(combined, force=False)
-            mlp_out = _simple_all_reduce(mlp_out, device, cluster_axis=1,
-                                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                                         ccl=self.tt_ccl)
         else:
             # Fallback: separate reduces (original behavior)
             if tp_enabled and tp_axis is not None:
@@ -474,16 +470,13 @@ class Glm4MoeDecoderLayer:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     ccl=self.tt_ccl,
                 )
-            # EP reduce for routed experts
+            # EP reduce for routed experts — full 32-way all_reduce (no cluster_axis)
             if device.__class__.__name__ == "MeshDevice":
                 num_devices = device.get_num_devices()
                 if num_devices > 1:
-                    routed_out_partial = _simple_all_reduce(
-                        routed_out_partial, device, cluster_axis=0,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG, ccl=self.tt_ccl)
-                    routed_out_partial = _simple_all_reduce(
-                        routed_out_partial, device, cluster_axis=1,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG, ccl=self.tt_ccl)
+                    result = ttnn.all_reduce(routed_out_partial, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(routed_out_partial, force=False)
+                    routed_out_partial = result
             mlp_out = ttnn.add(shared_out_partial, routed_out_partial,
                                memory_config=moe_decode_mc)
             ttnn.deallocate(shared_out_partial, force=False)
