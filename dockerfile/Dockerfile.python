@@ -79,6 +79,7 @@ RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
     uv pip install --no-cache uv build numpy setuptools==80 && \
     uv clean --force
 
@@ -157,6 +158,7 @@ RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
     uv pip install uv setuptools==80 && \
     uv clean --force
 
@@ -180,6 +182,7 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 # MAKEFLAGS accelerates builds for packages that compile with make
 RUN export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
     uv pip install --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
