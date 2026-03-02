@@ -20,6 +20,8 @@
 # Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
 ARG UBUNTU_VERSION=22.04
 ARG PYTHON_VERSION=''
+# UV_IMAGE can be overridden via build-arg for centralized version management.
+# The default value is kept in sync with docker-bake.hcl (single source of truth).
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
 #############################################################
@@ -32,11 +34,12 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05e
 FROM ${UV_IMAGE} AS uv-layer
 
 #############################################################
-# ci-build-venv
-# Packages: build, numpy, setuptools (base packages for building)
+# Common Python base stage
+# Shared setup for Python version detection and uv installation
+# Used by both ci-build-venv and ci-test-venv builders
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS python-base
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
@@ -54,7 +57,7 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
-# Install required build dependencies (without system python3 - we'll use uv's managed Python)
+# Install common Python dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
@@ -62,19 +65,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Auto-detect Python version from Ubuntu version if not explicitly provided,
-# then install Python with uv and create relocatable virtual environment
-# umask 000 ensures the venv is world-writable for multi-host NFS access
-# MAKEFLAGS accelerates builds for packages that compile with make
-RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
-    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
-    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+# Determine Python version based on UBUNTU_VERSION or PYTHON_VERSION override
+# Outputs: DETECTED_PYTHON_VERSION environment variable
+RUN if [ -n "${PYTHON_VERSION}" ]; then \
+    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    elif [ "${UBUNTU_VERSION}" = "24.04" ]; then \
     DETECTED_PYTHON_VERSION="3.12"; \
     else \
     DETECTED_PYTHON_VERSION="3.10"; \
     fi; \
-    fi; \
     echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+    echo "DETECTED_PYTHON_VERSION=${DETECTED_PYTHON_VERSION}" > /tmp/python-version.env
+
+#############################################################
+# ci-build-venv
+# Packages: build, numpy, setuptools (base packages for building)
+#############################################################
+
+FROM python-base AS ci-build-venv-builder
+
+ARG UBUNTU_VERSION
+ARG PYTHON_VERSION
+
+# Re-source the detected Python version from the base stage
+RUN source /tmp/python-version.env && echo "Using Python ${DETECTED_PYTHON_VERSION}"
+
+# Auto-detect Python version from Ubuntu version if not explicitly provided,
+# then install Python with uv and create relocatable virtual environment
+# umask 000 ensures the venv is world-writable for multi-host NFS access
+# MAKEFLAGS accelerates builds for packages that compile with make
+RUN source /tmp/python-version.env && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
@@ -83,12 +103,6 @@ RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
     source ${PYTHON_ENV_DIR}/bin/activate && \
     uv pip install --no-cache uv build numpy setuptools==80 && \
     uv clean --force
-
-# Bundle the Python interpreter into the venv for full portability
-# This makes the venv hermetic and suitable for sharing across multi-host SLURM environments
-#COPY scripts/bundle_python_into_venv.sh /tmp/
-#RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
-
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
@@ -102,34 +116,15 @@ COPY --from=ci-build-venv-builder /opt/venv /install/venv
 # Packages: torch (CPU) + requirements-dev.txt + docs + triage
 #############################################################
 
-FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-test-venv-builder
+FROM python-base AS ci-test-venv-builder
 
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
-# Enforce strict error handling: exit on error, unset vars, pipe failures
-SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
-
-# Set UV_PYTHON_INSTALL_DIR to an accessible location for bundling
-# Set environment variables for the venv (must be Docker ENV, not shell export,
-# so they persist across RUN layers and are inherited by uv's build subprocesses)
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHON_ENV_DIR=/opt/venv
-
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    VIRTUAL_ENV="$PYTHON_ENV_DIR" \
-    UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
-
-# Install uv from official distroless image
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
-
-# Install required build dependencies (without system python3 - we'll use uv's managed Python)
+# Install additional build dependencies required for test packages
 # Some packages require compilation, so we need build-essential and dev headers
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-venv \
-    python3-dev \
     python3-pkg-resources \
     build-essential \
     pkg-config \
@@ -137,24 +132,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1-dev \
     libgl1 \
     git \
-    ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Auto-detect Python version from Ubuntu version if not explicitly provided,
-# then install Python with uv and create relocatable virtual environment
+# Install Python with uv and create relocatable virtual environment
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
 # MAKEFLAGS accelerates builds for packages that compile with make
-RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
-    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
-    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
-    DETECTED_PYTHON_VERSION="3.12"; \
-    else \
-    DETECTED_PYTHON_VERSION="3.10"; \
-    fi; \
-    fi; \
-    echo "Detected Python version: ${DETECTED_PYTHON_VERSION}"; \
+RUN source /tmp/python-version.env && \
+    echo "Using Python ${DETECTED_PYTHON_VERSION}" && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
     uv python install "${DETECTED_PYTHON_VERSION}" && \
@@ -190,12 +176,6 @@ RUN export MAKEFLAGS="-j$(nproc)" && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
     uv clean --force
-
-# Bundle the Python interpreter into the venv for full portability
-# This makes the venv hermetic and suitable for sharing across multi-host SLURM environments
-#COPY scripts/bundle_python_into_venv.sh /tmp/
-#RUN /tmp/bundle_python_into_venv.sh ${PYTHON_ENV_DIR} --force
-
 # Export as scratch image with only the venv
 FROM scratch AS ci-test-venv
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"

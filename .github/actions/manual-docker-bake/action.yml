@@ -90,11 +90,14 @@ runs:
         delay="${INPUT_RETRY_DELAY_SECONDS}"
         attempt=1
         bake_success=false
+        last_bake_exit=0
         until [ "$attempt" -gt "$retries" ]; do
           echo "docker buildx bake targets=${CLEAN_TARGETS[*]} attempt ${attempt}/${retries}"
           if docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}"; then
             bake_success=true
             break
+          else
+            last_bake_exit=$?
           fi
           if [ "$attempt" -lt "$retries" ]; then
             echo "Bake failed, retrying in ${delay}s..."
@@ -104,11 +107,12 @@ runs:
         done
 
         if [ "$bake_success" != "true" ]; then
-          echo "ERROR: Bake failed after ${retries} attempts."
+          echo "ERROR: Bake failed after ${retries} attempts (last exit code: ${last_bake_exit})."
           exit 1
         fi
 
         # Validate that images were actually built and are inspectable
+        validation_failed=false
         if [ "${INPUT_VALIDATE_IMAGES}" = "true" ]; then
           echo ""
           echo "Validating built images..."
@@ -136,9 +140,10 @@ runs:
                 if ! docker manifest inspect "$target_tag" > /dev/null 2>&1; then
                   echo "ERROR: Registry image validation failed for target '$target' (tag: $target_tag)"
                   echo "The build reported success but the image is not available in the registry."
-                  exit 1
+                  validation_failed=true
+                else
+                  echo "  Registry image validated: $target_tag"
                 fi
-                echo "  Registry image validated: $target_tag"
               else
                 echo "  Skipping validation for target '$target' (no tag specified for registry check)"
               fi
@@ -156,10 +161,16 @@ runs:
               if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
                 echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
                 echo "The build reported success but the image is not inspectable."
-                exit 1
+                validation_failed=true
+              else
+                echo "  Local image validated: $local_tag"
               fi
-              echo "  Local image validated: $local_tag"
             fi
           done
+
+          if [ "$validation_failed" = "true" ]; then
+            echo "ERROR: One or more image validations failed."
+            exit 1
+          fi
           echo "All images validated successfully."
         fi

@@ -23,8 +23,9 @@ jobs:
         run: |
           # Try to reach Harbor registry API with authentication
           # Check both the health endpoint and the v2 API endpoint
-          if curl -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" > /dev/null 2>&1 || \
-             curl -sf -u "${HARBOR_USER}:${HARBOR_PASSWORD}" "https://harbor.ci.tenstorrent.net/v2/" > /dev/null 2>&1; then
+          # Using --max-time 10 to prevent hanging if Harbor is partially responsive
+          if curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" > /dev/null 2>&1 || \
+             curl --max-time 10 -sf -u "${HARBOR_USER}:${HARBOR_PASSWORD}" "https://harbor.ci.tenstorrent.net/v2/" > /dev/null 2>&1; then
             echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
             echo "✓ Harbor is available"
           else

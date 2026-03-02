@@ -60,6 +60,13 @@ variable "PYTHON_VERSION" {
   default = "3.10"
 }
 
+variable "UV_IMAGE" {
+  # Pinned SHA256 of the official uv distroless image for reproducible builds
+  # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+  # Update this when upgrading uv - verify the SHA256 matches the published value
+  default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
+}
+
 # =============================================================================
 # Tool targets (from Dockerfile.tools)
 #
@@ -152,6 +159,7 @@ target "ci-build-venv" {
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
+    UV_IMAGE       = UV_IMAGE
   }
   tags = ["python-ci-build-venv:local"]
 }
@@ -163,6 +171,7 @@ target "ci-test-venv" {
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
+    UV_IMAGE       = UV_IMAGE
   }
   tags = ["python-ci-test-venv:local"]
 }
@@ -187,6 +196,7 @@ target "_main-common" {
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
+    UV_IMAGE       = UV_IMAGE
   }
   contexts = {
     # Tool layers (resolved from Dockerfile.tools targets locally)

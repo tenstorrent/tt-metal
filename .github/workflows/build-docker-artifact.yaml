@@ -327,6 +327,17 @@ jobs:
           CI_TEST_VENV_TAG: ${{ needs.venvs.outputs.ci-test-venv-tag }}
         run: |
           set -euo pipefail
+
+          # Validate TOOL_TAGS JSON before processing
+          if [ -n "${TOOL_TAGS}" ]; then
+            if ! echo "${TOOL_TAGS}" | jq -e . > /dev/null 2>&1; then
+              echo "ERROR: TOOL_TAGS is not valid JSON"
+              echo "Received: ${TOOL_TAGS}"
+              exit 1
+            fi
+            echo "✓ TOOL_TAGS JSON is valid"
+          fi
+
           TARGETS=""
           SET=""
 
@@ -427,6 +438,17 @@ jobs:
           TOOL_TAGS: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
         run: |
           set -euo pipefail
+
+          # Validate TOOL_TAGS JSON before processing
+          if [ -n "${TOOL_TAGS}" ]; then
+            if ! echo "${TOOL_TAGS}" | jq -e . > /dev/null 2>&1; then
+              echo "ERROR: TOOL_TAGS is not valid JSON"
+              echo "Received: ${TOOL_TAGS}"
+              exit 1
+            fi
+            echo "✓ TOOL_TAGS JSON is valid"
+          fi
+
           SET=""
 
           for tool in ccache mold sfpi openmpi; do
@@ -449,15 +471,19 @@ jobs:
           targets: manylinux
           set-lines: ${{ steps.bake.outputs.set }}
 
-  # tag-latest runs after image-tags only (not after build jobs) because adding
-  # needs.ubuntu would cause this job to be skipped when builds are skipped
-  # (images already exist). The trade-off: on a push to main where images were just built
-  # on a branch, tag-latest may run before the build jobs complete, so "latest" could lag
-  # one run. This self-corrects on the next merge.
+  # tag-latest updates the 'latest' tags for all images after builds complete.
+  # It depends on ubuntu and manylinux jobs to ensure images are actually built
+  # before tagging. Using always() with failure/cancelled checks ensures this
+  # job runs even when build jobs are skipped (images already exist).
   tag-latest:
     name: "🏷️ Update latest tags"
-    needs: image-tags
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [image-tags, ubuntu, manylinux]
+    if: |
+      always() &&
+      !failure() &&
+      !cancelled() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
