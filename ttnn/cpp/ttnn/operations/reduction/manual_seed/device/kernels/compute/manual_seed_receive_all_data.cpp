@@ -29,8 +29,12 @@ void kernel_main() {
         // Read seed from message
         const uint32_t seed = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/1);
 
-        // Set random generator with seed
-        rand_tile_init(seed);
+        // A seed value of -1 (0xFFFFFFFF when interpreted as uint32_t) is a special value
+        // that skips rand_tile_init, leaving the PRNG state unchanged.
+        // Other negative int32_t values are not supported.
+        if (static_cast<int32_t>(seed) != -1) {
+            rand_tile_init(seed);
+        }
     }
 
     // Pop the communication entry
