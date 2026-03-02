@@ -46,6 +46,7 @@ struct DataflowBufferImpl {
     DataflowBufferConfig config;
 
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
+    uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
     uint16_t capacity = 0;
     std::vector<DFBRiscConfig> risc_configs;
 
