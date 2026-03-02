@@ -301,6 +301,15 @@ class DispatchManager:
 
         # Display or save
         pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
+        if "TorchModules" in pivot_table.columns:
+            func_times = df.pivot_table(
+                index=["func_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
+            )
+            module_times = func_times[func_times["TorchModules"] != 0]["TorchModules"].sort_values(ascending=False)
+            print(
+                "Top 30 Modules by total duration (s):\n",
+                module_times.head(30),
+            )
         print(f"Saved timing stats to {os.path.abspath(file_name)}")
         print(f"Saved pivot table to {os.path.abspath(file_name.replace('.csv', '_pivot.csv'))}")
 
