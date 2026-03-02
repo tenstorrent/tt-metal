@@ -252,6 +252,24 @@ class CompressedTensor:
     def num_tiles(self) -> int:
         return self.tiles_h * self.tiles_w
 
+    def get_data_tensor(self) -> ttnn.Tensor:
+        """Get the packed data ttnn tensor (uint8, row-major)."""
+        return self.data
+
+    def get_assignment_tensor(self) -> ttnn.Tensor:
+        """Get the assignment ttnn tensor (uint8, 2-bit packed, row-major)."""
+        return self.assignment
+
+    def get_data_l1_address(self) -> int:
+        """Get the L1 address of the packed data tensor. Must be on device."""
+        assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
+        return self.data.buffer_address()
+
+    def get_assignment_l1_address(self) -> int:
+        """Get the L1 address of the assignment tensor. Must be on device."""
+        assert ttnn.is_tensor_storage_on_device(self.assignment), "Assignment tensor not on device"
+        return self.assignment.buffer_address()
+
     @property
     def tile_counts(self) -> dict[str, int]:
         """Count of tiles per format."""
