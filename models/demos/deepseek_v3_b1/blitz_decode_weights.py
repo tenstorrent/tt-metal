@@ -132,6 +132,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             raw_tensor_shape=(1536, 12288),
             dtype=ttnn.DataType.BFLOAT8_B,
+            tp_dim=(None, 0),
         )
     )
     kv_a_shard_spec: OverlappedShardSpec = field(
@@ -165,18 +166,6 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     def packed_w(self) -> int:
         return self.q_a_proj_shape[1] * 2
 
-    @property
-    def q_a_tiles_per_shard(self) -> int:
-        return self.q_a_shard_spec.tiles_per_shard
-
-    @property
-    def q_b_tiles_per_shard(self) -> int:
-        return self.q_b_shard_spec.tiles_per_shard
-
-    @property
-    def kv_tiles_per_shard(self) -> int:
-        return self.kv_a_shard_spec.tiles_per_shard
-
     # --- weight shuffles ------------------------------------------------------
 
     @staticmethod
@@ -196,17 +185,17 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
             heads_per_row=self.heads_per_row,
         )
 
-    def get_q_b_slice(self, q_b_proj_weights: torch.Tensor, tp_idx: int) -> torch.Tensor:
+    def get_q_b_slice(self, q_b_proj_weights: torch.Tensor, tp_idx: int, mesh_shape: tuple[int, int]) -> torch.Tensor:
         """Extract the per-device q_b_proj slice for a given TP index.
 
         The full q_b_proj tensor is laid out as ``[all_qnope | all_qrope]``
-        across ``q_b_shard_spec.tp`` devices.  This method splits qnope and
-        qrope, takes the ``tp_idx``-th chunk of each, and stitches them into
-        the single-device ``(K, qnope_dim + qrope_dim)`` slice.
+        across TP devices.  This method splits qnope and qrope, takes the
+        ``tp_idx``-th chunk of each, and stitches them into the single-device
+        ``(K, qnope_dim + qrope_dim)`` slice.
         """
         per_tp_qnope_dim = self.num_qnope_heads * self.qnope_head_dim
         per_tp_qrope_dim = self.num_qrope_heads * self.qrope_head_dim
-        total_qnope_dim = self.q_b_shard_spec.tp * per_tp_qnope_dim
+        total_qnope_dim = self.q_b_shard_spec.tp(mesh_shape) * per_tp_qnope_dim
 
         full_qnope = q_b_proj_weights[:, :total_qnope_dim]
         full_qrope = q_b_proj_weights[:, total_qnope_dim:]
@@ -239,7 +228,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
 
     Fuses the following into a single WIDTH_SHARDED raw buffer:
 
-    * **o_proj** — BFP8, (16384, 7168) full / (8192, 7168) per-device at tp=2,
+    * **o_proj** — BFP8, (16384, 7168) full, TP along mesh columns (tp_dim=(None, 0)),
       WIDTH_SHARDED on 112 cores.
     * **gate_mm** — BFP16, (7168, 256), WIDTH_SHARDED on 8 cores.
     * **attn_norm** — BFP16, (1, 7168), on core (12, 9).
@@ -271,7 +260,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             ),
             raw_tensor_shape=(16384, 7168),
             dtype=ttnn.DataType.BFLOAT8_B,
-            tp=2,
+            tp_dim=(None, 0),
         )
     )
     gate_mm: OverlappedShardSpec = field(
@@ -617,11 +606,11 @@ class BlitzDecodeWeights:
             self.moe_tp = 1
         else:
             mesh_shape = (device.shape[0], device.shape[1])
-            assert mesh_shape == (
-                4,
-                2,
-            ), f"Only single-device or 4x2 mesh supported, got {mesh_shape[0]}x{mesh_shape[1]}"
-            self.mla_tp = 2
+            # assert mesh_shape == (
+            #     4,
+            #     2,
+            # ), f"Only single-device or 4x2 mesh supported, got {mesh_shape[0]}x{mesh_shape[1]}"
+            self.mla_tp = 2 if device.shape[1] == 2 else 1
             self.moe_tp = 8
 
     # ------------------------------------------------------------------
@@ -674,7 +663,8 @@ class BlitzDecodeWeights:
             underlying fused device buffer.
         """
         cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-        cfg.q_b_shard_spec.tp = self.mla_tp
+        mesh_shape = (self._device.shape[0], self._device.shape[1])
+        q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
         # -- Validate device grid ----------------------------------------
         device_grid = self._device.compute_with_storage_grid_size()
@@ -689,7 +679,7 @@ class BlitzDecodeWeights:
         assert (
             q_a_proj_weights.shape == cfg.q_a_proj_shape
         ), f"q_a_proj_weights must be {cfg.q_a_proj_shape}, got {tuple(q_a_proj_weights.shape)}"
-        expected_q_b_shape = (cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * cfg.q_b_shard_spec.tp)
+        expected_q_b_shape = (cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp)
         assert (
             tuple(q_b_proj_weights.shape) == expected_q_b_shape
         ), f"q_b_proj_weights must be {expected_q_b_shape}, got {tuple(q_b_proj_weights.shape)}"
@@ -708,8 +698,8 @@ class BlitzDecodeWeights:
 
         # -- Step 3: build per-TP fused tensors -------------------------
         per_tp_combined = []
-        for tp_idx in range(cfg.q_b_shard_spec.tp):
-            q_b_slice = cfg.get_q_b_slice(q_b_proj_weights, tp_idx)
+        for tp_idx in range(q_b_tp):
+            q_b_slice = cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh_shape)
             shuffled = cfg.shuffle_q_b(q_b_slice)
 
             q_ab_fused, q_ab_shard_shape = stitch_width_sharded(packed, shuffled, q_ab_num_cores)
@@ -728,7 +718,7 @@ class BlitzDecodeWeights:
             assert combined_tp.shape == (fused_shard_h, target_w * total_cores)
             per_tp_combined.append(combined_tp)
 
-        combined = torch.cat(per_tp_combined, dim=1) if cfg.q_b_shard_spec.tp > 1 else per_tp_combined[0]
+        combined = torch.cat(per_tp_combined, dim=1) if q_b_tp > 1 else per_tp_combined[0]
 
         # -- Step 4: place on device as WIDTH_SHARDED -------------------
         shard_spec = ttnn.ShardSpec(
@@ -742,10 +732,9 @@ class BlitzDecodeWeights:
             shard_spec,
         )
 
-        if cfg.q_b_shard_spec.tp == 1:
+        if q_b_tp == 1:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self._device)
         else:
-            mesh_shape = (self._device.shape[0], self._device.shape[1])
             mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=mesh_shape, dims=(None, 1))
         device_for_torch = self._device if move_to_device else None
 
@@ -785,8 +774,7 @@ class BlitzDecodeWeights:
                 core_range_set=cfg.q_ab_core_range_set,
                 dtype=ttnn.bfloat8_b,
                 tile_shape=ts,
-                byte_offset=cfg.q_a_tiles_per_shard * tile_bytes,
-                total_size=cfg.q_b_tiles_per_shard * tile_bytes,
+                byte_offset=cfg.q_a_shard_spec.tiles_per_shard(mesh_shape) * tile_bytes,
             ),
             OverlappedTensor(
                 fused_tensor=fused,
@@ -837,7 +825,6 @@ class BlitzDecodeWeights:
             ``[o_proj, gate_mm, attn_norm, q_norm, ffn_norm, kv_norm]``.
         """
         cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
-        cfg.o_proj.tp = self.mla_tp
 
         return overlap_tensors(
             [
