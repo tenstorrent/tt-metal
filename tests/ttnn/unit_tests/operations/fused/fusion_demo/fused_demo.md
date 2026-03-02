@@ -106,10 +106,12 @@ Input (DRAM) -> [RMS norm -> Matmul -> RMS norm] -> Output (DRAM)
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
+| Device FW (Tracy) | 26.9 us | 24.3 us | 0.90x |
+| Device kernel (Tracy) | 26.3 us | 22.3 us | 0.85x |
 | Cold start | 1,681 ms | 2,075 ms | **1.23x** |
 | E2E steady state | 0.042 ms | 0.066 ms | **1.57x** |
 
-At H=128, each op takes 7-8 us on device. The **1.57x E2E speedup** comes entirely from eliminating host dispatch gaps between ops. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead.
+At H=128, each op takes 7-8 us on device. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead. The **1.57x E2E speedup** comes entirely from eliminating host dispatch gaps between ops.
 
 ### H=1536 (large — compute-dominated)
 
@@ -121,6 +123,8 @@ At H=128, each op takes 7-8 us on device. The **1.57x E2E speedup** comes entire
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
+| Device FW (Tracy) | 957.7 us | — | — |
+| Device kernel (Tracy) | 957.0 us | — | — |
 | Cold start | 1,688 ms | 2,119 ms | **1.26x** |
 | E2E steady state | 0.993 ms | 0.994 ms | 1.00x |
 
@@ -233,7 +237,6 @@ The fused kernel runs both chains **simultaneously** on 16 cores (8 per chain). 
 | Unfused RMS (chain B) | 45.5 us | 44.8 us | 8 |
 | Unfused matmul (chain B) | 19.0 us | 18.4 us | 8 |
 | **Unfused total (4 ops)** | **109.3 us** | **106.8 us** | |
-| **FW speedup** | | | **1.68x** |
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
@@ -356,9 +359,6 @@ Sequential(
 |--|---:|------:|------:|
 | **Fused (1 dispatch)** | **117.3 us** | **115.6 us** | 16 |
 | **Unfused total (13 dispatches)** | **189.3 us** | **179.3 us** | |
-| **FW speedup** | | | **1.61x** |
-
-**Summary:**
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
