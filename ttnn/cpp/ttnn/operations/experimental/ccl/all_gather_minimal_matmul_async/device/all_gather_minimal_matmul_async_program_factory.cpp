@@ -366,7 +366,7 @@ all_gather_minimal_matmul_async_factory_helper(
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, device);
+        sender_device_coord, forward_coord, backward_coord, device);
 
     auto full_grid_size = device->compute_with_storage_grid_size();
     TT_FATAL(
