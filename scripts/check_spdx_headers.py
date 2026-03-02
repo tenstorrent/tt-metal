@@ -52,31 +52,28 @@ HEADER_LINES_TO_CHECK = 10
 
 REQUIRED_TAGS = ("SPDX-FileCopyrightText", "SPDX-License-Identifier")
 
-HASH_COMMENT_EXTS = frozenset({".py", ".sh", ".bash", ".cmake", ".rb", ".pl", ".r"})
-HASH_COMMENT_NAMES = frozenset({"CMakeLists.txt", "Makefile", "Dockerfile"})
 SLASH_COMMENT_EXTS = frozenset(
     {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".js", ".ts", ".jsx", ".tsx", ".rs", ".go"}
 )
 
+YEAR_RE = re.compile(r"(SPDX-FileCopyrightText:.*?)(\d{4})")
+
 
 def make_spdx_header(filepath):
     """Generate the correct SPDX header block for a file based on its extension."""
-    name = os.path.basename(filepath)
-    _, ext = os.path.splitext(name)
-    ext = ext.lower()
+    _, ext = os.path.splitext(os.path.basename(filepath))
 
-    if ext in SLASH_COMMENT_EXTS:
+    if ext.lower() in SLASH_COMMENT_EXTS:
         return (
             f"// SPDX-FileCopyrightText: © {CURRENT_YEAR} Tenstorrent AI ULC\n"
             f"//\n"
             f"// SPDX-License-Identifier: Apache-2.0\n\n"
         )
-    else:
-        return (
-            f"# SPDX-FileCopyrightText: © {CURRENT_YEAR} Tenstorrent AI ULC\n"
-            f"#\n"
-            f"# SPDX-License-Identifier: Apache-2.0\n\n"
-        )
+    return (
+        f"# SPDX-FileCopyrightText: © {CURRENT_YEAR} Tenstorrent AI ULC\n"
+        f"#\n"
+        f"# SPDX-License-Identifier: Apache-2.0\n\n"
+    )
 
 
 def load_ignore_patterns(repo_root):
@@ -142,8 +139,72 @@ def is_source_file(filepath):
     return ext.lower() in SOURCE_EXTENSIONS
 
 
+def _file_exists_in_git(filepath, ref):
+    """Check if a file exists in a given git ref."""
+    try:
+        subprocess.check_output(
+            ["git", "cat-file", "-e", f"{ref}:{filepath}"],
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _auto_detect_base_ref(to_ref):
+    """Auto-detect base ref by finding merge base with common branches."""
+    for base_branch in ["origin/main", "main", "origin/master", "master"]:
+        try:
+            subprocess.check_output(
+                ["git", "rev-parse", "--verify", base_branch],
+                stderr=subprocess.DEVNULL,
+            )
+            merge_base = subprocess.check_output(
+                ["git", "merge-base", to_ref, base_branch],
+                stderr=subprocess.DEVNULL,
+                encoding="utf-8",
+            ).strip()
+            if merge_base:
+                return merge_base
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+
+    try:
+        subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD^"],
+            stderr=subprocess.DEVNULL,
+        )
+        return "HEAD^"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return "HEAD"
+
+
 def get_newly_added_files(repo_root):
-    """Return the set of files that are newly added (not previously tracked by git)."""
+    """
+    Return the set of files that are newly added (not previously tracked).
+
+    In CI (--from-ref/--to-ref mode via PRE_COMMIT_FROM_REF/PRE_COMMIT_TO_REF),
+    compares refs to detect new files. Locally, uses the staged index.
+    """
+    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
+
+    if from_ref and to_ref:
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=A", from_ref, to_ref],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return set(result.stdout.strip().splitlines())
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
     try:
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=A"],
@@ -153,14 +214,31 @@ def get_newly_added_files(repo_root):
             timeout=10,
         )
         if result.returncode == 0:
+            cached = set(result.stdout.strip().splitlines())
+            if cached:
+                return cached
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    base_ref = _auto_detect_base_ref("HEAD")
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=A", base_ref, "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
             return set(result.stdout.strip().splitlines())
     except (subprocess.SubprocessError, FileNotFoundError):
         pass
+
     return set()
 
 
 def read_header(filepath):
-    """Read the first N lines of a file. Returns the text or None on error."""
+    """Read the first N lines of a file. Returns the text, empty string for empty files, or None on error."""
     try:
         if os.path.getsize(filepath) == 0:
             return ""
@@ -179,9 +257,6 @@ def read_header(filepath):
         return None
 
 
-YEAR_RE = re.compile(r"(SPDX-FileCopyrightText:.*?)(\d{4})")
-
-
 def fix_new_file(filepath):
     """
     Auto-fix a new file's SPDX header. Returns True if the file was modified.
@@ -195,7 +270,10 @@ def fix_new_file(filepath):
     except (OSError, UnicodeDecodeError):
         return False
 
-    head = content[:2048]
+    head = read_header(filepath)
+    if head is None:
+        return False
+
     has_copyright = "SPDX-FileCopyrightText" in head
     has_license = "SPDX-License-Identifier" in head
 
@@ -231,7 +309,7 @@ def check_spdx_header(filepath, is_new_file):
     """
     head = read_header(filepath)
     if head is None:
-        return []
+        return ["unable to read file header"]
 
     errors = []
 
@@ -254,7 +332,7 @@ def check_spdx_header(filepath, is_new_file):
 
 
 def find_repo_root():
-    """Walk up from cwd to find the repo root (contains .github/spdx_ignore.yaml or .git)."""
+    """Walk up from cwd to find the git repository root."""
     path = Path.cwd()
     while path != path.parent:
         if (path / ".git").exists():
@@ -308,7 +386,7 @@ def main():
         for path, errors in failures:
             for error in errors:
                 print(f"  {path}: {error}")
-        print("\nExpected both of these tags in the first " f"{HEADER_LINES_TO_CHECK} lines:")
+        print(f"\nExpected both of these tags in the first {HEADER_LINES_TO_CHECK} lines:")
         print(f"  SPDX-FileCopyrightText: © {CURRENT_YEAR} Tenstorrent AI ULC")
         print("  SPDX-License-Identifier: Apache-2.0")
         print("\nSee .github/spdx_ignore.yaml for files excluded from this check.")
