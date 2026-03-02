@@ -369,6 +369,26 @@ class TestTriage:
     def test_dump_risc_debug_signals(self):
         self.run_triage_script("dump_risc_debug_signals.py")
 
+    def test_dump_broken_components(self):
+        self.run_triage_script("dump_broken_components.py")
+
+        RISC_CORES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1"]
+        for device_id, device in self.exalens_context.devices.items():
+            block_locations = device.get_block_locations("functional_workers")
+            block_locations.extend(device.idle_eth_block_locations)
+
+            for location in block_locations:
+                noc_block = device.get_block(location)
+                available_riscs = noc_block.risc_names
+                riscs_to_check = [r for r in available_riscs if r in RISC_CORES_TO_CHECK]
+                for risc_name in riscs_to_check:
+                    risc_debug = noc_block.get_risc_debug(risc_name)
+                    if risc_debug.is_in_reset():
+                        continue
+                    assert (
+                        risc_debug.is_halted()
+                    ), f"Device {device_id}, {location.to_user_str()}, {risc_name}: core is not halted"
+
     def test_dump_aggregated_callstacks(self):
         os.environ["TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS"] = "1"
         try:
