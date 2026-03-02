@@ -716,6 +716,9 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        tracking = ttnn.graph.is_graph_capture_active()
+        if tracking:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
         try:
             if not OPERATION_CALL_STACK:
                 ttnn._ttnn.fetch_and_increment_python_operation_id()
@@ -723,6 +726,8 @@ class Operation:
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
+            if tracking:
+                ttnn.graph.track_function_end()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
