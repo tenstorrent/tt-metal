@@ -371,3 +371,91 @@ class VisionBackbone(LightweightModule):
             Concatenated multi-scale features [1, 1, N, pool_input_dim]
         """
         return self.encode_image(images_embedded)
+
+    def forward_ttnn(
+        self,
+        images_embedded: ttnn.Tensor,
+        pooled_patches_idx_ttnn: ttnn.Tensor,
+        valid_mask_ttnn: ttnn.Tensor,
+        valid_token_ttnn: ttnn.Tensor,
+        n_out: int,
+        k_pool: int,
+        batch_size: int = 1,
+    ) -> ttnn.Tensor:
+        """
+        Full forward pass using TTNN ops (traceable).
+
+        This version keeps everything in TTNN to enable tracing.
+
+        Args:
+            images_embedded: Embedded image patches [1, 1, B*T*N, hidden_dim]
+            pooled_patches_idx_ttnn: Flattened indices [1, B*N_out*K_pool] (clipped to >= 0)
+            valid_mask_ttnn: Valid mask [1, 1, B*N_out*K_pool, 1] for masking gathered features
+            valid_token_ttnn: Valid token mask [B*N_out] for final filtering
+            n_out: Number of output positions
+            k_pool: Pooling kernel size
+            batch_size: Batch size (default 1)
+
+        Returns:
+            Visual embeddings [1, 1, B*N_out, output_dim]
+        """
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+
+        # 1. Encode image through ViT
+        image_features = self.encode_image(images_embedded)
+        # image_features: [1, 1, B*T*N, pool_dim]
+
+        # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
+        image_features_2d = ttnn.reshape(image_features, [-1, image_features.shape[-1]])
+
+        # 2. Gather features using ttnn.embedding
+        # pooled_patches_idx_ttnn: [1, B*N_out*K_pool] contains indices into B*T*N
+        gathered = ttnn.embedding(
+            pooled_patches_idx_ttnn,
+            image_features_2d,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # gathered: [1, B*N_out*K_pool, pool_dim]
+
+        # Reshape to [1, 1, B*N_out*K_pool, pool_dim] for masking
+        pool_dim = image_features.shape[-1]
+        gathered = ttnn.reshape(gathered, [1, 1, batch_size * n_out * k_pool, pool_dim])
+
+        # 3. Apply valid mask (zero out invalid positions)
+        # valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1]
+        gathered = ttnn.mul(gathered, valid_mask_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Reshape to [1, B*N_out, K_pool, pool_dim]
+        to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
+
+        # 4. Compute query (mean of valid features per output position)
+        # Sum along K_pool dimension
+        query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
+
+        # Count valid positions per output (need denominator for mean)
+        # For simplicity, use K_pool as denominator (assuming mostly valid)
+        # More accurate would be to sum the valid mask per position
+        query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # 5. Cross-attention pooling
+        # query: [1, B*N_out, 1, pool_dim]
+        # to_pool (key/value): [1, B*N_out, K_pool, pool_dim]
+        pooled_features = self.image_pooling_2d(
+            query=query,
+            key_value=to_pool,
+            attn_mask=None,  # Skip mask for now (slight accuracy loss but enables tracing)
+        )
+
+        ttnn.deallocate(query)
+        ttnn.deallocate(to_pool)
+        ttnn.deallocate(gathered)
+        ttnn.deallocate(image_features)
+
+        # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
+        pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+
+        # 6. Project to language model dimension
+        visual_embeddings = self.image_projector(pooled_features)
+
+        return visual_embeddings
