@@ -97,6 +97,39 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(args.pad2_cluster_axis.has_value(), "pad2_cluster_axis required when pad_dim2 is set");
         TT_FATAL(args.pad2_num_links > 0, "pad2_num_links must be > 0 when pad_dim2 is set");
     }
+
+    // Validate preallocated output buffer if provided
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output_tensor = tensor_args.preallocated_output.value();
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Preallocated output tensor must be on device.");
+        TT_FATAL(
+            output_tensor.layout() == tensor_args.input_tensor.layout(),
+            "Preallocated output tensor layout {} must match input tensor layout {}.",
+            output_tensor.layout(),
+            tensor_args.input_tensor.layout());
+        TT_FATAL(
+            output_tensor.dtype() == tensor_args.input_tensor.dtype(),
+            "Preallocated output tensor dtype {} must match input tensor dtype {}.",
+            output_tensor.dtype(),
+            tensor_args.input_tensor.dtype());
+        TT_FATAL(
+            output_tensor.tensor_spec().page_config() == tensor_args.input_tensor.tensor_spec().page_config(),
+            "Preallocated output tensor page config must match input tensor page config.");
+        TT_FATAL(
+            output_tensor.memory_config() == args.output_mem_config,
+            "Preallocated output tensor memory config must match output_mem_config.");
+
+        auto expected_shape = tensor_args.input_tensor.logical_shape();
+        expected_shape[args.dim] += (args.padding_left + args.padding_right);
+        if (args.pad_dim2.has_value()) {
+            expected_shape[args.pad_dim2.value()] += (args.pad2_left + args.pad2_right);
+        }
+        TT_FATAL(
+            output_tensor.logical_shape() == expected_shape,
+            "Preallocated output tensor shape {} must match expected output shape {}.",
+            output_tensor.logical_shape(),
+            expected_shape);
+    }
 }
 
 TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
