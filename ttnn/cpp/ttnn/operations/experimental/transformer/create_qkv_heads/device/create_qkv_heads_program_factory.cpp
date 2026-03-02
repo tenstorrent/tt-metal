@@ -44,6 +44,13 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
     const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(
+        elements_per_group != 0,
+        "Invalid configuration: elements_per_group is 0. Check that num_q_heads ({}) and num_kv_heads ({}) are "
+        "non-zero and that head_dim ({}) is valid.",
+        num_q_heads,
+        num_kv_heads,
+        head_dim);
+    TT_FATAL(
         input_shape[3] % elements_per_group == 0,
         "flattened inner tensor dimension {} does not divide evenly into head dim {}, heads per group, and groups {}",
         input_shape[3],
