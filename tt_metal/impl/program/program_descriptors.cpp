@@ -163,7 +163,7 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
         semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
 }
 
-ttsl::hash::hash_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor) {
+std::uint64_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor) {
     if (descriptor.custom_program_hash) {
         return *descriptor.custom_program_hash;
     }

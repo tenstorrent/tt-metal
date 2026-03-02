@@ -827,15 +827,25 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
         desc.cbs.push_back(std::move(cb_desc));
     }
 
-    // Second pass: merge overlapped CBs into the CBDescriptor of the CB they overlap with
+    // Second pass: merge overlapped CBs into the CBDescriptor of the CB they overlap with.
+    // This also handles zero-page overlapped CBs (e.g. ACT when skip_activation_mcast is true)
+    // which need their index propagated even though they have no physical CB allocation.
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(cb_info.size()); ++ci) {
         auto& cb = cb_info[ci];
-        if (cb.num_pages == 0 || !cb.overlapped_by_cb.has_value()) {
+        if (!cb.overlapped_by_cb.has_value()) {
             continue;
         }
 
         // Find the CBInfo that this CB is overlapped by
         const CBInfo& overlapping_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
+
+        // Set the overlapped CB's index to match the overlapping CB's index
+        cb.index = overlapping_cb.index;
+
+        if (cb.num_pages == 0) {
+            continue;
+        }
+
         // Find cb_info index of overlapping CB
         uint32_t overlapping_ci = 0;
         for (uint32_t j = 0; j < static_cast<uint32_t>(cb_info.size()); ++j) {
@@ -849,9 +859,6 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
         auto it = cb_info_idx_to_desc_idx.find(overlapping_ci);
         TT_FATAL(it != cb_info_idx_to_desc_idx.end(), "Could not find CBDescriptor for overlapping CB");
         uint32_t desc_idx = it->second;
-
-        // Set the overlapped CB's index to match the overlapping CB's index
-        cb.index = overlapping_cb.index;
 
         // Add format descriptor to the overlapping CB's descriptor
         desc.cbs[desc_idx].format_descriptors.push_back(CBFormatDescriptor{
