@@ -310,6 +310,7 @@ class ModelWithMP:
         use_throughput_experts=False,
         use_model_parallelism=False,
         ccl_manager=None,
+        mesh_shape=None,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -336,6 +337,7 @@ class ModelWithMP:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
+            mesh_shape=mesh_shape,
         )
 
         # Add tt_transformers compatible attributes
@@ -473,17 +475,11 @@ class ModelWithMP:
         # Skip TP all-gather when sampling is active — TTSampling handles its own all-gather
         skip_gather = sampling_on_device or self._prefill_sampling_active
         self._prefill_sampling_active = False
-        config = self.mesh_config.get_config(mode)
-        if config.tp > 1 and not skip_gather:
-            logits_gathered = self.mesh_config.allgather(
-                logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
-            )
-            logits.deallocate(True)
-            logits = logits_gathered
         # No post-matmul padding needed: the lm_head weight is pre-padded to
         # padded_vocab_size before column-parallel sharding, so each device's
         # matmul output is already tile-aligned (per_device_padded width).
-
+        logger.info("Synchronzing last submesh")
+        ttnn.synchronize_device(self.mp_submeshes[-1])
         return logits
 
     def ttnn_decode_forward(

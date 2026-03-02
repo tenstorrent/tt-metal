@@ -99,6 +99,7 @@ def prepare_gpt_oss_generator_args(
     long_context_mode=False,
     use_model_parallelism=False,
     ccl_manager=None,
+    mesh_shape=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)
 
@@ -141,6 +142,7 @@ def prepare_gpt_oss_generator_args(
             use_throughput_experts=use_throughput,
             use_model_parallelism=use_model_parallelism,
             ccl_manager=ccl_manager,
+            mesh_shape=mesh_shape,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -430,7 +432,6 @@ def test_gpt_oss_demo(
 
     if os.environ.get("CI", None) and long_context_mode:
         pytest.skip(f"Long-context mode skipped for CI environment.")
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False, use_model_parallelism=use_model_parallelism)
@@ -488,6 +489,7 @@ def test_gpt_oss_demo(
         long_context_mode=long_context_mode,
         use_model_parallelism=use_model_parallelism,
         ccl_manager=setup["ccl_manager"],
+        mesh_shape=mesh_shape,
     )
 
     # Create generator (match tt-transformers pattern)

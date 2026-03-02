@@ -26,6 +26,7 @@ def create_tt_model(
     use_throughput_experts=False,
     use_model_parallelism=False,
     ccl_manager=None,
+    mesh_shape=None,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -74,6 +75,7 @@ def create_tt_model(
             use_throughput_experts=use_throughput_experts,
             use_model_parallelism=use_model_parallelism,
             ccl_manager=ccl_manager,
+            mesh_shape=mesh_shape,
         )
     else:
         # Create GPT-OSS model using transformer-compatible constructor
