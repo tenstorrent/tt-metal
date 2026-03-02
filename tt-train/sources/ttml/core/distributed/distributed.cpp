@@ -24,7 +24,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const std::optional<
         return tensor;
     }
 
-    auto result = ttnn::all_reduce(tensor, dp_dim);
+    auto result = ttnn::ccl::all_reduce(tensor, dp_dim);
     result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
     return result;
 }
