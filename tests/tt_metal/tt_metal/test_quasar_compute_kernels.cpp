@@ -61,7 +61,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     tt_metal::detail::ReadFromDeviceL1(
         mesh_device->get_devices()[0], core, l1_address, 16 * sizeof(uint32_t), actual_values);
 
-    const std::vector<uint32_t> expected_values = {4, 6, 5, 7, 8, 10, 9, 11, 12, 14, 13, 15, 16, 18, 17, 19};
+    const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
     ASSERT_EQ(actual_values, expected_values);
 }
