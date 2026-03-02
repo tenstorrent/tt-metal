@@ -11,6 +11,9 @@
 #include <type_traits>
 
 #include "tools/profiler/kernel_profiler.hpp"
+#ifdef ARCH_BLACKHOLE
+#include "api/compute/experimental/matmul_custom.h"
+#endif
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
@@ -74,7 +77,12 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+#ifdef ARCH_BLACKHOLE
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+#else
         matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+#endif
         in0_index++;
         in1_index += IN1_STRIDE;
     }
@@ -599,7 +607,11 @@ void sdpa_inner_loop_step(
             cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         }
         kt_index_offset = 0;
-
+#ifdef ARCH_BLACKHOLE
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#else
+        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#endif
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
@@ -611,11 +623,15 @@ void sdpa_inner_loop_step(
                     true,
                     (int)VectorMode::RC,
                     true /*blocked_pack*/>(cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+#ifdef ARCH_BLACKHOLE
+                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#else
+                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+#endif
             }
 
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
-                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                 blocked_matmul_and_pack<
                     true,
                     qkt_subblock_w,
@@ -739,7 +755,11 @@ void sdpa_inner_loop_step(
                     {
                         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
+                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+#else
                         mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+#endif
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
@@ -772,7 +792,12 @@ void sdpa_inner_loop_step(
                 {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
+#ifdef ARCH_BLACKHOLE
+                    mm_no_mop_reinit_short(
+                        cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#else
                     mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
+#endif
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
