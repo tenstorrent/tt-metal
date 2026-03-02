@@ -54,7 +54,7 @@ class HostTensor {
     using attribute_type = TensorImpl<HostStorage>;
 
 public:
-    using volumn_type = std::uint64_t;
+    using volume_type = std::uint64_t;
 
     // Special Member functions
 
@@ -212,8 +212,8 @@ public:
     const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
     const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
 
-    volumn_type logical_volume() const { return logical_shape().volume(); }
-    volumn_type physical_volume() const { return padded_shape().volume(); }
+    volume_type logical_volume() const { return logical_shape().volume(); }
+    volume_type physical_volume() const { return padded_shape().volume(); }
 
     const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
     bool is_sharded() const { return tensor_spec().memory_config().is_sharded(); }
