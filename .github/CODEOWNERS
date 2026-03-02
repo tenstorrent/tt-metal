@@ -333,6 +333,7 @@ models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt @tenstorrent
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
+models/demos/llasa3b @uaydonat @yieldthought @cglagovichTT @gwangTT @mtairum @tenstorrent/codeowner-bypass
 models/demos/t3000/sentence_bert @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/audio/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
