@@ -1,0 +1,1 @@
+# Granite Timeseries TTM-R1 implementation for TT-Metal
