@@ -20,6 +20,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     // ========== Compile-time args ==========
@@ -41,10 +42,19 @@ void kernel_main() {
 
     // ========== CB indices ==========
     constexpr uint32_t cb_input = 0;
+    constexpr uint32_t cb_scaler = 1;
 
     // ========== Setup TensorAccessor ==========
     const uint32_t input_page_size = get_tile_size(cb_input);
     auto input_accessor = TensorAccessor(input_accessor_args, input_addr, input_page_size);
+
+    // ========== Fill scaler CB with 1/W for reduce AVG ==========
+    // W = Wt * 32 (total elements across the last dimension)
+    // The reduce hardware sums across 32 columns per tile, applying the scaler
+    // to each partial sum. Accumulating Wt tiles gives total_sum * scaler.
+    // For mean: scaler = 1/W = 1/(Wt * 32)
+    const float W_float = static_cast<float>(Wt * 32);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(1.0f / W_float);
 
     // ========== Read input tiles row by row ==========
     uint32_t tile_id = start_tile_id;
