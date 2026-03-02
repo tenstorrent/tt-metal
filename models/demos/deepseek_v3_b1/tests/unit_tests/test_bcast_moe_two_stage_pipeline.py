@@ -23,7 +23,6 @@ from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     create_routed_expert_tensors,
     create_shared_expert_tensors,
@@ -114,9 +113,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
     # The root_coord for reduce-to-one; for host 1 this is the exit node
     reduce_root_coord = pipeline_config[1].exit_node_coord if num_procs >= 2 else ttnn.MeshCoordinate(0, 0)
 
-    # ── Compute D2D_0 core location (no socket creation — must avoid blocking PipelineBlock) ──
-    d2d0_infra = None
-    d2d0_core = None
+    # ── Core setup for reduce aggregation ──
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
@@ -124,39 +121,13 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+    # Aggregator is the first worker core (shard_idx == 0)
+    aggregator_core = shard_cores_list[0]
 
     if is_stage1:
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
         logger.info(f"[rank={my_mesh_id}] stage entry device: {stage_entry_device}")
-
-        # Find D2D_0 core without creating sockets (same logic as create_d2d0_infrastructure)
-        column_to_cores_map = {}
-        for core in shard_cores_list:
-            column_to_cores_map.setdefault(core.x, []).append(core)
-        sorted_columns = sorted(column_to_cores_map.keys())
-        for x in sorted_columns:
-            column_to_cores_map[x].sort(key=lambda c: c.y)
-        all_y_coords = set(core.y for core in shard_cores_list)
-        is_horizontal_layout = len(all_y_coords) <= 2
-        fabric_cores_local = []
-        for x in sorted_columns:
-            bottom_core = max(column_to_cores_map[x], key=lambda c: c.y)
-            if is_horizontal_layout:
-                fabric_cores_local.append(ttnn.CoreCoord(bottom_core.x, bottom_core.y + 1))
-            else:
-                fabric_cores_local.append(ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y))
-        all_reduce_cores = set((c.x, c.y) for c in shard_cores_list + fabric_cores_local)
-        all_reduce_cores.add((pipeline_core.x, pipeline_core.y))
-        all_reduce_cores.add((moe_sender_core.x, moe_sender_core.y))
-        for y in range(device_grid.y - 1, -1, -1):
-            for x in range(device_grid.x - 1, -1, -1):
-                if (x, y) not in all_reduce_cores:
-                    d2d0_core = ttnn.CoreCoord(x, y)
-                    break
-            if d2d0_core:
-                break
-        assert d2d0_core is not None, "Could not find non-overlapping core for D2D_0 aggregator"
-        logger.info(f"[rank={my_mesh_id}] D2D_0 core selected at {d2d0_core}")
+        logger.info(f"[rank={my_mesh_id}] reduce aggregator core: {aggregator_core}")
 
     # ── Pipeline block setup (collective — all hosts must participate simultaneously) ────
     if is_stage0:
@@ -187,7 +158,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-            exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, d2d0_core),
+            exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
         )
     else:
         pipeline_block = PipelineBlock(
@@ -201,20 +172,11 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
-    # ── Create D2D_0 socket infrastructure AFTER PipelineBlock (avoids collective deadlock) ──
+    # ── Get downstream socket for reduce aggregator to send to pipeline exit ──
+    downstream_socket = None
     if is_stage1:
-        d2d0_infra_temp = ReduceToOneB1.create_d2d0_infrastructure(
-            mesh_device,
-            reduce_root_coord,
-            shard_cores_list,
-            reduce_payload_per_shard,
-            None,
-            d2d0_core=d2d0_core,
-        )
-        d2d0_downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
-        d2d0_infra_temp["d2d0_downstream_socket"] = d2d0_downstream_socket
-        d2d0_infra = d2d0_infra_temp
-        logger.info(f"[rank={my_mesh_id}] D2D_0 infrastructure created and wired to pipeline exit")
+        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        logger.info(f"[rank={my_mesh_id}] downstream socket wired to pipeline exit")
 
     # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
     result_scores = None
@@ -407,10 +369,9 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
             semaphores=moe_semaphores,
             worker_core_grid=moe_worker_core_grid,
             is_torus=is_torus,
-            enable_d2d0_output=True,
-            d2d0_infrastructure=d2d0_infra,
+            downstream_socket=downstream_socket,
         )
-        logger.info("[rank=1] MoE + reduce + D2D0 completed")
+        logger.info("[rank=1] MoE + reduce completed")
 
     # ── Stage 0: D2H loopback read + golden validation ───────────────────────
     if is_stage0:
@@ -477,23 +438,18 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
 
         expected_reduce_output = sum(expected_final_outputs)
 
-        d2d0_shard_width = reduce_payload_per_shard // dtype_size(ttnn.bfloat16)
+        reduce_shard_width = reduce_payload_per_shard // dtype_size(ttnn.bfloat16)
         d2h_valid = extract_routed_expert_output(
-            d2h_result_torch, r["num_gate_proj_cores"], d2d0_shard_width, r["per_core_down_proj_N"]
+            d2h_result_torch, r["num_gate_proj_cores"], reduce_shard_width, r["per_core_down_proj_N"]
         )
 
-        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.97)
+        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.95)
         logger.info(f"Pipeline Stage 0 D2H Reduce PCC: {pcc_msg}")
         # assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
 
     ttnn.distributed_context_barrier()
 
-    # ── D2D0 termination + pipeline teardown ─────────────────────────────────
-    if is_stage1 and d2d0_infra is not None:
-        termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
-        ttnn.reset_global_semaphore_value(termination_semaphore, 1)
-        logger.info("[rank=1] D2D_0 termination signaled")
-
+    # ── Pipeline teardown ───────────────────────────────────────────────────
     logger.info(f"[rank={my_mesh_id}] waiting for pipeline block termination")
     pipeline_block.terminate()
     logger.info(f"[rank={my_mesh_id}] programs terminated")
@@ -559,7 +515,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
 
         passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
         logger.info(f"Pipeline Stage 1 Reduce PCC: {pcc_msg}")
-        logger.info(f"[rank=1] expected first 5 values: {reduce_output_valid.flatten()[0, :5]}")
+        logger.info(f"[rank=1] expected first 5 values: {reduce_output_valid.flatten()[:5]}")
         assert passing, f"Pipeline Stage 1 Reduce PCC check failed: {pcc_msg}"
 
     logger.info(f"[rank={my_mesh_id}] test PASSED")
