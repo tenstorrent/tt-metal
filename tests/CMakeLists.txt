@@ -23,6 +23,7 @@ target_link_libraries(
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/scale_out)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/didt)
 endif(TT_METAL_BUILD_TESTS)
 
 if(TTNN_BUILD_TESTS)
