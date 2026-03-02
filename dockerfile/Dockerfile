@@ -83,8 +83,9 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
     OMPI_TAG=v5.0.7 \
-    OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm \
-    PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH" \
+    OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+
+ENV PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH" \
     LD_LIBRARY_PATH=${OMPI_PREFIX}/lib \
     CPATH=${OMPI_PREFIX}/include \
     PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig \
@@ -116,8 +117,9 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PYTHON_ENV_DIR=/opt/venv \
-    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+ENV PYTHON_ENV_DIR=/opt/venv
+
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
     VIRTUAL_ENV="$PYTHON_ENV_DIR" \
     CCACHE_TEMPDIR=/tmp/ccache
 
@@ -274,8 +276,9 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 ARG PYTHON_VERSION
 
 # Set up virtual environment
-ENV PYTHON_ENV_DIR=/opt/venv \
-    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+ENV PYTHON_ENV_DIR=/opt/venv
+
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
     VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 ARG WHEEL_FILENAME
@@ -312,8 +315,9 @@ ARG PYTHON_VERSION
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv \
     TT_METAL_HOME=/tt-metal \
-    PYTHONPATH=/tt-metal \
-    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    PYTHONPATH=/tt-metal
+
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH" \
     VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Accept git reference argument
