@@ -47,6 +47,23 @@ run_quad_galaxy_unit_tests() {
 # Environment setup helpers
 ###############################################################################
 
+_resolve_deepseekv3_cache() {
+    local ci_cache="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+    if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
+        local resolved
+        resolved=$(realpath -m "${DEEPSEEK_V3_CACHE_OVERRIDE}")
+        local ci_resolved
+        ci_resolved=$(realpath -m "${ci_cache}")
+        if [[ "${resolved}" == "${ci_resolved}" || "${resolved}" == "${ci_resolved}/"* ]]; then
+            echo "Error: DEEPSEEK_V3_CACHE_OVERRIDE must not point to or inside the production CI cache (${ci_cache})." >&2
+            exit 1
+        fi
+        export DEEPSEEK_V3_CACHE="${DEEPSEEK_V3_CACHE_OVERRIDE}"
+    else
+        export DEEPSEEK_V3_CACHE="${ci_cache}"
+    fi
+}
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
@@ -66,7 +83,7 @@ setup_dual_galaxy_env() {
     fi
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    export DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+    _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
 
@@ -89,7 +106,7 @@ setup_quad_galaxy_env() {
     fi
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    export DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+    _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 }
 
