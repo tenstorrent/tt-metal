@@ -13,13 +13,17 @@
 
 namespace ttml::optimizers {
 
-std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serialization::NamedParameters params) {
-    auto type = config["type"].as<std::string>("AdamW");
+OptimizerRegistry& OptimizerRegistry::instance() {
+    static OptimizerRegistry registry;
+    return registry;
+}
 
-    if (type == "NoOp") {
+OptimizerRegistry::OptimizerRegistry() {
+    register_optimizer("NoOp", [](const YAML::Node&, serialization::NamedParameters params) {
         return std::make_unique<NoOp>(std::move(params));
-    }
-    if (type == "AdamW") {
+    });
+
+    register_optimizer("AdamW", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<AdamW>(
             std::move(params),
             AdamWConfig{
@@ -30,8 +34,9 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .weight_decay = config["weight_decay"].as<float>(1e-2F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
                 .stochastic_rounding = config["stochastic_rounding"].as<bool>(false)});
-    }
-    if (type == "MorehAdamW") {
+    });
+
+    register_optimizer("MorehAdamW", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<MorehAdamW>(
             std::move(params),
             AdamWCompositeConfig{
@@ -42,8 +47,9 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .weight_decay = config["weight_decay"].as<float>(0.01F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
                 .use_kahan_summation = config["use_kahan_summation"].as<bool>(false)});
-    }
-    if (type == "AdamWComposite") {
+    });
+
+    register_optimizer("AdamWComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<AdamWComposite>(
             std::move(params),
             AdamWCompositeConfig{
@@ -54,8 +60,9 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .weight_decay = config["weight_decay"].as<float>(0.01F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
                 .use_kahan_summation = config["use_kahan_summation"].as<bool>(false)});
-    }
-    if (type == "AdamWFullPrecision") {
+    });
+
+    register_optimizer("AdamWFullPrecision", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<AdamWFullPrecision>(
             std::move(params),
             AdamWFullPrecisionConfig{
@@ -65,8 +72,9 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .epsilon = config["epsilon"].as<float>(1e-8F),
                 .weight_decay = config["weight_decay"].as<float>(1e-2F),
                 .amsgrad = config["amsgrad"].as<bool>(false)});
-    }
-    if (type == "SGD") {
+    });
+
+    register_optimizer("SGD", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<SGD>(
             std::move(params),
             SGDConfig{
@@ -75,8 +83,9 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .dampening = config["dampening"].as<float>(0.0F),
                 .weight_decay = config["weight_decay"].as<float>(0.0F),
                 .nesterov = config["nesterov"].as<bool>(false)});
-    }
-    if (type == "SGDComposite") {
+    });
+
+    register_optimizer("SGDComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
         return std::make_unique<SGDComposite>(
             std::move(params),
             SGDCompositeConfig{
@@ -85,8 +94,25 @@ std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serial
                 .dampening = config["dampening"].as<float>(0.0F),
                 .weight_decay = config["weight_decay"].as<float>(0.0F),
                 .nesterov = config["nesterov"].as<bool>(false)});
+    });
+}
+
+void OptimizerRegistry::register_optimizer(const std::string& type, OptimizerCreator creator) {
+    m_creators[type] = std::move(creator);
+}
+
+std::unique_ptr<OptimizerBase> OptimizerRegistry::create(
+    const YAML::Node& config, serialization::NamedParameters params) const {
+    auto type = config["type"].as<std::string>("AdamW");
+    auto it = m_creators.find(type);
+    if (it == m_creators.end()) {
+        throw std::runtime_error("Unknown optimizer type: " + type);
     }
-    throw std::runtime_error("Unknown optimizer type: " + type);
+    return it->second(config, std::move(params));
+}
+
+std::unique_ptr<OptimizerBase> create_optimizer(const YAML::Node& config, serialization::NamedParameters params) {
+    return OptimizerRegistry::instance().create(config, std::move(params));
 }
 
 }  // namespace ttml::optimizers
