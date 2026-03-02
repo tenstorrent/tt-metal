@@ -31,4 +31,6 @@ When complete, generate a comprehensive markdown report covering:
 - TDD pipeline outcomes: stage pass/fail status, retry counts per stage,
   failure classifications encountered
 - Key decisions, any deviations from the spec, and pain points
+- Infrastructure issues: any device access errors, device hangs, build
+  failures or delays, venv problems, or other environment issues encountered
 - Recommendations for improving the agent pipeline

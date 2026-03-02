@@ -2,7 +2,8 @@
 # run_eval.sh - Repeatable agentic workflow evaluation
 #
 # Drop this script anywhere and run it. It clones tt-metal, builds, and
-# runs claude against prompt file(s).
+# runs claude against prompt file(s). All runs execute in parallel, and
+# claude starts immediately while the build runs in the background.
 #
 # Usage:
 #   ./run_eval.sh <prompt_file_or_dir> [--runs N] [--base-dir DIR]
@@ -103,11 +104,6 @@ echo "Results:   $RESULTS_DIR"
 echo "=========================="
 echo ""
 
-# --- Summary tracking ---
-PASS_COUNT=0
-FAIL_COUNT=0
-ERROR_COUNT=0
-
 run_single() {
     local prompt_file="$1"
     local run_id="$2"
@@ -123,8 +119,7 @@ run_single() {
 
     local start_time=$SECONDS
 
-    echo "--- ${prompt_name} run ${run_id}/${NUM_RUNS} ---"
-    echo "[${prompt_name}:${run_id}] Clone dir: $clone_dir"
+    echo "[${prompt_name}:${run_id}] Starting..."
 
     # 1. Clone and create a unique branch from the source branch
     local run_branch="eval/${prompt_name}_run${run_id}_${TIMESTAMP}"
@@ -139,8 +134,7 @@ run_single() {
     git -C "$clone_dir" submodule update --init --recursive \
         > "${log_dir}/submodules.log" 2>&1
 
-    # 3. Build and run claude in an isolated env (mirrors .envrc)
-    #    Everything runs in a subshell so env vars don't leak between runs.
+    # 3. Everything from here runs in a subshell with isolated env vars.
     local claude_exit=0
     (
         cd "$clone_dir"
@@ -151,19 +145,73 @@ run_single() {
         export TT_METAL_CCACHE_KERNEL_SUPPORT=1
         unset CLAUDECODE
 
-        echo "[${prompt_name}:${run_id}] Building metal (this takes a while)..."
-        if ! ./build_metal.sh --enable-ccache > "${log_dir}/build.log" 2>&1; then
-            echo "BUILD_FAIL" > "${log_dir}/result.txt"
-            exit 2
+        # Sentinel files for build stages
+        local build_sentinel="${clone_dir}/.build_complete"
+        local venv_sentinel="${clone_dir}/.venv_complete"
+        local infra_failed="${clone_dir}/.infra_failed"
+
+        # 4. Build + venv in background
+        (
+            echo "[${prompt_name}:${run_id}] Building metal..."
+            if ! ./build_metal.sh --enable-ccache > "${log_dir}/build.log" 2>&1; then
+                echo "BUILD_FAIL" > "${log_dir}/result.txt"
+                touch "$infra_failed"
+                exit 1
+            fi
+            touch "$build_sentinel"
+
+            echo "[${prompt_name}:${run_id}] Creating python env..."
+            if ! ./create_venv.sh --force > "${log_dir}/venv.log" 2>&1; then
+                echo "VENV_FAIL" > "${log_dir}/result.txt"
+                touch "$infra_failed"
+                exit 1
+            fi
+            touch "$venv_sentinel"
+            echo "[${prompt_name}:${run_id}] Build + venv complete"
+        ) &
+        local build_pid=$!
+
+        # 5. Install a gate script that blocks until build+venv are done.
+        #    tt-test.sh sources python_env/bin/activate and needs built artifacts,
+        #    so any test execution must wait. Claude's early turns (reading code,
+        #    planning, writing) don't need the build and run freely.
+        mkdir -p "${clone_dir}/.eval"
+        cat > "${clone_dir}/.eval/wait_for_build.sh" <<GATE
+#!/bin/bash
+# Blocks until build + venv are complete or failed.
+while [ ! -f "${build_sentinel}" ] && [ ! -f "${infra_failed}" ]; do
+    sleep 5
+done
+if [ -f "${infra_failed}" ]; then
+    echo "ERROR: Build infrastructure failed. Check build/venv logs." >&2
+    exit 1
+fi
+while [ ! -f "${venv_sentinel}" ] && [ ! -f "${infra_failed}" ]; do
+    sleep 5
+done
+if [ -f "${infra_failed}" ]; then
+    echo "ERROR: Venv creation failed. Check venv logs." >&2
+    exit 1
+fi
+GATE
+        chmod +x "${clone_dir}/.eval/wait_for_build.sh"
+
+        # Wrap tt-test.sh: prepend a build gate so tests block until ready
+        if [[ -f "${clone_dir}/tt-test.sh" ]]; then
+            local original_test_sh
+            original_test_sh="$(cat "${clone_dir}/tt-test.sh")"
+            cat > "${clone_dir}/tt-test.sh" <<WRAPPER
+#!/bin/bash
+# Auto-generated wrapper: wait for build before running tests
+source "${clone_dir}/.eval/wait_for_build.sh" || exit \$?
+# --- Original tt-test.sh below ---
+$(echo "$original_test_sh" | tail -n +2)
+WRAPPER
+            chmod +x "${clone_dir}/tt-test.sh"
         fi
 
-        echo "[${prompt_name}:${run_id}] Creating python env..."
-        if ! ./create_venv.sh --force > "${log_dir}/venv.log" 2>&1; then
-            echo "VENV_FAIL" > "${log_dir}/result.txt"
-            exit 2
-        fi
-
-        echo "[${prompt_name}:${run_id}] Running claude..."
+        # 6. Run claude immediately (doesn't need build for early turns)
+        echo "[${prompt_name}:${run_id}] Running claude (build in background)..."
         claude -p \
             --dangerously-skip-permissions \
             --output-format json \
@@ -171,11 +219,14 @@ run_single() {
             --model opus \
             "$prompt_content" \
             > "${log_dir}/claude_output.json" 2> "${log_dir}/claude_stderr.log"
+
+        # Clean up: wait for build process to finish (may already be done)
+        wait "$build_pid" 2>/dev/null || true
     ) || claude_exit=$?
 
     echo "[${prompt_name}:${run_id}] Exited with code: $claude_exit"
 
-    # 4. Record result
+    # 7. Record result
     local elapsed=$(( SECONDS - start_time ))
     local mins=$(( elapsed / 60 ))
     local secs=$(( elapsed % 60 ))
@@ -183,29 +234,47 @@ run_single() {
     local result
     if [[ $claude_exit -eq 0 ]]; then
         result="PASS"
-        PASS_COUNT=$((PASS_COUNT + 1))
     elif [[ -f "${log_dir}/result.txt" ]] && grep -q "_FAIL" "${log_dir}/result.txt"; then
         result="$(cat "${log_dir}/result.txt")"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
     else
         result="FAIL (exit $claude_exit)"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
     echo "$result" > "${log_dir}/result.txt"
     echo "[${prompt_name}:${run_id}] ${result} (${mins}m ${secs}s)"
     echo "${elapsed}" > "${log_dir}/duration_seconds.txt"
-
-    echo ""
 }
 
-# --- Run evaluations ---
+# --- Launch all runs in parallel ---
+PIDS=()
 for prompt_file in "${PROMPT_FILES[@]}"; do
     for run in $(seq 1 "$NUM_RUNS"); do
-        run_single "$prompt_file" "$run"
+        run_single "$prompt_file" "$run" &
+        PIDS+=($!)
     done
 done
 
-# --- Summary ---
+echo "Launched ${#PIDS[@]} parallel runs. Waiting for all to complete..."
+echo ""
+
+# Wait for all background jobs
+for pid in "${PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+done
+
+# --- Collect results from files ---
+PASS_COUNT=0
+FAIL_COUNT=0
+ERROR_COUNT=0
+
+while IFS= read -r result_file; do
+    result="$(cat "$result_file")"
+    case "$result" in
+        PASS)          PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        *_FAIL)        ERROR_COUNT=$((ERROR_COUNT + 1)) ;;
+        *)             FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+    esac
+done < <(find "$RESULTS_DIR" -name "result.txt" -type f)
+
 TOTAL=$((PASS_COUNT + FAIL_COUNT + ERROR_COUNT))
 
 cat > "${RESULTS_DIR}/summary.txt" <<EOF
@@ -222,6 +291,7 @@ Results:   $PASS_COUNT/$TOTAL passed
 ===========================
 EOF
 
+echo ""
 cat "${RESULTS_DIR}/summary.txt"
 
 # Exit non-zero if any run failed
