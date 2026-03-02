@@ -86,9 +86,9 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     Returns:
         MatmulMultiCoreReuseMultiCastProgramConfig
     """
-    M_tiles = seq_len // tile_h
-    K_tiles = k // tile_w
-    N_tiles = n // tile_w
+    M_tiles = even_int_div(seq_len, tile_h)
+    K_tiles = even_int_div(k, tile_w)
+    N_tiles = even_int_div(n, tile_w)
 
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
@@ -217,7 +217,7 @@ class MLA1D(AbstractModule):
         # Create DRAM WIDTH sharded memory config for wq_b
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
         wq_b_k = q_lora_rank  # 1536
-        wq_b_n = num_heads * q_head_dim // mesh_device.shape[1]  # 3072 per device
+        wq_b_n = even_int_div(num_heads * q_head_dim, mesh_device.shape[1])  # 3072 per device
         wq_b_n_padded = pad_n_to_dram_banks(
             wq_b_n, tile_size=32, num_dram_banks=num_dram_banks
         )  # 3072 (already aligned)
@@ -233,7 +233,7 @@ class MLA1D(AbstractModule):
         # Create DRAM WIDTH sharded memory config for wo
         # wo: k=num_heads*v_head_dim, n=dim
         wo_k = num_heads * v_head_dim  # 16384
-        wo_n = dim // mesh_device.shape[1]  # 896
+        wo_n = even_int_div(dim, mesh_device.shape[1])  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n, tile_size=32, num_dram_banks=num_dram_banks)  # 1152
         wo_shard_shape = [wo_k, wo_n_padded // num_dram_banks]
         wo_dram_shard_grid = ttnn.CoreRangeSet(
@@ -303,7 +303,7 @@ class MLA1D(AbstractModule):
 
         # Create DRAM WIDTH sharded memory config for wq_kv_a
         # wq_kv_a: k=dim, n=q_lora_rank+kv_lora_rank+qk_rope_head_dim
-        qkv_a_k = dim // mesh_device.shape[1]  # 896
+        qkv_a_k = even_int_div(dim, mesh_device.shape[1])  # 896
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
         qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n, tile_size=32, num_dram_banks=num_dram_banks)  # 2304
         qkv_a_shard_shape = [qkv_a_k, qkv_a_n_padded // num_dram_banks]
@@ -350,7 +350,7 @@ class MLA1D(AbstractModule):
         # Create DRAM HEIGHT sharded memory config for wkv_b1 (batch sharding)
         # wkv_b1: batch=num_heads_local, k=qk_nope_head_dim, n=kv_lora_rank
         # After transpose in _convert_weight: k=qk_nope_head_dim, n=kv_lora_rank
-        num_heads_local = num_heads // mesh_device.shape[1]
+        num_heads_local = even_int_div(num_heads, mesh_device.shape[1])
         wkv_b1_batch = num_heads_local
         wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch, num_dram_banks)
         wkv_b1_k = qk_nope_head_dim  # 128
@@ -676,9 +676,9 @@ class MLA1D(AbstractModule):
         # Program config for qkv_a
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
         qkv_a_num_out_cores = qkv_a_out_core_grid.x * qkv_a_out_core_grid.y
-        qkv_a_in0_block_w = hidden_size_per_device // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
+        qkv_a_in0_block_w = even_int_div(hidden_size_per_device, qkv_a_num_in0_cores * tile_size)  # 896 // 7 // 32 = 4
         qkv_a_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
-        qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
+        qkv_a_per_core_N = even_int_div(qkv_a_n_padded, qkv_a_num_out_cores * tile_size)  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=qkv_a_in0_block_w,
@@ -723,9 +723,9 @@ class MLA1D(AbstractModule):
         # Program config for wq_b
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
         wq_b_num_out_cores = wq_b_out_core_grid.x * wq_b_out_core_grid.y
-        wq_b_in0_block_w = q_lora_rank // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
+        wq_b_in0_block_w = even_int_div(q_lora_rank, wq_b_num_in0_cores * tile_size)  # 1536 // 16 // 32 = 3
         wq_b_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
-        wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
+        wq_b_per_core_N = even_int_div(wq_b_n_padded, wq_b_num_out_cores * tile_size)  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wq_b_in0_block_w,
@@ -767,9 +767,9 @@ class MLA1D(AbstractModule):
         wkv_b1_n = kv_lora_rank  # 512
 
         # Program config for wkv_b1 (batched DRAM sharded)
-        wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
-        wkv_b1_per_core_M = wkv_b1_m // tile_size  # 32 // 32 = 1
-        wkv_b1_per_core_N = wkv_b1_n // tile_size  # 512 // 32 = 16
+        wkv_b1_in0_block_w = even_int_div(wkv_b1_k, tile_size)  # 128 // 32 = 4
+        wkv_b1_per_core_M = even_int_div(wkv_b1_m, tile_size)  # 32 // 32 = 1
+        wkv_b1_per_core_N = even_int_div(wkv_b1_n, tile_size)  # 512 // 32 = 16
 
         wkv_b1_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b1_in0_block_w,
@@ -829,9 +829,9 @@ class MLA1D(AbstractModule):
         wkv_b2_tile_h = 32
 
         # Program config for wkv_b2 (batched DRAM sharded)
-        wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
-        wkv_b2_per_core_M = wkv_b2_m // wkv_b2_tile_h  # 32 // 32 = 1
-        wkv_b2_per_core_N = wkv_b2_n // tile_size  # 128 // 32 = 4
+        wkv_b2_in0_block_w = even_int_div(wkv_b2_k, tile_size)  # 512 // 32 = 16
+        wkv_b2_per_core_M = even_int_div(wkv_b2_m, wkv_b2_tile_h)  # 32 // 32 = 1
+        wkv_b2_per_core_N = even_int_div(wkv_b2_n, tile_size)  # 128 // 32 = 4
 
         wkv_b2_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b2_in0_block_w,
@@ -890,12 +890,12 @@ class MLA1D(AbstractModule):
         # Program config for wo
         wo_num_in0_cores = wo_in0_core_grid.x * wo_in0_core_grid.y
         wo_num_out_cores = wo_out_core_grid.x * wo_out_core_grid.y
-        wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 16 // 32 = 32
+        wo_in0_block_w = even_int_div(wo_k, wo_num_in0_cores * tile_size)  # 16384 // 16 // 32 = 32
         wo_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
-        wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 12 // 32 = 3
+        wo_per_core_N = even_int_div(wo_n_padded, wo_num_out_cores * tile_size)  # 1152 // 12 // 32 = 3
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=wo_in0_block_w // 2,
+            in0_block_w=even_int_div(wo_in0_block_w, 2),
             per_core_M=wo_per_core_M,
             per_core_N=wo_per_core_N,
             fused_activation=None,

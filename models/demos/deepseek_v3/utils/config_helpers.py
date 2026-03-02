@@ -963,12 +963,13 @@ def _shard_device_impl(
             # 1D sharding along one dimension
             shard_dim_size = mesh_device.get_num_devices()
             dim = shard_dims[0]
+            shard_size = even_int_div(tensor.shape[dim], shard_dim_size)
 
             # Split along the shard dimension
             shards = []
             for i in range(shard_dim_size):
-                start = i * (tensor.shape[dim] // shard_dim_size)
-                end = (i + 1) * (tensor.shape[dim] // shard_dim_size)
+                start = i * shard_size
+                end = (i + 1) * shard_size
 
                 # Extract shard
                 shard_slice = [slice(None)] * len(tensor.shape)
@@ -996,11 +997,12 @@ def _shard_device_impl(
             # Sharding only along dimension 1 (dimension 0 is None)
             shard_dim_size = mesh_device.shape[1]
             dim = shard_dims[1]
+            shard_size = even_int_div(tensor.shape[dim], shard_dim_size)
 
             shards = []
             for j in range(shard_dim_size):
-                start = j * (tensor.shape[dim] // shard_dim_size)
-                end = (j + 1) * (tensor.shape[dim] // shard_dim_size)
+                start = j * shard_size
+                end = (j + 1) * shard_size
 
                 shard_slice = [slice(None)] * len(tensor.shape)
                 shard_slice[dim] = slice(start, end)
@@ -1022,11 +1024,12 @@ def _shard_device_impl(
             # Sharding only along dimension 0 (dimension 1 is None)
             shard_dim_size = mesh_device.shape[0]
             dim = shard_dims[0]
+            shard_size = even_int_div(tensor.shape[dim], shard_dim_size)
 
             shards = []
             for i in range(shard_dim_size):
-                start = i * (tensor.shape[dim] // shard_dim_size)
-                end = (i + 1) * (tensor.shape[dim] // shard_dim_size)
+                start = i * shard_size
+                end = (i + 1) * shard_size
 
                 shard_slice = [slice(None)] * len(tensor.shape)
                 shard_slice[dim] = slice(start, end)
