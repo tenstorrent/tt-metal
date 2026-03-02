@@ -525,7 +525,7 @@ class Glm4MoeAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            logical_batch_after_slice = self.batch_size_per_device_group
+            logical_batch_after_slice = active_batch // dp_size
         else:
             # Single-user or unsupported batch size: skip slice_mat.
             xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)

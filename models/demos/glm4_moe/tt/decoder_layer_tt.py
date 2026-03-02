@@ -63,6 +63,7 @@ def _sharded_rms_norm(x: ttnn.Tensor, norm_module: Any, hidden_size: int, num_co
     For hidden_size=5120, single-core RMSNorm overflows L1 by ~13.6 KB (1.51 MB vs 1.43 MB limit).
     Spreading across 8 cores reduces per-core memory to ~100 KB — well within L1.
     """
+    input_shape = [int(d) for d in x.shape]  # save for shape restoration
     h_logical = int(x.shape[-2])  # logical height (may NOT be tile-padded)
     h = ((h_logical + 31) // 32) * 32  # round up to tile boundary (32)
     tile_h = h // 32  # number of tile rows
@@ -110,6 +111,12 @@ def _sharded_rms_norm(x: ttnn.Tensor, norm_module: Any, hidden_size: int, num_co
 
     # Convert back to interleaved DRAM
     result = ttnn.sharded_to_interleaved(result, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Restore original logical shape — sharding pads batch to tile boundary (e.g. 1→32)
+    # and sharded_to_interleaved does NOT restore the logical shape.
+    if int(result.shape[-2]) != h_logical:
+        result = ttnn.slice(result, starts=[0, 0, 0, 0], ends=input_shape)
+
     return result
 
 
