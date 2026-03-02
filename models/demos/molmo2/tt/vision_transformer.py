@@ -256,8 +256,9 @@ class VisionTransformer(LightweightModule):
         for i, block in enumerate(self.blocks):
             x = block(x)
             if return_all_hidden_states:
-                # Clone tensor to preserve it for multi-scale feature extraction
-                hidden_states.append(ttnn.clone(x))
+                # No clone needed - block() creates a new tensor, so old x is still valid
+                # This follows tt_transformers' pattern for traceable ViT
+                hidden_states.append(x)
 
         if return_all_hidden_states:
             return hidden_states
