@@ -28,6 +28,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     uint32_t num_workers_per_link = 0;
     uint32_t num_buffers_per_channel = 0;
 
+    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
+    std::optional<float> fused_ternary_scalar;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -43,7 +46,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool using_persistent_buffers,
         bool force_transpose,
         uint32_t num_workers_per_link,
-        uint32_t num_buffers_per_channel) :
+        uint32_t num_buffers_per_channel,
+        std::optional<float> fused_ternary_scalar) :
         config(config),
         fused_activation(fused_activation),
         output_mem_config(output_mem_config),
@@ -58,7 +62,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_buffers(using_persistent_buffers),
         force_transpose(force_transpose),
         num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+        num_buffers_per_channel(num_buffers_per_channel),
+        fused_ternary_scalar(fused_ternary_scalar) {}
 
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
@@ -92,6 +97,10 @@ struct AllGatherMinimalMatmulAsyncInputs {
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
     std::optional<Tensor> persistent_output_buffer;
+
+    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
+    std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)
+    std::optional<Tensor> fused_ternary_input_b;  // gate/multiplier (full MxN shape)
 };
 
 }  // namespace ttnn::experimental::prim

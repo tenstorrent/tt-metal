@@ -20,6 +20,7 @@ struct AllGatherMinimalMatmulAsyncProgramFactory {
         tt::tt_metal::KernelHandle in0_receiver_no_fabric_kernels_id;
         tt::tt_metal::KernelHandle in1_sender_kernels_id;
         tt::tt_metal::KernelHandle in1_receiver_kernels_id;
+        tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid;
         uint32_t in1_size;
         ;

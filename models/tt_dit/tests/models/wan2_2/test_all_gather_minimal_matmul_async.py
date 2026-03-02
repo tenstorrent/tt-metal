@@ -64,6 +64,10 @@ def run_test_linear_impl(
     sp_axis=0,
     tp_axis=1,
     torch_dtype=torch.float32,
+    fuse_addcmul=False,
+    torch_addcmul_a=None,
+    torch_addcmul_b=None,
+    addcmul_scalar=1.0,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -103,10 +107,36 @@ def run_test_linear_impl(
     else:
         assert activation is None, f"Unsupported activation: {activation}"
 
+    if fuse_addcmul:
+        if sp_axis == 1:
+            if use_non_fused:
+                shard_dims = [None, tp_axis + 2]
+            else:
+                shard_dims = [None, tp_axis]
+        else:
+            if use_non_fused:
+                shard_dims = [sp_axis + 2, None]
+            else:
+                shard_dims = [sp_axis, None]
+        tt_addcmul_a = ttnn.from_torch(
+            torch_addcmul_a,
+            dtype=input_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+        )
+        tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        tt_addcmul_a = None
+        tt_addcmul_b = None
+        addcmul_scalar = None
+
     with torch.no_grad():
         torch_output = torch_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
+        if fuse_addcmul:
+            torch_output = torch.addcmul(torch_addcmul_a, torch_output, torch_addcmul_b, value=addcmul_scalar)
 
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
@@ -145,14 +175,28 @@ def run_test_linear_impl(
                 num_buffers_per_channel=2,
             )
 
-            tt_output = ttnn.experimental.minimal_matmul(
-                tt_all_gather_out_tensor,
-                tt_weight,
-                bias_tensor=tt_bias,
-                fused_activation=activation_fn,
-                compute_kernel_config=compute_config,
-                config=matmul_config,
-            )
+            if fuse_addcmul:
+                tt_output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_all_gather_out_tensor,
+                    tt_weight,
+                    addcmul_scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    bias_tensor=tt_bias,
+                    fused_activation=activation_fn,
+                    config=matmul_config,
+                    compute_kernel_config=compute_config,
+                )
+            else:
+                tt_output = ttnn.experimental.minimal_matmul(
+                    tt_all_gather_out_tensor,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    fused_activation=activation_fn,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+
         else:
             tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
                 tt_input,
@@ -170,6 +214,9 @@ def run_test_linear_impl(
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48,
+                scalar=addcmul_scalar,
+                addcmul_input_tensor1=tt_addcmul_a,
+                addcmul_input_tensor2=tt_addcmul_b,
             )
 
         return tt_output
@@ -282,6 +329,8 @@ def run_test_linear(
     num_iters=1,
     enable_trace=False,
     cluster_axis=1,
+    fuse_addcmul=False,
+    addcmul_scalar=1.0,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -298,6 +347,17 @@ def run_test_linear(
             bias_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
         else:
             bias_input = torch.randn((1, N), dtype=torch_dtype)
+
+    if fuse_addcmul:
+        if use_non_fused:
+            torch_addcmul_a = torch.randn(1, 1, M, N, dtype=torch.bfloat16)  # base value (full shape)
+            torch_addcmul_b = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+        else:
+            torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # base value (full shape)
+            torch_addcmul_b = torch.randn(1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
+    else:
+        torch_addcmul_a = None
+        torch_addcmul_b = None
 
     # Prepare TT tensors
     if sp_axis == 1:
@@ -353,6 +413,10 @@ def run_test_linear(
         torch_dtype=torch_dtype,
         num_iters=num_iters,
         enable_trace=enable_trace,
+        fuse_addcmul=fuse_addcmul,
+        torch_addcmul_a=torch_addcmul_a,
+        torch_addcmul_b=torch_addcmul_b,
+        addcmul_scalar=addcmul_scalar,
     )
 
 
@@ -463,12 +527,24 @@ def run_test_linear(
     ],
 )
 @pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(10, 8, 8, 2, 1)],
+)
+@pytest.mark.parametrize(
     "use_non_fused",
     [
         True,
         False,
     ],
     ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
+    "fuse_addcmul",
+    [
+        True,
+        False,
+    ],
+    ids=["addcmul", "noternary"],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -502,9 +578,8 @@ def test_linear(
     enable_trace,
     num_iters,
     cluster_axis,
+    fuse_addcmul,
 ):
-    print(f"M,K,N,h,w: {M_block_size}, {K_block_size}, {N_block_size}, {subblock_h},  {subblock_w}\n")
-
     check_result = run_test_linear(
         mesh_device,
         M,
@@ -528,6 +603,7 @@ def test_linear(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
+        fuse_addcmul=fuse_addcmul,
     )
 
     for n in range(num_iters):
