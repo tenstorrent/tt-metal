@@ -395,5 +395,48 @@ def test_ring_distributed_sdpa_128k(device):
     run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chunk_size)
 
 
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("q_chunk_size", [64, 128, 256, 512, 1024], ids=["q64", "q128", "q256", "q512", "q1024"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256, 512, 1024], ids=["k128", "k256", "k512", "k1024"])
+def test_ring_sdpa_128k_chunk_sweep(device, q_chunk_size, k_chunk_size):
+    """
+    Sweep chunk sizes for 128k sequence to find optimal configuration.
+
+    This test explores the performance tradeoffs between different chunk sizes:
+    - Smaller chunks: Lower L1 memory usage, higher loop overhead
+    - Larger chunks: Better compute efficiency, higher memory pressure
+
+    Memory scaling (from program factory):
+    - q_tiles scales with q_chunk_size
+    - k_tiles, v_tiles scale with k_chunk_size
+    - mask_tiles, qk_tiles scale with q_chunk * k_chunk (quadratic!)
+
+    Valid q_chunk_size values (divisors of 16384 that are multiples of 32):
+    - 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384
+
+    Valid k_chunk_size values (divisors of 131072 that are multiples of 32):
+    - 32, 64, 128, 256, 512, 1024, 2048, 4096, ...
+
+    Use Tracy profiling to compare DEVICE KERNEL DURATION across configurations:
+        python -m tracy -p -r -m pytest <this_file> -k "test_ring_sdpa_128k_chunk_sweep" -v
+    """
+    b = 1
+    s = 131072  # 128k
+    ring_size = 4
+    per_device_seq_len = s // (2 * ring_size)  # 16384
+
+    # Skip invalid configurations
+    if per_device_seq_len % q_chunk_size != 0:
+        pytest.skip(f"per_device_seq_len {per_device_seq_len} not divisible by q_chunk_size {q_chunk_size}")
+
+    if s % k_chunk_size != 0:
+        pytest.skip(f"sequence length {s} not divisible by k_chunk_size {k_chunk_size}")
+
+    logger.info(f"Testing chunk sweep: q_chunk={q_chunk_size}, k_chunk={k_chunk_size}")
+    logger.info(f"  Estimated QK buffer tiles: {(q_chunk_size // 32) * (k_chunk_size // 32)} tiles")
+
+    run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chunk_size)
+
+
 if __name__ == "__main__":
     print("Minimal ring-distributed SDPA test file ready!")
