@@ -90,7 +90,9 @@ struct ReduceToOneB1 {
         uint32_t numWorkers,
         uint32_t slotSizeBytes,
         uint32_t isFabricCore,
-        uint32_t fabricRtArgBase = 0>
+        uint32_t fabricRtArgBase = 0,
+        uint32_t totalNumWorkers = 0,
+        uint32_t aggOutputSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -108,6 +110,8 @@ struct ReduceToOneB1 {
         static constexpr uint32_t slot_size_bytes = slotSizeBytes;
         static constexpr uint32_t is_fabric_core = isFabricCore;
         static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
+        static constexpr uint32_t total_num_workers = totalNumWorkers;
+        static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
     };
 
     // Compute (TRISC) compile-time args
@@ -154,7 +158,10 @@ struct ReduceToOneB1 {
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
         uint32_t shard_idx;
-        uint32_t socket_config_addr;  // For ROOT1 socket sending
+        uint32_t socket_config_addr;  // Non-zero only on aggregator worker (downstream socket)
+        uint32_t agg_sem_l1_addr;     // Aggregation sync semaphore L1 address (global sem)
+        uint32_t agg_core_noc_x;      // Aggregator core physical NOC x
+        uint32_t agg_core_noc_y;      // Aggregator core physical NOC y
     };
 
     // Writer (BRISC) runtime args for fabric cores - handled dynamically via build_from_args
@@ -246,13 +253,12 @@ struct ReduceToOneB1 {
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
-            DPRINT << "start of reduce to one op\n";
+            DPRINT << "START OF REDUCE TO ONE B1 WRITER KERNEL\n";
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                    // ROOT1 fabric cores have nothing to do
-                    DPRINT << "end of reduce to one op - ROOT1 fabric core\n";
+                    DPRINT << "END of REDUCE TO ONE B1 WRITER KERNEL - ROOT1 fabric core has no forwarding work\n";
                     return;
                 }
 
@@ -292,7 +298,7 @@ struct ReduceToOneB1 {
 
                 fabric_sender.close();
                 noc_async_write_barrier();
-                DPRINT << "end of reduce to one op - fabric core\n";
+                DPRINT << "END of REDUCE TO ONE B1 WRITER KERNEL - Fabric core forwarded all worker packets\n";
                 return;
             }
 
@@ -300,57 +306,76 @@ struct ReduceToOneB1 {
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
 
-            // ROOT1: send final results via socket (if D2H enabled) or NOC gather
+            // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Wait for compute to finish
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-
+                DPRINT << "CTArgs::payload_size_bytes: " << CTArgs::payload_size_bytes << "\n";
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
                 uint64_t dst_noc_addr_0 =
                     get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
-
-                // Always write to output tensor via NOC
                 noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
 
-                // Send to D2H socket if enabled (socket_config_addr != 0)
-                DPRINT << "before socket send to host\n";
                 if (args.socket_config_addr != 0) {
-                    // Create socket sender interface
+                    DPRINT << "is aggregator, preparing to stream data downstream\n";
+                    // Aggregator: wait for all other workers, then stream useful data downstream.
+                    // payload_size_bytes is the padded shard stride on the output core.
+                    // agg_output_size_bytes is the actual downstream page size (unpadded).
+                    volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                    DPRINT << "Waiting for other workers to reach aggregation point\n";
+                    noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                    noc_semaphore_set(agg_sem_ptr, 0);
+                    DPRINT << "All workers reached aggregation point, starting downstream transfer\n";
+                    DPRINT << "total num workers: " << CTArgs::total_num_workers << "\n";
+
+                    constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
+                    DPRINT << "useful_per_shard: " << useful_per_shard << "\n";
+                    DPRINT << "aggr output size bytes: " << CTArgs::agg_output_size_bytes << "\n";
+
                     SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                    set_sender_socket_page_size(sender_socket, CTArgs::payload_size_bytes);
-
-                    // Reserve space in socket
+                    set_sender_socket_page_size(sender_socket, CTArgs::agg_output_size_bytes);
                     socket_reserve_pages(sender_socket, 1);
-
-                    // Get downstream encoding
                     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-                    // Write to downstream socket
-                    DPRINT << "writing to socket downstream\n";
-                    noc_async_write(
-                        src_addr,
-                        get_noc_addr(
+                    uint32_t scratch_l1 = get_read_ptr(CTArgs::scratch_cb);
+                    uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
+
+                    for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
+                        DPRINT << "Worker " << i << " is sending its shard downstream\n";
+                        uint64_t shard_src = get_noc_addr(
+                            CTArgs::output_core_noc_x,
+                            CTArgs::output_core_noc_y,
+                            args.output_base_addr + i * CTArgs::payload_size_bytes);
+                        noc_async_read(shard_src, scratch_l1, useful_per_shard);
+                        noc_async_read_barrier();
+
+                        uint64_t fifo_dst = get_noc_addr(
                             downstream_enc.d2d.downstream_noc_x,
                             downstream_enc.d2d.downstream_noc_y,
-                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                        CTArgs::payload_size_bytes);
+                            fifo_base + i * useful_per_shard);
+                        noc_async_write(scratch_l1, fifo_dst, useful_per_shard);
+                        noc_async_writes_flushed();
+                        DPRINT << "Worker " << i << " finished async write, waiting for it to flush\n";
+                    }
 
-                    // Push to downstream and notify
                     socket_push_pages(sender_socket, 1);
                     socket_notify_receiver(sender_socket);
-                    noc_async_writes_flushed();
-                    DPRINT << "finished writing to socket downstream\n";
-
+                    noc_async_write_barrier();
                     socket_barrier(sender_socket);
                     noc_async_write_barrier();
+                    DPRINT << "Aggregator worker finished downstream transfer\n";
+                } else if (args.agg_sem_l1_addr != 0) {
+                    DPRINT << "No downstream socket, using semaphore to signal completion\n";
+                    uint64_t agg_sem_noc = get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                    noc_semaphore_inc(agg_sem_noc, 1);
+                    DPRINT << "Signaled aggregation semaphore\n";
                 }
 
-                // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "end of reduce to one op - ROOT1 worker core\n";
+                DPRINT << "END of REDUCE TO ONE B1 WRITER KERNEL - ROOT1 sent data to output core and signaled "
+                          "completion\n";
                 return;
             }
 
@@ -423,7 +448,8 @@ struct ReduceToOneB1 {
             } else {
                 cb_pop_front(source_cb, CTArgs::num_tiles);
             }
-            DPRINT << "end of reduce to one op - worker core\n";
+            DPRINT << "END of REDUCE TO ONE B1 WRITER KERNEL - Worker core sent data to fabric core and signaled "
+                      "arrival\n";
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
