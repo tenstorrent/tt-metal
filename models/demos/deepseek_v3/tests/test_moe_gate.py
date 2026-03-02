@@ -463,10 +463,6 @@ def test_new_forward_pass(
     reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
     tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
 
-    import pdb
-
-    pdb.set_trace()
-
     passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
 
     assert (
