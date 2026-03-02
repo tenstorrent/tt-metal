@@ -8,6 +8,8 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <stdint.h>
 #include <tuple>
+#include <fmt/format.h>
+#include <string>
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -45,3 +47,15 @@ MeshContainer<PhysicalMeshCoordinate> get_system_mesh_coordinate_translation_map
     const tt::tt_fabric::ControlPlane& control_plane);
 
 }  // namespace tt::tt_metal::distributed
+
+// fmt::formatter for PhysicalMeshCoordinate
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::distributed::PhysicalMeshCoordinate& coord);
+}  // namespace ttsl::fmt_detail
+
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::PhysicalMeshCoordinate> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::PhysicalMeshCoordinate& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};

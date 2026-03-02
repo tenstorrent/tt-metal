@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
-#include <tt_stl/fmt.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {
 

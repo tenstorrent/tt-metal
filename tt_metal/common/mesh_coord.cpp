@@ -6,6 +6,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include <boost/move/utility_core.hpp>
+#include <fmt/format.h>
 #include <mesh_coord.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -684,6 +685,13 @@ std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoo
     }
     result += "])";
     return result;
+}
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoordinateRange& range) {
+    return fmt::format(
+        "MeshCoordinateRange(start={}, end={})",
+        ttsl::fmt_detail::to_string(range.start_coord()),
+        ttsl::fmt_detail::to_string(range.end_coord()));
 }
 
 size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(

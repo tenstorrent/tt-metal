@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt_stl/fmt.hpp>
+#include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"

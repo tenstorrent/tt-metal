@@ -561,6 +561,7 @@ typename MeshContainer<T>::ConstIterator MeshContainer<T>::end() const {
 namespace ttsl::fmt_detail {
 std::string to_string(const tt::tt_metal::distributed::MeshShape& shape);
 std::string to_string(const tt::tt_metal::distributed::MeshCoordinate& coord);
+std::string to_string(const tt::tt_metal::distributed::MeshCoordinateRange& range);
 }  // namespace ttsl::fmt_detail
 
 // Lightweight fmt::formatters – delegate to out-of-line to_string().
@@ -574,6 +575,13 @@ struct fmt::formatter<tt::tt_metal::distributed::MeshShape> : fmt::formatter<std
 template <>
 struct fmt::formatter<tt::tt_metal::distributed::MeshCoordinate> : fmt::formatter<std::string_view> {
     auto format(const tt::tt_metal::distributed::MeshCoordinate& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
+
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::MeshCoordinateRange> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::MeshCoordinateRange& val, fmt::format_context& ctx) const {
         return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
     }
 };
