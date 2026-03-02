@@ -156,9 +156,7 @@ def create_routed_expert_tensors(
     )  # Gate bias (batch=1, 8, 32) - matches golden expectation
     # Expert indices 0-255, transposed as expected by gate
     torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
-
-    # Define core grid for compute (first column, 8 cores)
-    compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
+    torch_rmsnorm_gamma = torch.randn(1, K, dtype=torch.bfloat16).float()
 
     # Input tensor: sharded on sender core OUTSIDE the compute grid
     device_grid_size = device.compute_with_storage_grid_size()
@@ -181,56 +179,44 @@ def create_routed_expert_tensors(
         **from_torch_kwargs,
     )
 
-    # ── RMSNorm gamma weights [1, K] on sender core ──
-    torch_rmsnorm_gamma = torch.randn(1, K, dtype=torch.bfloat16).float()
-    rmsnorm_gamma_shard = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
-    rmsnorm_gamma_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm_gamma_shard
-    )
-    ttnn_rmsnorm_gamma = ttnn.from_torch(
-        torch_rmsnorm_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=rmsnorm_gamma_mem,
-        tile=tile_1x32,
-        **from_torch_kwargs,
-    )
-
     # Get optimal DRAM bank cores for DRAM streaming matmul + SiLU
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
+    # ── Gate MM weights + RMSNorm gamma via overlapped tensor (matches production layout) ──
+    bdw_weights = BlitzDecodeWeights(device)
+    torch_o_proj_dummy = torch.zeros((8192 * bdw_weights.mla_tp, K), dtype=torch.bfloat16)
+    torch_attn_norm_dummy = torch.zeros((1, K), dtype=torch.bfloat16)
+    torch_q_norm_dummy = torch.zeros((1, 1536), dtype=torch.bfloat16)
+    torch_kv_norm_dummy = torch.zeros((1, 512), dtype=torch.bfloat16)
+    (
+        _,  # o_proj
+        ttnn_gate_mm_weights,  # gate_mm overlapped tensor on (12,0)-(12,7)
+        _,  # attn_norm
+        _,  # q_norm
+        _,  # kv_norm
+        ttnn_rmsnorm_gamma,  # ffn_norm overlapped tensor on gamma core
+    ) = bdw_weights.get_tt_o_proj_and_gate_mm_weights(
+        torch_o_proj_dummy,
+        torch_gate_mm_weights,
+        torch_attn_norm_dummy,
+        torch_q_norm_dummy,
+        torch_kv_norm_dummy,
+        torch_rmsnorm_gamma.bfloat16(),
+    )
+    compute_core_grid = ttnn_gate_mm_weights.core_range_set
+
     # Routing tensors (only when enable_routing=True)
-    ttnn_gate_mm_weights = None
+    if not enable_routing:
+        ttnn_gate_mm_weights = None
     ttnn_gate_bias = None
     ttnn_gate_indices = None
     gate_output_scores_tensor = None
     gate_output_indices_tensor = None
 
     if enable_routing:
-        # Gate matmul weights: width-sharded across 8 cores
-        gate_mm_weights_shard_spec = ttnn.ShardSpec(
-            compute_core_grid,
-            (K, N_per_core),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        gate_mm_weights_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_weights_shard_spec
-        )
-
-        ttnn_gate_mm_weights = ttnn.from_torch(
-            torch_gate_mm_weights,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=gate_mm_weights_mem_config,
-            tile=tile_32x32,
-            **from_torch_kwargs,
-        )
-
         # Gate bias and indices tensors: [16, 16] on sender core
         gate_input_shard_spec = ttnn.ShardSpec(
             input_core_grid,
@@ -414,8 +400,9 @@ def extract_routed_expert_output(
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
+def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
     M = 1
@@ -471,6 +458,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
         tile=ttnn.Tile([8, 32]),
     )
 
+    moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -495,6 +483,8 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
         reconfig_moe_cbs=reconfig_moe_cbs,
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
     logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -562,8 +552,9 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs):
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs):
+def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -694,6 +685,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
     logger.info("Created 4 global semaphores for reduce synchronization")
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
+    moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -723,6 +715,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -809,8 +803,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index, re
 # Test: Fused MoE with enable_routing=False (dense MLP mode)
 # ============================================================================
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_mlp(device, reconfig_moe_cbs):
+def test_mlp(device, reconfig_moe_cbs, noc_mode):
     """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
 
     M = 1
@@ -865,6 +860,7 @@ def test_mlp(device, reconfig_moe_cbs):
     )
 
     # ── Run MoeOp with enable_routing=False ──
+    moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = 100
     ttnn_result_final = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -884,6 +880,8 @@ def test_mlp(device, reconfig_moe_cbs):
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
         reconfig_moe_cbs=reconfig_moe_cbs,
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
     logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -930,8 +928,9 @@ def test_mlp(device, reconfig_moe_cbs):
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
+def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode):
     """
     Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
 
@@ -1060,6 +1059,7 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
     logger.info("Created 4 global semaphores for reduce synchronization")
 
     # ── Run MoeOp with enable_routing=False and reduce ──
+    moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = 100
     ttnn_result_reduce = MoeOp.op(
         r["ttnn_residual_mcast_src"],
@@ -1083,6 +1083,8 @@ def test_mlp_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs):
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        semaphores=moe_semaphores,
+        noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
