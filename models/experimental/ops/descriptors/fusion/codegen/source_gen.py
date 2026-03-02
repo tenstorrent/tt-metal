@@ -226,29 +226,36 @@ def _offset_compile_time_args_in_source(source: str, phase_idx: int, ct_arg_offs
 
 
 def _emit_rt_arg_wrapper(phase_idx: int, rt_offset: int) -> List[str]:
-    """Emit the RT arg wrapper function definition for a phase.
+    """Emit the RT arg wrapper function definitions for a phase.
 
     Emitted once at file scope (before any #define redirect) so the
-    wrapper body references the real ``get_arg_val``.  All phases
-    (including phase 0) get a wrapper for uniform treatment.
+    wrapper body references the real ``get_arg_val`` / ``get_arg_addr``.
+    All phases (including phase 0) get wrappers for uniform treatment.
     """
-    wrapper_name = f"phase_{phase_idx}_get_arg_val"
+    val_name = f"phase_{phase_idx}_get_arg_val"
+    addr_name = f"phase_{phase_idx}_get_arg_addr"
     return [
         f"template <typename T>",
-        f"FORCE_INLINE T {wrapper_name}(int arg_idx) {{",
+        f"FORCE_INLINE T {val_name}(int arg_idx) {{",
         f"    return get_arg_val<T>(arg_idx + {rt_offset});",
+        f"}}",
+        f"static FORCE_INLINE uintptr_t {addr_name}(int arg_idx) {{",
+        f"    return get_arg_addr(arg_idx + {rt_offset});",
         f"}}",
     ]
 
 
-def _emit_rt_arg_define(phase_idx: int) -> str:
-    """Emit #define to redirect get_arg_val to the phase wrapper."""
-    return f"#define get_arg_val phase_{phase_idx}_get_arg_val"
+def _emit_rt_arg_define(phase_idx: int) -> List[str]:
+    """Emit #define redirects for get_arg_val and get_arg_addr."""
+    return [
+        f"#define get_arg_val phase_{phase_idx}_get_arg_val",
+        f"#define get_arg_addr phase_{phase_idx}_get_arg_addr",
+    ]
 
 
-def _emit_rt_arg_undef() -> str:
-    """Emit #undef to restore get_arg_val after a phase."""
-    return "#undef get_arg_val"
+def _emit_rt_arg_undef() -> List[str]:
+    """Emit #undef to restore get_arg_val and get_arg_addr after a phase."""
+    return ["#undef get_arg_val", "#undef get_arg_addr"]
 
 
 def _emit_common_rt_arg_wrapper(phase_idx: int, crta_offset: int) -> List[str]:
@@ -332,7 +339,7 @@ def _generate_phase_namespace(
         lines.extend(_emit_define_lines(defines))
 
     # RT arg redirect (all phases, including phase 0)
-    lines.append(_emit_rt_arg_define(phase_idx))
+    lines.extend(_emit_rt_arg_define(phase_idx))
 
     # Open namespace
     lines.append(f"namespace {ns_name} {{")
@@ -364,7 +371,7 @@ def _generate_phase_namespace(
     lines.append(f"}} // namespace {ns_name}")
 
     # Undef RT arg redirect
-    lines.append(_emit_rt_arg_undef())
+    lines.extend(_emit_rt_arg_undef())
 
     # Undef per-phase defines
     if defines:
@@ -459,6 +466,7 @@ def _generate_phase_block(
 
     - ``get_named_compile_time_arg_val(name)`` → ``get_named_ct_arg("phase_N_" name)``
     - ``get_arg_val`` → ``phase_N_get_arg_val``
+    - ``get_arg_addr`` → ``phase_N_get_arg_addr``
     - ``get_common_arg_val`` → ``phase_N_get_common_arg_val`` (when common RT args present)
     - ``get_common_arg_addr`` → ``phase_N_get_common_arg_addr`` (when common RT args present)
 
@@ -480,7 +488,7 @@ def _generate_phase_block(
         lines.extend(_emit_define_lines(defines))
 
     # RT arg redirect (all phases, including phase 0)
-    lines.append(_emit_rt_arg_define(phase_idx))
+    lines.extend(_emit_rt_arg_define(phase_idx))
 
     # Common RT arg redirect (when any phase has common args)
     if has_common_rt_args:
@@ -506,7 +514,7 @@ def _generate_phase_block(
         lines.extend(_emit_common_rt_arg_undef())
 
     # Undo RT arg redirect
-    lines.append(_emit_rt_arg_undef())
+    lines.extend(_emit_rt_arg_undef())
 
     # Undo per-phase defines
     if defines:
