@@ -4,7 +4,7 @@
 
 import time
 from types import SimpleNamespace
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence, Union
 
 import torch
 from loguru import logger
@@ -18,6 +18,24 @@ from vllm.model_executor.models.qwen2_5_vl import (
     Qwen2_5_VLProcessingInfo,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
+
+try:
+    import vllm.envs as envs
+
+    _VLLM_USE_V1 = envs.VLLM_USE_V1
+except (ImportError, AttributeError):
+    _VLLM_USE_V1 = True
+
+if not _VLLM_USE_V1:
+    from vllm.multimodal.inputs import (
+        MultiModalDataDict,
+        MultiModalFieldConfig,
+        MultiModalInputs,
+        MultiModalKwargs,
+    )
+    from vllm.multimodal.parse import MultiModalDataItems
+    from vllm.multimodal.processing import BaseMultiModalProcessor, PromptUpdate
+    from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
@@ -102,10 +120,84 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
+if not _VLLM_USE_V1:
+
+    class _V0DummyInputsBuilder(BaseDummyInputsBuilder):
+        """Stub for V0 — profiling is not used on TT hardware."""
+
+        def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
+            raise NotImplementedError
+
+        def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
+            raise NotImplementedError
+
+    class _V0MultiModalProcessor(BaseMultiModalProcessor):
+        """V0 multi-modal processor that bypasses vLLM image processing
+        and passes images directly to the TT model."""
+
+        def _get_mm_fields_config(
+            self,
+            hf_inputs,
+            hf_processor_mm_kwargs: Mapping[str, object],
+        ) -> Mapping[str, "MultiModalFieldConfig"]:
+            raise NotImplementedError
+
+        def _get_prompt_updates(
+            self,
+            mm_items: "MultiModalDataItems",
+            hf_processor_mm_kwargs: Mapping[str, object],
+            out_mm_kwargs: "MultiModalKwargs",
+        ) -> Sequence["PromptUpdate"]:
+            raise NotImplementedError
+
+        def apply(
+            self,
+            prompt: Union[str, list[int]],
+            mm_data: "MultiModalDataDict",
+            hf_processor_mm_kwargs: Mapping[str, object],
+            tokenization_kwargs: Optional[Mapping[str, object]] = None,
+            return_mm_hashes: bool = False,
+        ) -> "MultiModalInputs":
+            input_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
+
+            if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
+                tokenizer = (
+                    getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
+                )
+                text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
+                logger.warning(
+                    f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility"
+                )
+            else:
+                text_prompt = prompt
+
+            processed_inputs = input_processor(
+                text=text_prompt,
+                images=mm_data["image"] if mm_data else None,
+                videos=None,
+                return_tensors="pt",
+            )
+
+            assert (
+                processed_inputs.input_ids.shape[0] == 1
+            ), "Expected to process one input prompt at a time in processor"
+            prompt_token_ids = processed_inputs.input_ids[0].tolist()
+
+            mm_inputs = MultiModalInputs(
+                type="multimodal",
+                prompt=prompt,
+                prompt_token_ids=prompt_token_ids,
+                mm_kwargs={"image": processed_inputs},
+                mm_hashes={},
+                mm_placeholders={},
+            )
+            return mm_inputs
+
+
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen2_5_VLMultiModalProcessor,
+    Qwen2_5_VLMultiModalProcessor if _VLLM_USE_V1 else _V0MultiModalProcessor,
     info=TT_Qwen2_5_VLProcessingInfo,
-    dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
+    dummy_inputs=Qwen2_5_VLDummyInputsBuilder if _VLLM_USE_V1 else _V0DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
@@ -187,7 +279,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
         enable_trace,
-        **kwargs,  # pixel_values and image_grid_thw
+        **kwargs,  # V1: pixel_values and image_grid_thw; V0: images
     ):
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
@@ -205,43 +297,80 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
-        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
-        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
-        inputs.attention_mask = torch.zeros(
-            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
-        )
-        for i, plen in enumerate(prompt_lens):
-            inputs.attention_mask[i, :plen] = 1
-
-        if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
-            inputs.pixel_values = torch.concat(
-                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+        if _VLLM_USE_V1:
+            inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
+            inputs.attention_mask = torch.zeros(
+                (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
             )
-            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-            assert _grid_items and all(
-                im is not None for im in _grid_items
-            ), "Expected non-empty image_grid_thw for image inputs."
-            for g in _grid_items:
-                assert (
-                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
-            inputs.image_grid_thw = torch.stack(
-                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
+            for i, plen in enumerate(prompt_lens):
+                inputs.attention_mask[i, :plen] = 1
+
+            if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
+                inputs.pixel_values = torch.concat(
+                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+                )
+                assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
+                _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
+                assert _grid_items and all(
+                    im is not None for im in _grid_items
+                ), "Expected non-empty image_grid_thw for image inputs."
+                for g in _grid_items:
+                    assert (
+                        torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                    ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+                inputs.image_grid_thw = torch.stack(
+                    [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
+                    dim=0,
+                )
+                vision_start = time.perf_counter()
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
+                )
+            else:
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+        else:  # V0
+            if (
+                "images" in kwargs
+                and isinstance(kwargs["images"], list)
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "attention_mask" in kwargs["images"][0]
+            ):
+                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
+            else:
+                inputs.input_ids = tokens
+
+            inputs.attention_mask = torch.concat(
+                [
+                    torch.nn.functional.pad(
+                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
+                    )
+                    if im is not None
+                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                    for i, im in enumerate(kwargs["images"])
+                ],
                 dim=0,
             )
-            # Vision prefill
-            vision_start = time.perf_counter()
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            vision_time = time.perf_counter() - vision_start
-            batch_size = tokens.shape[0]
-            logger.info(
-                f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
-            )
-        else:
-            # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+            images_with_pixels = [
+                im for im in kwargs.get("images", []) if im is not None and hasattr(im, "pixel_values")
+            ]
+            if images_with_pixels:
+                inputs.pixel_values = torch.concat([im.pixel_values for im in images_with_pixels], dim=0)
+                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images_with_pixels], dim=0)
+
+                vision_start = time.perf_counter()
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill (V0): {vision_time*1000:.2f}ms "
+                    f"({vision_time/batch_size*1000:.2f}ms/user)"
+                )
+            else:
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)

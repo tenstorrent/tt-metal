@@ -372,7 +372,14 @@ class Generator(WarmupForwardMixin):
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device=None,
+        non_greedy_decoding_on_device=None,
+        sampling_params=None,
+    ) -> None:
         """
         Pre-compile programs for expected power-of-2 prefill sequence lengths.
         Uses dummy embeddings and rotation matrices to avoid depending on real data.
