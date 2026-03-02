@@ -301,6 +301,88 @@ def golden_avg_pool2d(
 ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
 
 
+def golden_adaptive_avg_pool2d(
+    input_tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    output_size: Tuple[int, int],
+    **_,
+):
+    """
+    Golden function for adaptive_avg_pool2d operation using torch.nn.functional.adaptive_avg_pool2d.
+
+    Args:
+        input_tensor: Input tensor in (1, 1, N*H*W, C) format
+        batch_size: Number of batches
+        input_h: Input height
+        input_w: Input width
+        channels: Number of channels
+        output_size: Target output size (out_h, out_w)
+
+    Returns:
+        Output tensor in (1, 1, N*out_H*out_W, C) format
+    """
+    import torch
+
+    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+
+    output_tensor = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=output_size)
+
+    N, C, H, W = output_tensor.shape
+    # Convert from (N, C, H, W) to (1, 1, N*H*W, C)
+    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+
+    return output_tensor
+
+
+if hasattr(ttnn, "adaptive_avg_pool2d"):
+    ttnn.attach_golden_function(ttnn.adaptive_avg_pool2d, golden_adaptive_avg_pool2d)
+
+
+def golden_adaptive_max_pool2d(
+    input_tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    output_size: Tuple[int, int],
+    **_,
+):
+    """
+    Golden function for adaptive_max_pool2d operation using torch.nn.functional.adaptive_max_pool2d.
+
+    Args:
+        input_tensor: Input tensor in (1, 1, N*H*W, C) format
+        batch_size: Number of batches
+        input_h: Input height
+        input_w: Input width
+        channels: Number of channels
+        output_size: Target output size (out_h, out_w)
+
+    Returns:
+        Output tensor in (1, 1, N*out_H*out_W, C) format
+    """
+    import torch
+
+    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
+    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+
+    output_tensor, _ = torch.nn.functional.adaptive_max_pool2d(input_nchw, output_size=output_size, return_indices=True)
+
+    N, C, H, W = output_tensor.shape
+    # Convert from (N, C, H, W) to (1, 1, N*H*W, C)
+    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+
+    return output_tensor
+
+
+if hasattr(ttnn, "adaptive_max_pool2d"):
+    ttnn.attach_golden_function(ttnn.adaptive_max_pool2d, golden_adaptive_max_pool2d)
+
+
 def golden_upsample(
     input_tensor: ttnn.Tensor,
     batch_size: int,
