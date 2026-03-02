@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
@@ -26,20 +28,23 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    cb_reserve_back(cb_id_in1, num_tiles);
-    uint64_t base_noc_addr = get_noc_addr(get_write_ptr(cb_id_in1));
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+
+    cb_in1.reserve_back(num_tiles);
+    uint64_t base_noc_addr = get_noc_addr(cb_in1.get_write_ptr());
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint64_t col_noc_addr = base_noc_addr;
         for (uint32_t i = 0; i < Wt; ++i) {
             uint64_t curr_noc_addr = col_noc_addr;
             for (uint32_t j = 0; j < Ht; ++j) {
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
+                cb_in0.reserve_back(onetile);
+                noc_async_read(curr_noc_addr, cb_in0.get_write_ptr(), tile_bytes);
                 curr_noc_addr += row_size_bytes;
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                noc.async_read_barrier();
+                cb_in0.push_back(onetile);
             }
             col_noc_addr += tile_bytes;
         }
