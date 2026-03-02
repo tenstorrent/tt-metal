@@ -962,7 +962,10 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
 // The formatters below are for types that require the full reflection machinery.
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T>>> {
+struct fmt::formatter<
+    T,
+    char,
+    std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T> && !ttsl::is_strong_type_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& object, format_context& ctx) const -> format_context::iterator {

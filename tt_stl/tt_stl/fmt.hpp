@@ -44,6 +44,46 @@
 
 #include <enchantum/scoped.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/strong_type.hpp>
+
+// ============================================================================
+// "Leaf" formatters – these must appear BEFORE the generic format_value helper
+// so that format_value can find them when instantiated with these types.
+// ============================================================================
+
+// ---- enums (via enchantum, avoids <reflect>) ----
+
+template <typename T>
+    requires std::is_enum_v<T>
+struct fmt::formatter<T> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}", enchantum::scoped::to_string(value));
+    }
+};
+
+// ---- std::filesystem::path ----
+
+template <>
+struct fmt::formatter<std::filesystem::path> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::filesystem::path& p, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}", p.string());
+    }
+};
+
+// ---- ttsl::StrongType  (fully inline – dereferences to inner T) ----
+
+template <typename T, typename Tag>
+struct fmt::formatter<ttsl::StrongType<T, Tag>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const ttsl::StrongType<T, Tag>& val, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}", *val);
+    }
+};
 
 // ============================================================================
 // Implementation detail – format a single value, with pointer handling.
@@ -89,35 +129,10 @@ auto format_sequence(
 }  // namespace ttsl::fmt_detail
 
 // ============================================================================
-// fmt::formatter – enums (via enchantum, avoids <reflect>)
+// fmt::formatter – wrapper / sum types
 // ============================================================================
 
-template <typename T>
-    requires std::is_enum_v<T>
-struct fmt::formatter<T> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "{}", enchantum::scoped::to_string(value));
-    }
-};
-
-// ============================================================================
-// fmt::formatter – std::filesystem::path
-// ============================================================================
-
-template <>
-struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::filesystem::path& p, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "{}", p.string());
-    }
-};
-
-// ============================================================================
-// fmt::formatter – std::optional
-// ============================================================================
+// ---- std::optional ----
 
 template <typename T>
 struct fmt::formatter<std::optional<T>> {
@@ -131,9 +146,7 @@ struct fmt::formatter<std::optional<T>> {
     }
 };
 
-// ============================================================================
-// fmt::formatter – std::variant
-// ============================================================================
+// ---- std::variant ----
 
 template <typename... Ts>
 struct fmt::formatter<std::variant<Ts...>> {
@@ -144,9 +157,7 @@ struct fmt::formatter<std::variant<Ts...>> {
     }
 };
 
-// ============================================================================
-// fmt::formatter – std::reference_wrapper
-// ============================================================================
+// ---- std::reference_wrapper ----
 
 template <typename T>
 struct fmt::formatter<std::reference_wrapper<T>> {
