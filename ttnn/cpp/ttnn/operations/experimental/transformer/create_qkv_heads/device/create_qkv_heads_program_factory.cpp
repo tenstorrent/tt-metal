@@ -31,6 +31,7 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
     const uint32_t groups = num_kv_heads;
 
     // Validation
+    TT_FATAL(head_dim > 0, "head_dim must be greater than 0, got {}", head_dim);
     TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
     TT_FATAL(heads_per_group.size() == 3, "heads_per_group size ({}) must equal 3", heads_per_group.size());
 
@@ -41,8 +42,8 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
 
     TT_FATAL(
         elements_per_group != 0,
-        "Invalid configuration: elements_per_group is 0. Check that num_q_heads ({}) and num_kv_heads ({}) are "
-        "non-zero and that head_dim ({}) is valid.",
+        "Invalid configuration: elements_per_group is 0. This occurs when head_dim is 0 or when the total number of "
+        "heads (num_q_heads + 2*num_kv_heads) is 0. Current values: num_q_heads={}, num_kv_heads={}, head_dim={}",
         num_q_heads,
         num_kv_heads,
         head_dim);
