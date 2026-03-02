@@ -62,6 +62,8 @@
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/moe_gpt_fused/moe_gpt_fused_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_gpt_fused/moe_gpt_fused_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 

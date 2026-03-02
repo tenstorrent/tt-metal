@@ -50,16 +50,30 @@ MoEGPTDeviceOperation::invoke(
     const uint32_t num_experts,
     const uint32_t layer_id,
     bool enable_dram_output,
-    std::optional<Tensor> dram_output_tensor) {
+    std::optional<Tensor> dram_output_tensor,
+    std::optional<Tensor> sparse_buffer,
+    std::optional<Tensor> expert_indices,
+    std::optional<Tensor> expert_scores,
+    std::optional<Tensor> expert_mapping,
+    std::optional<Tensor> tilize_output,
+    std::optional<uint32_t> cluster_axis) {
     return {
         operation_attributes_t{
-            .num_experts = num_experts, .layer_id = layer_id, .enable_dram_output = enable_dram_output},
+            .num_experts = num_experts,
+            .layer_id = layer_id,
+            .enable_dram_output = enable_dram_output,
+            .cluster_axis = cluster_axis},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,
             .w2_tensor = w2_tensor,
             .output_tensor = output_tensor,
-            .dram_output_tensor = std::move(dram_output_tensor)}};
+            .dram_output_tensor = std::move(dram_output_tensor),
+            .sparse_buffer = std::move(sparse_buffer),
+            .expert_indices = std::move(expert_indices),
+            .expert_scores = std::move(expert_scores),
+            .expert_mapping = std::move(expert_mapping),
+            .tilize_output = std::move(tilize_output)}};
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt

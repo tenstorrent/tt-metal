@@ -54,7 +54,7 @@ The op uses three types of cores:
 ## File Structure
 
 ```
-ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/
+ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/
   moe_gpt_fused.hpp / .cpp              - Top-level op interface
   moe_gpt_fused_nanobind.hpp / .cpp     - Python bindings
   device/

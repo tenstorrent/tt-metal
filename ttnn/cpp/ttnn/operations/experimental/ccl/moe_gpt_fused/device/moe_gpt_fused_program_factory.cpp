@@ -192,7 +192,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
 
     auto dm0_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/matmul_dm0.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/matmul_dm0.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -201,7 +201,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
 
     auto dm1_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/matmul_dm1.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/matmul_dm1.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -211,7 +211,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
 
     auto compute_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/matmul_compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/matmul_compute.cpp",
         matmul_core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -224,7 +224,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
     // Combine dm1 kernel
     auto combine_dm1_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/combine_dm1.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/combine_dm1.cpp",
         combine_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
@@ -232,14 +232,14 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
     // Tilize kernels
     auto gather_reader_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/gather_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/gather_reader.cpp",
         gather_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1});
 
     auto gather_compute_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/gather_compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/gather_compute.cpp",
         gather_core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -250,7 +250,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
 
     auto gather_writer_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gpt_fused/device/kernels/gather_writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt_fused/device/kernels/gather_writer.cpp",
         gather_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0});

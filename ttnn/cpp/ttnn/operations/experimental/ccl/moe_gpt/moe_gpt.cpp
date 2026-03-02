@@ -19,10 +19,15 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
     const ttnn::Tensor& output_tensor,
     const uint32_t num_experts,
     const uint32_t layer_id,
-    bool enable_dram_output) {
+    bool enable_dram_output,
+    std::optional<ttnn::Tensor> sparse_buffer,
+    std::optional<ttnn::Tensor> expert_indices,
+    std::optional<ttnn::Tensor> expert_scores,
+    std::optional<ttnn::Tensor> expert_mapping,
+    std::optional<ttnn::Tensor> tilize_output,
+    std::optional<uint32_t> cluster_axis) {
     std::optional<Tensor> dram_output_tensor;
     if (enable_dram_output) {
-        // Allocate interleaved DRAM output tensor with shape (E, 1, M, K) in TILE_LAYOUT
         auto shape = input_tensor.logical_shape();
         uint32_t M = shape[-2];
         uint32_t K = shape[-1];
@@ -43,7 +48,13 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
         num_experts,
         layer_id,
         enable_dram_output,
-        std::move(dram_output_tensor));
+        std::move(dram_output_tensor),
+        std::move(sparse_buffer),
+        std::move(expert_indices),
+        std::move(expert_scores),
+        std::move(expert_mapping),
+        std::move(tilize_output),
+        cluster_axis);
 }
 
 }  // namespace ttnn::operations::experimental::moe_gpt
