@@ -42,7 +42,7 @@ class OverlappedShardSpec:
     bfp8_tile_bytes: int = 1088
     bfp4_tile_bytes: int = 576
 
-    tp: int = 1
+    tp_dim: tuple[int | None, int | None] = (None, None)
 
     def _tile_bytes(self) -> int:
         num_elements = self.tile_h * self.tile_w
@@ -53,26 +53,49 @@ class OverlappedShardSpec:
             return exponent_bytes + mantissa_bytes
         return num_elements * _DTYPE_ELEMENT_BYTES[self.dtype]
 
-    @property
-    def tiles_per_shard(self) -> int:
-        shard_w = self.raw_tensor_shape[1] // self.core_range_set.num_cores()
-        return (self.per_device_height // self.tile_h) * (shard_w // self.tile_w)
+    def _dim_tp(self, tensor_dim: int, mesh_shape: tuple[int, int]) -> int:
+        """TP factor for a single tensor dimension (0=height, 1=width)."""
+        result = 1
+        for mesh_dim, d in enumerate(self.tp_dim):
+            if d == tensor_dim:
+                result *= mesh_shape[mesh_dim]
+        return result
 
-    @property
-    def shard_bytes(self) -> int:
-        return self.tiles_per_shard * self._tile_bytes()
+    def _dim_slice_idx(self, tensor_dim: int, row: int, col: int, mesh_shape: tuple[int, int]) -> int:
+        """Slice index for a single tensor dimension at mesh coordinate (row, col)."""
+        idx = 0
+        stride = 1
+        mesh_coord = (row, col)
+        for mesh_dim in reversed(range(2)):
+            if self.tp_dim[mesh_dim] == tensor_dim:
+                idx += mesh_coord[mesh_dim] * stride
+                stride *= mesh_shape[mesh_dim]
+        return idx
 
-    @property
-    def total_bytes(self) -> int:
-        return self.shard_bytes * self.core_range_set.num_cores()
+    def tp(self, mesh_shape: tuple[int, int]) -> int:
+        """Total TP factor (product of all non-None mesh dimensions)."""
+        return self._dim_tp(0, mesh_shape) * self._dim_tp(1, mesh_shape)
 
-    @property
-    def per_device_height(self) -> int:
-        return self.raw_tensor_shape[0] // self.tp
+    def per_device_height(self, mesh_shape: tuple[int, int]) -> int:
+        return self.raw_tensor_shape[0] // self._dim_tp(0, mesh_shape)
+
+    def per_device_width(self, mesh_shape: tuple[int, int]) -> int:
+        return self.raw_tensor_shape[1] // self._dim_tp(1, mesh_shape)
+
+    def tiles_per_shard(self, mesh_shape: tuple[int, int]) -> int:
+        pdw = self.per_device_width(mesh_shape)
+        shard_w = pdw // self.core_range_set.num_cores()
+        return (self.per_device_height(mesh_shape) // self.tile_h) * (shard_w // self.tile_w)
+
+    def shard_bytes(self, mesh_shape: tuple[int, int]) -> int:
+        return self.tiles_per_shard(mesh_shape) * self._tile_bytes()
+
+    def total_bytes(self, mesh_shape: tuple[int, int]) -> int:
+        return self.shard_bytes(mesh_shape) * self.core_range_set.num_cores()
 
 
-def max_shard_bytes(shard_specs: list[list[OverlappedShardSpec]]) -> int:
-    return max(sum(spec.shard_bytes for spec in lane) for lane in shard_specs)
+def max_shard_bytes(shard_specs: list[list[OverlappedShardSpec]], mesh_shape: tuple[int, int]) -> int:
+    return max(sum(spec.shard_bytes(mesh_shape) for spec in lane) for lane in shard_specs)
 
 
 def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedShardSpec) -> bytes:
@@ -142,7 +165,9 @@ def overlap_tensors(
                 f"Core range set {spec.core_range_set} does not match {lane[0][1].core_range_set}, "
                 "all core range sets must be the same within a lane"
             )
-            assert spec.tp > 0 and (spec.tp & (spec.tp - 1)) == 0, "TP must be a positive power of 2"
+            assert len(spec.tp_dim) == 2 and all(
+                d is None or d in (0, 1) for d in spec.tp_dim
+            ), "tp_dim must be a 2-tuple of None, 0, or 1"
 
     def _core_set(crs: ttnn.CoreRangeSet) -> set[tuple[int, int]]:
         cores = set()
@@ -158,43 +183,54 @@ def overlap_tensors(
             cores_b = _core_set(lane_b[0][1].core_range_set)
             assert not cores_a & cores_b, "Lanes must have separate core range sets"
 
-    needed_shard_bytes = max_shard_bytes([[spec for _, spec in lane] for lane in tensors])
+    mesh_shape = (device.shape[0], device.shape[1])
+    mesh_rows, mesh_cols = mesh_shape
+    num_devices = mesh_rows * mesh_cols
+
+    needed_shard_bytes = max_shard_bytes([[spec for _, spec in lane] for lane in tensors], mesh_shape)
     assert needed_shard_bytes % 4 == 0, "shard bytes must be UINT32-aligned"
     uint32_per_shard = needed_shard_bytes // 4
 
-    max_tp = max(spec.tp for lane in tensors for _, spec in lane)
     total_cores = sum(lane[0][1].core_range_set.num_cores() for lane in tensors)
 
     byte_offsets: dict[int, int] = {}
 
-    per_tp_raw = []
-    for tp_idx in range(max_tp):
-        tp_packed = bytearray()
-        for lane in tensors:
-            num_cores = lane[0][1].core_range_set.num_cores()
-            for core_idx in range(num_cores):
-                shard_data = bytearray()
-                for tensor, spec in lane:
-                    slice_idx = tp_idx * spec.tp // max_tp
-                    per_dev_h = spec.per_device_height
-                    device_slice = tensor[slice_idx * per_dev_h : (slice_idx + 1) * per_dev_h, :]
-                    shard_w = spec.raw_tensor_shape[1] // num_cores
-                    shard_col = device_slice[:, core_idx * shard_w : (core_idx + 1) * shard_w].contiguous()
-                    shard_raw = tilize_and_pack(shard_col, spec)
-                    assert len(shard_raw) == spec.shard_bytes
-                    byte_offsets[id(spec)] = len(shard_data)
-                    shard_data.extend(shard_raw)
+    per_device_raw: list[list[torch.Tensor]] = [[] for _ in range(mesh_rows)]
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            dev_packed = bytearray()
+            for lane in tensors:
+                num_cores = lane[0][1].core_range_set.num_cores()
+                for core_idx in range(num_cores):
+                    shard_data = bytearray()
+                    for tensor, spec in lane:
+                        h_idx = spec._dim_slice_idx(0, row, col, mesh_shape)
+                        w_idx = spec._dim_slice_idx(1, row, col, mesh_shape)
+                        per_dev_h = spec.per_device_height(mesh_shape)
+                        per_dev_w = spec.per_device_width(mesh_shape)
+                        device_slice = tensor[
+                            h_idx * per_dev_h : (h_idx + 1) * per_dev_h,
+                            w_idx * per_dev_w : (w_idx + 1) * per_dev_w,
+                        ]
+                        shard_w = per_dev_w // num_cores
+                        shard_col = device_slice[:, core_idx * shard_w : (core_idx + 1) * shard_w].contiguous()
+                        shard_raw = tilize_and_pack(shard_col, spec)
+                        assert len(shard_raw) == spec.shard_bytes(mesh_shape)
+                        byte_offsets[id(spec)] = len(shard_data)
+                        shard_data.extend(shard_raw)
 
-                if len(shard_data) < needed_shard_bytes:
-                    shard_data.extend(b"\x00" * (needed_shard_bytes - len(shard_data)))
-                tp_packed.extend(shard_data)
+                    if len(shard_data) < needed_shard_bytes:
+                        shard_data.extend(b"\x00" * (needed_shard_bytes - len(shard_data)))
+                    dev_packed.extend(shard_data)
 
-        per_tp_raw.append(torch.frombuffer(bytes(tp_packed), dtype=torch.int32).clone())
+            per_device_raw[row].append(torch.frombuffer(bytes(dev_packed), dtype=torch.int32).clone())
 
-    if max_tp == 1:
-        combined = per_tp_raw[0].reshape(1, uint32_per_shard * total_cores)
+    shard_elems = uint32_per_shard * total_cores
+    if num_devices == 1:
+        combined = per_device_raw[0][0].reshape(1, shard_elems)
     else:
-        combined = torch.cat([t.reshape(1, -1) for t in per_tp_raw], dim=1)
+        row_tensors = [torch.cat([t.reshape(1, -1) for t in row_list], dim=1) for row_list in per_device_raw]
+        combined = torch.cat(row_tensors, dim=0)
 
     combined_crs_ranges = [cr for lane in tensors for cr in lane[0][1].core_range_set.ranges()]
     combined_crs = ttnn.CoreRangeSet(combined_crs_ranges)
@@ -209,11 +245,10 @@ def overlap_tensors(
         shard_spec,
     )
 
-    if max_tp == 1:
+    if num_devices == 1:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
     else:
-        mesh_shape = (device.shape[0], device.shape[1])
-        mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=(None, 1))
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
     device_for_torch = device if move_to_device else None
 
     fused = ttnn.from_torch(
@@ -229,12 +264,14 @@ def overlap_tensors(
     for lane in tensors:
         num_cores = lane[0][1].core_range_set.num_cores()
         for tensor, spec in lane:
-            shard_w = spec.raw_tensor_shape[1] // num_cores
+            pdh = spec.per_device_height(mesh_shape)
+            pdw = spec.per_device_width(mesh_shape)
+            shard_w = pdw // num_cores
             result.append(
                 OverlappedTensor(
                     fused_tensor=fused,
-                    tensor_shape=(spec.per_device_height, spec.raw_tensor_shape[1]),
-                    shard_shape=(spec.per_device_height, shard_w),
+                    tensor_shape=(pdh, pdw),
+                    shard_shape=(pdh, shard_w),
                     core_range_set=spec.core_range_set,
                     dtype=spec.dtype,
                     tile_shape=(spec.tile_h, spec.tile_w),

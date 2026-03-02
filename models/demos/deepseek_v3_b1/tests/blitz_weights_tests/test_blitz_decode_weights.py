@@ -163,11 +163,12 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-    cfg.q_b_shard_spec.tp = mesh_cols
+    mesh_shape = (mesh_rows, mesh_cols)
+    q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
     torch.manual_seed(42)
     q_a_raw = torch.randn(cfg.q_a_proj_shape, dtype=torch.bfloat16)
-    q_b_raw = torch.randn(cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * cfg.q_b_shard_spec.tp, dtype=torch.bfloat16)
+    q_b_raw = torch.randn(cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp, dtype=torch.bfloat16)
     kv_raw = torch.randn(cfg.kv_a_proj_shape, dtype=torch.bfloat16)
 
     bdw = BlitzDecodeWeights(submesh)
@@ -223,8 +224,8 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     logger.info("Building q_b_proj per-TP round-trip references ...")
     q_b_tp_refs = []
-    for tp_idx in range(cfg.q_b_shard_spec.tp):
-        q_b_slice = cfg.get_q_b_slice(q_b_raw, tp_idx)
+    for tp_idx in range(q_b_tp):
+        q_b_slice = cfg.get_q_b_slice(q_b_raw, tp_idx, mesh_shape)
         ref = _get_roundtrip_reference(
             cfg.shuffle_q_b(q_b_slice),
             q_b.core_range_set,
@@ -257,7 +258,7 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): q_a_proj, q_b_proj, kv_a_proj overlap passed")
 
 
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (2, 2), (1, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
@@ -292,7 +293,8 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
-    cfg.o_proj.tp = mesh_cols
+    mesh_shape = (mesh_rows, mesh_cols)
+    o_proj_tp = cfg.o_proj.tp(mesh_shape)
     tile_1x32 = ttnn.Tile([1, 32])
 
     torch.manual_seed(42)
@@ -362,9 +364,9 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     # -- Build references (dtype round-trip on single device) ----------------
     logger.info("Building o_proj per-TP round-trip references ...")
-    per_device_o_h = cfg.o_proj.per_device_height
+    per_device_o_h = cfg.o_proj.per_device_height(mesh_shape)
     o_tp_refs = []
-    for tp_idx in range(cfg.o_proj.tp):
+    for tp_idx in range(o_proj_tp):
         o_slice = o_proj_raw[tp_idx * per_device_o_h : (tp_idx + 1) * per_device_o_h, :]
         ref = _get_roundtrip_reference(
             o_slice,
