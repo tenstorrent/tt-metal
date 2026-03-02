@@ -1,0 +1,24 @@
+torch==2.9.0
+torchvision==0.24.0
+torchaudio==2.9.0
+diffusers==0.36.0
+transformers==4.55.2
+accelerate
+einops
+easydict
+flash_attn
+numpy==1.26.4
+tqdm
+imageio[ffmpeg]
+websockets
+msgpack
+opencv-python
+matplotlib
+ftfy
+safetensors
+Pillow
+
+# Post-training
+lerobot==0.3.3
+scipy
+wandb
