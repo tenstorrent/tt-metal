@@ -69,11 +69,14 @@ def compute_forwarder_scratch_size(
     tile_width: int = 32,
     bytes_per_element: int = 2,
     num_links: int = 2,
+    max_payload_size: int = 0,
 ):
     """
     Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
 
     This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
+    Supports both single-shot L transfer (when total_l_bytes fits in max_payload_size)
+    and chunked streaming.
     """
     input_page_size_bytes = tile_height * tile_width * bytes_per_element
     input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
@@ -92,14 +95,29 @@ def compute_forwarder_scratch_size(
 
     tiles_per_l_chunk = out_tiles // num_l_chunks
     l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+    total_l_bytes = out_tiles * input_page_size_bytes
+
+    # Determine transfer mode: single-shot if full L fits in one fabric packet
+    if max_payload_size > 0:
+        max_fabric_payload = max_payload_size - ttnn.get_tt_fabric_packet_header_size_bytes()
+    else:
+        max_fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    single_shot_l = total_l_bytes <= max_fabric_payload
 
     header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
     l1_alignment = 16
-    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
+
+    if single_shot_l:
+        slots_per_worker = 2  # MS + full L
+        max_payload_per_slot = total_l_bytes
+    else:
+        slots_per_worker = 1 + num_l_chunks  # MS + L chunks
+        max_payload_per_slot = l_chunk_size_bytes
+
+    slot_size = _round_up(header_size + max_payload_per_slot, l1_alignment)
 
     num_workers_per_link = num_cores // num_links
     workers_per_type = num_workers_per_link // 2
-    slots_per_worker = 1 + num_l_chunks
     slots_per_round = workers_per_type * slots_per_worker
 
     return 2 * slots_per_round * slot_size * 2
@@ -1050,6 +1068,7 @@ def test_post_sdpa_with_sdpa_phase(
         batch_size=SDPA_L_HEIGHT,
         l_width=sdpa_l_per_worker,
         num_cores=NUM_SDPA_WORKERS,
+        max_payload_size=15232,
     )
     # Total elements (bfloat16 = 2 bytes per element)
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
