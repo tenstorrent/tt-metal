@@ -120,22 +120,24 @@ class WanAttentionBlock(Module):
         if "norm.gamma" in state:
             state["norm.weight"] = state.pop("norm.gamma").squeeze()
 
-    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
+    def forward(self, x_tile_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W
 
         returns: (B, T, H, W, C) fractured on H and W
         """
-        assert len(x_BTHWC.shape) == 5
-        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
-        residual_BTHWC = x_BTHWC
+        assert len(x_tile_BTHWC.shape) == 5
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
+        residual_BTHWC = x_tile_BTHWC
+
+        # x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
+            x_tile_BTHWC = ttnn.experimental.all_gather_async(
+                x_tile_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
+                    x_tile_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
                 ),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -146,10 +148,10 @@ class WanAttentionBlock(Module):
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
         if self.parallel_config.width_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
+            x_tile_BTHWC = ttnn.experimental.all_gather_async(
+                x_tile_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                    x_tile_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -164,11 +166,11 @@ class WanAttentionBlock(Module):
             """
             H is padded, so slice it out before attention
             """
-            padded_h = x_BTHWC.shape[2]
-            x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
-        B, T, H, W, C = x_BTHWC.shape
-        x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
-        x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
+            padded_h = x_tile_BTHWC.shape[2]
+            x_tile_BTHWC = x_tile_BTHWC[:, :, :logical_h, :, :]
+        B, T, H, W, C = x_tile_BTHWC.shape
+        x_TNC = ttnn.reshape(x_tile_BTHWC, (B * T, H * W, C))
+        # x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
         x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -209,7 +211,10 @@ class WanAttentionBlock(Module):
                 out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
             )
 
-        return out_BTHWC + residual_BTHWC
+        assert out_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+        out_tile_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.TILE_LAYOUT)
+
+        return out_tile_BTHWC + residual_BTHWC
 
 
 class WanCausalConv3d(Module):
@@ -324,13 +329,18 @@ class WanCausalConv3d(Module):
         returns: (B, T, H, W, C) fractured on H and W
         """
         # NOTE: T padding is handled explicitly and depends on the cache
+
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+        if cache_x_BTHWC is not None:
+            assert cache_x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
             t_front_padding -= cache_x_BTHWC.shape[1]
-        if t_front_padding > 0:
-            # Padding only works on the lowest 3 dims. reshape input.
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+
+        if t_front_padding > 0:  # Padding only works on the lowest 3 dims. reshape input.
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
@@ -342,6 +352,8 @@ class WanCausalConv3d(Module):
             """
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
+
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         # Height halo
         if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
@@ -364,6 +376,7 @@ class WanCausalConv3d(Module):
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         # Width halo
         if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
@@ -389,6 +402,7 @@ class WanCausalConv3d(Module):
             ttnn.synchronize_device(x_THWC.device())
             x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
 
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
@@ -498,12 +512,14 @@ class WanResidualBlock(Module):
 
     def forward(
         self,
-        x_BTHWC: ttnn.Tensor,
+        x_tile_BTHWC: ttnn.Tensor,
         logical_h: int,
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
+
+        # x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
             self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
@@ -555,8 +571,8 @@ class WanResidualBlock(Module):
         # Add residual
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        return x_BTHWC
+        # x_tile_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        return x_tile_BTHWC
 
 
 class WanMidBlock(Module):
@@ -610,17 +626,17 @@ class WanMidBlock(Module):
 
     def forward(
         self,
-        x_BTHWC: ttnn.Tensor,
+        x_tile_BTHWC: ttnn.Tensor,
         logical_h: int,
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
-        x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
-        x_BTHWC = x_res_BTHWC
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
+        x_tile_BTHWC = self.resnets[0](x_tile_BTHWC, logical_h, feat_cache, feat_idx)
         for i in range(len(self.attentions)):
-            x_attn_BTHWC = self.attentions[i](x_BTHWC, logical_h)
-            x_BTHWC = self.resnets[i + 1](x_attn_BTHWC, logical_h, feat_cache, feat_idx)
-        return x_BTHWC
+            x_tile_BTHWC = self.attentions[i](x_tile_BTHWC, logical_h)
+            x_tile_BTHWC = self.resnets[i + 1](x_tile_BTHWC, logical_h, feat_cache, feat_idx)
+        return x_tile_BTHWC
 
 
 class WanConv2d(Module):
@@ -718,6 +734,7 @@ class WanConv2d(Module):
         return self.mask_cache[key]
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
@@ -844,11 +861,13 @@ class WanResample(Module):
 
     def forward(
         self,
-        x_BTHWC,
+        x_tile_BTHWC,
         logical_h,
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> tuple[ttnn.Tensor, int]:
+        x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+
         B, T, H, W, C = x_BTHWC.shape
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
@@ -919,7 +938,10 @@ class WanResample(Module):
                     feat_idx[0] += 1
             else:
                 raise ValueError("feat_cache cannot be None")
-        return x_conv_BTHWC, logical_h
+
+        x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
+
+        return x_tile_BTHWC, logical_h
 
 
 class WanUpBlock(Module):
@@ -981,9 +1003,11 @@ class WanUpBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> tuple[ttnn.Tensor, int]:
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT
         for resnet in self.resnets:
             x_res_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
             x_BTHWC = x_res_BTHWC
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT
         if self.upsamplers is not None:
             x_upsampled_BTHWC, logical_h = self.upsamplers(x_BTHWC, logical_h, feat_cache, feat_idx)
             x_BTHWC = x_upsampled_BTHWC
@@ -1116,17 +1140,19 @@ class WanDecoder3d(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## middle
-        x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+        x_tile_BTHWC = self.mid_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
         # DEBUG
-        # return x_BTHWC
+        # return x_tile_BTHWC
 
         ## upsamples
         for up_block in self.up_blocks:
-            x_BTHWC, logical_h = up_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+            x_tile_BTHWC, logical_h = up_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
         x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
@@ -1404,22 +1430,24 @@ class WanEncoder3D(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## downsamples
         for down_block in self.down_blocks:
             if isinstance(down_block, WanResample):
-                x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_tile_BTHWC, logical_h = down_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanResidualBlock):
-                x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_tile_BTHWC = down_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanAttentionBlock):
-                x_BTHWC = down_block(x_BTHWC, logical_h)
+                x_tile_BTHWC = down_block(x_tile_BTHWC, logical_h)
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
 
         ## middle
-        x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+        x_tile_BTHWC = self.mid_block(x_tile_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        assert x_tile_BTHWC.layout == ttnn.TILE_LAYOUT
         x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
