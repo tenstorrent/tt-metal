@@ -110,10 +110,6 @@ void kernel_main() {
     constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
     constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
 
-    // Padding bytes to append after each patch row to reach tile-aligned CB page width
-    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
-    constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
-
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
@@ -129,7 +125,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<36>();
+    constexpr auto in_args = TensorAccessorArgs<35>();
     const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
@@ -276,15 +272,13 @@ void kernel_main() {
                                 // Use stateful NOC read: L1->L1 with constexpr transfer size.
                                 constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
                                 static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
+                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+
                                 constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
                                 uint32_t patches_remaining = num_patches;
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                 cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
-                                if constexpr (patch_pad_bytes > 0) {
-                                    pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
-                                }
-                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                 uint32_t patches_in_chunk = 0;
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
@@ -307,10 +301,6 @@ void kernel_main() {
                                                 }
                                             }
 
-                                            if constexpr (patch_pad_bytes > 0) {
-                                                cb_write_addr += patch_pad_bytes;
-                                            }
-
                                             patches_in_chunk++;
                                             if (patches_in_chunk == chunk_size) {
                                                 noc_async_read_barrier();
@@ -322,10 +312,6 @@ void kernel_main() {
                                                         patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                                     cb_reserve_back(cb_vol2col, chunk_size);
                                                     cb_write_addr = get_write_ptr(cb_vol2col);
-                                                    if constexpr (patch_pad_bytes > 0) {
-                                                        pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
-                                                    }
-                                                    noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                                 }
                                             }
                                         }
@@ -365,9 +351,6 @@ void kernel_main() {
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                 cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
-                                if constexpr (patch_pad_bytes > 0) {
-                                    pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
-                                }
                                 uint32_t patches_in_chunk = 0;
 
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
@@ -415,10 +398,6 @@ void kernel_main() {
                                                 }
                                             }
 
-                                            if constexpr (patch_pad_bytes > 0) {
-                                                cb_write_addr += patch_pad_bytes;
-                                            }
-
                                             patches_in_chunk++;
                                             if (patches_in_chunk == chunk_size) {
                                                 noc_async_read_barrier();
@@ -430,9 +409,6 @@ void kernel_main() {
                                                         patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                                     cb_reserve_back(cb_vol2col, chunk_size);
                                                     cb_write_addr = get_write_ptr(cb_vol2col);
-                                                    if constexpr (patch_pad_bytes > 0) {
-                                                        pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
-                                                    }
                                                 }
                                             }
                                         }
