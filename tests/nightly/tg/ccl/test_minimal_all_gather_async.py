@@ -286,7 +286,7 @@ def test_all_gather_async_big_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -317,15 +317,15 @@ def test_all_gather_async_big_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },
-            ttnn.Topology.Linear,
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
 def test_all_gather_async_quad_host_mesh(
