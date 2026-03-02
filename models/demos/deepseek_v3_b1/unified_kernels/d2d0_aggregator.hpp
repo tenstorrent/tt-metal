@@ -60,17 +60,10 @@ struct D2D0Aggregator {
     template <typename CT, bool IsD2D0Core>
     class Op {
     public:
-        void setup() {
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (IsD2D0Core) {
-                setup_impl();
-            }
-#endif
-        }
-
         void run() {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsD2D0Core) {
+                setup_impl();
                 run_impl();
             }
 #endif
@@ -151,6 +144,8 @@ struct D2D0Aggregator {
         }
 
         void setup_impl() {
+            DPRINT << "D2D0 Aggregator setup\n";
+            DPRINT << "sender_page_size: " << CT::sender_page_size << "\n";
             size_t rt_args_idx = 0;
             if constexpr (CT::use_fabric_on_sender) {
                 fabric_conn_1_ =
@@ -191,55 +186,62 @@ struct D2D0Aggregator {
                 fabric_set_unicast_route(pkt_hdr_1_, downstream_enc_);
                 fabric_set_unicast_route(pkt_hdr_2_, downstream_enc_);
             }
+            DPRINT << "D2D0 Aggregator setup complete\n";
         }
 
         void run_impl() {
             volatile tt_l1_ptr uint32_t* termination_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CT::termination_semaphore_addr);
+            DPRINT << "D2D0 Aggregator run\n";
+            // while (true) {
+            uint32_t bytes_accumulated = 0;
+            bool terminated = false;
 
-            while (true) {
-                uint32_t bytes_accumulated = 0;
-                bool terminated = false;
+            socket_reserve_pages(sender_socket_, 1);
 
-                socket_reserve_pages(sender_socket_, 1);
-
-                for (uint32_t i = 0; i < CT::num_upstream_sockets; i++) {
-                    if (!socket_wait_for_pages_with_termination(receiver_sockets_[i], 1, termination_semaphore)) {
-                        terminated = true;
-                        break;
-                    }
-
-                    auto l1_read_addr = receiver_sockets_[i].read_ptr;
-                    uint32_t dst_l1_addr = downstream_fifo_l1_addr_ + sender_socket_.write_ptr + bytes_accumulated;
-                    uint64_t dst_addr = get_noc_addr(
-                        downstream_enc_.d2d.downstream_noc_x, downstream_enc_.d2d.downstream_noc_y, dst_l1_addr);
-
-                    noc_async_write(l1_read_addr, dst_addr, CT::upstream_page_size);
-                    noc_async_writes_flushed();
-                    socket_pop_pages(receiver_sockets_[i], 1);
-                    socket_notify_sender(receiver_sockets_[i]);
-                    invalidate_l1_cache();
-                    bytes_accumulated += CT::upstream_page_size;
-                }
-
-                if (terminated) {
+            for (uint32_t i = 0; i < CT::num_upstream_sockets; i++) {
+                DPRINT << "Waiting for data on receiver socket " << i << "\n";
+                if (!socket_wait_for_pages_with_termination(receiver_sockets_[i], 1, termination_semaphore)) {
+                    terminated = true;
                     break;
                 }
 
-                if (bytes_accumulated >= CT::sender_page_size) {
-                    if constexpr (CT::use_fabric_on_sender) {
-                        send_pages_over_socket(
-                            downstream_fifo_l1_addr_ + sender_socket_.write_ptr,
-                            get_noc_addr(
-                                downstream_enc_.d2d.downstream_noc_x,
-                                downstream_enc_.d2d.downstream_noc_y,
-                                downstream_fifo_l1_addr_ + sender_socket_.write_ptr));
-                    }
-                    socket_push_pages(sender_socket_, 1);
-                    socket_notify_receiver(sender_socket_);
-                }
+                auto l1_read_addr = receiver_sockets_[i].read_ptr;
+                uint32_t dst_l1_addr = downstream_fifo_l1_addr_ + sender_socket_.write_ptr + bytes_accumulated;
+                uint64_t dst_addr = get_noc_addr(
+                    downstream_enc_.d2d.downstream_noc_x, downstream_enc_.d2d.downstream_noc_y, dst_l1_addr);
+                DPRINT << "AGGREGATing data\n ";
+                noc_async_write(l1_read_addr, dst_addr, CT::upstream_page_size);
+                noc_async_writes_flushed();
+                socket_pop_pages(receiver_sockets_[i], 1);
+                socket_notify_sender(receiver_sockets_[i]);
                 invalidate_l1_cache();
+                bytes_accumulated += CT::upstream_page_size;
+                DPRINT << "bytes accumulated: " << bytes_accumulated << "\n";
             }
+            DPRINT << "Finished receiving from upstream sockets, bytes_accumulated: " << bytes_accumulated << "\n";
+
+            // if (terminated) {
+            //     break;
+            // }
+            DPRINT << "not terminated\n";
+
+            if (bytes_accumulated >= CT::sender_page_size) {
+                if constexpr (CT::use_fabric_on_sender) {
+                    DPRINT << "Sending aggregated data over fabric\n";
+                    send_pages_over_socket(
+                        downstream_fifo_l1_addr_ + sender_socket_.write_ptr,
+                        get_noc_addr(
+                            downstream_enc_.d2d.downstream_noc_x,
+                            downstream_enc_.d2d.downstream_noc_y,
+                            downstream_fifo_l1_addr_ + sender_socket_.write_ptr));
+                }
+                socket_push_pages(sender_socket_, 1);
+                socket_notify_receiver(sender_socket_);
+                DPRINT << "Finished sending aggregated data over fabric\n";
+            }
+            invalidate_l1_cache();
+            //}
 
             // Teardown
             update_socket_config(sender_socket_);
@@ -250,6 +252,7 @@ struct D2D0Aggregator {
                 fabric_conn_1_.close();
                 fabric_conn_2_.close();
             }
+            DPRINT << "D2D0 Aggregator run complete\n";
         }
 #endif  // COMPILE_FOR_NCRISC
     };  // class Op
