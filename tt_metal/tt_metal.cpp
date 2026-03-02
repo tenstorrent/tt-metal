@@ -1619,6 +1619,7 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnClusterQuasar(
         if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
             const std::shared_ptr<QuasarDataMovementKernel> dm_kernel =
                 std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel);
+            TT_ASSERT(dm_kernel != nullptr);
             const std::vector<DataMovementProcessor> dm_processors = dm_kernel->get_dm_processors();
             processors_in_use.insert(dm_processors.begin(), dm_processors.end());
         }
@@ -1659,9 +1660,9 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
                         processors.erase(dm_processor);
                     }
                 } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
-                    if (DoesClusterHaveComputeKernelQuasar(program, CoreCoord(x, y))) {
-                        TT_THROW("In Quasar, each cluster can only have a single compute kernel.");
-                    }
+                    TT_FATAL(
+                        !DoesClusterHaveComputeKernelQuasar(program, CoreCoord(x, y)),
+                        "In Quasar, each cluster can only have a single compute kernel.");
                 }
             }
         }

@@ -4,6 +4,7 @@
 
 #include "common/device_fixture.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -26,11 +27,11 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        std::cerr
-            << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(1,0) to see the output of "
-               "the Data Movement kernels."
-            << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)" << std::endl;
+        log_error(
+            tt::LogTest,
+            "Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(1,0) to see the output of the Data "
+            "Movement kernels.");
+        log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
     IDevice* dev = devices_[0]->get_devices()[0];
