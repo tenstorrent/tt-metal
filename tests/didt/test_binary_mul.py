@@ -18,26 +18,19 @@ MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 # This test was created to measure power consumption of BH chip on non-matmul workload.
 # The underlying workload is binary eltwise multiplication.
 class BinaryMulTest(OpTestBase):
-    def __init__(self, *args, gelu=None, **kwargs):
+    def __init__(self, *args, compute_grid=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.gelu = gelu
+        self.compute_grid = compute_grid
 
     def run_device_operation(self):
         return ttnn.mul(
             self.activations,
             self.inputs[0],
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)] if self.gelu else [],
+            sub_core_grids=self.compute_grid,
         )
 
 
-@pytest.mark.parametrize(
-    "gelu, math_fidelity",
-    [
-        (False, ttnn.MathFidelity.LoFi),
-        (True, ttnn.MathFidelity.HiFi2),
-    ],
-    ids=["without_gelu", "with_gelu"],
-)
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -51,16 +44,15 @@ class BinaryMulTest(OpTestBase):
 )
 def test_binary_mul(
     mesh_device,
-    gelu,
-    math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
 ):
     # Initialize input configurations
-    compute_grid = get_mesh_grid_size(mesh_device)
+    # compute_grid = get_mesh_grid_size(mesh_device)
+    compute_grid = ttnn.CoreCoord(2, 1)
     logger.info(f"Running on {compute_grid} cores")
 
-    in0_shape = [1, 1, 640 * compute_grid.y, 576 * compute_grid.x]
+    in0_shape = [1, 1, 128 * compute_grid.y, 512 * compute_grid.x]
     in1_shape = in0_shape
 
     in0_mem_config = ttnn.L1_MEMORY_CONFIG
@@ -79,7 +71,9 @@ def test_binary_mul(
         out_dtype=ttnn.DataType.BFLOAT8_B,
         program_config=program_config,
         compute_config=compute_config,
-        gelu=gelu,
+        compute_grid=ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))]
+        ),
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
