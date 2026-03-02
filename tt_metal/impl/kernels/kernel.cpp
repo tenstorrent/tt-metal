@@ -25,7 +25,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
