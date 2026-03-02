@@ -975,6 +975,127 @@ def run_reduce_scatter_impl(
         ),
         pytest.param(
             ReduceScatterTestConfig(
+                # Non-div Wt with wide mm blocks and single worker.
+                # mm_block_wt=3 → chunk_width_in_tiles=3; effective_advance_by_tiles=2 (1 worker).
+                # 2 % 3 != 0 → consecutive tiles in a 2-tile packet have different chunk_col values,
+                # which can straddle the left-bound validity threshold.
+                # chip 1: skip_cols_left = (1*7) % 9 = 7; in the last chunk of N-block 0
+                # (chunk_idx=2, cols 6..8), packet slot 0 has slice_col=6 (invalid, <7) and
+                # slot 1 has slice_col=8 (valid, >=7) — exercises the CB-packing fix.
+                rs_input_shape=[8, 1, 128, 1792],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=1,
+                mm_block_ht=4,
+                mm_block_wt=3,
+                mm_N_full_block_wt=9,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_non_div_Wt_wide_mm_block_cross_col_single_worker",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # Same shape as above but with 2 workers (effective_advance=4, 4%3=1≠0).
+                # chip k: skip = (k*7)%9 = {0,7,5,3,1,8,6,4} — diverse skips across chips.
+                # chip 1 (skip=7): in chunk_idx=2 of N-block 0, advance of 4 within a width-3
+                # subchunk causes col sequence (0,1,2,0,...); a packet landing on (col=2, col=0)
+                # wraps to (invalid, valid) — same root cause as the large_7_cores test.
+                rs_input_shape=[8, 1, 128, 1792],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=1,
+                mm_block_ht=4,
+                mm_block_wt=3,
+                mm_N_full_block_wt=9,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=2,
+            ),
+            id="experimental_strided_non_div_Wt_wide_mm_block_cross_col_two_workers",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # Non-div Wt with partial last chunk and multi-worker: smaller version of the
+                # large_7_cores test pattern. mm_N_full_block_wt=14, mm_block_wt=8 → chunk_width=8,
+                # chunks_per=2; partial last chunk has effective_width=6.
+                # effective_advance=4 (2 workers); 4 % 6 = 4 ≠ 0 → cross-column in partial chunk.
+                # chip 1 (skip=9%14=9): partial chunk cols 8..13; packet (col=0,col=4) →
+                # slice_col=8 invalid (8<9), slice_col=12 valid — exercises the partial-chunk path.
+                rs_input_shape=[4, 1, 256, 2304],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=4,
+                mm_block_wt=8,
+                mm_N_full_block_wt=14,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=2,
+            ),
+            id="experimental_strided_non_div_Wt_partial_last_chunk_cross_col_two_workers",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # All 8 chips have distinct skip values: slice_Wt=9, mm_N_full_block_wt=11 →
+                # chip k: skip = (k*9) % 11 = {0,9,7,5,3,1,10,8} — all 8 values are different,
+                # exercising every skip magnitude from 0 to 10 across one test run.
+                # mm_block_wt=3, chunk_width_in_mm_blocks=1 → chunk_width=3, chunks_per=4
+                # (last chunk partial: effective_width=2); effective_advance=4 (2 workers).
+                # 4 % 3 = 1 ≠ 0 in full chunks → cross-column packets.
+                # Also combines non-div Ht (slice_Ht=11, mm_cores_y=3: padded=12, per_core=4,
+                # ghost rows=1 on last core; mm_block_ht=3: partial last M-block of 1 row).
+                rs_input_shape=[8, 1, 352, 2304],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=3,
+                mm_block_ht=3,
+                mm_block_wt=3,
+                mm_N_full_block_wt=11,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=2,
+            ),
+            id="experimental_strided_non_div_Wt_all_unique_skips_non_div_Ht_multi_worker",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
                 # slice_Wt=3 is not divisible by mm_N_full_block_wt=2 (3 % 2 = 1).
                 # Fallback: mm_N_full_block_wt_val overridden to slice_Wt=3, 1 chunk covering all
                 # 3 tiles; mm_blocks_sem_override = div_up(2,1) = 2.
@@ -1175,12 +1296,21 @@ def test_strided_reduce_scatter_async(
         (5, 3, 2, 4, 1),
         # Non-divisible: padded=18, per_core=3; core 5: 1 real + 2 ghost; exact M-block (3%3=0)
         (6, 3, 2, 4, 1),
-        # Non-div Wt: slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0); fallback: whole 8-tile row
-        # as 1 chunk; mm_blocks_sem_override = div_up(3,2) = 2
+        # Non-div Wt: slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0).
+        # mm_block_wt=2 → chunk_width=2 = effective_advance; same column per packet advance.
         (1, 4, 2, 3, 1),
         # Non-div Wt + non-div Ht: slice_Wt=8, mm_N_full_block_wt=5 (8%5=3≠0) AND
-        # slice_Ht=16, mm_cores_y=4; padded_Ht=16 (exact); mm_blocks_sem_override = div_up(5,2) = 3
+        # slice_Ht=16, mm_cores_y=4; padded_Ht=16 (exact).
+        # mm_block_wt=2 → chunk_width=2 = effective_advance; same column per packet advance.
         (4, 4, 2, 5, 1),
+        # Non-div Wt: mm_N_full_block_wt=3, but now mm_block_wt=4 → chunk_width=4 > effective_advance=2.
+        # Consecutive packet slots advance by 2 within a width-4 subchunk → different columns.
+        # chip k: skip = (k*8)%3 = {0,2,1,0,...}; chip 2 (skip=1): packet (col=0,col=2) →
+        # col0 invalid, col2 valid — exercises the CB-packing fix path.
+        (1, 4, 4, 3, 1),
+        # Non-div Wt + non-div Ht: mm_N_full_block_wt=5 (8%5=3), mm_block_wt=4, mm_cores_y=2.
+        # Both cross-column packets (chunk_width=4 > effective_advance=2) and ghost rows.
+        (2, 4, 4, 5, 1),
     ],
     ids=[
         "finest_granularity",
@@ -1202,6 +1332,8 @@ def test_strided_reduce_scatter_async(
         "non_div_Ht_6cores_exact_Mblock_ghost_tail",
         "non_div_Wt_N3_into_8",
         "non_div_Wt_N5_into_8_multi_cores",
+        "non_div_Wt_N3_into_8_wide_block_cross_col",
+        "non_div_Wt_N5_into_8_wide_block_cross_col_non_div_Ht",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep(
@@ -1250,9 +1382,9 @@ def test_strided_reduce_scatter_blocking_sweep(
     # Shape [4,1,4096,4096] dim=3 with ring_size=8 gives:
     #   slice_Ht = 128 tiles, slice_Wt = 16 tiles
     #
-    # Constraints:
-    #   slice_Wt (16) % mm_N_full_block_wt == 0
-    #   NOTE: slice_Ht does NOT need to be divisible by mm_cores_y — ghost rows are skipped.
+    # NOTE: slice_Wt does NOT need to be divisible by mm_N_full_block_wt — kernels handle
+    #       non-divisible slices dynamically.
+    # NOTE: slice_Ht does NOT need to be divisible by mm_cores_y — ghost rows are skipped.
     #         slice_Ht_per_core does NOT need to be divisible by mm_block_ht either.
     #
     # Derived values:
@@ -1294,6 +1426,13 @@ def test_strided_reduce_scatter_blocking_sweep(
         (3, 5, 2, 8, 1),
         # Non-divisible: padded=132, per_core=22, last core has 18 real + 4 ghost; 22%5=2 → partial M-block
         (6, 5, 2, 8, 1),
+        # Non-div Wt: slice_Wt=16, mm_N_full_block_wt=5 (16%5=1≠0).
+        # mm_block_wt=3 → chunk_width=3 > effective_advance=2; cross-column packets hit the
+        # CB-packing fix. chip k: skip=(k*16)%5={0,1,2,3,4,0,...} — 5 distinct skip values.
+        (1, 8, 3, 5, 1),
+        # Non-div Wt: slice_Wt=16, mm_N_full_block_wt=3 (16%3=1≠0), mm_block_wt=4, 4 cores.
+        # chunk_width=4 > effective_advance=2; cross-column. chip k skip=(k*16)%3={0,1,2,0,...}.
+        (4, 4, 4, 3, 1),
     ],
     ids=[
         "coarsest_single_block",
@@ -1313,6 +1452,8 @@ def test_strided_reduce_scatter_blocking_sweep(
         "non_div_Ht_5cores_partial_Mblock",
         "non_div_Ht_3cores_partial_Mblock",
         "non_div_Ht_6cores_partial_Mblock",
+        "non_div_Wt_N5_into_16_wide_block_cross_col",
+        "non_div_Wt_N3_into_16_wide_block_cross_col_multi_cores",
     ],
 )
 # @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
@@ -1368,7 +1509,8 @@ def test_strided_reduce_scatter_blocking_sweep_large(
     #   slice_Ht_per_core = padded_slice_Ht / mm_cores_y
     #   ghost rows on last core(s) = padded_slice_Ht - 13
     #
-    # Constraint: slice_Wt (8) % mm_N_full_block_wt == 0
+    # NOTE: slice_Wt does NOT need to be divisible by mm_N_full_block_wt — kernels handle
+    #       non-divisible slices dynamically.
     "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
     [
         # padded=14, per_core=7, ghost=1; 7%3=1 → partial last M-block on every core
@@ -1392,12 +1534,20 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         # core 3: row 12 real + rows 13-15 ghost → M-block 0 mixed, M-block 1 all ghost
         (4, 2, 2, 4, 1),
         # Non-div Ht + non-div Wt: slice_Ht=13, mm_cores_y=2 (padded=14, per_core=7, ghost=1);
-        # slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0); both fallback paths active;
-        # mm_blocks_sem_override = div_up(3,2) = 2
+        # slice_Wt=8, mm_N_full_block_wt=3 (8%3=2≠0).
+        # mm_block_wt=2 → chunk_width=2 = effective_advance; same column per packet advance.
         (2, 3, 2, 3, 1),
         # Non-div Ht + non-div Wt: padded=16, per_core=4, ghost=3; core 3 mostly ghost;
-        # slice_Wt=8, mm_N_full_block_wt=5 (8%5=3≠0); mm_blocks_sem_override = div_up(5,2) = 3
+        # slice_Wt=8, mm_N_full_block_wt=5 (8%5=3≠0).
+        # mm_block_wt=2 → chunk_width=2 = effective_advance; same column per packet advance.
         (4, 3, 2, 5, 1),
+        # Non-div Ht + non-div Wt + cross-column: same as above but mm_block_wt=4 →
+        # chunk_width=4 > effective_advance=2; consecutive packet slots visit different columns.
+        # chip k: skip=(k*8)%3={0,2,1,0,...}; chip 2 (skip=1): packet (col=0,col=2) → invalid,valid.
+        (2, 3, 4, 3, 1),
+        # Non-div Ht + non-div Wt + cross-column, more ghost rows: padded=16, per_core=4, ghost=3.
+        # mm_N_full_block_wt=5 (8%5≠0), mm_block_wt=4 → chunk_width=4 > effective_advance=2.
+        (4, 3, 4, 5, 1),
     ],
     ids=[
         "2cores_partial_last_Mblock",
@@ -1409,6 +1559,8 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         "4cores_ghost_spans_Mblocks",
         "non_div_Ht_and_Wt_N3_into_8",
         "non_div_Ht_and_Wt_N5_into_8",
+        "non_div_Ht_and_Wt_N3_wide_block_cross_col",
+        "non_div_Ht_and_Wt_N5_wide_block_cross_col",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(
