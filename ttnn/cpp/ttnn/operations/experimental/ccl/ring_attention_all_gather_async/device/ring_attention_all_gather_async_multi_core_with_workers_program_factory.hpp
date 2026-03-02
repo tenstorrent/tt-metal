@@ -77,7 +77,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 
 void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
     const RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables& shared_variables,
