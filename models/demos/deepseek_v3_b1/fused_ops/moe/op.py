@@ -1474,11 +1474,11 @@ class MoeRoutedExpertOp:
 
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
             # Residual mcast source (setup_sharded_buffer on sender core)
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
@@ -1487,8 +1487,8 @@ class MoeRoutedExpertOp:
             ("shared_residual_cb", ctx.residual_mcast_dst_cb),
             ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
             # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
             # Gate matmul reader (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1598,18 +1598,18 @@ class MoeRoutedExpertOp:
 
         brisc_named_compile_time_args = [
             # Input mcast sender
-            ("mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
-            ("mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
-            ("mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
-            ("mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
-            ("mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
-            ("mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
+            ("moe_mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
+            ("moe_mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
+            ("moe_mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
+            ("moe_mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
+            ("moe_mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
+            ("moe_mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
             # Residual mcast sender (input from sender → residual CB on mcast grid)
             ("shared_residual_mcast_data_sender_semaphore_addr", ctx.mcast_data_sender_semaphore_addr),
             ("shared_residual_mcast_data_receiver_semaphore_addr", ctx.residual_mcast_receiver_semaphore_addr),
@@ -1695,13 +1695,13 @@ class MoeRoutedExpertOp:
 
         trisc_named_compile_time_args = [
             # RMSNorm compute (sender core only)
-            ("rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_output_cb", ctx.rmsnorm_output_cb),
-            ("rmsnorm_fp32_acc", 0),
-            ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
-            ("rmsnorm_rsqrt_fast_approx", 0),
-            ("rmsnorm_trisc_common_rt_arg_base", 0),
+            ("moe_rmsnorm_input_cb", ctx.residual_mcast_src_cb),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_output_cb", ctx.rmsnorm_output_cb),
+            ("moe_rmsnorm_fp32_acc", 0),
+            ("moe_rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
+            ("moe_rmsnorm_rsqrt_fast_approx", 0),
+            ("moe_rmsnorm_trisc_common_rt_arg_base", 0),
             # Gate matmul compute (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
