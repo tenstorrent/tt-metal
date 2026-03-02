@@ -444,54 +444,63 @@ ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
 def golden_grid_sample(
     input_tensor: ttnn.Tensor,
     grid: ttnn.Tensor,
-    batch_size: int,
-    input_h: int,
-    input_w: int,
-    channels: int,
-    output_h: int,
-    output_w: int,
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool = False,
+    batch_size: int = None,
+    input_h: int = None,
+    input_w: int = None,
+    channels: int = None,
+    output_h: int = None,
+    output_w: int = None,
     **_,
 ):
     """
     Golden function for grid_sample operation using torch.nn.functional.grid_sample.
 
+    Supports two input formats:
+    - (N, H_in, W_in, C): Used by attach_golden_function (ttnn.grid_sample passes this format)
+    - (1, 1, N*H*W, C): Used by direct test calls with explicit batch_size/input_h/input_w/channels
+
     Args:
-        input_tensor: Input tensor in (1, 1, N*H*W, C) format
-        grid: Grid tensor in (1, 1, N*out_H*out_W, 2) format
-        batch_size: Number of batches
-        input_h: Input height
-        input_w: Input width
-        channels: Number of channels
-        output_h: Output height
-        output_w: Output width
+        input_tensor: Input tensor in (N, H_in, W_in, C) or (1, 1, N*H*W, C) format
+        grid: Grid tensor in (N, H_out, W_out, 2) or (1, 1, N*out_H*out_W, 2) format
         mode: Interpolation mode ("bilinear" or "nearest")
         padding_mode: Padding mode ("zeros", "border", or "reflection")
         align_corners: Whether to align corners
+        batch_size: Number of batches (required for (1, 1, N*H*W, C) format)
+        input_h: Input height (required for (1, 1, N*H*W, C) format)
+        input_w: Input width (required for (1, 1, N*H*W, C) format)
+        channels: Number of channels (required for (1, 1, N*H*W, C) format)
+        output_h: Output height (required for (1, 1, N*out_H*out_W, 2) format)
+        output_w: Output width (required for (1, 1, N*out_H*out_W, 2) format)
 
     Returns:
-        Output tensor in (1, 1, N*out_H*out_W, C) format
+        Output tensor in the same spatial format as input
     """
     import torch
 
-    # Reshape input from (1, 1, N*H*W, C) to (N, C, H, W)
-    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+    if batch_size is not None:
+        # Direct call with (1, 1, N*H*W, C) format
+        input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+        grid_nhwc = grid.reshape(batch_size, output_h, output_w, 2)
 
-    # Reshape grid from (1, 1, N*out_H*out_W, 2) to (N, out_H, out_W, 2)
-    grid_nhwc = grid.reshape(batch_size, output_h, output_w, 2)
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(), grid_nhwc.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        )
 
-    # Apply grid_sample
-    output_nchw = torch.nn.functional.grid_sample(
-        input_nchw.float(), grid_nhwc.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
-    )
+        N, C, H, W = output_nchw.shape
+        return output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C).to(input_tensor.dtype)
+    else:
+        # attach_golden_function call with (N, H_in, W_in, C) format
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
+        # grid is already (N, H_out, W_out, 2)
 
-    # Convert back to (1, 1, N*H*W, C)
-    N, C, H, W = output_nchw.shape
-    output_tensor = output_nchw.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C).to(input_tensor.dtype)
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(), grid.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        )
 
-    return output_tensor
+        return output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
 
 
 ttnn.attach_golden_function(ttnn.grid_sample, golden_grid_sample)
