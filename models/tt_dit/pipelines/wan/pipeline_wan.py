@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard, local_device_to_torch
+from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -135,6 +135,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -249,6 +250,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
+            dtype=vae_dtype,
         )
 
         if self.dynamic_load:
@@ -988,7 +990,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            tt_latents_BTHWC = bf16_tensor_2dshard(
+            tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -996,6 +998,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.height_parallel.mesh_axis: 2,
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
+                dtype=self.tt_vae.dtype,
             )
 
             self._prepare_vae()
