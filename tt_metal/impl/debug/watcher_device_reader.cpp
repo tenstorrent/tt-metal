@@ -710,6 +710,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (ethernet send with L1 source overflow).";
             break;
+        case dev_msgs::DebugSanitizeCBOutOfBounds:
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (NOC transaction overflows a circular buffer).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
