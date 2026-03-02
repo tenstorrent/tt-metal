@@ -4,9 +4,7 @@
 """
 Test eltwise add with compressed tensor input.
 
-A (bf16 TILE_LAYOUT) + B (compressed bfp8) = C (bf16 TILE_LAYOUT)
-
-Single core, HEIGHT_SHARDED, 32x32 (1 tile).
+Single core, HEIGHT_SHARDED.
 """
 
 import torch
@@ -19,21 +17,24 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_compressed_tensor import 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-def test_eltwise_add_compressed_single_core(device):
-    """
-    Single-core eltwise add: A (bf16) + decompress(B_compressed) = C (bf16).
-    """
+def _run_eltwise_add_compressed(device, M, N, formats, threshold=0.993, pcc_threshold=0.98):
+    """Helper: run A (bf16) + decompress(B_compressed) = C (bf16) on single core."""
     torch.manual_seed(42)
-    M, N = 32, 32  # 1x1 tile
 
     a_torch = torch.randn(1, 1, M, N).bfloat16().float()
     b_torch = torch.randn(M, N).float()
+    # Scale alternating tiles so the assigner picks different formats:
+    # even tiles get large range (needs bfp8), odd tiles get small range (bfp4 ok)
+    tiles_h = M // 32
+    tiles_w = N // 32
+    for tr in range(tiles_h):
+        for tc in range(tiles_w):
+            if (tr + tc) % 2 == 1:
+                b_torch[tr * 32 : (tr + 1) * 32, tc * 32 : (tc + 1) * 32] *= 0.5
 
-    # Single core grid
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
-    # Create compressed tensor B, HEIGHT_SHARDED on single core in L1
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8"])
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats)
     b_mem_config = _make_sharded_mem_config(
         (M, N), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, core_grid
     )
@@ -46,32 +47,63 @@ def test_eltwise_add_compressed_single_core(device):
     b_decompressed = ct.to_torch()
     golden = a_torch + b_decompressed.unsqueeze(0).unsqueeze(0)
 
-    # A tensor on device (HEIGHT_SHARDED, single core)
+    # A tensor on device
     a_shard_spec = ttnn.ShardSpec(core_grid, [M, N], ttnn.ShardOrientation.ROW_MAJOR)
     a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec)
     a_t = ttnn.from_torch(
-        a_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=a_mem_config
+        a_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=a_mem_config
     )
 
     # Output tensor on device
     out_t = ttnn.from_torch(
         torch.zeros_like(a_torch),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=a_mem_config,
     )
 
-    logger.info(f"A L1 addr: {a_t.buffer_address():#x}")
-    logger.info(f"B data L1 addr: {ct.get_data_l1_address():#x}")
-    logger.info(f"Out L1 addr: {out_t.buffer_address():#x}")
-
-    # Run eltwise add compressed
+    # Run
     result_t = EltwiseAddCompressed.op(a_t, ct, out_t)
 
     # Compare
     result_torch = ttnn.to_torch(result_t)
-    passing, output = comp_pcc(golden, result_torch, 0.98)
+    passing, output = comp_pcc(golden, result_torch, pcc_threshold)
 
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
+
+
+def test_eltwise_add_compressed_1tile_bfp4(device):
+    """1 tile, bfp4 only."""
+    _run_eltwise_add_compressed(device, 32, 32, formats=["bfp4"])
+
+
+def test_eltwise_add_compressed_4tile_bfp4(device):
+    """4 tiles (64x64), bfp4 only."""
+    _run_eltwise_add_compressed(device, 64, 64, formats=["bfp4"])
+
+
+def test_eltwise_add_compressed_1tile_bfp8(device):
+    """1 tile, bfp8 only."""
+    _run_eltwise_add_compressed(device, 32, 32, formats=["bfp8"])
+
+
+def test_eltwise_add_compressed_4tile_bfp8(device):
+    """4 tiles (64x64), bfp8 only."""
+    _run_eltwise_add_compressed(device, 64, 64, formats=["bfp8"])
+
+
+def test_eltwise_add_compressed_2tile_mixed(device):
+    """2 tiles (64x32), mixed bfp4 + bfp8."""
+    _run_eltwise_add_compressed(device, 64, 32, formats=["bfp8", "bfp4"])
+
+
+def test_eltwise_add_compressed_4tile_mixed(device):
+    """4 tiles (64x64), mixed bfp4 + bfp8."""
+    _run_eltwise_add_compressed(device, 64, 64, formats=["bfp8", "bfp4"])
+
+
+def test_eltwise_add_compressed_16tile_mixed(device):
+    """16 tiles (128x128), mixed bfp4 + bfp8."""
+    _run_eltwise_add_compressed(device, 128, 128, formats=["bfp8", "bfp4"])
