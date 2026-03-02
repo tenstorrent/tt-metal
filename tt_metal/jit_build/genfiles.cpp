@@ -224,7 +224,7 @@ void jit_build_genfiles_triscs_src(
         unpack_src = math_src = pack_src = isolate_sfpu_src = src;
     }
 
-    // Generate the three TRISC source files
+    // Generate the four TRISC source files (fourth only used on Quasar)
     write_file(unpack_cpp, unpack_prolog + unpack_src);
     write_file(math_cpp, math_prolog + math_src);
     write_file(pack_cpp, pack_prolog + pack_src);

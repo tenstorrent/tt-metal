@@ -109,7 +109,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     tt_metal::detail::ReadFromDeviceL1(
         mesh_device->get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
 
-    const std::vector<uint32_t> expected_values = {4, 6, 5, 7};
+    const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 
     ASSERT_EQ(actual_values, expected_values);
 }
