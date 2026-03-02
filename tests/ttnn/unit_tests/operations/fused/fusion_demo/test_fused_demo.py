@@ -12,6 +12,8 @@ Demos showcasing different fusion capabilities:
 3. Two parallel sharded chains (LN→MM, RMS→MM) on disjoint 1×8 core columns
 4. GlobalCircularBuffer mid-kernel write to an external consumer
 5. Sharded heterogeneous tree (LN → Slice → Matmul → Slice → LN) with block-sharded L1 intermediates
+6. Asymmetric parallel branches: 2-op RMS chain hidden behind matmul, common stem (2×8 → 1×8+1×8)
+7. Non-contiguous core grid: identity chain with branching on scattered cores (unicast barrier)
 
 Each demo is split into separate fused and unfused tests, each with cold + warm timing.
 Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
@@ -44,6 +46,150 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_approx_mode=False,
     fp32_dest_acc_en=True,
 )
+
+TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
+
+DRAM_READER_SOURCE = """\
+#include "api/dataflow/dataflow_api.h"
+void kernel_main() {
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
+    uint32_t tile_bytes = get_tile_size(cb_id);
+    DataFormat data_format = get_dataformat(cb_id);
+    const InterleavedAddrGenFast<true> s = {
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_reserve_back(cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        noc_async_read_tile(i, s, l1_write_addr);
+        noc_async_read_barrier();
+        cb_push_back(cb_id, 1);
+    }
+}
+"""
+
+TILE_COPY_COMPUTE_SOURCE = """\
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+void kernel_main() {
+    constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    unary_op_init_common(cb_in, cb_out);
+    copy_tile_init(cb_in);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_wait_front(cb_in, 1);
+        tile_regs_acquire();
+        copy_tile(cb_in, 0, 0);
+        cb_pop_front(cb_in, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_out, 1);
+        pack_tile(0, cb_out);
+        cb_push_back(cb_out, 1);
+        tile_regs_release();
+    }
+}
+"""
+
+DRAM_WRITER_SOURCE = """\
+#include "api/dataflow/dataflow_api.h"
+void kernel_main() {
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
+    uint32_t tile_bytes = get_tile_size(cb_id);
+    DataFormat data_format = get_dataformat(cb_id);
+    const InterleavedAddrGenFast<true> d = {
+        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_wait_front(cb_id, 1);
+        uint32_t l1_read_addr = get_read_ptr(cb_id);
+        noc_async_write_tile(i, d, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id, 1);
+    }
+}
+"""
+
+
+def _get_core_coords(core_ranges):
+    coords = []
+    for cr in core_ranges.ranges():
+        for y in range(cr.start.y, cr.end.y + 1):
+            for x in range(cr.start.x, cr.end.x + 1):
+                coords.append(ttnn.CoreCoord(x, y))
+    return coords
+
+
+def _make_cb_desc(buffer_index, core_ranges, total_size=TILE_SIZE_BF16, is_remote=False, gcb=None):
+    cb = ttnn.CBDescriptor()
+    cb.total_size = total_size
+    cb.core_ranges = core_ranges
+    fmt = ttnn.CBFormatDescriptor(
+        buffer_index=buffer_index,
+        data_format=ttnn.DataType.BFLOAT16,
+        page_size=TILE_SIZE_BF16,
+    )
+    if is_remote:
+        cb.remote_format_descriptors = [fmt]
+    else:
+        cb.format_descriptors = [fmt]
+    if gcb is not None:
+        cb.set_global_circular_buffer(gcb)
+    return cb
+
+
+def _make_kernel_desc(source, core_ranges, config, named_ct_args, rt_args_per_core):
+    k = ttnn.KernelDescriptor()
+    k.kernel_source = source
+    k.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+    k.core_ranges = core_ranges
+    k.named_compile_time_args = named_ct_args
+    k.runtime_args = rt_args_per_core
+    k.config = config
+    return k
+
+
+def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
+    src_addr = input_tensor.buffer_address()
+    dst_addr = output_tensor.buffer_address()
+    cb_in = _make_cb_desc(0, core_ranges)
+    cb_out = _make_cb_desc(4, core_ranges)
+    coords = _get_core_coords(core_ranges)
+    reader = _make_kernel_desc(
+        DRAM_READER_SOURCE,
+        core_ranges,
+        ttnn.ReaderConfigDescriptor(),
+        [("cb_in", 0)],
+        [(c, [src_addr, num_tiles]) for c in coords],
+    )
+    compute = _make_kernel_desc(
+        TILE_COPY_COMPUTE_SOURCE,
+        core_ranges,
+        ttnn.ComputeConfigDescriptor(),
+        [("cb_in", 0), ("cb_out", 4)],
+        [(c, [num_tiles]) for c in coords],
+    )
+    writer = _make_kernel_desc(
+        DRAM_WRITER_SOURCE,
+        core_ranges,
+        ttnn.WriterConfigDescriptor(),
+        [("cb_out", 4)],
+        [(c, [dst_addr, num_tiles]) for c in coords],
+    )
+    desc = ttnn.ProgramDescriptor()
+    desc.cbs = [cb_in, cb_out]
+    desc.kernels = [reader, compute, writer]
+    return OpDescriptor(
+        descriptor=desc,
+        input_tensors=[input_tensor],
+        output_tensors=[output_tensor],
+        name="identity",
+    )
 
 
 def _clear_all_caches(device):
@@ -162,7 +308,7 @@ class TestFusedDemo:
 
         return core_range, mm_cfg, torch_input, torch_w, torch_b
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_demo1_fused(self, device, H, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -238,7 +384,7 @@ class TestFusedDemo:
             print(f"\n  Demo 1 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_demo1_unfused(self, device, H, single_run_only):
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._demo1_setup(device, H)
@@ -314,7 +460,7 @@ class TestFusedDemo:
 
         return cores, sharded_mem, program_cfg, tt_input, tt_w
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_demo2_fused(self, device, H, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -376,7 +522,7 @@ class TestFusedDemo:
             print(f"\n  Demo 2 Fused (H={H}): cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_demo2_unfused(self, device, H, single_run_only):
         cores, sharded_mem, program_cfg, tt_input, tt_w = self._demo2_setup(device, H)
@@ -489,7 +635,7 @@ class TestFusedDemo:
             tB,
         )
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     def test_demo3_fused(self, device, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
@@ -571,7 +717,7 @@ class TestFusedDemo:
             assert p_a, f"Chain A PCC: {pcc_a}"
             assert p_b, f"Chain B PCC: {pcc_b}"
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     def test_demo3_unfused(self, device, single_run_only):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -681,57 +827,9 @@ class TestFusedDemo:
     # Demo 4: GlobalCircularBuffer mid-kernel write (fused only)
     # -----------------------------------------------------------------
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     def test_demo4_fused(self, device, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
-
-        TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
-
-        DRAM_READER_SOURCE = """\
-#include "api/dataflow/dataflow_api.h"
-void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_in");
-    uint32_t tile_bytes = get_tile_size(cb_id);
-    DataFormat data_format = get_dataformat(cb_id);
-    const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(i, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id, 1);
-    }
-}
-"""
-
-        TILE_COPY_COMPUTE_SOURCE = """\
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
-void kernel_main() {
-    constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_in, 1);
-        tile_regs_acquire();
-        copy_tile(cb_in, 0, 0);
-        cb_pop_front(cb_in, 1);
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_out, 1);
-        pack_tile(0, cb_out);
-        cb_push_back(cb_out, 1);
-        tile_regs_release();
-    }
-}
-"""
 
         GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
@@ -781,26 +879,7 @@ void kernel_main() {
 }
 """
 
-        DRAM_WRITER_SOURCE = """\
-#include "api/dataflow/dataflow_api.h"
-void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_out");
-    uint32_t tile_bytes = get_tile_size(cb_id);
-    DataFormat data_format = get_dataformat(cb_id);
-    const InterleavedAddrGenFast<true> d = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, 1);
-    }
-}
-"""
-
+        # RECEIVER_DRAM_WRITER_SOURCE uses cb_in (not cb_out) — kept local to demo 4
         RECEIVER_DRAM_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() {
@@ -820,41 +899,6 @@ void kernel_main() {
     }
 }
 """
-
-        def _get_core_coords(core_ranges):
-            coords = []
-            for cr in core_ranges.ranges():
-                for y in range(cr.start.y, cr.end.y + 1):
-                    for x in range(cr.start.x, cr.end.x + 1):
-                        coords.append(ttnn.CoreCoord(x, y))
-            return coords
-
-        def _make_cb_desc(buffer_index, core_ranges, total_size=TILE_SIZE_BF16, is_remote=False, gcb=None):
-            cb = ttnn.CBDescriptor()
-            cb.total_size = total_size
-            cb.core_ranges = core_ranges
-            fmt = ttnn.CBFormatDescriptor(
-                buffer_index=buffer_index,
-                data_format=ttnn.DataType.BFLOAT16,
-                page_size=TILE_SIZE_BF16,
-            )
-            if is_remote:
-                cb.remote_format_descriptors = [fmt]
-            else:
-                cb.format_descriptors = [fmt]
-            if gcb is not None:
-                cb.set_global_circular_buffer(gcb)
-            return cb
-
-        def _make_kernel_desc(source, core_ranges, config, named_ct_args, rt_args_per_core):
-            k = ttnn.KernelDescriptor()
-            k.kernel_source = source
-            k.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-            k.core_ranges = core_ranges
-            k.named_compile_time_args = named_ct_args
-            k.runtime_args = rt_args_per_core
-            k.config = config
-            return k
 
         def _build_globalcb_sender_op(input_tensor, core_ranges, gcb, num_tiles):
             src_addr = input_tensor.buffer_address()
@@ -887,43 +931,6 @@ void kernel_main() {
             desc.cbs = [cb_in, cb_out, cb_remote]
             desc.kernels = [reader, compute, writer]
             return OpDescriptor(descriptor=desc, input_tensors=[input_tensor], output_tensors=[], name="gcb_sender")
-
-        def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
-            src_addr = input_tensor.buffer_address()
-            dst_addr = output_tensor.buffer_address()
-            cb_in = _make_cb_desc(0, core_ranges)
-            cb_out = _make_cb_desc(4, core_ranges)
-            coords = _get_core_coords(core_ranges)
-            reader = _make_kernel_desc(
-                DRAM_READER_SOURCE,
-                core_ranges,
-                ttnn.ReaderConfigDescriptor(),
-                [("cb_in", 0)],
-                [(c, [src_addr, num_tiles]) for c in coords],
-            )
-            compute = _make_kernel_desc(
-                TILE_COPY_COMPUTE_SOURCE,
-                core_ranges,
-                ttnn.ComputeConfigDescriptor(),
-                [("cb_in", 0), ("cb_out", 4)],
-                [(c, [num_tiles]) for c in coords],
-            )
-            writer = _make_kernel_desc(
-                DRAM_WRITER_SOURCE,
-                core_ranges,
-                ttnn.WriterConfigDescriptor(),
-                [("cb_out", 4)],
-                [(c, [dst_addr, num_tiles]) for c in coords],
-            )
-            desc = ttnn.ProgramDescriptor()
-            desc.cbs = [cb_in, cb_out]
-            desc.kernels = [reader, compute, writer]
-            return OpDescriptor(
-                descriptor=desc,
-                input_tensors=[input_tensor],
-                output_tensors=[output_tensor],
-                name="identity",
-            )
 
         def _build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
             dst_addr = output_tensor.buffer_address()
@@ -1264,7 +1271,7 @@ void kernel_main() {
             ),
         ).build(device)
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     def test_demo5_fused(self, device, single_run_only):
         (
             ln_stem,
@@ -1387,7 +1394,7 @@ void kernel_main() {
             assert p_ll, f"Left-left PCC: {pcc_ll}"
             assert p_rl, f"Right-left PCC: {pcc_rl}"
 
-    @pytest.mark.parametrize("single_run_only", [False])
+    @pytest.mark.parametrize("single_run_only", [True, False])
     def test_demo5_unfused(self, device, single_run_only):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -1524,3 +1531,427 @@ void kernel_main() {
             e2e = _time_steady_state(unfused, device)
 
             print(f"\n  Demo 5 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 6: Asymmetric parallel branches with common stem
+    #
+    # Demonstrates the benefit of parallel + sequential fusion when one
+    # branch is a chain of lightweight ops running alongside a single
+    # heavy compute op on disjoint cores.  Uses 32-core stem (4×8) and
+    # 16-core branches (2×8 each).
+    #
+    # Topology:
+    #   Sequential(
+    #       LN_stem                       (32 cores, 4×8)
+    #       Parallel(
+    #           Sequential(Slice_L, RMS, RMS)   (left 16 cores, cols 0-1)
+    #           Sequential(Slice_R, LN)          (right 16 cores, cols 2-3)
+    #       )
+    #   )
+    #
+    # The 2-op RMS chain runs hidden behind the heavier LN on the
+    # other branch. Unfused, all 6 ops serialize on a single grid.
+    # -----------------------------------------------------------------
+
+    def _demo6_setup(self, device):
+        torch.manual_seed(42)
+        rows, cols = 2048, 512
+
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})
+        left_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
+        right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 7))})
+
+        def _shard_mem(cores, shard_h, shard_w):
+            spec = ttnn.ShardSpec(cores, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        shards = {
+            "stem": _shard_mem(stem_cores, 256, 128),  # [2048,512] on 4×8
+            "left": _shard_mem(left_cores, 128, 256),  # [1024,512] on 2×8
+            "right": _shard_mem(right_cores, 128, 256),  # [1024,512] on 2×8
+        }
+
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=shards["stem"],
+        )
+
+        # RMS weight [1,1,1,512] width-sharded on left cores → [32,32] per core
+        torch_w = torch.ones(1, 1, 1, cols, dtype=torch.bfloat16)
+        w_shard = ttnn.ShardSpec(left_cores, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
+        tw = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem)
+
+        return (
+            stem_cores,
+            left_cores,
+            right_cores,
+            shards,
+            tt_input,
+            tw,
+        )
+
+    @pytest.mark.parametrize("single_run_only", [True, False])
+    def test_demo6_fused(self, device, single_run_only):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
+        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+
+        (
+            stem_cores,
+            left_cores,
+            right_cores,
+            shards,
+            tt_input,
+            tw,
+        ) = self._demo6_setup(device)
+        rows, cols = 2048, 512
+        half = rows // 2
+
+        # Stem: LN on 32 cores
+        ln_stem = layer_norm.layer_norm(
+            tt_input,
+            core_range_set=stem_cores,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+        )
+
+        # Split to disjoint branches
+        sl_left = slice_op(
+            ln_stem.output_tensors[0],
+            [0, 0, 0, 0],
+            [1, 1, half, cols],
+            core_range_set=left_cores,
+            memory_config=shards["left"],
+        )
+        sl_right = slice_op(
+            ln_stem.output_tensors[0],
+            [0, 0, half, 0],
+            [1, 1, rows, cols],
+            core_range_set=right_cores,
+            memory_config=shards["right"],
+        )
+
+        # Left branch: chain of 2 RMS norms
+        rms1 = rms_norm.rms_norm(
+            sl_left.output_tensors[0],
+            core_range_set=left_cores,
+            weight=tw,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=shards["left"],
+        )
+        rms2 = rms_norm.rms_norm(
+            rms1.output_tensors[0],
+            core_range_set=left_cores,
+            weight=tw,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=shards["left"],
+        )
+
+        # Right branch: single LN (heavy compute)
+        ln_right = layer_norm.layer_norm(
+            sl_right.output_tensors[0],
+            core_range_set=right_cores,
+            epsilon=1e-5,
+            compute_kernel_config=COMPUTE_CONFIG,
+        )
+
+        def build():
+            return Sequential(
+                ln_stem,
+                Parallel(
+                    Sequential(sl_left, rms1, rms2),
+                    Sequential(sl_right, ln_right),
+                ),
+            ).build(device)
+
+        if single_run_only:
+            fused = build()
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 6 Fused: single run (for Tracy)")
+        else:
+            _, cold, _ = _time_fused(build, device)
+
+            fused = build()
+            e2e = _time_steady_state(fused.launch, device)
+
+            # Unfused reference for PCC — sharded on (0,0)-based grids
+            branch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
+            stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(4, 8),
+                subblock_w=min(128 // 32, 4),
+                block_h=256 // 32,
+                block_w=128 // 32,
+                inplace=False,
+            )
+            branch_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(2, 8),
+                subblock_w=min(256 // 32, 4),
+                block_h=128 // 32,
+                block_w=256 // 32,
+                inplace=False,
+            )
+            branch_mem = shards["left"]  # (0,0)-based 2×8
+
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=shards["stem"],
+            )
+            u_left = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=branch_mem)
+            u_right = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=branch_mem)
+            ttnn.deallocate(u_stem)
+
+            for _ in range(2):
+                u_left = ttnn.rms_norm(
+                    u_left,
+                    weight=tw,
+                    epsilon=1e-5,
+                    program_config=branch_ln_cfg,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    memory_config=branch_mem,
+                )
+            u_right = ttnn.layer_norm(
+                u_right,
+                epsilon=1e-5,
+                program_config=branch_ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=branch_mem,
+            )
+
+            result_left = ttnn.to_torch(rms2.output_tensors[0])
+            result_right = ttnn.to_torch(ln_right.output_tensors[0])
+            ref_left = ttnn.to_torch(u_left)
+            ref_right = ttnn.to_torch(u_right)
+
+            p_l, pcc_l = comp_pcc(ref_left, result_left, pcc=0.97)
+            p_r, pcc_r = comp_pcc(ref_right, result_right, pcc=0.97)
+
+            print(f"\n  Demo 6 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
+            assert p_l, f"Left chain PCC: {pcc_l}"
+            assert p_r, f"Right LN PCC: {pcc_r}"
+
+    @pytest.mark.parametrize("single_run_only", [True, False])
+    def test_demo6_unfused(self, device, single_run_only):
+        """Unfused path: all 6 ops serialize on (0,0)-based grids.
+
+        The fused path runs the RMS chain in parallel with the LN on
+        disjoint cores.  Here everything serializes on the same grid.
+        """
+        torch.manual_seed(42)
+        rows, cols = 2048, 512
+        half = rows // 2
+
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})
+        branch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
+
+        def _shard_mem(cores, shard_h, shard_w):
+            spec = ttnn.ShardSpec(cores, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        stem_mem = _shard_mem(stem_cores, 256, 128)
+        branch_mem = _shard_mem(branch_cores, 128, 256)
+
+        stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(4, 8),
+            subblock_w=min(128 // 32, 4),
+            block_h=256 // 32,
+            block_w=128 // 32,
+            inplace=False,
+        )
+        branch_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(2, 8),
+            subblock_w=min(256 // 32, 4),
+            block_h=128 // 32,
+            block_w=256 // 32,
+            inplace=False,
+        )
+
+        tt_input = ttnn.from_torch(
+            torch.randn(1, 1, rows, cols, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=stem_mem,
+        )
+        # RMS weight on branch_cores
+        w_shard = ttnn.ShardSpec(branch_cores, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
+        tw = ttnn.from_torch(
+            torch.ones(1, 1, 1, cols, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=w_mem,
+        )
+
+        def unfused():
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=stem_mem,
+            )
+            u_left = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=branch_mem)
+            u_right = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=branch_mem)
+            # 2× RMS on left half
+            u_left = ttnn.rms_norm(
+                u_left,
+                weight=tw,
+                epsilon=1e-5,
+                program_config=branch_ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=branch_mem,
+            )
+            u_left = ttnn.rms_norm(
+                u_left,
+                weight=tw,
+                epsilon=1e-5,
+                program_config=branch_ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=branch_mem,
+            )
+            # LN on right half
+            ttnn.layer_norm(
+                u_right,
+                epsilon=1e-5,
+                program_config=branch_ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=branch_mem,
+            )
+
+        if single_run_only:
+            unfused()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 6 Unfused: single run (for Tracy)")
+        else:
+            cold, _ = _time_cold_warm(unfused, device)
+            e2e = _time_steady_state(unfused, device)
+            print(f"\n  Demo 6 Unfused: cold={cold:.2f}ms  e2e={e2e:.3f}ms")
+
+    # -----------------------------------------------------------------
+    # Demo 7: Non-contiguous core grid ("swiss cheese")
+    # Data flows through a stem on scattered cores into two branches.
+    # Exercises unicast barrier release across gaps in the core grid.
+    #
+    #       col0  col1  col2  col3  col4  col5
+    # row0   X     X     X     X     X     X    ┐
+    # row1   X     X     X     X     X     X    ┤ branch A (18 cores)
+    # row2   .     .     .     .     .     .    │  ← gap
+    # row3   X     X     X     X     X     X    ┘
+    # row4   .     .     .     .     .     .      ← gap
+    # row5   X     X     X     X     X     X    ← branch B (6 cores)
+    #
+    # Stem = all 24 cores (3 CoreRanges — swiss cheese)
+    # Branch A = rows 0-1, 3 (2 CoreRanges — also swiss cheese)
+    # Branch B = row 5 (contiguous)
+    #
+    # Data flow:
+    #   t_in → stem (24 cores) → t_mid → branch A (18 cores) → t_out_a
+    #                                   → branch B ( 6 cores) → t_out_b
+    #
+    # The stem→branch barrier coordinator must unicast the release
+    # signal to all 24 cores spanning 4 rows with 2 gaps.  With the
+    # old multicast, the bounding box (0,0)→(5,5) would hit rows 2+4
+    # which aren't part of the kernel.
+    # -----------------------------------------------------------------
+
+    def _demo7_setup(self, device, num_tiles=4):
+        torch.manual_seed(42)
+        shape = [1, 1, 32, 32 * num_tiles]
+
+        # Non-contiguous stem: rows 0-1, 3, 5 — gaps at rows 2 and 4
+        all_cores = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 3), ttnn.CoreCoord(5, 3)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(5, 5)),
+            }
+        )
+        # Branch A: rows 0-1, 3 (non-contiguous — also swiss cheese)
+        cores_a = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 3), ttnn.CoreCoord(5, 3)),
+            }
+        )
+        # Branch B: row 5 (contiguous)
+        cores_b = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(5, 5)),
+            }
+        )
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        t_in = ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        t_mid = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        t_out_a = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+        t_out_b = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+
+        stem = _build_identity_op(t_in, t_mid, all_cores, num_tiles)
+        op_a = _build_identity_op(t_mid, t_out_a, cores_a, num_tiles)
+        op_b = _build_identity_op(t_mid, t_out_b, cores_b, num_tiles)
+
+        return stem, op_a, op_b, t_in, t_out_a, t_out_b
+
+    @pytest.mark.parametrize("single_run_only", [True, False])
+    def test_demo7_fused(self, device, single_run_only):
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        stem, op_a, op_b, t_in, t_out_a, t_out_b = self._demo7_setup(device)
+
+        def build():
+            return Sequential(stem, Parallel(op_a, op_b)).build(device)
+
+        if single_run_only:
+            fused = build()
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print("\n  Demo 7 Fused: single run (for Tracy)")
+        else:
+            _, cold, _ = _time_fused(build, device)
+
+            fused = build()
+            e2e = _time_steady_state(fused.launch, device)
+
+            ref = ttnn.to_torch(t_in)
+            p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
+            p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(t_out_b), pcc=0.999)
+
+            print(f"\n  Demo 7 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
+            assert p_a, f"Branch A PCC: {pcc_a}"
+            assert p_b, f"Branch B PCC: {pcc_b}"
