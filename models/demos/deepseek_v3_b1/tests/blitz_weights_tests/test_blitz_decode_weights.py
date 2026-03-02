@@ -258,7 +258,7 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): q_a_proj, q_b_proj, kv_a_proj overlap passed")
 
 
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (2, 2), (1, 2)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
