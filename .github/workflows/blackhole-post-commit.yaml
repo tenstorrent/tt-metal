@@ -46,7 +46,7 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Run T3000 APC fast tests"
+        description: "Run UMD unit tests"
       run-ops-unit-tests:
         required: false
         type: boolean
@@ -126,7 +126,7 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Run T3000 APC fast tests"
+        description: "Run UMD unit tests"
       run-ops-unit-tests:
         required: false
         type: boolean
