@@ -85,6 +85,16 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     return result;
 }
 
+// mul_a * mul_b + addend (MAD)
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
+    sfpi::vFloat result = mul_a * mul_b + addend;
+    if constexpr (!is_fp32_dest_acc_en) {
+        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+    }
+    sfpi::dst_reg[0] = result;
+}
+
 /*
  * This function implements the xIELU (Expanded Integral of ELU) activation function,
  * a trainable piecewise function with learnable alpha_p and alpha_n parameters.
@@ -109,25 +119,12 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat beta_mul_x = 0.5f * x;
-        // Storing result in respective branch to avoid register spills.
-        // Reusing a single result variable across conditional blocks increases register pressure and led to compiler
-        // errors.
         v_if(x > 0.0f) {  // positive
-            sfpi::vFloat term_1 = alpha_p * x * x;
-            sfpi::vFloat result = term_1 + beta_mul_x;
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-            }
-            sfpi::dst_reg[0] = result;
+            _xielu_mad_<is_fp32_dest_acc_en>(alpha_p * x, x, beta_mul_x);
         }
         v_elseif(x >= sfpi::vConstFloatPrgm1) {  // very small negative
             sfpi::vFloat exp_term = sfpi::vConstFloatPrgm2 - x;
-            sfpi::vFloat term_1 = alpha_n * exp_term;
-            sfpi::vFloat result = term_1 + beta_mul_x;
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-            }
-            sfpi::dst_reg[0] = result;
+            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_elseif(x > -0.5f) {  // moderate negative region
             // For small x >- 0.5: use Taylor series to avoid cancellation
@@ -145,21 +142,11 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
                 1.400390756316483020782470703125e-3f,
                 1.99588379473425447940826416015625e-4f);
             exp_term = exp_term - x;
-            sfpi::vFloat term_1 = alpha_n * exp_term;
-            sfpi::vFloat result = term_1 + beta_mul_x;
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-            }
-            sfpi::dst_reg[0] = result;
+            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_else {  // large negative
             sfpi::vFloat exp_term = _sfpu_neg_exp_f32_(x) - sfpi::vConst1 - x;
-            sfpi::vFloat term_1 = alpha_n * exp_term;
-            sfpi::vFloat result = term_1 + beta_mul_x;
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-            }
-            sfpi::dst_reg[0] = result;
+            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_endif;
         sfpi::dst_reg++;
