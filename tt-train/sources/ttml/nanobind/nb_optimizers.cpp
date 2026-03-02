@@ -7,6 +7,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/trampoline.h>
 
 #include "serialization/serializable.hpp"
 
@@ -27,11 +28,47 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
+class OptimizerBaseTrampoline : public ttml::optimizers::OptimizerBase {
+    NB_TRAMPOLINE(OptimizerBase, 10);
+
+public:
+    std::string get_name() const override {
+        NB_OVERRIDE_PURE(get_name);
+    }
+    void zero_grad() override {
+        NB_OVERRIDE_PURE(zero_grad);
+    }
+    void step() override {
+        NB_OVERRIDE_PURE(step);
+    }
+    ttml::serialization::StateDict get_state_dict() const override {
+        NB_OVERRIDE_PURE(get_state_dict);
+    }
+    void set_state_dict(const ttml::serialization::StateDict& dict) override {
+        NB_OVERRIDE_PURE(set_state_dict, dict);
+    }
+    size_t get_steps() const override {
+        NB_OVERRIDE_PURE(get_steps);
+    }
+    void set_steps(size_t steps) override {
+        NB_OVERRIDE_PURE(set_steps, steps);
+    }
+    void set_lr(float lr) override {
+        NB_OVERRIDE_PURE(set_lr, lr);
+    }
+    float get_lr() const override {
+        NB_OVERRIDE_PURE(get_lr);
+    }
+    void print_stats() const override {
+        NB_OVERRIDE(print_stats);
+    }
+};
+
 namespace ttml::nanobind::optimizers {
 using namespace ttml::optimizers;
 
 void py_module_types(nb::module_& m) {
-    nb::class_<OptimizerBase>(m, "OptimizerBase");
+    nb::class_<OptimizerBase, OptimizerBaseTrampoline>(m, "OptimizerBase");
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
