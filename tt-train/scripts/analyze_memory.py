@@ -10,7 +10,7 @@ import argparse
 import re
 import sys
 from typing import Dict, List, Optional, Tuple
-import csv
+import process_logs
 import datetime
 from pathlib import Path
 
@@ -405,7 +405,7 @@ def analyze_memory_summary(
     return peak_breakdown
 
 
-def main():
+def _main(raw_args=None):
     parser = argparse.ArgumentParser(
         description="Analyze memory usage from tt-train logs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -465,7 +465,7 @@ def main():
         help="Output filename for visualization (default: memory_peak_visualization.png)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
 
     # Read log file
     with open(args.logs, "r") as f:
@@ -527,14 +527,6 @@ def main():
         if breakdown:
             visualization_data.append((name, breakdown))
 
-    log_filename = Path(args.logs).stem
-    with open(f"{log_filename}.csv", "w", newline="") as csvfile:
-        fieldnames = breakdown.keys()
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows([breakdown])
-        print(f"\nWritten {log_filename}.csv")
-
     print(f"\n{'='*80}")
     print("Analysis complete")
     print(f"{'='*80}\n")
@@ -550,6 +542,15 @@ def main():
             create_peak_memory_visualization(
                 visualization_data, title=args.title, output_file=args.output
             )
+
+    if breakdown:
+        return breakdown
+    else:
+        return None
+
+
+def main(raw_args=None):
+    _main(raw_args)
 
 
 if __name__ == "__main__":
