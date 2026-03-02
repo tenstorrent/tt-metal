@@ -9,8 +9,10 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
 def test_add_1D_tensor_and_scalar(device, scalar, size):

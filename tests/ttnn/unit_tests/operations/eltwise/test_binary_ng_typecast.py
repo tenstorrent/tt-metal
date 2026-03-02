@@ -5,11 +5,11 @@
 import torch
 import pytest
 import ttnn
-
 from models.common.utility_functions import torch_random, skip_with_llk_assert
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -154,6 +154,7 @@ def test_binary_w_typecast(input_shapes, in_dtype, out_dtype, layout, ttnn_fn, d
     assert_with_ulp(torch_output_tensor, output_tensor, 0)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -933,6 +934,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     [

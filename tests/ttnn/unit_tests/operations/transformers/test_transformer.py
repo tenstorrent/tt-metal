@@ -9,9 +9,16 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_blackhole, is_wormhole_b0, is_watcher_enabled
+from models.common.utility_functions import (
+    torch_random,
+    is_blackhole,
+    is_wormhole_b0,
+    is_watcher_enabled,
+    skip_with_llk_assert,
+)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("sequence_size", [384, 1024])

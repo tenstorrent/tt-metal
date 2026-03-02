@@ -8,7 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
+from models.common.utility_functions import skip_for_blackhole, skip_with_watcher, skip_with_llk_assert
 
 
 def _out_size(in_size, pad, stride, k, dilation):
@@ -170,6 +170,7 @@ def run_conv3d_test(
     assert pcc_passed, pcc_message
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [64, 48])

@@ -594,6 +594,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])

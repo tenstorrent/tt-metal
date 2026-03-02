@@ -8,6 +8,7 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 from models.common.utility_functions import comp_allclose_and_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -35,6 +36,7 @@ def is_supported(shape, dim, ttnn_dtype):
     return True
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "size, dim",
     [

@@ -782,6 +782,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     assert torch.equal(golden_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (

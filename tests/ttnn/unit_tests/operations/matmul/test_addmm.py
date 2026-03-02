@@ -7,10 +7,12 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("matrix_size", [4, 8, 16, 32, 64, 128, 256, 512, 1024])
 def test_addmm_square_matrices(device, dtype, matrix_size):

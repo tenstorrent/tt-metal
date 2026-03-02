@@ -8,6 +8,7 @@ import ttnn
 
 from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.utils_for_testing import assert_with_pcc, tt_dtype_to_torch_dtype
+from models.common.utility_functions import skip_with_llk_assert
 
 
 DEFAULT_SHAPE = (64, 64)
@@ -56,6 +57,7 @@ def _ttt_where_test_impl(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_ttt_where_0d(device):
     if is_watcher_enabled():
         pytest.skip("Skipping test_ttt_where_0d with watcher enabled, github issue #37048")

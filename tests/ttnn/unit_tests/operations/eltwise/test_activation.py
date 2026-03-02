@@ -8,6 +8,7 @@ import ttnn
 import numpy as np
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from models.common.utility_functions import skip_with_llk_assert
 
 pytestmark = pytest.mark.use_module_device
 
@@ -167,6 +168,7 @@ def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanhshrink(device, h, w):
