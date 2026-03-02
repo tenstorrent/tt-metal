@@ -43,15 +43,13 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
 inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        sfpi::vUInt in;
         if constexpr (u16) {
-            in = __builtin_rvtt_sfpload(InstrModLoadStore::LO16, ADDR_MOD_3, 0);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
         } else {
-            in = sfpi::dst_reg[0];
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         }
-        in += 256;
-        sfpi::dst_reg[0] = in & 0xFF;
-        sfpi::dst_reg++;
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
     }
 }
 
@@ -164,7 +162,9 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {}
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_uint_to_uint8() {}
+inline void init_typecast_uint_to_uint8() {
+    sfpi::vConstIntPrgm0 = 0xFF;
+}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_uint16() {
