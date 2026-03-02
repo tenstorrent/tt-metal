@@ -89,7 +89,8 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, core_grid, index_input_intermed0_config);
 
     // identity scale input
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_values_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scale_tiles = 1;
     uint32_t scalar_tile_size = tile_size(scalar_df);
     uint32_t scale_cb_index = tt::CBIndex::c_3;

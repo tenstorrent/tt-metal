@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace dataflow_kernel_lib {
 
@@ -33,9 +34,11 @@ using ckernel::ReduceDim;
  * Data format and tile shape (half/full) are deduced from the circular buffer.
  *
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @tparam tile_columns_to_fill Number of tile columns to fill (1-32, default 32 = full tile).
+ *         When < 32, only the first tile_columns_to_fill columns of row 0 are filled (for partial last tiles).
  * @param scaler_f Float scaler value to fill the tile with
  */
-template <uint32_t cb_id>
+template <uint32_t cb_id, uint32_t tile_columns_to_fill = tt::constants::TILE_WIDTH>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**
@@ -47,14 +50,21 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
  *
  * For AVG pooling with REDUCE_SCALAR, uses 1/sqrt(N) since the LLK applies the
  * scaler twice (row then col). For AVG with REDUCE_ROW/REDUCE_COL, uses 1/N.
- * For SUM/MAX, the reduce_volume is ignored and the scaler is 1.0.
+ * For SUM/MAX, the reduce_factor is ignored and the scaler is 1.0.
  *
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam reduce_volume Number of elements being reduced (N). Must be non-zero for AVG.
+ * @tparam tile_columns_to_fill Number of tile columns to fill (1-32, default 32 = full tile).
+ *         When < 32, only the first tile_columns_to_fill columns of row 0 are filled (for partial last tiles).
+ * @tparam reduce_factor Number of elements being reduced (N). Must be non-zero for AVG.
  */
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_volume = 1>
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t tile_columns_to_fill = tt::constants::TILE_WIDTH,
+    uint32_t reduce_factor = 1>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler();
 
 }  // namespace dataflow_kernel_lib
