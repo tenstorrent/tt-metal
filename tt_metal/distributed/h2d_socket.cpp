@@ -4,34 +4,40 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/socket_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
+#include <unistd.h>
 
 namespace tt::tt_metal::distributed {
+
+static std::string generate_shm_name(const std::string& prefix) {
+    static std::atomic<uint32_t> counter{0};
+    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
+}
 
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
-    uint32_t pcie_alignment) {
-    // Use mmap to ensure page-aligned allocation that won't share pages with other PinnedMemory objects.
-    // This prevents failures when multiple sockets try to pin overlapping page regions to the NOC, since
-    // the driver does not allow this.
-    size_t page_size = sysconf(_SC_PAGESIZE);  // OS Specified Page Size
-    // Allocate a single page for the bytes_acked buffer, since its only 4 bytes.
-    void* aligned_ptr = mmap(nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    TT_FATAL(aligned_ptr != MAP_FAILED, "Failed to allocate page-aligned memory for bytes_acked buffer.");
+    uint32_t pcie_alignment,
+    const std::string& shm_name) {
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, page_size));
+    void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: Bytes_acked buffer must be aligned to the PCIe alignment.");
-    std::memset(aligned_ptr, 0, sizeof(uint32_t));
-    host_buffer_ = std::shared_ptr<uint32_t[]>(
-        static_cast<uint32_t*>(aligned_ptr), [page_size](uint32_t* p) { munmap(p, page_size); });
+    // NamedShm::create zero-initializes the region; no explicit memset needed.
+    // No-op deleter: NamedShm owns the memory.
+    host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
@@ -52,23 +58,19 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
 H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
-    uint32_t pcie_alignment) {
-    // Use mmap to ensure page-aligned allocation that won't share pages with other PinnedMemory objects.
-    // This prevents failures when multiple sockets try to pin overlapping page regions to the NOC, since
-    // the driver does not allow this.
+    uint32_t pcie_alignment,
+    const std::string& shm_name) {
     uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t host_buffer_size_words = host_buffer_size_bytes / sizeof(uint32_t);
-    size_t page_size = sysconf(_SC_PAGESIZE);  // OS Specified Page Size
-    // Round up to page boundary
+    size_t page_size = sysconf(_SC_PAGESIZE);
     size_t alloc_size = align(host_buffer_size_bytes, page_size);
-    void* aligned_ptr = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    TT_FATAL(aligned_ptr != MAP_FAILED, "Failed to allocate page-aligned memory for host data buffer.");
+    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: Host data buffer must be aligned to the PCIe alignment.");
-    std::memset(aligned_ptr, 0, host_buffer_size_bytes);
-    host_buffer_ = std::shared_ptr<uint32_t[]>(
-        static_cast<uint32_t*>(aligned_ptr), [alloc_size](uint32_t* p) { munmap(p, alloc_size); });
+    // No-op deleter: NamedShm owns the memory.
+    host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
 
     tt::tt_metal::HostBuffer host_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
@@ -195,7 +197,9 @@ H2DSocket::H2DSocket(
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
     pinned_memory_(nullptr),
-    h2d_mode_(h2d_mode) {
+    h2d_mode_(h2d_mode),
+    mesh_device_(mesh_device.get()),
+    is_owner_(true) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
@@ -203,13 +207,13 @@ H2DSocket::H2DSocket(
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
     TT_FATAL(buffer_type_ == BufferType::L1, "H2D sockets currently only support data buffers in SRAM.");
 
+    std::string shm_name = generate_shm_name("h2d");
+
     PinnedBufferInfo bytes_acked_info = {};
     PinnedBufferInfo data_info = {};
     if (h2d_mode_ == H2DMode::DEVICE_PULL) {
-        // Allocate host data buffer and bytes_acked buffer in the same pinned memory.
-        data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment);
+        data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_info = data_info;
-        // Bytes acked buffer is located after the data buffer in the same pinned memory.
         auto bytes_acked_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
         bytes_acked_info.addr_hi = static_cast<uint32_t>(bytes_acked_addr >> 32);
         bytes_acked_info.addr_lo = static_cast<uint32_t>(bytes_acked_addr & 0xFFFFFFFFull);
@@ -218,8 +222,7 @@ H2DSocket::H2DSocket(
             bytes_acked_info.pcie_xy_enc == data_info.pcie_xy_enc,
             "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
     } else {
-        // Dedicate a separate pinned memory for the bytes_acked buffer.
-        bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment);
+        bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
 
@@ -227,16 +230,23 @@ H2DSocket::H2DSocket(
     init_data_buffer(mesh_device, pcie_alignment);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
+
+    config_buffer_address_ = config_buffer_->address();
 }
 
 H2DSocket::~H2DSocket() noexcept {
-    // Wait for 1000ms for the device to acknowledge all data over the socket.
-    // This may need to be tuned in future, depending on the application and
-    // the amount of data being sent.
-    // Realistically a hang should not be seen here since most user workloads
-    // synchronize with the device before the application exits and destructors are called.
-    barrier(1000);
-    pinned_memory_.reset();
+    if (!exported_) {
+        barrier(1000);
+    }
+    if (is_owner_) {
+        pinned_memory_.reset();
+        if (shm_) {
+            shm_->unlink();
+        }
+        if (!descriptor_path_.empty()) {
+            std::remove(descriptor_path_.c_str());
+        }
+    }
 }
 
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {
@@ -260,7 +270,7 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
 }
 
 void H2DSocket::notify_receiver() {
-    uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
+    uint32_t bytes_sent_addr = config_buffer_address_ + offsetof(receiver_socket_md, bytes_sent);
     pcie_writer(&bytes_sent_, sizeof(bytes_sent_), bytes_sent_addr);
     tt_driver_atomics::sfence();
 }
@@ -323,8 +333,67 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
 
 std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {recv_core_}; }
 
-MeshDevice* H2DSocket::get_mesh_device() const { return config_buffer_->device(); }
+MeshDevice* H2DSocket::get_mesh_device() const { return mesh_device_; }
 
 H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
+
+std::string H2DSocket::export_descriptor(const std::string& socket_id) {
+    TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
+    TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
+
+    auto device_id = mesh_device_->get_device(recv_core_.device_coord)->id();
+
+    SocketDescriptor desc;
+    desc.socket_type = "h2d";
+    desc.shm_name = shm_->name();
+    desc.shm_size = shm_->size();
+    desc.data_offset = 0;
+    desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL) ? fifo_size_ : 0;
+    desc.bytes_sent_offset = 0;
+    desc.fifo_size = fifo_size_;
+    desc.h2d_mode = static_cast<uint32_t>(h2d_mode_);
+    desc.config_buffer_address = config_buffer_address_;
+    desc.aligned_data_buf_start = aligned_data_buf_start_;
+    desc.device_id = static_cast<uint32_t>(device_id);
+    desc.core_x = recv_core_.core_coord.x;
+    desc.core_y = recv_core_.core_coord.y;
+
+    descriptor_path_ = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
+    desc.write_to_file(descriptor_path_);
+    exported_ = true;
+    return descriptor_path_;
+}
+
+std::unique_ptr<H2DSocket> H2DSocket::connect(
+    const std::shared_ptr<MeshDevice>& mesh_device, const std::string& descriptor_path) {
+    auto desc = SocketDescriptor::read_from_file(descriptor_path);
+    TT_FATAL(desc.socket_type == "h2d", "Descriptor type mismatch: expected 'h2d', got '{}'", desc.socket_type);
+
+    auto socket = std::unique_ptr<H2DSocket>(new H2DSocket());
+    socket->is_owner_ = false;
+    socket->mesh_device_ = mesh_device.get();
+    socket->fifo_size_ = desc.fifo_size;
+    socket->h2d_mode_ = static_cast<H2DMode>(desc.h2d_mode);
+    socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;
+    socket->config_buffer_address_ = desc.config_buffer_address;
+
+    auto device_coord = mesh_device->get_view().find_device(static_cast<ChipId>(desc.device_id));
+    socket->recv_core_ = MeshCoreCoord{device_coord, CoreCoord{desc.core_x, desc.core_y}};
+
+    socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
+
+    if (socket->h2d_mode_ == H2DMode::DEVICE_PULL) {
+        socket->host_buffer_ =
+            std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
+        socket->bytes_acked_ptr_ =
+            static_cast<uint32_t*>(socket->shm_->ptr()) + (desc.bytes_acked_offset / sizeof(uint32_t));
+    } else {
+        socket->bytes_acked_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr());
+    }
+
+    socket->init_receiver_tlb(mesh_device);
+
+    return socket;
+}
 
 }  // namespace tt::tt_metal::distributed

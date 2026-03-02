@@ -23,6 +23,8 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/socket_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
 )
 
@@ -102,6 +104,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        nlohmann_json::nlohmann_json
 )
 add_dependencies(distributed metalium_GeneratedHeaders)
 

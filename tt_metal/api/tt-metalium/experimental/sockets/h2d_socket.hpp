@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <memory>
 #include <utility>
 
 namespace tt::umd {
@@ -13,6 +14,8 @@ class TlbWindow;
 }
 
 namespace tt::tt_metal::distributed {
+
+class NamedShm;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -41,16 +44,25 @@ enum class H2DMode : uint8_t {
  *
  * Usage:
  * @code
+ *   // Owner process creates the socket and exports a descriptor
  *   auto socket = H2DSocket(mesh_device, recv_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
- *   socket.set_page_size(page_size);
- *   socket.write(data_ptr, num_pages);
- *   socket.barrier();  // Wait for device to consume all data
+ *   auto desc_path = socket.export_descriptor("my_socket");
+ *
+ *   // Remote process connects via the descriptor
+ *   auto socket = H2DSocket::connect(mesh_device, desc_path);
+ *   socket->set_page_size(page_size);
+ *   socket->write(data_ptr, num_pages);
+ *   socket->barrier();
  * @endcode
  */
 class H2DSocket {
 public:
     /**
-     * @brief Constructs an H2DSocket for streaming data to a device core.
+     * @brief Constructs an H2DSocket for streaming data to a device core (owner).
+     *
+     * Allocates named shared memory for host-side buffers, pins it for device DMA,
+     * and sets up device-side config and data buffers. The socket can be exported
+     * via export_descriptor() for cross-process attachment.
      *
      * @param mesh_device The mesh device containing the target core.
      * @param recv_core The target core coordinate (device + core) to receive data.
@@ -66,57 +78,47 @@ public:
         H2DMode h2d_mode);
 
     /**
+     * @brief Connects to an existing H2DSocket from another process via a descriptor file.
+     *
+     * Opens the named shared memory created by the owner process and sets up TLB access
+     * to the same device core. Does not allocate device-side buffers or pin memory.
+     * The returned socket is fully functional for write() and barrier() operations.
+     *
+     * @param mesh_device The mesh device (must contain the same physical device as the owner).
+     * @param descriptor_path Path to the JSON descriptor file exported by the owner.
+     * @return A connected H2DSocket ready for data transfer.
+     */
+    static std::unique_ptr<H2DSocket> connect(
+        const std::shared_ptr<MeshDevice>& mesh_device, const std::string& descriptor_path);
+
+    /**
+     * @brief Exports a descriptor file for cross-process socket attachment.
+     *
+     * Writes a JSON file to /dev/shm/ containing all metadata needed for a remote
+     * process to connect: shared memory name, buffer layout, device addresses, and
+     * core coordinates.
+     *
+     * @param socket_id A user-provided identifier used in the descriptor filename.
+     * @return The full path to the written descriptor file.
+     */
+    std::string export_descriptor(const std::string& socket_id);
+
+    /**
      * @brief Destroys the H2DSocket.
      *
-     * Frees the pinned memory allocated for the socket.
-     * Also issues a barrier to wait for the device to acknowledge all data over the socket.
+     * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory.
+     * Connector: waits for device acknowledgement, unmaps shared memory.
      */
     ~H2DSocket() noexcept;
 
-    /**
-     * @brief Returns the currently configured page size.
-     */
     uint32_t get_page_size() const { return page_size_; }
 
-    /**
-     * @brief Returns the L1 address of the socket configuration buffer on the device.
-     *
-     * This address is passed to the device kernel to access socket metadata.
-     */
-    uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
+    uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
-    /**
-     * @brief Sets the page size for subsequent write operations.
-     *
-     * The page size determines the granularity of data transfers. Must be PCIe-aligned
-     * and less than or equal to the FIFO size. The write pointer is aligned to the new
-     * page size boundary.
-     *
-     * @param page_size Page size in bytes. Must be PCIe-aligned.
-     */
     void set_page_size(uint32_t page_size);
 
-    /**
-     * @brief Writes data pages to the socket FIFO.
-     *
-     * Blocks if the FIFO does not have enough space, waiting for the device to
-     * acknowledge previously written data. After writing, notifies the device
-     * that new data is available.
-     *
-     * @param data Pointer to the source data buffer.
-     * @param num_pages Number of pages to write.
-     */
     void write(void* data, uint32_t num_pages);
 
-    /**
-     * @brief Blocks until the device has acknowledged all written data.
-     *
-     * Waits until `bytes_acked` equals `bytes_sent`, indicating the device has
-     * consumed all data in the FIFO.
-     *
-     * @param timeout_ms Optional timeout in milliseconds. If specified, the function will throw an exception if the
-     * barrier is not met within the timeout.
-     */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
     std::vector<MeshCoreCoord> get_active_cores() const;
@@ -126,23 +128,27 @@ public:
     H2DMode get_h2d_mode() const;
 
 private:
-    // Helper struct for pinned buffer NOC address info
+    H2DSocket() = default;
+    H2DSocket(const H2DSocket&) = delete;
+    H2DSocket& operator=(const H2DSocket&) = delete;
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
         uint32_t addr_hi = 0;
     };
 
-    // Initialization helpers
     PinnedBufferInfo init_bytes_acked_buffer(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoordinateRangeSet& device_range,
-        uint32_t pcie_alignment);
+        uint32_t pcie_alignment,
+        const std::string& shm_name);
 
     PinnedBufferInfo init_host_data_buffer(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoordinateRangeSet& device_range,
-        uint32_t pcie_alignment);
+        uint32_t pcie_alignment,
+        const std::string& shm_name);
 
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment);
@@ -167,12 +173,18 @@ private:
     uint32_t write_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t aligned_data_buf_start_ = 0;
+    uint32_t config_buffer_address_ = 0;
     tt::umd::TlbWindow* receiver_core_tlb_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_acked_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
+    std::unique_ptr<NamedShm> shm_;
+    MeshDevice* mesh_device_ = nullptr;
+    bool is_owner_ = true;
+    std::string descriptor_path_;
+    bool exported_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed
