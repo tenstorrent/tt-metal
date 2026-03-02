@@ -156,7 +156,7 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
  *
  * If desc.custom_program_hash is set, returns that value directly (allows override).
  */
-ttsl::hash::hash_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor);
+std::uint64_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor);
 
 }  // namespace tt::tt_metal
 
