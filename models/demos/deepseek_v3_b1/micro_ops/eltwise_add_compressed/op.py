@@ -39,17 +39,16 @@ class EltwiseAddCompressed:
         # CB1: backed by compressed data tensor, override format to bfp8
         tile_32x32 = ttnn.Tile([32, 32])
         bfp8_page_size = tile_32x32.get_tile_size(ttnn.bfloat8_b)  # 1088
-        cb1_total_size = bfp8_page_size * num_tiles
 
         cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
             cb_in1,
             data_tensor,
-            total_size=cb1_total_size,
+            total_size=ct.max_shard_size,
         )
         cb1_fmt = ttnn.CBFormatDescriptor(
             buffer_index=cb_in1,
             data_format=ttnn.bfloat8_b,
-            page_size=bfp8_page_size,
+            page_size=ct.max_shard_size,
             tile=ttnn.TileDescriptor(tile_32x32),
         )
         cb1_desc.format_descriptors = [cb1_fmt]
@@ -59,7 +58,9 @@ class EltwiseAddCompressed:
 
         # Number of pages for sharded buffer setup
         cb_in0_num_pages = num_tiles
-        cb_in1_num_pages = num_tiles
+        # Compressed data: push 1 page covering the whole shard.
+        # The kernel manually advances addr_b per tile.
+        cb_in1_num_pages = 1
 
         assign_l1_addr = ct.get_assignment_l1_address()
 

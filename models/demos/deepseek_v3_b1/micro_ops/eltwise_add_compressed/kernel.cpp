@@ -57,7 +57,7 @@ void kernel_main() {
     compressed::add_tiles_init_in1_compressed(cb_in0);
 
     cb_wait_front(cb_in0, num_tiles);
-    cb_wait_front(cb_in1, num_tiles);
+    cb_wait_front(cb_in1, 1);  // 1 page covering whole compressed shard
 
     // Read assignment
     volatile uint8_t* assign_ptr = reinterpret_cast<volatile uint8_t*>(assign_l1_addr);
