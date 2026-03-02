@@ -239,6 +239,28 @@ def parse_rankfile(rankfile_path: Path) -> Dict[int, str]:
     return rank_to_host
 
 
+def rankfile_needs_oversubscribe(rankfile_path: Path) -> bool:
+    """Check if rankfile requires --oversubscribe (multiple ranks per host).
+
+    Args:
+        rankfile_path: Path to rankfile
+
+    Returns:
+        True if any host has more than one rank assigned (requires oversubscription)
+    """
+    rank_to_host = parse_rankfile(rankfile_path)
+    if not rank_to_host:
+        return False
+
+    # Count ranks per host
+    host_to_rank_count: Dict[str, int] = {}
+    for hostname in rank_to_host.values():
+        host_to_rank_count[hostname] = host_to_rank_count.get(hostname, 0) + 1
+
+    # Check if any host has more than one rank
+    return any(count > 1 for count in host_to_rank_count.values())
+
+
 def build_phase2_mock_mapping(
     rankfile_path: Path,
     phase1_hosts: Optional[List[str]],
@@ -1217,9 +1239,29 @@ def legacy_flow(
             )
         else:
             mpi_launcher = get_mpi_launcher()
-            effective_mpi_args = inject_rankfile_mpi_args(rankfile, effective_mpi_args, mpi_launcher)
+            # Detect rankfile syntax once
+            rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
+            rankfile_args = build_rankfile_args(rankfile_syntax, rankfile)
+            effective_mpi_args = rankfile_args + effective_mpi_args
             if verbose:
                 logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
+
+            # Check if rankfile requires oversubscription (multiple ranks per host)
+            # Add --oversubscribe if needed and not already present
+            if rankfile_needs_oversubscribe(rankfile):
+                has_oversubscribe = False
+                if effective_mpi_args:
+                    has_oversubscribe = "--oversubscribe" in effective_mpi_args
+                if not has_oversubscribe:
+                    # Insert --oversubscribe right after rankfile args (before other args)
+                    rankfile_args_len = len(rankfile_args)
+                    effective_mpi_args = (
+                        effective_mpi_args[:rankfile_args_len]
+                        + ["--oversubscribe"]
+                        + effective_mpi_args[rankfile_args_len:]
+                    )
+                    if verbose:
+                        logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (rankfile has multiple ranks per host)")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(

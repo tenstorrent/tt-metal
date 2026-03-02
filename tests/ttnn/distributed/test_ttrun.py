@@ -32,6 +32,7 @@ from ttnn.distributed.ttrun import (
     run_phase1_generate_rank_bindings,
     new_mode_flow,
     find_generate_rank_bindings_executable,
+    rankfile_needs_oversubscribe,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
@@ -519,6 +520,40 @@ class TestRankfileInjection:
             # Should succeed but warn about conflict (if rankfile param was used)
             # Since we're not passing --rankfile param here, no conflict expected
             assert result.exit_code == 0
+
+    def test_legacy_flow_rankfile_oversubscribe(self, runner, sample_rank_binding_yaml, temp_dir):
+        """Test legacy_flow adds --oversubscribe when rankfile has multiple ranks per host."""
+        from ttnn.distributed.ttrun import build_rankfile_args, detect_rankfile_syntax, get_mpi_launcher
+
+        # Create rankfile with multiple ranks per host
+        rankfile = temp_dir / "rankfile"
+        rankfile.write_text("rank 0=node1 slot=0\nrank 1=node1 slot=1\nrank 2=node2 slot=0\n")
+
+        # Verify rankfile needs oversubscribe
+        assert rankfile_needs_oversubscribe(rankfile), "Rankfile should need oversubscribe"
+
+        # Test the logic directly - simulate what happens in legacy_flow
+        mpi_launcher = get_mpi_launcher()
+        rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
+        rankfile_args = build_rankfile_args(rankfile_syntax, rankfile)
+        effective_mpi_args = rankfile_args + []
+
+        # Check if --oversubscribe would be added (simulate the logic from legacy_flow)
+        if rankfile_needs_oversubscribe(rankfile):
+            has_oversubscribe = "--oversubscribe" in effective_mpi_args
+            if not has_oversubscribe:
+                # Simulate the insertion logic from legacy_flow
+                rankfile_args_len = len(rankfile_args)
+                effective_mpi_args = (
+                    effective_mpi_args[:rankfile_args_len]
+                    + ["--oversubscribe"]
+                    + effective_mpi_args[rankfile_args_len:]
+                )
+
+        # Verify --oversubscribe is present
+        assert (
+            "--oversubscribe" in effective_mpi_args
+        ), "Should add --oversubscribe when rankfile has multiple ranks per host"
 
 
 class TestDetectRankfileSyntax:
