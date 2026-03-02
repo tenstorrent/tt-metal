@@ -435,14 +435,14 @@ class CompressedTensor:
           BLOCK_SHARDED:  (h_shards * shard_bytes, w_shards), shard = [shard_bytes, 1]
         """
         if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            return (num_cores * shard_bytes, 1), [shard_bytes, 1]
+            return (num_cores, shard_bytes), [1, shard_bytes]
         elif layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             return (1, num_cores * shard_bytes), [1, shard_bytes]
         elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
             is_row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
             h_shards = grid_h if is_row_major else grid_w
             w_shards = grid_w if is_row_major else grid_h
-            return (h_shards * shard_bytes, w_shards), [shard_bytes, 1]
+            return (h_shards, w_shards * shard_bytes), [1, shard_bytes]
         else:
             raise ValueError(f"Unsupported sharded layout: {layout}")
 

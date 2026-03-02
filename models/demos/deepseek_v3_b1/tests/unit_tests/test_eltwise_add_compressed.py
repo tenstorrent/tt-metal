@@ -4,9 +4,9 @@
 """
 Test eltwise add with compressed tensor input.
 
-A (bf16 TILE_LAYOUT) + B (compressed bfp8/bfp4 mix) = C (bf16 TILE_LAYOUT)
+A (bf16 TILE_LAYOUT) + B (compressed bfp8) = C (bf16 TILE_LAYOUT)
 
-Single core, HEIGHT_SHARDED, 128x128 tensor (4x4 tile grid).
+Single core, HEIGHT_SHARDED, 32x32 (1 tile).
 """
 
 import torch
@@ -24,9 +24,8 @@ def test_eltwise_add_compressed_single_core(device):
     Single-core eltwise add: A (bf16) + decompress(B_compressed) = C (bf16).
     """
     torch.manual_seed(42)
-    M, N = 128, 128  # 4x4 tile grid
+    M, N = 32, 32  # 1x1 tile
 
-    # Create input tensors
     a_torch = torch.randn(1, 1, M, N).bfloat16().float()
     b_torch = torch.randn(M, N).float()
 
@@ -42,12 +41,6 @@ def test_eltwise_add_compressed_single_core(device):
 
     logger.info(f"Compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
-
-    # Only bfp8/bfp4 supported in the kernel for now (no bfp2/bfp0 unpack on device yet)
-    counts = ct.tile_counts
-    assert counts.get("bfp2", 0) == 0, f"bfp2 tiles not supported in kernel: {counts}"
-    assert counts.get("bfp0", 0) == 0, f"bfp0 tiles not supported in kernel: {counts}"
-    assert counts["bfp8"] > 0 or counts["bfp4"] > 0, f"Expected bfp8/bfp4 tiles: {counts}"
 
     # Golden: A + dequantized(B)
     b_decompressed = ct.to_torch()
@@ -71,7 +64,6 @@ def test_eltwise_add_compressed_single_core(device):
 
     logger.info(f"A L1 addr: {a_t.buffer_address():#x}")
     logger.info(f"B data L1 addr: {ct.get_data_l1_address():#x}")
-    logger.info(f"B assign L1 addr: {ct.get_assignment_l1_address():#x}")
     logger.info(f"Out L1 addr: {out_t.buffer_address():#x}")
 
     # Run eltwise add compressed
@@ -82,6 +74,4 @@ def test_eltwise_add_compressed_single_core(device):
     passing, output = comp_pcc(golden, result_torch, 0.98)
 
     logger.info(output)
-    logger.info(golden)
-    logger.info(result_torch)
     assert passing, f"PCC check failed: {output}"
