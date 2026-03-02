@@ -307,9 +307,6 @@ void MetalContext::teardown() {
 
     auto all_devices = cluster_->all_chip_ids();
 
-    //
-    // Some objects may not be initialized if minimal initialization was used
-    //
 
     if (data_collector_) {
         data_collector_->DumpData();
