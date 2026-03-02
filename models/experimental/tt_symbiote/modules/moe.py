@@ -1519,3 +1519,91 @@ class TTNNBailingMoE(TTNNMoE):
             adapted.e_score_correction_bias = torch.zeros(bailing_gate.weight.shape[0])
 
         return adapted
+
+
+class TTNNQwen3MoE(TTNNMoE):
+    """TTNN MoE for Qwen3-Next / Qwen3-Coder-Next (Qwen3NextSparseMoeBlock)."""
+
+    @classmethod
+    def from_torch(cls, torch_moe):
+        """
+        Create TTNNQwen3MoE from PyTorch Qwen3NextSparseMoeBlock.
+
+        Args:
+            torch_moe: PyTorch Qwen3NextSparseMoeBlock (e.g. from Qwen/Qwen3-Coder-Next)
+        """
+        adapted_config = cls._adapt_config(torch_moe.gate, torch_moe.experts)
+        adapted_gate = cls._adapt_gate(torch_moe.gate)
+        experts_wrapper = cls._wrap_experts(torch_moe.experts, adapted_config)
+
+        module = cls(adapted_config)
+        module._fallback_torch_layer = torch_moe
+
+        module.gate = TTNNGlm4MoeTopkRouter.from_parameters(adapted_gate.weight, adapted_gate.e_score_correction_bias)
+        module.route_tokens_to_experts = TTNNMoERouterDecode.from_torch(
+            Glm4MoeRouteTokenToExperts(
+                adapted_gate.e_score_correction_bias,
+                adapted_config.n_routed_experts,
+                adapted_config.n_group,
+                adapted_config.topk_group,
+                adapted_config.num_experts_per_tok,
+                adapted_config.norm_topk_prob,
+                adapted_config.routed_scaling_factor,
+            )
+        )
+        module.experts = TTNNExperts.from_torch(experts_wrapper)
+        module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_moe.shared_expert)
+
+        return module
+
+    @staticmethod
+    def _adapt_config(gate, experts):
+        """Build Glm4MoeConfig-compatible config from Qwen3 Next gate/experts."""
+        num_experts = gate.num_experts
+        hidden_dim = gate.hidden_dim
+        top_k = gate.top_k
+        norm_topk_prob = gate.norm_topk_prob
+        intermediate_dim = experts.intermediate_dim
+
+        class AdaptedConfig:
+            pass
+
+        config = AdaptedConfig()
+        config.hidden_size = hidden_dim
+        config.moe_intermediate_size = intermediate_dim
+        config.num_experts_per_tok = top_k
+        config.n_routed_experts = num_experts
+        config.n_group = 1
+        config.topk_group = 1
+        config.routed_scaling_factor = 1.0
+        config.norm_topk_prob = norm_topk_prob
+        config.hidden_act = getattr(experts, "act_fn", None) or "silu"
+
+        return config
+
+    @staticmethod
+    def _adapt_gate(qwen3_gate):
+        """Adapt Qwen3NextTopKRouter to have e_score_correction_bias (zeros)."""
+
+        class AdaptedGate:
+            pass
+
+        adapted = AdaptedGate()
+        adapted.weight = qwen3_gate.weight
+        adapted.e_score_correction_bias = torch.zeros(
+            qwen3_gate.num_experts, device=qwen3_gate.weight.device, dtype=qwen3_gate.weight.dtype
+        )
+        return adapted
+
+    @staticmethod
+    def _wrap_experts(qwen3_experts, config):
+        """Wrap Qwen3NextExperts so TTNNExperts.from_torch sees .config, .gate_up_proj, .down_proj."""
+
+        class ExpertsWrapper:
+            pass
+
+        w = ExpertsWrapper()
+        w.config = config
+        w.gate_up_proj = qwen3_experts.gate_up_proj
+        w.down_proj = qwen3_experts.down_proj
+        return w
