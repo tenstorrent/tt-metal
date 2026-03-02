@@ -60,7 +60,7 @@ TEST(FmtTest, Optional) {
 TEST(FmtTest, OptionalConst) {
     std::optional<const bool> opt_const = true;
     std::string result = fmt::format("{}", opt_const);
-    EXPECT_TRUE(result.find("true") != std::string::npos || result.find("1") != std::string::npos);
+    EXPECT_TRUE(result.find("true") != std::string::npos || result.find('1') != std::string::npos);
 }
 
 // Test container of non-void pointers (critical edge case)
@@ -87,7 +87,7 @@ TEST(FmtTest, Array) {
 TEST(FmtTest, Map) {
     std::map<std::string, int> m = {{"a", 1}, {"b", 2}, {"c", 3}};
     std::string result = fmt::format("{}", m);
-    EXPECT_TRUE(result.find("a") != std::string::npos || result.find("\"a\"") != std::string::npos);
+    EXPECT_TRUE(result.find('a') != std::string::npos || result.find("\"a\"") != std::string::npos);
     EXPECT_THAT(result, HasSubstr("1"));
 }
 
@@ -105,7 +105,7 @@ TEST(FmtTest, Set) {
 TEST(FmtTest, UnorderedMap) {
     std::unordered_map<std::string, int> um = {{"x", 10}, {"y", 20}};
     std::string result = fmt::format("{}", um);
-    EXPECT_TRUE(result.find("x") != std::string::npos || result.find("\"x\"") != std::string::npos);
+    EXPECT_TRUE(result.find('x') != std::string::npos || result.find("\"x\"") != std::string::npos);
     EXPECT_THAT(result, HasSubstr("10"));
 }
 
@@ -115,7 +115,7 @@ TEST(FmtTest, Tuple) {
     std::string result = fmt::format("{}", t);
     EXPECT_THAT(result, HasSubstr("42"));
     EXPECT_THAT(result, HasSubstr("test"));
-    EXPECT_TRUE(result.find("true") != std::string::npos || result.find("1") != std::string::npos);
+    EXPECT_TRUE(result.find("true") != std::string::npos || result.find('1') != std::string::npos);
 }
 
 // Test std::variant
