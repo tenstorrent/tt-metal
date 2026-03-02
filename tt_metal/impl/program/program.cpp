@@ -478,7 +478,7 @@ KernelGroup::KernelGroup(
                     hal.get_programmable_core_type(programmable_core_type_index),
                     HalProcessorClassType::DM,
                     qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
-                kernel_config.num_kernel_threads()[processor_index] = config.num_processors_per_cluster;
+                kernel_config.num_kernel_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
         }

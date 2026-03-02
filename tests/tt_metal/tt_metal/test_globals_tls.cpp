@@ -66,19 +66,19 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_1.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 4, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 4, .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_1 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_2.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 3, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 3, .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_2 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_3.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .is_legacy_kernel = is_legacy_kernel});
 
     // signal_address, dram_dst_address, dram_dst_bank_id, l1_result_addr, kernel_id
     SetRuntimeArgs(
