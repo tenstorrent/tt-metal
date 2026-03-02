@@ -16,12 +16,17 @@ NCRISC, compute).  Structure::
         void init();
     }
 
-BRISC ``local::sync()``: drain NOC, wait followers, reset op sems + CBs,
-rebind, signal ``*reset_done = done``.
+The barrier coordinator is the reader RISC (NCRISC / riscv_1).  NCRISC
+is chosen because ``ReaderDataMovementConfig`` maps to ``RISCV_1`` in the
+hardware (``kernel_types.cpp``), and the reader kernel is always present
+in every fused op.
+
+Coordinator ``local::sync()``: drain NOC, wait followers, reset op sems +
+CBs, rebind, signal ``*reset_done = done``.
 
 Follower ``local::sync()``: signal done, wait ``*reset_done >= done``.
 
-BRISC ``group::sync()``: per-transition segment multicast.
+Coordinator ``group::sync()``: per-transition segment unicast release.
 
 Follower ``group::sync()``: per-transition segment spinwait + CB resync +
 rebind.
@@ -45,11 +50,13 @@ _REBIND_RT_OFFSET_CT_ARG = "rebind_rt_offset"
 _RISC_SUFFIX = {"riscv_0": "br", "riscv_1": "nc", "compute": "tr"}
 
 # =============================================================================
-# Per-RISC CB Reset/Resync C++ Templates
+# Per-Role CB Reset/Resync C++ Templates
 # =============================================================================
 
-# BRISC: equalize stream registers + reset FIFO pointers
-_RISCV0_RESET_CBS = """\
+# Coordinator: equalize stream registers + reset FIFO pointers.
+# Stream registers are shared hardware — any RISC can write to them.
+# The coordinator equalizes once; followers resync their local state after.
+_COORDINATOR_RESET_CBS = """\
 // Equalize stream tile counters + reset FIFO pointers for the given CB indices.
 // Skips write when counters already match (writing same value to a stream
 // register may have hardware side-effects).
@@ -71,9 +78,9 @@ __attribute__((noinline)) void reset_cbs(const std::array<uint32_t, N>& cbs) {
     }
 }"""
 
-# NCRISC: simple FIFO pointer reset
-_RISCV1_RESYNC_CBS = """\
-// Resync NCRISC local CB pointers to CB start between phases.
+# Data-movement follower (BRISC or NCRISC): simple FIFO pointer reset.
+_DM_FOLLOWER_RESYNC_CBS = """\
+// Resync data-movement follower local CB pointers to CB start between phases.
 template <size_t N>
 __attribute__((noinline)) void resync_cbs(const std::array<uint32_t, N>& cbs) {
     for (uint32_t i = 0; i < N; i++) {
@@ -85,9 +92,9 @@ __attribute__((noinline)) void resync_cbs(const std::array<uint32_t, N>& cbs) {
     }
 }"""
 
-# Compute: TRISC0 syncs tiles_acked, TRISC2 syncs tiles_received
+# Compute follower: TRISC0 syncs tiles_acked, TRISC2 syncs tiles_received.
 _COMPUTE_RESYNC_CBS = """\
-// Resync compute-side local CB state after BRISC reset.
+// Resync compute-side local CB state after coordinator reset.
 // TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.
 // TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.
 template <size_t N>
@@ -115,12 +122,6 @@ __attribute__((noinline)) void resync_cbs(const std::array<uint32_t, N>& cbs) {
 #endif
 }"""
 
-_CB_RESET_TEMPLATES = {
-    "riscv_0": _RISCV0_RESET_CBS,
-    "riscv_1": _RISCV1_RESYNC_CBS,
-    "compute": _COMPUTE_RESYNC_CBS,
-}
-
 # Rebind CB buffer addresses from runtime args.  Uses cb_addr_shift from
 # circular_buffer_interface.h (4 on TRISC, 0 on BRISC/NCRISC) to convert
 # byte addresses to the per-RISC CB interface units.
@@ -143,52 +144,88 @@ __attribute__((noinline)) void rebind_cbs(
 # Segment C++ Templates (with .format() placeholders)
 # =============================================================================
 
-# Multicast segment template (BRISC only): leader gathers arrive, multicasts release.
-_MULTICAST_SEGMENT_TEMPLATE = """\
-namespace seg_{seg_idx} {{
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("{s}_num_cores");
-    constexpr uint32_t core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");
-    constexpr uint32_t core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");
-    constexpr uint32_t mcast_start_x = get_named_compile_time_arg_val("{s}_mcast_start_x");
-    constexpr uint32_t mcast_start_y = get_named_compile_time_arg_val("{s}_mcast_start_y");
-    constexpr uint32_t mcast_end_x = get_named_compile_time_arg_val("{s}_mcast_end_x");
-    constexpr uint32_t mcast_end_y = get_named_compile_time_arg_val("{s}_mcast_end_y");
-    uint32_t call_count;
-    volatile tt_l1_ptr uint32_t* arrive;
-    volatile tt_l1_ptr uint32_t* release;
 
-    __attribute__((noinline)) void init() {{
-        call_count = 0;
-        arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            get_arg_val<uint32_t>(rt_offset + {arrive_offset}));
-        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            get_arg_val<uint32_t>(rt_offset + {release_offset}));
-        // Reset L1 semaphores for re-execution
-        *arrive = 0;
-        *release = 0;
-    }}
+def _generate_unicast_segment(
+    seg_idx: int,
+    s: str,
+    arrive_offset: int,
+    release_offset: int,
+    other_phys_coords: "List[Tuple[int, int]]",
+) -> str:
+    """Generate coordinator barrier segment code with unicast release.
 
-    __attribute__((noinline)) void sync() {{
-        if constexpr (num_cores > 1) {{
-            uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);
-            noc_semaphore_inc(core0_arrive_noc_addr, 1);
-            bool is_core_0 = (my_x[0] == core0_phys_x && my_y[0] == core0_phys_y);
-            if (is_core_0) {{
-                noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
-                *release = call_count + 1;
-                uint64_t mcast_addr = get_noc_multicast_addr(
-                    mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, (uint32_t)release);
-                noc_semaphore_set_multicast_loopback_src((uint32_t)release, mcast_addr, num_cores);
-                noc_async_write_barrier();
-            }} else {{
-                noc_semaphore_wait_min(release, call_count + 1);
-            }}
-        }} else {{
-            *release = call_count + 1;
-        }}
-        call_count++;
-    }}
-}} // namespace seg_{seg_idx}"""
+    Instead of multicasting release to a rectangular bounding box, this
+    writes to each non-coordinator core individually via ``noc_async_write``.
+    This removes the requirement for a rectangular core grid (~300 ns for
+    16 cores vs ~30 ns for multicast — negligible).
+    """
+    n_other = len(other_phys_coords)
+
+    # Build constexpr array of other cores' physical coordinates.
+    # Always declare the array (with dummy values when empty) because
+    # `if constexpr` does NOT discard branches in non-template context —
+    # the compiler still checks name lookup in the discarded branch.
+    if n_other > 0:
+        coords_flat = []
+        for x, y in other_phys_coords:
+            coords_flat.extend([str(x), str(y)])
+        array_init = ", ".join(coords_flat)
+        array_size = n_other * 2
+    else:
+        array_init = "0, 0"
+        array_size = 2
+    array_decl = f"    constexpr std::array<uint32_t, {array_size}> other_core_phys = {{{{{array_init}}}}};"
+
+    # Unicast release loop: write local release value to each other core
+    release_loop = (
+        "            *release = call_count + 1;\n"
+        "            for (uint32_t i = 0; i < {n_other} * 2; i += 2) {{\n"
+        "                uint64_t dest = get_noc_addr(other_core_phys[i], other_core_phys[i+1], (uint32_t)release);\n"
+        "                noc_async_write((uint32_t)release, dest, 4);\n"
+        "            }}\n"
+        "            noc_async_write_barrier();"
+    ).format(n_other=n_other)
+
+    return (
+        f"namespace seg_{seg_idx} {{\n"
+        f'    constexpr uint32_t num_cores = get_named_compile_time_arg_val("{s}_num_cores");\n'
+        f'    constexpr uint32_t core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");\n'
+        f'    constexpr uint32_t core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");\n'
+        f"{array_decl}\n"
+        f"    uint32_t call_count;\n"
+        f"    volatile tt_l1_ptr uint32_t* arrive;\n"
+        f"    volatile tt_l1_ptr uint32_t* release;\n"
+        f"\n"
+        f"    __attribute__((noinline)) void init() {{\n"
+        f"        call_count = 0;\n"
+        f"        arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+        f"            get_arg_val<uint32_t>(rt_offset + {arrive_offset}));\n"
+        f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+        f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));\n"
+        f"        // Reset L1 semaphores for re-execution\n"
+        f"        *arrive = 0;\n"
+        f"        *release = 0;\n"
+        f"    }}\n"
+        f"\n"
+        f"    __attribute__((noinline)) void sync() {{\n"
+        f"        if constexpr (num_cores > 1) {{\n"
+        f"            uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);\n"
+        f"            noc_semaphore_inc(core0_arrive_noc_addr, 1);\n"
+        f"            bool is_core_0 = (my_x[0] == core0_phys_x && my_y[0] == core0_phys_y);\n"
+        f"            if (is_core_0) {{\n"
+        f"                noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));\n"
+        f"{release_loop}\n"
+        f"            }} else {{\n"
+        f"                noc_semaphore_wait_min(release, call_count + 1);\n"
+        f"            }}\n"
+        f"        }} else {{\n"
+        f"            *release = call_count + 1;\n"
+        f"        }}\n"
+        f"        call_count++;\n"
+        f"    }}\n"
+        f"}} // namespace seg_{seg_idx}"
+    )
+
 
 # Spinwait segment template (NCRISC/compute): spin on release semaphore.
 _SPINWAIT_SEGMENT_TEMPLATE = """\
@@ -305,14 +342,14 @@ def _emit_phase_cb_arrays(
 # =============================================================================
 
 
-def _emit_state_vars(risc_type: str, has_compute: bool) -> List[str]:
+def _emit_state_vars(risc_type: str, is_coordinator: bool, has_compute: bool) -> List[str]:
     """Emit state variables at barrier namespace level."""
     lines = ["uint32_t done;"]
-    if risc_type == "riscv_0":
+    if is_coordinator:
         if has_compute:
             lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
         lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
-    elif risc_type == "riscv_1":
+    elif risc_type == "riscv_0":
         lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
     elif risc_type == "compute":
         lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
@@ -331,12 +368,12 @@ def _emit_local_sync_coordinator(
     dispatch: List[Dict[str, Any]],
     op_semaphore_info: List[Tuple[int, int]],
 ) -> List[str]:
-    """Emit ``namespace local { void sync(); }`` for BRISC.
+    """Emit ``namespace local { void sync(); }`` for the coordinator (NCRISC).
 
     Order: done++ -> drain NOC -> wait followers -> reset op sems ->
     per-done CB reset + rebind -> signal *reset_done = done.
     """
-    s = _RISC_SUFFIX["riscv_0"]
+    s = _RISC_SUFFIX["riscv_1"]
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
     lines.append(f'        DeviceZoneScopedN("local-sync-{s}");')
@@ -378,16 +415,19 @@ def _emit_local_sync_coordinator(
 
 
 def _emit_local_sync_follower(risc_type: str) -> List[str]:
-    """Emit ``namespace local { void sync(); }`` for NCRISC or compute.
+    """Emit ``namespace local { void sync(); }`` for BRISC or compute.
 
-    Order: done++ -> drain NOC (writer only) -> signal done -> wait reset_done.
+    Order: done++ -> drain NOC (DM only) -> signal done -> wait reset_done.
     """
     s = _RISC_SUFFIX[risc_type]
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
     lines.append(f'        DeviceZoneScopedN("local-sync-{s}");')
     lines.append("        done++;")
-    if risc_type == "riscv_1":
+    if risc_type != "compute":
+        # DM follower: drain outstanding NOC writes before signaling done.
+        # For a writer this flushes real writes; for a reader with no
+        # pending writes this is a harmless no-op.
         lines.append("        {")
         lines.append(f'            DeviceZoneScopedN("noc-drain-{s}");')
         lines.append("            noc_async_write_barrier();")
@@ -395,10 +435,11 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
         lines.append("        *writer_done = done;")
     else:  # compute
         lines.append("        *compute_done = done;")
-    lines.append("        // Wait for BRISC to complete reset (op sem + CB) before")
-    lines.append("        // proceeding.  Without this, a fast core can start the next")
-    lines.append("        // phase's multicast while a slow core's BRISC hasn't reset")
-    lines.append("        // op semaphores yet, clobbering in-flight noc_semaphore_inc.")
+    lines.append("        // Wait for coordinator to complete reset (op sem + CB)")
+    lines.append("        // before proceeding.  Without this, a fast core can start")
+    lines.append("        // the next phase's multicast while a slow core's coordinator")
+    lines.append("        // hasn't reset op semaphores yet, clobbering in-flight")
+    lines.append("        // noc_semaphore_inc.")
     lines.append("        while (*reset_done < done) {}")
     lines.append("    }")
     lines.append("} // namespace local")
@@ -411,8 +452,8 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
 
 
 def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
-    """Emit ``group::sync()`` function for BRISC."""
-    s = _RISC_SUFFIX["riscv_0"]
+    """Emit ``group::sync()`` function for the coordinator (NCRISC)."""
+    s = _RISC_SUFFIX["riscv_1"]
     lines = []
     lines.append("    __attribute__((noinline)) void sync() {")
     lines.append(f'        DeviceZoneScopedN("group-sync-{s}");')
@@ -475,7 +516,7 @@ def _emit_init_coordinator(
     num_segments: int,
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
 ) -> List[str]:
-    """Emit ``init()`` for BRISC."""
+    """Emit ``init()`` for the coordinator (NCRISC)."""
     lines = []
     lines.append("__attribute__((noinline)) void init() {")
     lines.append("    done = 0;")
@@ -490,8 +531,8 @@ def _emit_init_coordinator(
     lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset + 1}));")
     lines.append("    *reset_done = 0;")
     lines.append("    // NOTE: Do NOT reset *compute_done or *writer_done here.")
-    lines.append("    // Each RISC resets its own semaphore in its own init().")
-    lines.append("    // Resetting here races with fast compute/writer signaling")
+    lines.append("    // Each follower RISC resets its own semaphore in its own init().")
+    lines.append("    // Resetting here races with fast compute/BRISC signaling")
     lines.append("    // (e.g. no-op phase 0 where compute signals immediately).")
     if op_semaphore_info:
         lines.append("    // Reset op semaphores so phase 0 doesn't see stale values")
@@ -510,11 +551,12 @@ def _emit_init_follower(
     risc_type: str,
     num_segments: int,
 ) -> List[str]:
-    """Emit ``init()`` for NCRISC or compute."""
+    """Emit ``init()`` for the DM follower (BRISC) or compute."""
     lines = []
     lines.append("__attribute__((noinline)) void init() {")
     lines.append("    done = 0;")
-    if risc_type == "riscv_1":
+    if risc_type != "compute":
+        # DM follower: signals writer_done, reads reset_done
         lines.append("    writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset));")
         lines.append("    *writer_done = 0;")
@@ -552,10 +594,11 @@ def _generate_barrier_namespace(
     state variables -> local::sync() -> group { segments + sync() } ->
     top-level sync() -> init() -> close.
 
-    When ``has_compute`` is False, the BRISC barrier skips the
+    The coordinator is ``riscv_1`` (NCRISC / reader).  When
+    ``has_compute`` is False, the coordinator barrier skips the
     ``compute_done`` semaphore wait (no compute kernel to signal it).
     """
-    is_coordinator = risc_type == "riscv_0"
+    is_coordinator = risc_type == "riscv_1"
     num_segments = len(multi_barrier.segments)
     dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
 
@@ -574,8 +617,16 @@ def _generate_barrier_namespace(
         )
     lines.append("")
 
-    # CB reset/resync function + per-phase CB index arrays
-    lines.extend(_CB_RESET_TEMPLATES[risc_type].split("\n"))
+    # CB reset/resync function + per-phase CB index arrays.
+    # The coordinator equalizes shared stream registers; followers only
+    # resync their local CB interface pointers.
+    if is_coordinator:
+        cb_template = _COORDINATOR_RESET_CBS
+    elif risc_type == "compute":
+        cb_template = _COMPUTE_RESYNC_CBS
+    else:
+        cb_template = _DM_FOLLOWER_RESYNC_CBS
+    lines.extend(cb_template.split("\n"))
     lines.append("")
     if has_rebinds:
         lines.extend(_REBIND_CBS.split("\n"))
@@ -585,7 +636,7 @@ def _generate_barrier_namespace(
         lines.extend(_emit_rebind_slot_arrays(dispatch))
 
     # State variables at barrier namespace level
-    lines.extend(_emit_state_vars(risc_type, has_compute))
+    lines.extend(_emit_state_vars(risc_type, is_coordinator, has_compute))
 
     # namespace local { void sync(); }
     if is_coordinator:
@@ -602,12 +653,14 @@ def _generate_barrier_namespace(
     seg_base_offset = num_phase_sems
     if is_coordinator:
         for seg_idx in range(num_segments):
+            seg_config = multi_barrier.segments[seg_idx].config
             lines.extend(
-                _MULTICAST_SEGMENT_TEMPLATE.format(
+                _generate_unicast_segment(
                     seg_idx=seg_idx,
                     s=f"seg{seg_idx}",
                     arrive_offset=seg_base_offset + seg_idx * 2,
                     release_offset=seg_base_offset + 1 + seg_idx * 2,
+                    other_phys_coords=seg_config.other_core_phys_coords,
                 ).split("\n")
             )
             lines.append("")
