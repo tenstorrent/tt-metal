@@ -24,7 +24,7 @@ namespace {
 Tensor manual_seed_wrapper(
     const std::variant<int32_t, ttnn::Tensor>& seeds,
     const std::optional<MeshDevice*>& device,
-    const std::optional<std::variant<int32_t, ttnn::Tensor>>& user_ids,
+    const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::manual_seed(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
 }

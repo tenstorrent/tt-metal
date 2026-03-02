@@ -119,7 +119,7 @@ ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::crea
 ttnn::Tensor manual_seed(
     const std::variant<int32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
-    const std::optional<std::variant<int32_t, Tensor>>& user_ids,
+    const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (std::holds_alternative<int32_t>(seeds)) {
         TT_FATAL(device.has_value(), "Device must be provided when seeds is an int32_t value.");
@@ -137,7 +137,7 @@ ttnn::Tensor manual_seed(
     if (std::holds_alternative<int32_t>(seeds)) {
         operation_attributes.seeds = std::get<int32_t>(seeds);
     }
-    if (user_ids.has_value() && std::holds_alternative<int32_t>(user_ids.value())) {
+    if (user_ids.has_value() && std::holds_alternative<uint32_t>(user_ids.value())) {
         operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());
     }
     operation_attributes.sub_core_grids = sub_core_grids;

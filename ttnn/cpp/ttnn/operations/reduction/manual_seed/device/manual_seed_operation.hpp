@@ -37,7 +37,7 @@ struct ManualSeedDeviceOperation {
 ttnn::Tensor manual_seed(
     const std::variant<int32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
-    const std::optional<std::variant<int32_t, Tensor>>& user_ids,
+    const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::prim
