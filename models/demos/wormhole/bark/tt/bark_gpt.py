@@ -73,6 +73,7 @@ def preprocess_embedding_weight(weight_tensor, device):
     w = weight_tensor.detach().float()
     return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
+
 class TtBarkMLP:
     def __init__(self, device, parameters, config: BarkConfig):
         self.device = device
@@ -101,7 +102,9 @@ class TtBarkMLP:
             packer_l1_acc=True,
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG
+    ) -> ttnn.Tensor:
         """Forward pass through MLP block with fused activation."""
         # Linear projection: hidden -> 4*hidden with fused GELU
         intermediate = ttnn.linear(
@@ -409,10 +412,8 @@ class TtBarkGPT:
             else:
                 tt_input_ids = input_ids
 
-            inputs_embeds = ttnn.embedding(
-                tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            
+            inputs_embeds = ttnn.embedding(tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+
             if isinstance(input_ids, torch.Tensor):
                 ttnn.deallocate(tt_input_ids)
         elif inputs_embeds is None:
