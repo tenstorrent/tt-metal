@@ -117,6 +117,12 @@ void kernel_main() {
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
 
+#ifdef FUSE_TERNARY
+    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
+    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+#endif  // FUSE_TERNARY
+
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
     uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
@@ -164,6 +170,28 @@ void kernel_main() {
     constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+#endif
+
+#ifdef FUSE_TERNARY
+#ifdef READ_FROM_LOCAL_INPUT
+    constexpr auto ternary_a_args = TensorAccessorArgs<in3_args.next_compile_time_args_offset()>();
+#else
+#ifdef FUSE_BIAS
+    constexpr auto ternary_a_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto ternary_a_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
+#endif
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
@@ -397,6 +425,22 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 cb_push_back(cb_id_in2, N_block_tiles);
+            }
+#endif
+
+#ifdef FUSE_TERNARY
+            if constexpr (!is_output_writer) {
+                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
+                    ternary_a_reader,
+                    ternary_b_reader,
+                    out_shape,
+                    cb_id_ternary_a,
+                    cb_id_ternary_b,
+                    ternary_a_tile_size,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
             }
 #endif
 
