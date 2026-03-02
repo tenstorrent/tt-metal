@@ -203,21 +203,15 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(
-        self,
-        tokens,
-        start_pos=0,
-        page_table=None,
-        chunk_page_table=None,
-        trace_enabled=False,
-        last_token_idx=None,
-        global_user_id=None,
-    ):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+
+        trace_enabled = kwargs.get("trace_enabled", False)
+        last_token_idx = kwargs.get("last_token_idx", None)
 
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
