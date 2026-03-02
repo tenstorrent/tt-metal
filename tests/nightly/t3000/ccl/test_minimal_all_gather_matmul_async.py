@@ -165,7 +165,7 @@ def run_all_gather_impl(
         bias_tt = None
 
     ##### Configs for ttnn.matmul #####
-    core_grid = (8, 6)
+    core_grid = (8, 8)  # Changed from (8, 6) to test 64 cores
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=core_grid,
         in0_block_w=min(max_in0_block_w, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time

@@ -1,0 +1,4 @@
+Run Name: fused_ag_mm_padded_k4_4k
+Date: Thu Feb 26 01:48:40 UTC 2026
+Prompt Lengths: 4k
+Parse Only: false

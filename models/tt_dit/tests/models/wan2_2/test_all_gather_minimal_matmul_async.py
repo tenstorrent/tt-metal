@@ -55,7 +55,7 @@ def run_test_linear_impl(
     num_workers_per_link,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
-    fp32_acc=True,
+    fp32_acc=False,
     num_iters=1,
     enable_trace=False,
     use_persistent_buffers=True,
@@ -80,12 +80,13 @@ def run_test_linear_impl(
     K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
     N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
     per_device_M = M // device.shape[sp_axis]
+    per_device_M_buffer = per_device_M
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
-                torch.zeros((1, 1, per_device_M, K), dtype=torch_dtype)
+                torch.zeros((1, 1, per_device_M_buffer, K), dtype=torch_dtype)
                 if use_non_fused
-                else torch.zeros((per_device_M, K), dtype=torch_dtype),
+                else torch.zeros((per_device_M_buffer, K), dtype=torch_dtype),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
@@ -217,10 +218,8 @@ def run_test_linear_impl(
             else:
                 concat_dims = [tp_axis + 2, sp_axis + 2]
         else:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis, tp_axis]
-            else:
-                concat_dims = [tp_axis, sp_axis]
+            # Fused: we shard (M, K) with M on sp_axis, K on tp_axis; output (per_device_M, N) per device -> reassemble as (M, N*mesh_cols)
+            concat_dims = [sp_axis, tp_axis]
 
         tt_output = ttnn.from_device(tt_output)
         tt_output = ttnn.to_torch(
@@ -271,7 +270,7 @@ def run_test_linear(
     use_bias=True,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
-    fp32_acc=True,
+    fp32_acc=False,
     dtype=ttnn.bfloat16,
     weight_dtype=None,
     bias_dtype=None,
@@ -299,7 +298,8 @@ def run_test_linear(
         else:
             bias_input = torch.randn((1, N), dtype=torch_dtype)
 
-    # Prepare TT tensors
+    # Non-fused all_gather_async(dim=3) gathers along the ring (cluster_axis); so K must be sharded on the ring to get full K after one gather.
+    # Use [sp_axis+2, tp_axis+2] so K (dim 3) is on tp_axis = ring; then per device (1,1, M/8, K/4), gather gives (1,1, M/8, K).
     if sp_axis == 1:
         if use_non_fused:
             shard_dims = [sp_axis + 2, tp_axis + 2]
@@ -307,9 +307,10 @@ def run_test_linear(
             shard_dims = [sp_axis, tp_axis]
     else:
         if use_non_fused:
-            shard_dims = [tp_axis + 2, sp_axis + 2]
+            shard_dims = [sp_axis + 2, tp_axis + 2]  # M on mesh 0, K on mesh 1 (ring) so gather dim=3 gives full K
         else:
-            shard_dims = [tp_axis, sp_axis]
+            # Fused: shard (M, K) with M on sp_axis, K on tp_axis so op's K = per_device_K * ring_size matches K_w
+            shard_dims = [sp_axis, tp_axis]
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
@@ -387,62 +388,88 @@ def run_test_linear(
             8,
             1,
         ],
+        # Llama 70B config: 8x4 mesh with 4 workers (less L1 usage)
         [
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
-            2,
-            4,
+            1,
+            4,  # num_workers_per_link=4 like Llama
             0,
             1,
             8,
             8,
             1,
         ],
+        # 4x8 core grid (32 cores) - current working config in Llama
         [
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
-            4,
-            2,
+            1,
+            4,  # num_workers_per_link=4 like Llama
             0,
             1,
-            8,
-            8,
+            4,  # core_grid_x = 4
+            8,  # core_grid_y = 8
             1,
         ],
+        # 7x8 core grid (56 cores) - test if grid_x=7 works
         [
-            (4, 8),
+            (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
-            2,
-            6,
             1,
+            4,
             0,
-            12,
-            9,
+            1,
+            7,  # core_grid_x = 7
+            8,  # core_grid_y = 8
+            1,
+        ],
+        # 8x4 core grid (32 cores) - swap x and y
+        [
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            1,
+            4,
             0,
+            1,
+            8,  # core_grid_x = 8
+            4,  # core_grid_y = 4
+            1,
+        ],
+        # 2x8 core grid (16 cores) - test grid_x=2
+        [
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            1,
+            4,
+            0,
+            1,
+            2,  # core_grid_x = 2
+            8,  # core_grid_y = 8
+            1,
         ],
     ],
-    ids=[
-        "2x4links1",
-        "wh8x4links1",
-        "wh8x4links2",
-        "wh8x4links4",
-        "bh8x4links2",
-    ],
+    ids=["2x4links1", "wh8x4links1", "llama_8x4", "llama_4x8grid", "llama_7x8grid", "llama_8x4grid", "llama_2x8grid"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -453,6 +480,11 @@ def run_test_linear(
         (75776, 5120, 1280, True, True, None),
         (75776, 5120, 3456, True, True, "gelu"),
         (3072, 5120, 3456, True, True, "gelu"),
+        # Llama 70B W2 sizes for 8x4 mesh: M=65536 (8192*8), K=3584, N=2048
+        # Per device: M=8192, K=896 (before gather), N=2048
+        (65536, 3584, 2048, True, True, None),
+        # Llama 70B W2 with K padded to 4096 (power of 2)
+        (65536, 4096, 2048, True, True, None),
     ],
     ids=[
         "4k4k4k",
@@ -460,6 +492,8 @@ def run_test_linear(
         "denseout",
         "ff1",
         "unit",
+        "llama70b_w2_8x4",
+        "llama70b_w2_k4096",
     ],
 )
 @pytest.mark.parametrize(
@@ -503,6 +537,17 @@ def test_linear(
     num_iters,
     cluster_axis,
 ):
+    # 8x4 fused on wormhole exceeds fabric L1; separate path is supported
+    # COMMENTED OUT to test if Llama 70B sizes work with 8x8 grid
+    # if (
+    #     not use_non_fused
+    #     and tuple(mesh_device.shape) == (8, 4)
+    #     and mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    # ):
+    #     pytest.skip(
+    #         "8x4 fused exceeds fabric L1 on wormhole (memory_map_end_address > l1_end_address); run separate path"
+    #     )
+
     print(f"M,K,N,h,w: {M_block_size}, {K_block_size}, {N_block_size}, {subblock_h},  {subblock_w}\n")
 
     check_result = run_test_linear(

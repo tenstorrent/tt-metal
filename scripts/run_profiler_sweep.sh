@@ -50,6 +50,14 @@
 #   ./scripts/run_profiler_sweep.sh --compare-runs baseline optimized_v2
 #
 # =============================================================================
+# PROFILING DATA (single-device view)
+# =============================================================================
+#
+#   parse_profiler_report.py is called with --device-id 0, so prefill.csv/decode.csv
+#   and summary timings (e.g. op duration in us) are for device 0 only — i.e.
+#   "single device profiling" view of the multi-device run.
+#
+# =============================================================================
 # OUTPUT STRUCTURE
 # =============================================================================
 #
@@ -333,6 +341,7 @@ parse_results() {
 
     log_info "Parsing results for ${prompt_len}: $(basename $ops_csv)"
 
+    # Parsed times are per-device (device-id 0): "single device profiling" view of a multi-device run.
     # Get the actual sequence length for SDPA filtering
     local seq_len="${SEQ_LENGTHS[$prompt_len]}"
 

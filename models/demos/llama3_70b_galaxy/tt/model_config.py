@@ -953,9 +953,11 @@ class TtModelArgs:
                     grid_x = int(os.environ.get("FUSED_AG_MM_GRID_X", "4"))
                     grid_y = int(os.environ.get("FUSED_AG_MM_GRID_Y", "8"))
                     n_block = 8
+                # Add support for FUSED_AG_MM_K_BLOCK environment variable
+                k_block = int(os.environ.get("FUSED_AG_MM_K_BLOCK", "8"))
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
-                    K_block_size=8,
+                    K_block_size=k_block,
                     N_block_size=n_block,
                     subblock_h=4,
                     subblock_w=2,

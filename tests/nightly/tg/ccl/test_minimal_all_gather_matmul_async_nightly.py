@@ -10,12 +10,15 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_matmul_async import run_all
 
 
 @pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
+        # Llama 70B W2 sizes: 4 devices, seq_len=8192, full_hidden=3584 (896*4), output=2048
+        # Input per device: (8192, 896), Weight: (3584, 2048), Output: (8192, 2048)
+        (4, [1, 1, 8192, 3584], 3, ttnn.TILE_LAYOUT, 2048, 2, ttnn.bfloat16, ttnn.bfloat16, True),
     ],
+    ids=["llama70b_8k_8x8grid"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag, mem_config_mm",
@@ -30,7 +33,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_matmul_async import run_all
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),  # Keep only perf variant to test tracing
+        (True, 10),
     ],
     ids=["perf"],
 )
@@ -49,7 +52,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_matmul_async import run_all
     ],
     ids=["default"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
 def test_all_gather_async(
     mesh_device,
     num_devices,
