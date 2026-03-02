@@ -8,6 +8,7 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include "../../../device/kernels/accumulation_common.hpp"
 
 void kernel_main() {
     // Compile time args
@@ -22,25 +23,25 @@ void kernel_main() {
 
     // CB indices
     // ----------
-    constexpr auto dst_cb = tt::CBIndex::c_1;
+    constexpr auto dst_cb_idx = tt::CBIndex::c_1;
 
     // Tile sizes
     // ----------
-    constexpr uint32_t dst_tile_size = get_tile_size(dst_cb);
+    constexpr uint32_t dst_tile_size = get_tile_size(dst_cb_idx);
 
     // Tensor accessor
     // ---------------
     const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr, dst_tile_size);
 
     experimental::Noc noc;
-    experimental::CircularBuffer cb_dst(dst_cb);
+    experimental::CircularBuffer cb_dst(dst_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from dst_cb and push to dst
     for (uint32_t tile_id = dst_start_tile; tile_id < (dst_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_dst.wait_front(1);
+        cb_dst.wait_front(ONE_TILE);
         noc.async_write(cb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
         noc.async_write_barrier();
-        cb_dst.pop_front(1);
+        cb_dst.pop_front(ONE_TILE);
     }
 }

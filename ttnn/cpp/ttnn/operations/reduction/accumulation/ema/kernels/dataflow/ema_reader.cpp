@@ -8,6 +8,7 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include "../../../device/kernels/accumulation_common.hpp"
 
 void kernel_main() {
     // Compile time args
@@ -22,25 +23,25 @@ void kernel_main() {
 
     // CB indices
     // ----------
-    constexpr auto src_cb = tt::CBIndex::c_0;
+    constexpr auto src_cb_idx = tt::CBIndex::c_0;
 
     // Tile sizes
     // ----------
-    constexpr uint32_t src_tile_size = get_tile_size(src_cb);
+    constexpr uint32_t src_tile_size = get_tile_size(src_cb_idx);
 
     // Tensor accessor
     // ---------------
     const auto src_accessor = TensorAccessor(src_args, src_base_addr, src_tile_size);
 
     experimental::Noc noc;
-    experimental::CircularBuffer cb_src(src_cb);
+    experimental::CircularBuffer cb_src(src_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from src and push to src_cb
     for (uint32_t tile_id = src_start_tile; tile_id < (src_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_src.reserve_back(1);
+        cb_src.reserve_back(ONE_TILE);
         noc.async_read(src_accessor, cb_src, src_tile_size, {.page_id = tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_src.push_back(1);
+        cb_src.push_back(ONE_TILE);
     }
 }

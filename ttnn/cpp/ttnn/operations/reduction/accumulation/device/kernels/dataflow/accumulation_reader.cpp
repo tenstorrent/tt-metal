@@ -76,7 +76,7 @@ void kernel_main() {
     }
 
     // TODO(jbbieniekTT): issue #21108
-    experimental::CoreLocalMem<int32_t> data_start(data_start_addr);
+    volatile experimental::CoreLocalMem<int32_t> data_start(data_start_addr);
     for (uint32_t i = 0; i < ublock_size_bytes / sizeof(int32_t); i++) {
         data_start[i] = scaler;
     }

@@ -6,6 +6,7 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/ema.h"
 #include "experimental/circular_buffer.h"
+#include "../../../device/kernels/accumulation_common.hpp"
 
 /*
  * -------------------------------------------------------------------------------------------------
@@ -74,13 +75,13 @@ void kernel_main() {
 
     // CB indices
     // ----------
-    constexpr auto src_cb = tt::CBIndex::c_0;
-    constexpr auto dst_cb = tt::CBIndex::c_1;
-    constexpr auto trp_cb = tt::CBIndex::c_2;
+    constexpr auto src_cb_idx = tt::CBIndex::c_0;
+    constexpr auto dst_cb_idx = tt::CBIndex::c_1;
+    constexpr auto trp_cb_idx = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_src(src_cb);
-    experimental::CircularBuffer cb_dst(dst_cb);
-    experimental::CircularBuffer cb_trp(trp_cb);
+    experimental::CircularBuffer cb_src(src_cb_idx);
+    experimental::CircularBuffer cb_dst(dst_cb_idx);
+    experimental::CircularBuffer cb_trp(trp_cb_idx);
 
     // DST indices
     // -----------
@@ -90,38 +91,38 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Main loop - compute ema for each batch
     ema_init(alpha_bits, beta_bits);
-    transpose_wh_init(src_cb, dst_cb);
+    transpose_wh_init(src_cb_idx, dst_cb_idx);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
         // For each batch, clear the previous output
         ema_clear_previous_output();
         for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
             // Read input, transpose and compute ema
-            cb_src.wait_front(1);
+            cb_src.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(src_cb, 0, inp_dst_index);
+            transpose_wh_tile(src_cb_idx, 0, inp_dst_index);
             ema_tile(inp_dst_index);
             tile_regs_commit();
-            cb_src.pop_front(1);
+            cb_src.pop_front(ONE_TILE);
 
-            cb_trp.reserve_back(1);
+            cb_trp.reserve_back(ONE_TILE);
             tile_regs_wait();
-            pack_tile(output_dst_index, trp_cb);
+            pack_tile(output_dst_index, trp_cb_idx);
             tile_regs_release();
-            cb_trp.push_back(1);
+            cb_trp.push_back(ONE_TILE);
 
             // Transpose back and write to output
-            cb_trp.wait_front(1);
+            cb_trp.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(trp_cb, 0, output_dst_index);
+            transpose_wh_tile(trp_cb_idx, 0, output_dst_index);
             tile_regs_commit();
-            cb_trp.pop_front(1);
+            cb_trp.pop_front(ONE_TILE);
 
-            cb_dst.reserve_back(1);
+            cb_dst.reserve_back(ONE_TILE);
             tile_regs_wait();
-            pack_tile(output_dst_index, dst_cb);
+            pack_tile(output_dst_index, dst_cb_idx);
             tile_regs_release();
-            cb_dst.push_back(1);
+            cb_dst.push_back(ONE_TILE);
         }
     }
 }
