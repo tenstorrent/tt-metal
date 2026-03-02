@@ -50,6 +50,9 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        sender_config_buffer_address=None,
+        receiver_config_buffer_address=None,
+        data_buffer_address=None,
     ):
         self.h2d_socket = h2d_socket
         self.d2h_socket = d2h_socket
@@ -108,16 +111,30 @@ class HostInterface:
                 self.d2h_upstream_core,
                 self.d2h_mesh_core_coord,
             )
-            socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
+            downstream_socket_memory_config = ttnn.SocketMemoryConfig(
+                ttnn.BufferType.L1,
+                core_to_core_socket_buffer_size,
+                data_buffer_address=data_buffer_address,
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+            )
+
+            upstream_socket_memory_config = ttnn.SocketMemoryConfig(
+                ttnn.BufferType.L1,
+                core_to_core_socket_buffer_size,
+                data_buffer_address=data_buffer_address,
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+            )
 
             downstream_socket_config = ttnn.SocketConfig(
                 [downstream_socket_connection],
-                socket_memory_config,
+                downstream_socket_memory_config,
             )
 
             upstream_socket_config = ttnn.SocketConfig(
                 [upstream_socket_connection],
-                socket_memory_config,
+                upstream_socket_memory_config,
             )
 
             self.downstream_socket_pair = ttnn.create_socket_pair(

@@ -54,6 +54,9 @@ class SocketInterface:
         receiver_mesh=None,
         sender_packet_header_cb_index=None,
         receiver_packet_header_cb_index=None,
+        sender_config_buffer_address=None,
+        receiver_config_buffer_address=None,
+        data_buffer_address=None,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -84,7 +87,14 @@ class SocketInterface:
             else:
                 # Upstream socket not provided, create a new socket, on the sender mesh
                 socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
-                socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+                # In this case, the sender is the upstream, the receiver is the pipeline core
+                socket_memory_config = ttnn.SocketMemoryConfig(
+                    ttnn.BufferType.L1,
+                    socket_fifo_size,
+                    data_buffer_address=data_buffer_address,
+                    sender_config_buffer_address=sender_config_buffer_address,
+                    receiver_config_buffer_address=receiver_config_buffer_address,
+                )
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.upstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize upstream as receiver socket
@@ -98,7 +108,14 @@ class SocketInterface:
                 assert downstream_core_coord is None
             else:
                 socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
-                socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+                # In this case, the sender is the pipeline core, the receiver is the downstream
+                socket_memory_config = ttnn.SocketMemoryConfig(
+                    ttnn.BufferType.L1,
+                    socket_fifo_size,
+                    data_buffer_address=data_buffer_address,
+                    sender_config_buffer_address=sender_config_buffer_address,
+                    receiver_config_buffer_address=receiver_config_buffer_address,
+                )
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize downstream as sender socket
@@ -110,7 +127,14 @@ class SocketInterface:
 
         # Create a socket between the sender and receiver cores
         socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
-        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+        # In this case the sender is the pipeline core at stage n - 1 and the receiver is the pipeline core at stage n
+        socket_memory_config = ttnn.SocketMemoryConfig(
+            ttnn.BufferType.L1,
+            socket_fifo_size,
+            data_buffer_address=data_buffer_address,
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+        )
 
         if self.local_socket:
             # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair

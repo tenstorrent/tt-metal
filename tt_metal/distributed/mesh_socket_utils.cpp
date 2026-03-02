@@ -186,6 +186,24 @@ Tag generate_descriptor_exchange_tag(tt_fabric::MeshId peer_mesh_id, std::option
 }
 }  // namespace
 
+std::shared_ptr<Buffer> get_device_local_buffer_view(const std::shared_ptr<MeshBuffer>& buffer) {
+    if (Buffer* backing = buffer->get_backing_buffer()) {
+        // Non-owning shared_ptr: MeshBuffer keeps the backing buffer alive.
+        return std::shared_ptr<Buffer>(buffer, backing);
+    }
+
+    const auto& device_local_config = buffer->device_local_config();
+    return Buffer::create(
+        buffer->device(),
+        buffer->address(),
+        buffer->size(),
+        device_local_config.page_size,
+        device_local_config.buffer_type,
+        device_local_config.sharding_args,
+        device_local_config.bottom_up,
+        device_local_config.sub_device_id);
+}
+
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
     const auto& socket_connections = config.socket_connection_config;
@@ -238,7 +256,26 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         .size = total_config_buffer_size,
     };
 
-    return MeshBuffer::create(mesh_buffer_specs, buffer_specs, device.get());
+    if (is_sender && socket_mem_config.sender_config_buffer_address.has_value()) {
+        auto l1_size = device->allocator()->get_bank_size(BufferType::L1);
+        TT_FATAL(
+            socket_mem_config.sender_config_buffer_address.value() + config_buffer_size <= l1_size,
+            "Sender config buffer address {} is out of bounds for L1 size {}",
+            socket_mem_config.sender_config_buffer_address.value(),
+            l1_size);
+    } else if ((!is_sender) && socket_mem_config.receiver_config_buffer_address.has_value()) {
+        auto l1_size = device->allocator()->get_bank_size(BufferType::L1);
+        TT_FATAL(
+            socket_mem_config.receiver_config_buffer_address.value() + config_buffer_size <= l1_size,
+            "Receiver config buffer address {} is out of bounds for L1 size {}",
+            socket_mem_config.receiver_config_buffer_address.value(),
+            l1_size);
+    }
+    return MeshBuffer::create(
+        mesh_buffer_specs,
+        buffer_specs,
+        device.get(),
+        is_sender ? socket_mem_config.sender_config_buffer_address : socket_mem_config.receiver_config_buffer_address);
 }
 
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
@@ -275,7 +312,17 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
         .size = total_data_buffer_size,
     };
 
-    return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get());
+    if (socket_mem_config.data_buffer_address.has_value()) {
+        auto bank_size = receiver->allocator()->get_bank_size(socket_mem_config.socket_storage_type);
+        TT_FATAL(
+            socket_mem_config.data_buffer_address.value() + socket_mem_config.fifo_size <= bank_size,
+            "Data buffer address {} is out of bounds for bank size {}",
+            socket_mem_config.data_buffer_address.value(),
+            bank_size);
+    }
+
+    return MeshBuffer::create(
+        socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get(), socket_mem_config.data_buffer_address);
 }
 
 void write_socket_configs(
@@ -285,7 +332,7 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint,
     const std::shared_ptr<MeshDevice>& peer_device) {
     auto* mesh_device = config_buffer->device();
-    const auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    auto core_to_core_id = get_device_local_buffer_view(config_buffer)->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     const auto& config = peer_descriptor.config;
     auto grouped_connections = group_socket_connections(config, socket_endpoint);

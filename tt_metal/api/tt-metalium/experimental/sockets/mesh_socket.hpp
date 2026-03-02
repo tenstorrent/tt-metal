@@ -61,17 +61,30 @@ struct SocketMemoryConfig {
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
 
+    // Optional Parameters for manual memory management.
+    // A user can specify these if they want to bypass the
+    // allocator and manage memory with their own
+    std::optional<DeviceAddr> data_buffer_address = std::nullopt;
+    std::optional<DeviceAddr> sender_config_buffer_address = std::nullopt;
+    std::optional<DeviceAddr> receiver_config_buffer_address = std::nullopt;
+
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
     SocketMemoryConfig() = default;
     SocketMemoryConfig(
         BufferType socket_storage_type,
         uint32_t fifo_size,
         std::optional<SubDeviceId> sender_sub_device = std::nullopt,
-        std::optional<SubDeviceId> receiver_sub_device = std::nullopt) :
+        std::optional<SubDeviceId> receiver_sub_device = std::nullopt,
+        std::optional<DeviceAddr> data_buffer_address = std::nullopt,
+        std::optional<DeviceAddr> sender_config_buffer_address = std::nullopt,
+        std::optional<DeviceAddr> receiver_config_buffer_address = std::nullopt) :
         socket_storage_type(socket_storage_type),
         fifo_size(fifo_size),
         sender_sub_device(sender_sub_device),
-        receiver_sub_device(receiver_sub_device) {}
+        receiver_sub_device(receiver_sub_device),
+        data_buffer_address(data_buffer_address),
+        sender_config_buffer_address(sender_config_buffer_address),
+        receiver_config_buffer_address(receiver_config_buffer_address) {}
 
     static constexpr auto attribute_names =
         std::forward_as_tuple("socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device");
