@@ -966,9 +966,9 @@ struct fmt::formatter<
     T,
     char,
     std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T> && !ttsl::is_strong_type_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
@@ -981,9 +981,9 @@ template <typename T>
         ttsl::concepts::Reflectable<T> and
         not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
