@@ -364,16 +364,16 @@ def test_ring_distributed_sdpa_128k(device):
     - per_device_seq_len: 131072 / 8 = 16384 tokens per device
 
     Config:
-    - q_chunk_size: 128 (must divide 16384)
-    - k_chunk_size: 256
+    - q_chunk_size: 256 (must divide 16384)
+    - k_chunk_size: 512 (must divide 131072)
     - dtype: bfloat8_b
     """
     # Fixed parameters for 128k test
     b = 1
     s = 131072  # 128k
     ring_size = 4
-    q_chunk_size = 128
-    k_chunk_size = 256
+    q_chunk_size = 256
+    k_chunk_size = 512
 
     # Validate constraints
     assert s % (2 * ring_size) == 0, f"Sequence length {s} must be divisible by {2 * ring_size}"
@@ -398,7 +398,7 @@ def test_ring_distributed_sdpa_128k(device):
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_chunk_size", [64, 128, 256, 512, 1024], ids=["q64", "q128", "q256", "q512", "q1024"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256, 512, 1024], ids=["k128", "k256", "k512", "k1024"])
-def test_ring_sdpa_128k_chunk_sweep(device, q_chunk_size, k_chunk_size):
+def test_ring_sdpa_128k_chunk_sweep_slow(device, q_chunk_size, k_chunk_size):
     """
     Sweep chunk sizes for 128k sequence to find optimal configuration.
 
