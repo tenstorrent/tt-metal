@@ -134,17 +134,17 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
             // Use a polynomial approximation around 0 to avoid catastrophic cancellation
             // Polynomial coefficients found using Sollya with the following commands:
             // > fpminimax(exp(x)-1, [|1,2,3,4,5,6,7|], [|single...|], [-0.5; -2^(-40)] + [2^(-40); 0.5], relative);
-            sfpi::vFloat exp_term = PolynomialEvaluator::eval(
-                x,
-                sfpi::vConst0,
-                sfpi::vConst1,
-                0.500000059604644775390625f,
-                0.16666667163372039794921875f,
-                4.16650883853435516357421875e-2f,
-                8.333188481628894805908203125e-3f,
-                1.400390756316483020782470703125e-3f,
-                1.99588379473425447940826416015625e-4f);
-            exp_term = exp_term - x;
+            // expm1(x) = 0 + x + c2*x^2 + c3*x^3 + ... + c7*x^7
+            // Hence, expm1(x)-x = c2*x^2 + ... + c7*x^7 = x^2 * (c2 + c3*x + c4*x^2 + ... + c7*x^5)
+            sfpi::vFloat exp_term = x * x *
+                                    PolynomialEvaluator::eval(
+                                        x,
+                                        0.500000059604644775390625f,
+                                        0.16666667163372039794921875f,
+                                        4.16650883853435516357421875e-2f,
+                                        8.333188481628894805908203125e-3f,
+                                        1.400390756316483020782470703125e-3f,
+                                        1.99588379473425447940826416015625e-4f);
             _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_else {  // large negative
