@@ -147,6 +147,19 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
         }
     }
 
+    if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
+        // On architectures with coordinate virtualization, NOC_ID_LOGICAL on each NOC
+        // instance may return NOC-specific translated coordinates that don't map to any
+        // known virtual or physical coordinate space. This is the case on Wormhole where
+        // NOC_1's NOC_ID_LOGICAL returns NOC_1-specific coordinates. These coordinates
+        // are valid for hardware routing via ID translation. Check if the target matches
+        // the local core's coordinates for this NOC (set from NOC_ID_LOGICAL in risc_init).
+        if (x == my_x[noc_id] && y == my_y[noc_id]) {
+            is_virtual_coord = false;
+            return AddressableCoreType::TENSIX;
+        }
+    }
+
     return AddressableCoreType::UNKNOWN;
 }
 

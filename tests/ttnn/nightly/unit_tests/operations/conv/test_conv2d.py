@@ -901,7 +901,6 @@ def test_conv_dram(
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #38727")
 def test_conv_ws(
     device,
     torch_tensor_map,
