@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion_xl_base.utils.accuracy_utils import (
     save_report_json,
     check_clip_scores,
 )
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 test_demo_base_and_refiner.__test__ = False
 
@@ -30,7 +30,10 @@ test_demo_base_and_refiner.__test__ = False
     "image_resolution",
     [
         (1024, 1024),
-        (512, 512),
+        pytest.param(
+            (512, 512),
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
     ids=["1024x1024", "512x512"],
 )

@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     prepare_device,
 )
 import os
-from models.common.utility_functions import profiler, is_wormhole_b0
+from models.common.utility_functions import profiler, is_wormhole_b0, is_blackhole
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
@@ -231,7 +231,11 @@ def run_demo_inference(
     "image_resolution, images_or_path",
     [
         ((1024, 1024), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_1024x1024.jpg"),
-        ((512, 512), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg"),
+        pytest.param(
+            (512, 512),
+            "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg",
+            marks=pytest.mark.skipif(is_blackhole(), reason="512x512 not supported on Blackhole"),
+        ),
     ],
     ids=["1024x1024", "512x512"],
 )
