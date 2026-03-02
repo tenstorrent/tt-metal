@@ -13,6 +13,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
+#include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -186,7 +187,11 @@ void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB_EXP_BLOCK_INIT");
+#ifdef ARCH_BLACKHOLE
+        sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
+#else
         sub_bcast_cols_init_short(inout_cb, max_cb);
+#endif
         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     }
 
@@ -199,11 +204,18 @@ void sub_exp_block_bcast_cols(
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
+#ifdef ARCH_BLACKHOLE
+            uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
+            sub_tiles_bcast_cols_custom(
+                inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index, tiles_per_column);
+            dst_index += tiles_per_column;
+#else
             for (uint32_t j = 0; j < tiles_per_column; j++) {
                 // Absolute position in cb_qkt_im
                 uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base + j;
                 sub_tiles_bcast_cols(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index++);
             }
+#endif
         }
     }
     tile_regs_commit();
