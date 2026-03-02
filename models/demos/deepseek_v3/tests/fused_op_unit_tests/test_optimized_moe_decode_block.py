@@ -34,7 +34,7 @@ def create_torch_w0_tensors(L, E, H, N):
     # for e in range(E):
     #     torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     #     torch_w0_tensors.append(torch_w0)
-    torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w0 = torch.ones((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     torch_w0_tensors = [torch_w0.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -46,7 +46,7 @@ def create_torch_w1_tensors(L, E, H, N):
     # for e in range(E):
     #     torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     #     torch_w1_tensors.append(torch_w1)
-    torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w1 = torch.ones((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     torch_w1_tensors = [torch_w1.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -58,7 +58,7 @@ def create_torch_w2_tensors(L, E, N, H):
     # for e in range(E):
     #     torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
     #     torch_w2_tensors.append(torch_w2)
-    torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+    torch_w2 = torch.ones((L, 1, N, H), dtype=torch.bfloat16) - 0.5
     torch_w2_tensors = [torch_w2.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -899,14 +899,14 @@ def test_optimized_moe_decode_block(
         # runtime since it needs to be a zeroed out tensor
         # allacote before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
         # TODO: (GR) some issue with hangs using moreh_full on multiple iters
-        tt_preallocated_combine_output = ttnn.moreh_full(
-            shape=[select_experts_k, tokens_per_device, hidden_size],
-            fill_value=0,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # tt_preallocated_combine_output = ttnn.moreh_full(
+        #     shape=[select_experts_k, tokens_per_device, hidden_size],
+        #     fill_value=0,
+        #     device=mesh_device,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     dtype=ttnn.bfloat16,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
 
         tt_preallocated_combine_output = ttnn.from_torch(
             torch.zeros([select_experts_k, tokens_per_device, hidden_size], dtype=torch.bfloat16),
@@ -1126,8 +1126,8 @@ def test_optimized_moe_decode_block(
             )
 
             torch_temp = torch_temp[:1, :512, :4]
-            print(torch_temp.shape)
-            print(torch_temp)
+            # print(torch_temp.shape)
+            # print(torch_temp)
 
             # if torch.all(torch_comb_out == 1):
             #     print("COMBINE OUTPUT ALL ONES")
