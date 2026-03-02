@@ -3158,5 +3158,491 @@ class TestUniqueAliasGroupsCache:
         assert len(pool._unique_alias_groups) == 1
 
 
+class TestHasWriterFlag:
+    """Tests for has_writer flag in barrier generation."""
+
+    def test_has_writer_flag_computation(self):
+        """Verify has_writer is True when riscv_0 role exists, False otherwise."""
+        # has_writer = any(rk[0] == "riscv_0" for rk in role_keys)
+        role_keys_with_writer = [
+            ("riscv_1", frozenset([(0, 0)])),
+            ("riscv_0", frozenset([(0, 0)])),
+            ("compute", frozenset([(0, 0)])),
+        ]
+        assert any(rk[0] == "riscv_0" for rk in role_keys_with_writer)
+
+        role_keys_no_writer = [
+            ("riscv_1", frozenset([(0, 0)])),
+            ("compute", frozenset([(0, 0)])),
+        ]
+        assert not any(rk[0] == "riscv_0" for rk in role_keys_no_writer)
+
+        role_keys_only_compute = [
+            ("compute", frozenset([(0, 0)])),
+        ]
+        assert not any(rk[0] == "riscv_0" for rk in role_keys_only_compute)
+
+    def test_barrier_state_vars_with_writer(self):
+        """With has_writer=True, coordinator declares writer_done pointer."""
+        _emit_state_vars = _mock_codegen._generate_barrier_namespace.__module__
+        # Access the barrier module's function via codegen re-export
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        _emit_state_vars = _barrier_mod._emit_state_vars
+
+        lines = _emit_state_vars("riscv_1", is_coordinator=True, has_compute=True, has_writer=True)
+        text = "\n".join(lines)
+        assert "writer_done" in text
+        assert "compute_done" in text
+
+    def test_barrier_state_vars_without_writer(self):
+        """With has_writer=False, coordinator does NOT declare writer_done pointer."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        _emit_state_vars = _barrier_mod._emit_state_vars
+
+        lines = _emit_state_vars("riscv_1", is_coordinator=True, has_compute=True, has_writer=False)
+        text = "\n".join(lines)
+        assert "writer_done" not in text
+        assert "compute_done" in text
+        assert "reset_done" in text
+
+    def test_barrier_state_vars_without_compute(self):
+        """With has_compute=False, has_writer=True, only writer_done declared."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        _emit_state_vars = _barrier_mod._emit_state_vars
+
+        lines = _emit_state_vars("riscv_1", is_coordinator=True, has_compute=False, has_writer=True)
+        text = "\n".join(lines)
+        assert "compute_done" not in text
+        assert "writer_done" in text
+        assert "reset_done" in text
+
+    def test_barrier_state_vars_neither_compute_nor_writer(self):
+        """With both flags False, only reset_done declared for coordinator."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        _emit_state_vars = _barrier_mod._emit_state_vars
+
+        lines = _emit_state_vars("riscv_1", is_coordinator=True, has_compute=False, has_writer=False)
+        text = "\n".join(lines)
+        assert "compute_done" not in text
+        assert "writer_done" not in text
+        assert "reset_done" in text
+        assert "done" in text  # uint32_t done always present
+
+    def test_local_sync_coordinator_without_writer(self):
+        """Coordinator local::sync() skips writer_done wait when has_writer=False."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_local_sync_coordinator(
+            has_compute=True,
+            dispatch=[],
+            op_semaphore_info=[],
+            has_writer=False,
+        )
+        text = "\n".join(lines)
+        assert "noc_semaphore_wait_min(compute_done" in text
+        assert "noc_semaphore_wait_min(writer_done" not in text
+
+    def test_local_sync_coordinator_with_writer(self):
+        """Coordinator local::sync() waits for writer_done when has_writer=True."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_local_sync_coordinator(
+            has_compute=True,
+            dispatch=[],
+            op_semaphore_info=[],
+            has_writer=True,
+        )
+        text = "\n".join(lines)
+        assert "noc_semaphore_wait_min(compute_done" in text
+        assert "noc_semaphore_wait_min(writer_done" in text
+
+    def test_local_sync_coordinator_no_followers(self):
+        """With both has_compute=False and has_writer=False, no semaphore waits."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_local_sync_coordinator(
+            has_compute=False,
+            dispatch=[],
+            op_semaphore_info=[],
+            has_writer=False,
+        )
+        text = "\n".join(lines)
+        assert "noc_semaphore_wait_min" not in text
+
+    def test_init_coordinator_rt_offsets_both_present(self):
+        """RT arg offsets: compute_done@0, writer_done@1, reset_done@2."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_init_coordinator(
+            has_compute=True,
+            num_segments=0,
+            op_semaphore_info=None,
+            has_writer=True,
+        )
+        text = "\n".join(lines)
+        assert "rt_offset + 0)" in text  # compute_done
+        assert "rt_offset + 1)" in text  # writer_done
+        assert "rt_offset + 2)" in text  # reset_done
+
+    def test_init_coordinator_rt_offsets_no_compute(self):
+        """RT arg offsets: writer_done@0, reset_done@1 when no compute."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_init_coordinator(
+            has_compute=False,
+            num_segments=0,
+            op_semaphore_info=None,
+            has_writer=True,
+        )
+        text = "\n".join(lines)
+        # No compute_done pointer declaration (comments may mention it)
+        assert "volatile tt_l1_ptr uint32_t* compute_done" not in text
+        assert "rt_offset + 0)" in text  # writer_done
+        assert "rt_offset + 1)" in text  # reset_done
+
+    def test_init_coordinator_rt_offsets_no_writer(self):
+        """RT arg offsets: compute_done@0, reset_done@1 when no writer."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_init_coordinator(
+            has_compute=True,
+            num_segments=0,
+            op_semaphore_info=None,
+            has_writer=False,
+        )
+        text = "\n".join(lines)
+        assert "volatile tt_l1_ptr uint32_t* compute_done" not in text  # declaration is in state_vars, not init
+        # But compute_done IS referenced in init (reinterpret_cast assignment)
+        assert "compute_done = reinterpret_cast" in text
+        assert "writer_done = reinterpret_cast" not in text
+        assert "rt_offset + 0)" in text  # compute_done
+        assert "rt_offset + 1)" in text  # reset_done
+
+    def test_init_coordinator_rt_offsets_neither(self):
+        """RT arg offsets: only reset_done@0 when neither compute nor writer."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        lines = _barrier_mod._emit_init_coordinator(
+            has_compute=False,
+            num_segments=0,
+            op_semaphore_info=None,
+            has_writer=False,
+        )
+        text = "\n".join(lines)
+        # No pointer assignments for compute_done or writer_done
+        assert "compute_done = reinterpret_cast" not in text
+        assert "writer_done = reinterpret_cast" not in text
+        assert "rt_offset + 0)" in text  # reset_done
+
+    def test_barrier_namespace_has_writer_false(self):
+        """Full barrier namespace generation with has_writer=False."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        lines = _barrier_mod._generate_barrier_namespace(
+            "riscv_1",
+            multi_barrier,
+            rebind_info={},
+            sources=[(0, ""), (1, "")],
+            per_phase_cb_slots=[[0], [0]],
+            op_semaphore_info=None,
+            has_compute=True,
+            has_writer=False,
+        )
+        text = "\n".join(lines)
+
+        # Coordinator should NOT have writer_done
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" not in text
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" in text
+        assert "volatile tt_l1_ptr uint32_t* reset_done;" in text
+        # No wait for writer_done
+        assert "noc_semaphore_wait_min(writer_done" not in text
+        assert "noc_semaphore_wait_min(compute_done" in text
+
+    def test_barrier_namespace_has_writer_true(self):
+        """Full barrier namespace generation with has_writer=True (default)."""
+        import models.experimental.ops.descriptors.fusion.codegen.barrier as _barrier_mod
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        lines = _barrier_mod._generate_barrier_namespace(
+            "riscv_1",
+            multi_barrier,
+            rebind_info={},
+            sources=[(0, ""), (1, "")],
+            per_phase_cb_slots=[[0], [0]],
+            op_semaphore_info=None,
+            has_compute=True,
+            has_writer=True,
+        )
+        text = "\n".join(lines)
+
+        # Coordinator should have both
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" in text
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" in text
+        assert "noc_semaphore_wait_min(writer_done" in text
+        assert "noc_semaphore_wait_min(compute_done" in text
+
+
+class TestCoordinatorOnlySource:
+    """Tests for barrier-only coordinator source generation."""
+
+    def test_coordinator_only_source_basic(self):
+        """Generates valid source with barrier namespace and no phase_N::run() calls."""
+        import models.experimental.ops.descriptors.fusion.codegen.source_gen as _source_gen_mod
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        source = _source_gen_mod._generate_coordinator_only_source(
+            multi_barrier=multi_barrier,
+            rebind_info={},
+            all_phase_indices=[0, 1],
+            per_phase_cb_slots=[[0], [0]],
+            op_semaphore_info=None,
+            has_compute=True,
+            has_writer=False,
+            phase_names={0: "op_a", 1: "op_b"},
+        )
+
+        # Valid kernel structure
+        assert "void kernel_main()" in source
+        assert "barrier::init();" in source
+        assert "barrier::sync();" in source
+        assert "namespace barrier {" in source
+
+        # No phase_N::run() calls
+        assert "phase_0::run()" not in source
+        assert "phase_1::run()" not in source
+
+        # Has phase comments (no-op)
+        assert "Phase 0: op_a (no-op for this RISC)" in source
+        assert "Phase 1: op_b (no-op for this RISC)" in source
+
+        # No writer_done pointer (has_writer=False) — comments may still mention it
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" not in source
+        assert "noc_semaphore_wait_min(writer_done" not in source
+        # Has compute_done pointer (has_compute=True)
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" in source
+        assert "noc_semaphore_wait_min(compute_done" in source
+
+    def test_coordinator_only_source_no_followers(self):
+        """Barrier-only coordinator with both has_compute=False and has_writer=False."""
+        import models.experimental.ops.descriptors.fusion.codegen.source_gen as _source_gen_mod
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        source = _source_gen_mod._generate_coordinator_only_source(
+            multi_barrier=multi_barrier,
+            rebind_info={},
+            all_phase_indices=[0, 1],
+            per_phase_cb_slots=[[0], [0]],
+            op_semaphore_info=None,
+            has_compute=False,
+            has_writer=False,
+            phase_names={0: "op_a", 1: "op_b"},
+        )
+
+        # Only reset_done pointer should exist (comments may mention others)
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" not in source
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" not in source
+        assert "volatile tt_l1_ptr uint32_t* reset_done;" in source
+        assert "void kernel_main()" in source
+
+    def test_coordinator_only_source_includes(self):
+        """Barrier-only source has correct system includes."""
+        import models.experimental.ops.descriptors.fusion.codegen.source_gen as _source_gen_mod
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(num_cores=1, core0_phys_x=1, core0_phys_y=1),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        source = _source_gen_mod._generate_coordinator_only_source(
+            multi_barrier=multi_barrier,
+            rebind_info={},
+            all_phase_indices=[0, 1],
+            per_phase_cb_slots=[[0], [0]],
+            op_semaphore_info=None,
+            has_compute=True,
+            has_writer=True,
+            phase_names={},
+        )
+
+        assert '#include "dataflow_api.h"' in source
+        assert '#include "tools/profiler/kernel_profiler.hpp"' in source
+        assert "#include <array>" in source
+
+    def test_fused_source_passes_has_writer(self):
+        """_generate_fused_source passes has_writer to barrier namespace."""
+        _generate_fused_source = _mock_codegen._generate_fused_source
+        source_code_type = _mock_codegen.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+
+        core_ranges = _make_mock_core_ranges()
+        kernel = MagicMock()
+        kernel.kernel_source = "void kernel_main() { /* reader */ }"
+        kernel.source_type = source_code_type
+        kernel.defines = []
+        kernel.core_ranges = core_ranges
+        kernel.named_compile_time_args = [("cb_in", 0)]
+
+        PhaseInfo = _mock_cb_allocator.PhaseInfo
+        CBInfo = _mock_cb_allocator.CBInfo
+
+        phase0 = PhaseInfo(0, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
+        phase1 = PhaseInfo(1, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
+        phases = [phase0, phase1]
+
+        phase_kernels = [{"reader": kernel}, {"reader": kernel}]
+
+        MultiBarrierSpec = _mock_common.MultiBarrierSpec
+        BarrierSegment = _mock_common.BarrierSegment
+        BarrierConfig = _mock_common.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(num_cores=1, core0_phys_x=1, core0_phys_y=1),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            reset_done_addr=5000,
+            transition_map={0: (0, 0)},
+        )
+
+        # With has_writer=False
+        result = _generate_fused_source(
+            phase_kernels,
+            "reader",
+            phases,
+            {0: 0, 1: 0},
+            [[0], [0]],
+            risc_type="riscv_1",
+            role_label="reader",
+            rebind_info={},
+            multi_barrier=multi_barrier,
+            has_compute=True,
+            has_writer=False,
+        )
+
+        assert result is not None
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" not in result
+        assert "noc_semaphore_wait_min(writer_done" not in result
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" in result
+
+        # With has_writer=True
+        result2 = _generate_fused_source(
+            phase_kernels,
+            "reader",
+            phases,
+            {0: 0, 1: 0},
+            [[0], [0]],
+            risc_type="riscv_1",
+            role_label="reader",
+            rebind_info={},
+            multi_barrier=multi_barrier,
+            has_compute=True,
+            has_writer=True,
+        )
+
+        assert result2 is not None
+        assert "volatile tt_l1_ptr uint32_t* writer_done;" in result2
+        assert "volatile tt_l1_ptr uint32_t* compute_done;" in result2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
