@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 #include "../accumulation_common.hpp"
 
@@ -32,8 +36,12 @@ void kernel_main() {
     // type of accumulation
     const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(8));
 
-    cb_reserve_back(cb_start, ONE_TILE);
-    uint32_t data_start_addr = get_write_ptr(cb_start);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_start_obj(cb_start);
+    experimental::CircularBuffer cb_in_obj(cb_in);
+
+    cb_start_obj.reserve_back(ONE_TILE);
+    uint32_t data_start_addr = cb_start_obj.get_write_ptr();
 
     const int32_t ACC_START_VALUE_F32{caster.u};
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
@@ -68,25 +76,24 @@ void kernel_main() {
     }
 
     // TODO(jbbieniekTT): issue #21108
-    volatile tt_l1_ptr int32_t* data_start = reinterpret_cast<volatile tt_l1_ptr int32_t*>(data_start_addr);
-    for (uint32_t i = 0; i < ublock_size_bytes / sizeof(data_start); i++) {
+    experimental::CoreLocalMem<int32_t> data_start(data_start_addr);
+    for (uint32_t i = 0; i < ublock_size_bytes / sizeof(int32_t); i++) {
         data_start[i] = scaler;
     }
 
     const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr, input_tile_bytes);
 
-    cb_push_back(cb_start, ONE_TILE);
+    cb_start_obj.push_back(ONE_TILE);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t read_tile_id{
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset)};
-            cb_reserve_back(cb_in, ONE_TILE);
-            uint32_t l1_write_addr{get_write_ptr(cb_in)};
-            noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, ONE_TILE);
+            cb_in_obj.reserve_back(ONE_TILE);
+            noc.async_read(input_addrg, cb_in_obj, input_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(ONE_TILE);
         }
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {

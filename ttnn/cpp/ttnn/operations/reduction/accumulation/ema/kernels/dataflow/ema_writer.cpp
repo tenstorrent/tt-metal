@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Compile time args
@@ -29,14 +32,15 @@ void kernel_main() {
     // ---------------
     const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr, dst_tile_size);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_dst(dst_cb);
+
     //-------------------------------------------------------------------------
     // Main loop - pull pages from dst_cb and push to dst
     for (uint32_t tile_id = dst_start_tile; tile_id < (dst_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_wait_front(dst_cb, 1);
-        const uint32_t l1_read_addr = get_read_ptr(dst_cb);
-        const uint64_t dst_noc_addr = dst_accessor.get_noc_addr(tile_id);
-        noc_async_write(l1_read_addr, dst_noc_addr, dst_tile_size);
-        noc_async_write_barrier();
-        cb_pop_front(dst_cb, 1);
+        cb_dst.wait_front(1);
+        noc.async_write(cb_dst, dst_accessor, dst_tile_size, {.offset_bytes = 0}, {.page_id = tile_id});
+        noc.async_write_barrier();
+        cb_dst.pop_front(1);
     }
 }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/transpose_wh.h"
 #include "api/compute/ema.h"
+#include "experimental/circular_buffer.h"
 
 /*
  * -------------------------------------------------------------------------------------------------
@@ -77,6 +78,10 @@ void kernel_main() {
     constexpr auto dst_cb = tt::CBIndex::c_1;
     constexpr auto trp_cb = tt::CBIndex::c_2;
 
+    experimental::CircularBuffer cb_src(src_cb);
+    experimental::CircularBuffer cb_dst(dst_cb);
+    experimental::CircularBuffer cb_trp(trp_cb);
+
     // DST indices
     // -----------
     constexpr auto inp_dst_index = 0;
@@ -92,31 +97,31 @@ void kernel_main() {
         ema_clear_previous_output();
         for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
             // Read input, transpose and compute ema
-            cb_wait_front(src_cb, 1);
+            cb_src.wait_front(1);
             tile_regs_acquire();
             transpose_wh_tile(src_cb, 0, inp_dst_index);
             ema_tile(inp_dst_index);
             tile_regs_commit();
-            cb_pop_front(src_cb, 1);
+            cb_src.pop_front(1);
 
-            cb_reserve_back(trp_cb, 1);
+            cb_trp.reserve_back(1);
             tile_regs_wait();
             pack_tile(output_dst_index, trp_cb);
             tile_regs_release();
-            cb_push_back(trp_cb, 1);
+            cb_trp.push_back(1);
 
             // Transpose back and write to output
-            cb_wait_front(trp_cb, 1);
+            cb_trp.wait_front(1);
             tile_regs_acquire();
             transpose_wh_tile(trp_cb, 0, output_dst_index);
             tile_regs_commit();
-            cb_pop_front(trp_cb, 1);
+            cb_trp.pop_front(1);
 
-            cb_reserve_back(dst_cb, 1);
+            cb_dst.reserve_back(1);
             tile_regs_wait();
             pack_tile(output_dst_index, dst_cb);
             tile_regs_release();
-            cb_push_back(dst_cb, 1);
+            cb_dst.push_back(1);
         }
     }
 }
