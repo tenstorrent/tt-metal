@@ -20,8 +20,7 @@ jobs:
       - name: Check Harbor availability
         id: check
         run: |
-          # Try to reach Harbor registry API with authentication
-          # Check both the health endpoint and the v2 API endpoint
+          # Try to reach Harbor registry API and check api v2.0 health endpoint
           # Using --max-time 10 to prevent hanging if Harbor is partially responsive
 
           # First, try to get health endpoint response
