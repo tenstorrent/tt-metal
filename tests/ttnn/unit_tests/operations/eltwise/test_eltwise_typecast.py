@@ -287,26 +287,28 @@ def test_typecast_bfp8_b_to_fp32(device):
 
 
 @pytest.mark.parametrize(
-    "shard_layout",
+    "shard_layout, core_grid, shard_shape",
     [
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 128],
+        ),
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [128, 32],
+        ),
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [64, 64],
+        ),
     ],
 )
-def test_typecast_legacy_sharded(device, shard_layout):
+def test_typecast_legacy_sharded(device, shard_layout, core_grid, shard_shape):
     torch.manual_seed(0)
     shape = [1, 1, 128, 128]
-
-    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-        shard_shape = [64, 64]
-    elif shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-        shard_shape = [32, 128]
-    else:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-        shard_shape = [128, 32]
 
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
@@ -429,6 +431,11 @@ def test_typecast_nd_sharded_float(
     input_tensor = ttnn.from_torch(
         torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
+
+    # Build CPU-side reference: run the same input -> tt_input_dtype -> tt_output_dtype
+    cpu_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    cpu_reference = ttnn.to_torch(cpu_tensor)
+
     output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
     assert output_tensor.dtype == tt_output_dtype
 
@@ -436,7 +443,7 @@ def test_typecast_nd_sharded_float(
 
     # Compare in a common dtype so shapes/dtypes align
     common_dtype = torch.float32
-    assert torch.equal(torch_input.to(common_dtype), npu_result.to(common_dtype))
+    assert torch.equal(cpu_reference.to(common_dtype), npu_result.to(common_dtype))
 
 
 # Tests that legacy-sharded inputs violating TypecastShardedProgramFactory preconditions
@@ -453,29 +460,31 @@ def test_typecast_nd_sharded_float(
     ],
 )
 @pytest.mark.parametrize(
-    "shard_layout",
+    "shard_layout, core_grid, shard_shape",
     [
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 128],
+        ),
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [128, 32],
+        ),
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [64, 64],
+        ),
     ],
 )
 def test_typecast_legacy_sharded_tile_size_mismatch(
-    device, pt_input_dtype, tt_input_dtype, tt_output_dtype, shard_layout
+    device, pt_input_dtype, tt_input_dtype, tt_output_dtype, shard_layout, core_grid, shard_shape
 ):
     """Violates is_valid_for_sharded_optimized_typecast condition 2: tile_size(input) != tile_size(output)."""
     torch.manual_seed(0)
     shape = [1, 1, 128, 128]
-
-    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-        shard_shape = [64, 64]
-    elif shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-        shard_shape = [32, 128]
-    else:
-        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-        shard_shape = [128, 32]
 
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
