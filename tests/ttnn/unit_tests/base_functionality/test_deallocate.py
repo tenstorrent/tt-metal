@@ -8,7 +8,10 @@ import torch
 
 import ttnn
 
+from models.common.utility_functions import skip_with_llk_assert
 
+
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_deallocate(device, h, w):

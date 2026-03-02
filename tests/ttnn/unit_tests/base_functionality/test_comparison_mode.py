@@ -8,10 +8,11 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_wormhole_b0, skip_with_llk_assert
 from models.common.utility_functions import torch_random
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
@@ -31,6 +32,7 @@ def test_softmax(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
@@ -48,6 +50,7 @@ def test_exp(device, batch_size, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [64])

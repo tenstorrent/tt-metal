@@ -8,8 +8,10 @@ import ttnn
 from models.common.utility_functions import is_watcher_enabled, is_llk_assert_enabled
 from ttnn.graph_tracer_utils import GraphTracerUtils
 from ttnn.operations.conv2d import Conv2dConfig
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
 @pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
@@ -422,6 +424,7 @@ def test_extract_levelized_graph(device):
 def test_program_cache_invalidation_across_dispatch_modes(device):
     if is_llk_assert_enabled():
         pytest.skip("Hits LLK assert check for L1 memory address validation.")
+
     def test_conv(device):
         weights_shape = (32, 3, 3, 3)
         bias_shape = (1, 1, 1, 32)

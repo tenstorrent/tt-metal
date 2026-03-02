@@ -9,6 +9,7 @@ import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
+from models.common.utility_functions import skip_with_llk_assert
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -267,6 +268,7 @@ def test_multi_device_single_op_unary_with_cache(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_golden, pcc=0.999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],

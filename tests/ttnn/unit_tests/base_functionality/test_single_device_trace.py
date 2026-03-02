@@ -9,8 +9,10 @@ import ttnn
 import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
@@ -66,6 +68,7 @@ def test_single_device_single_trace(device, shape, blocking):
     ttnn.release_trace(device, tid)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32)])
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)

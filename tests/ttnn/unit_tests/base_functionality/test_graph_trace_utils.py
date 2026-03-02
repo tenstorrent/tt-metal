@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 
 def test_extract_peak_L1_memory_usage():
@@ -190,6 +191,7 @@ def test_output_info_with_multiple_outputs():
             assert len(info.shape) == 4, f"Expected 4D shape, got {info.shape}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_no_dispatch_vs_normal_mode_comparison():
     """Compare peak memory between NO_DISPATCH and NORMAL modes"""
     with ttnn.manage_device(device_id=0) as device:

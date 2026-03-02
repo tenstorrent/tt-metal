@@ -29,6 +29,7 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     assert output_tensor.shape == (size,)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_2D_tensors(device, h, w):
