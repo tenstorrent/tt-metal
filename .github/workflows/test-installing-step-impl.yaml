@@ -79,7 +79,19 @@ jobs:
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           SCRIPT=$(which tt-metalium-models)
+          if [[ ! -f "$SCRIPT" ]]; then
+            echo "::error::tt-metalium-models script not found on PATH"
+            exit 1
+          fi
+          cp "$SCRIPT" "$SCRIPT.bak"
           sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
+          if diff -q "$SCRIPT" "$SCRIPT.bak" > /dev/null 2>&1; then
+            echo "::error::sed did not modify $SCRIPT — hugepages volume pattern not found"
+            echo "Script contents:"
+            cat "$SCRIPT"
+            exit 1
+          fi
+          rm "$SCRIPT.bak"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 10
