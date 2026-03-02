@@ -171,6 +171,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
         fused_activation=None,
         fuse_batch=(batch == 1),
     )
+
+
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
