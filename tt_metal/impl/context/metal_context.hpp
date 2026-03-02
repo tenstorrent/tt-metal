@@ -62,6 +62,8 @@ public:
 
     static void destroy_instance(bool check_device_count = true);
 
+    static bool instance_exists();
+
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;

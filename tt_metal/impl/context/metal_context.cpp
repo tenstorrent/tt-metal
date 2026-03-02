@@ -361,6 +361,8 @@ std::atomic<MetalContext*> g_instance{nullptr};
 std::mutex g_instance_mutex;
 bool registered_atexit = false;
 
+bool MetalContext::instance_exists() { return g_instance.load(std::memory_order_acquire) != nullptr; }
+
 MetalContext& MetalContext::instance() {
     MetalContext* instance = g_instance.load(std::memory_order_acquire);
     if (instance) {

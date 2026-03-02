@@ -686,12 +686,30 @@ public:
         }
 
         std::string root = get_root_dir();
-        // Remove trailing slash if present to avoid double slashes
         if (!root.empty() && root.back() == '/') {
             root.pop_back();
         }
 
-        mock_cluster_desc_path = root + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        std::string relative_path = "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        std::string candidate_path = root + relative_path;
+
+        // Check if file exists at the constructed path
+        if (!std::filesystem::exists(candidate_path)) {
+            // Try source tree location using TT_METAL_HOME if available
+            const char* metal_home = std::getenv("TT_METAL_HOME");
+            if (metal_home != nullptr) {
+                std::string source_root(metal_home);
+                if (!source_root.empty() && source_root.back() == '/') {
+                    source_root.pop_back();
+                }
+                std::string source_path = source_root + relative_path;
+                if (std::filesystem::exists(source_path)) {
+                    candidate_path = source_path;
+                }
+            }
+        }
+
+        mock_cluster_desc_path = candidate_path;
 
         // Set target device to Mock if simulator is not enabled
         if (simulator_path.empty()) {
