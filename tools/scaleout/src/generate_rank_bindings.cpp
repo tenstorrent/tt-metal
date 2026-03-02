@@ -491,8 +491,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogFabric, "Stage: Running topology mapping...");
             TopologyMappingResult mapping_result = run_topology_mapping(psd, pgd, mgd, mgd_path);
 
-            log_critical(tt::LogFabric, "Mapping result: {}", mapping_result);
-
             if (!mapping_result.success) {
                 log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
                 return 1;
