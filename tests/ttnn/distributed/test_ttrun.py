@@ -419,6 +419,42 @@ class TestLegacyFlow:
             # Dry-run should succeed
             assert result.exit_code == 0
 
+    def test_legacy_flow_single_process_works(self, runner, temp_dir):
+        """Test legacy flow with single process works (multihost args are safe for single-process)."""
+        import subprocess
+        import yaml
+
+        # Create rank binding with single rank
+        rank_binding = temp_dir / "rank_binding.yaml"
+        mgd_path = temp_dir / "mesh_graph.yaml"
+        mgd_path.touch()
+
+        yaml_content = {
+            "rank_bindings": [
+                {"rank": 0, "mesh_id": 0, "mesh_host_rank": 0},
+            ],
+            "global_env": {},
+            "mesh_graph_desc_path": str(mgd_path),
+        }
+        with open(rank_binding, "w") as f:
+            yaml.dump(yaml_content, f)
+
+        with patch.object(subprocess, "run") as mock_subprocess:
+            result = runner.invoke(
+                main,
+                [
+                    "--rank-binding",
+                    str(rank_binding),
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+
+            assert result.exit_code == 0
+            # Single-process runs should work fine even with multihost args
+            # MPI handles single-process runs correctly regardless
+
 
 class TestRankfileInjection:
     """Test rankfile injection functions."""
