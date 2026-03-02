@@ -76,6 +76,20 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  bh_p100_perf:
+    runs_on:
+      - pipeline-perf
+      - P100
+      - in-service
+
+  bh_p100a_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-P100a-viommu-stable
+
+  bh_p150b_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-stable
+
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
@@ -121,3 +135,36 @@ skus:
       - arch-blackhole
       - P300-viommu
       - pipeline-yyz2-lfc
+  bh_p300_viommu:
+    runs_on:
+      - pipeline-yyz2-lfc
+      - P300-viommu
+      - in-service
+
+  bh_quietbox:
+    runs_on:
+      - BH-LLMBox
+      - pipeline-functional
+      - in-service
+
+  bh_quietbox_perf:
+    runs_on:
+      - BH-LLMBox
+      - pipeline-perf
+      - in-service
+
+  bh_deskbox:
+    runs_on:
+      - BH-DeskBox
+      - pipeline-functional
+      - in-service
+
+  bh_loudbox_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-BH-LoudBox-viommu-stable
+
+  bh_quietbox_2:
+    runs_on:
+      - BH-QB-GE
+      - pipeline-perf
+      - in-service
