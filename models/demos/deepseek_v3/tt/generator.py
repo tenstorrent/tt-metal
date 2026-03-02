@@ -1120,6 +1120,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         Returns:
             Tuple of TTNN tensors, one per layer
         """
+        if getattr(self, "kv_cache_shape", None) is not None:
+            expected_blocks = int(self.kv_cache_shape[0])
+            expected_block_size = int(self.kv_cache_shape[2])
+            if (
+                self.paged_config.max_num_blocks != expected_blocks
+                or self.paged_config.block_size != expected_block_size
+            ):
+                logger.warning(
+                    "KVDBG paged_config mismatch with kv_cache_shape: paged_max_blocks={} kv_max_blocks={} "
+                    "paged_block_size={} kv_block_size={}",
+                    self.paged_config.max_num_blocks,
+                    expected_blocks,
+                    self.paged_config.block_size,
+                    expected_block_size,
+                )
         # Calculate expected shape: [batch_per_shard, blocks_per_user]
         batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
         blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
