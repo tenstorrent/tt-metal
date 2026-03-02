@@ -665,7 +665,6 @@ on:
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name || github.event.schedule }}
   cancel-in-progress: false
-
 jobs:
   display-workflow-options:
     name: 📋 Display workflow options
@@ -714,6 +713,78 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
+  call-api:
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install boto3 requests
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::533267429815:role/github-actions-api-gateway-role
+          aws-region: us-east-2
+
+      - name: Print AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Call last_measurement API with Python
+        run: |
+          python3 -c "
+          import boto3
+          import requests
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+          from urllib.parse import urlparse
+
+          # API Gateway endpoint
+          url = 'https://ftuxhxqka0.execute-api.us-east-2.amazonaws.com/api-gw-data-db-main/api/v1/data_db_main/benchmarks/last_measurement'
+
+          # Query parameters
+          params = {
+              'project': 'tenstorrent/tt-metal',
+              'ml_model_name': 'tiiuae/falcon-7b-instruct',
+              'batch_size': '32',
+              'precision': 'prefill[BFLOAT16-DRAM]_decode[BFLOAT16-L1_SHARDED]'
+          }
+
+          # Create a request
+          request = AWSRequest(
+              method='GET',
+              url=url,
+              params=params
+          )
+
+          # Get credentials from the environment
+          session = boto3.Session()
+          credentials = session.get_credentials()
+
+          # Sign the request
+          SigV4Auth(credentials, 'execute-api', 'us-east-2').add_auth(request)
+
+          # Get the signed headers
+          signed_headers = dict(request.headers)
+
+          # Make the request
+          response = requests.get(
+              url,
+              params=params,
+              headers=signed_headers
+          )
+
+          print(f'Status Code: {response.status_code}')
+          print(f'Response: {response.text}')
+
+          response.raise_for_status()
+          "
+
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
@@ -766,7 +837,7 @@ jobs:
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: [build-artifact, generate-master-json-from-db]
-    if: always() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -872,7 +943,7 @@ jobs:
     name: Generate CCL Sweep Vectors (n300-llmbox)
     needs: [build-artifact]
     if: |
-      always() &&
+      !cancelled() &&
       needs.build-artifact.result == 'success' &&
       (
         (github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
@@ -942,7 +1013,7 @@ jobs:
     # The output matrix is consumed by ttnn-run-sweeps-batch to spawn parallel jobs
     needs: [ttnn-generate-sweeps, ttnn-generate-sweeps-ccl]
     if: |
-      always() &&
+      !cancelled() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       (github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
@@ -1119,7 +1190,7 @@ jobs:
 
           "${CMD[@]}"
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: ${{ !cancelled() && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-run-result
@@ -1133,7 +1204,7 @@ jobs:
       - build-artifact
       - ttnn-compute-module-matrix
     if: |
-      always() &&
+      !cancelled() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
@@ -1287,7 +1358,7 @@ jobs:
           fi
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: ${{ !cancelled() && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
