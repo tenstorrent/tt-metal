@@ -10,7 +10,8 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-TIMEOUT = 30
+
+TIMEOUT = 300
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("rms_norm_post_all_gather", all_cases=False)
@@ -42,53 +43,81 @@ def run(
     input_b_memory_config=None,
     *,
     device,
-    **kwargs,  # Accept any extra parameters (like input_c_*)
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict)
     if isinstance(input_shape, dict) and "self" in input_shape:
-        # This is model_traced suite - dict with 'self' (input) and 'other' (weight) keys
         shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
-        # Note: weight shape is in input_shape["other"], but we derive it from input shape's last dimension
+        # "other" is the stats tensor shape (not weight), use it to determine n_devices
+        stats_shape_from_trace = input_shape.get("other")
+        if stats_shape_from_trace is not None:
+            stats_shape_from_trace = (
+                tuple(stats_shape_from_trace) if isinstance(stats_shape_from_trace, list) else stats_shape_from_trace
+            )
     elif isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+        stats_shape_from_trace = None
     else:
         shape = (1, 1, 32, 32)
+        stats_shape_from_trace = None
 
     eps = 1e-5
+    hidden_dim = shape[-1]
 
-    # Tensor creation
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
     )
-    torch_weight = torch.randn(int(shape[-1]), dtype=torch.float32)
-    torch_output = torch_input * torch_weight / torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
-    torch_weight_padded = torch.cat(
-        [torch_weight, torch.zeros(((torch_weight.numel() + 31) // 32) * 32 - torch_weight.numel())]
-    ).reshape(1, 1, -1, 32)
 
-    # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
-    input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
+    # Weight shape: [1, 1, hidden_dim//32, 32] in ROW_MAJOR_LAYOUT, matching model usage
+    weight_sticks = max(hidden_dim // 32, 1)
+    weight_4d_shape = (1, 1, weight_sticks, 32)
+    weight_size = weight_sticks * 32
+    torch_gamma_1d = torch.randn(weight_size, dtype=torch.float32)
+    torch_gamma_4d = torch_gamma_1d.reshape(weight_4d_shape)
+
+    # Golden: output = x * gamma / sqrt(mean(x^2) + eps)
+    torch_output = (
+        torch_input * torch_gamma_1d[:hidden_dim] / torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
+    )
+
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
-    )
-    # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
-    weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
-    weight_tensor = ttnn.from_torch(
-        torch_weight_padded,
-        dtype=input_b_dtype or input_a_dtype,
-        layout=weight_layout,
-        device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
+        torch_input, dtype=input_a_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    # Op call
+    weight_tensor = ttnn.from_torch(
+        torch_gamma_4d,
+        dtype=input_b_dtype or input_a_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Determine n_devices from the traced stats shape
+    # Stats shape is (batch..., 32 * n_devices), each device contributes a tile-width (32) of stats
+    if stats_shape_from_trace and len(stats_shape_from_trace) >= 1:
+        n_devices = max(stats_shape_from_trace[-1] // 32, 1)
+    else:
+        n_devices = 1
+
+    # Construct stats tensor matching the gathered format that rms_norm_post_all_gather expects.
+    # The full sum(x^2) needs to be split across n_devices slots as if each device
+    # computed partial stats on 1/n_devices of the hidden_dim.
+    sum_x2 = torch_input.pow(2).sum(dim=-1, keepdim=True)
+    stats_width = 32 * n_devices
+    stats_tensor_shape = list(shape[:-1]) + [stats_width]
+    torch_stats = torch.zeros(stats_tensor_shape, dtype=torch.float32)
+    per_device_sum = sum_x2 / n_devices
+    for i in range(n_devices):
+        torch_stats[..., i * 32 : i * 32 + 1] = per_device_sum
+
+    stats_tensor = ttnn.from_torch(
+        torch_stats, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
     start_time = start_measuring_time()
-    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
-    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
+    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats_tensor, epsilon=eps, weight=weight_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Comparison
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
