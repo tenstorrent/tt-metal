@@ -312,6 +312,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
             }
+            device_configs[(4, 32)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
+                "is_fsdp": False,
+            }
             config = device_configs[tuple(mesh_device.shape)]
         else:
             device_configs[(2, 4)] = {
@@ -950,15 +958,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-        if profiler:
-            profiler.end("denoising", profiler_iteration)
-
-        self._current_timestep = None
 
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
         )
+
+        if profiler:
+            profiler.end("denoising", profiler_iteration)
+            profiler.start("vae", profiler_iteration)
+
+        self._current_timestep = None
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
@@ -987,9 +997,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
             )
-            with profiler("vae", profiler_iteration) if profiler else nullcontext():
-                self._prepare_vae()
-                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+
+            self._prepare_vae()
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -1000,6 +1010,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
+
+        if profiler:
+            profiler.end("vae", profiler_iteration)
 
         # Offload all models
         # self.maybe_free_model_hooks()

@@ -22,6 +22,7 @@
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
 #include "tensor_generated.h"
 
+#include <map>
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
@@ -166,9 +167,15 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     const auto& host_storage = tensor.host_storage();
 
+    // Deduplicate replicated shards: two shards are duplicates if their coordinates differ only
+    // along Replicate dimensions. The deduplication key is the vector of coordinates at sharded
+    // dimensions only.
+    const auto& placements = tensor.tensor_topology().placements();
+
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
+    std::map<ttsl::SmallVector<uint32_t>, uint64_t> dedup_key_to_offset;
     uint64_t next_buffer_offset = 0;
     for (const auto& coord : host_storage.buffer().shard_coords()) {
         // Iterate over local populated shards.
@@ -177,13 +184,26 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const std::size_t buffer_size = buffer->view_bytes().size();
 
             uint64_t shard_buffer_offset = next_buffer_offset;
-            if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
-                // Encountered a new buffer, add it to the buffers vector.
-                next_buffer_offset += buffer_size;
-                buffers.push_back(*buffer);
-            } else {
-                // Point to the existing buffer.
+
+            // If two shards share the same buffer, they are identical.
+            if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
                 shard_buffer_offset = it->second;
+            } else {
+                // Shards whose coordinates differ only along replicated dimensions are identical.
+                ttsl::SmallVector<uint32_t> key;
+                for (size_t dim = 0; dim < placements.size(); ++dim) {
+                    if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+                        key.push_back(coord[dim]);
+                    }
+                }
+                if (auto [kit, inserted] = dedup_key_to_offset.try_emplace(std::move(key), shard_buffer_offset);
+                    inserted) {
+                    next_buffer_offset += buffer_size;
+                    buffers.push_back(*buffer);
+                } else {
+                    shard_buffer_offset = kit->second;
+                }
+                buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
             }
 
             auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
