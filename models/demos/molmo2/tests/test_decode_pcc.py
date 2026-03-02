@@ -129,26 +129,36 @@ def test_decode_pcc():
     num_heads = 32
     num_kv_heads = 8
     head_dim = 128
-    seq_len = 10  # Prefill length
+    # Note: SDPA requires K sequence length to be multiple of chunk_size (256)
+    # Following tt_transformers pattern: pad prefill to 128, use max_seq_len=256
+    seq_len = 128  # Padded prefill length (must be multiple of 32 for TILE_LAYOUT)
     num_decode_steps = 20
 
     # Extract weights for layer 0
+    # Molmo2 uses fused QKV: att_proj contains [Q, K, V] concatenated
     layer_idx = 0
     prefix = f"model.transformer.blocks.{layer_idx}"
 
-    wq = state_dict[f"{prefix}.attn.q_proj.weight"].float()
-    wk = state_dict[f"{prefix}.attn.k_proj.weight"].float()
-    wv = state_dict[f"{prefix}.attn.v_proj.weight"].float()
-    wo = state_dict[f"{prefix}.attn.o_proj.weight"].float()
-    q_norm = state_dict[f"{prefix}.attn.q_norm.weight"].float()
-    k_norm = state_dict[f"{prefix}.attn.k_norm.weight"].float()
+    # Fused QKV weight: [q_dim + 2*kv_dim, hidden_dim] = [6144, 4096]
+    att_proj = state_dict[f"{prefix}.self_attn.att_proj.weight"].float()
+    q_dim = num_heads * head_dim  # 32 * 128 = 4096
+    kv_dim = num_kv_heads * head_dim  # 8 * 128 = 1024
+
+    # Split fused weight into Q, K, V
+    wq = att_proj[:q_dim, :]  # [4096, 4096]
+    wk = att_proj[q_dim : q_dim + kv_dim, :]  # [1024, 4096]
+    wv = att_proj[q_dim + kv_dim :, :]  # [1024, 4096]
+    wo = state_dict[f"{prefix}.self_attn.attn_out.weight"].float()
+    q_norm = state_dict[f"{prefix}.self_attn.q_norm.weight"].float()
+    k_norm = state_dict[f"{prefix}.self_attn.k_norm.weight"].float()
 
     # Create random prefill hidden states
     torch.manual_seed(42)
     prefill_hidden = torch.randn(1, seq_len, hidden_dim)
 
     # Initialize KV cache for reference
-    max_seq_len = 100
+    # Note: max_seq_len must be >= padded prefill + decode steps AND multiple of 256 for SDPA
+    max_seq_len = 256
     ref_k_cache = torch.zeros(1, num_kv_heads, max_seq_len, head_dim)
     ref_v_cache = torch.zeros(1, num_kv_heads, max_seq_len, head_dim)
 
@@ -189,7 +199,7 @@ def test_decode_pcc():
         ttnn_attn = TextAttention(
             mesh_device=device,
             state_dict=state_dict,
-            layer_idx=layer_idx,
+            layer_num=layer_idx,
             hidden_dim=hidden_dim,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
