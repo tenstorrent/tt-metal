@@ -104,29 +104,20 @@ enum class NOCDebugIssueBaseType : uint8_t {
 
 // TODO: Move metadata out into a variant so we can have different metadata for each issue types
 struct NOCDebugIssueType {
-    NOCDebugIssueBaseType base_type;
-    uint32_t issue_address;  // The destination address of the violating NOC transaction
-    uint32_t issue_size;     // The size of the violating NOC transaction in bytes
-    uint8_t src_x;
-    uint8_t src_y;
-    uint8_t dst_x;
-    uint8_t dst_y;
-    bool is_mcast : 1;      // True if the issue involved a multicast
-    bool is_semaphore : 1;  // True if the issue involved a semaphore operation
+    NOCDebugIssueBaseType base_type = NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER;
+    uint32_t issue_address = 0;  // The destination address of the violating NOC transaction
+    uint32_t issue_size = 0;     // The size of the violating NOC transaction in bytes
+    uint8_t src_x = 0;
+    uint8_t src_y = 0;
+    uint8_t dst_x = 0;
+    uint8_t dst_y = 0;
+    bool is_mcast : 1 = false;      // True if the issue involved a multicast
+    bool is_semaphore : 1 = false;  // True if the issue involved a semaphore operation
 
-    NOCDebugIssueType() :
-        base_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER),
-        issue_address(0),
-        issue_size(0),
-        src_x(0),
-        src_y(0),
-        dst_x(0),
-        dst_y(0),
-        is_mcast(false),
-        is_semaphore(false) {}
+    NOCDebugIssueType() = default;
 
     NOCDebugIssueType(NOCDebugIssueBaseType type, bool mcast = false, bool semaphore = false) :
-        base_type(type), issue_address(0), issue_size(0), is_mcast(mcast), is_semaphore(semaphore) {}
+        base_type(type), is_mcast(mcast), is_semaphore(semaphore) {}
 
     auto operator<=>(const NOCDebugIssueType& other) const = default;
 };
