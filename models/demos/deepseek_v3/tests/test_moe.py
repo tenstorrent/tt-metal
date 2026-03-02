@@ -14,10 +14,10 @@ from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
+    normalize_state_dict_to_bfloat16,
     run_module_forward,
 )
 
@@ -70,10 +70,7 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     # Get state dict from actual model - pass directly to convert_weights
-    state_dict = add_inv_scale_to_state_dict(
-        reference_model.state_dict(),
-        block_shape=hf_config.quantization_config["weight_block_size"],
-    )
+    state_dict = normalize_state_dict_to_bfloat16(reference_model.state_dict())
 
     # Create input tensor
     torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
