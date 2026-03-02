@@ -13,7 +13,6 @@ import math
 import torch
 
 import ttnn
-
 from models.demos.vision.detection.faster_rcnn.tt.ttnn_resnet50_backbone import TtConv2D
 
 

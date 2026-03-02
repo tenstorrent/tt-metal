@@ -8,10 +8,7 @@ Uses torchvision's pretrained model as the ground truth reference for PCC valida
 """
 
 import torch
-import torch.nn as nn
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
-from torchvision.models.detection.faster_rcnn import FasterRCNN
-from torchvision.ops import misc as misc_nn_ops
+from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights, fasterrcnn_resnet50_fpn
 
 
 class FasterRCNNReference:
