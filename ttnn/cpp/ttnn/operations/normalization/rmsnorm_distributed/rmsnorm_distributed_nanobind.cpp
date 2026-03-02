@@ -74,6 +74,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
                 - All tensors must be on-device.
                 - Unsharded inputs must be interleaved
                 - Sharded inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32). If :attr:`residual_input_tensor` is provided, it must match input's padded shape and sharding.
+                - FP32 destination accumulation is not supported (`compute_kernel_config.fp32_dest_acc_en` must be false).
               )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -156,6 +157,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
                   - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH, and its first three padded dims must match :attr:`input_tensor`.
                   - If :attr:`weight` (gamma) is provided, :attr:`bias` (beta) must also be provided. Gamma and beta must have the same layout. If this is ROW_MAJOR, last padded dim must be TILE_WIDTH.
                   - Sharded runs: inputs cannot be height-sharded; padded height must equal TILE_HEIGHT (32). When sharded, :attr:`stats` must be sharded across one core.
+                  - FP32 destination accumulation is not supported (`compute_kernel_config.fp32_dest_acc_en` must be false).
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
