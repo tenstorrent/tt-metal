@@ -544,6 +544,7 @@ def _generate_fused_source(
     common_rt_arg_offsets: Optional[Dict[int, int]] = None,
     all_phase_indices: Optional[List[int]] = None,
     has_compute: bool = True,
+    has_writer: bool = True,
 ) -> Optional[str]:
     """Generate fused kernel source for any RISC type.
 
@@ -701,6 +702,7 @@ def _generate_fused_source(
                 per_phase_cb_slots,
                 op_semaphore_info=op_semaphore_info,
                 has_compute=has_compute,
+                has_writer=has_writer,
             )
         )
 
@@ -741,4 +743,64 @@ def _generate_fused_source(
     lines.append("}")
     lines.append("")
 
+    return "\n".join(lines)
+
+
+def _generate_coordinator_only_source(
+    multi_barrier: "MultiBarrierSpec",
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    all_phase_indices: List[int],
+    per_phase_cb_slots: List[List[int]],
+    op_semaphore_info: Optional[List[Tuple[int, int]]],
+    has_compute: bool,
+    has_writer: bool,
+    phase_names: Dict[int, str],
+) -> str:
+    """Generate a barrier-only coordinator source (no phase work).
+
+    Called when no phase has a reader kernel but a barrier is needed.
+    The generated kernel has no ``phase_N::run()`` calls — only barrier
+    init, sync dispatch, and CB reset/rebind between phases.
+    """
+    lines = _spdx_header() + [
+        "",
+        "// Auto-generated barrier-only coordinator kernel",
+        "",
+        '#include "dataflow_api.h"',
+        _PROFILER_INCLUDE,
+        _ARRAY_INCLUDE,
+        "",
+    ]
+
+    # Barrier namespace
+    all_sources = [(i, "") for i in all_phase_indices]
+    lines.extend(
+        _generate_barrier_namespace(
+            "riscv_1",
+            multi_barrier,
+            rebind_info,
+            all_sources,
+            per_phase_cb_slots,
+            op_semaphore_info=op_semaphore_info,
+            has_compute=has_compute,
+            has_writer=has_writer,
+        )
+    )
+
+    # Dispatcher — all phases are no-ops, barrier::sync() between them
+    lines.append("void kernel_main() {")
+    lines.append("    barrier::init();")
+    lines.append("")
+    has_trailing = all_phase_indices[-1] in multi_barrier.transition_map
+    for count, phase_idx in enumerate(all_phase_indices):
+        pname = phase_names.get(phase_idx, "")
+        label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"
+        lines.append(f"    // {label} (no-op for this RISC)")
+        is_last = count == len(all_phase_indices) - 1
+        if not is_last or has_trailing:
+            lines.append("    barrier::sync();")
+            if not is_last:
+                lines.append("")
+    lines.append("}")
+    lines.append("")
     return "\n".join(lines)

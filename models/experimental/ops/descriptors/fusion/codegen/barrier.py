@@ -18,8 +18,12 @@ NCRISC, compute).  Structure::
 
 The barrier coordinator is the reader RISC (NCRISC / riscv_1).  NCRISC
 is chosen because ``ReaderDataMovementConfig`` maps to ``RISCV_1`` in the
-hardware (``kernel_types.cpp``), and the reader kernel is always present
-in every fused op.
+hardware (``kernel_types.cpp``).  When no phase has a reader kernel, a
+synthetic coordinator-only kernel is injected by the builder.
+
+When ``has_compute`` is False, the coordinator barrier skips the
+``compute_done`` semaphore wait.  When ``has_writer`` is False, the
+coordinator skips the ``writer_done`` semaphore wait.
 
 Coordinator ``local::sync()``: drain NOC, wait followers, reset op sems +
 CBs, rebind, signal ``*reset_done = done``.
@@ -342,15 +346,17 @@ def _emit_phase_cb_arrays(
 # =============================================================================
 
 
-def _emit_state_vars(risc_type: str, is_coordinator: bool, has_compute: bool) -> List[str]:
+def _emit_state_vars(risc_type: str, is_coordinator: bool, has_compute: bool, has_writer: bool = True) -> List[str]:
     """Emit state variables at barrier namespace level."""
     lines = ["uint32_t done;"]
     if is_coordinator:
         if has_compute:
             lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
-        lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
+        if has_writer:
+            lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
     elif risc_type == "riscv_0":
-        lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
+        if has_writer:
+            lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
     elif risc_type == "compute":
         lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
     lines.append("volatile tt_l1_ptr uint32_t* reset_done;")
@@ -367,6 +373,7 @@ def _emit_local_sync_coordinator(
     has_compute: bool,
     dispatch: List[Dict[str, Any]],
     op_semaphore_info: List[Tuple[int, int]],
+    has_writer: bool = True,
 ) -> List[str]:
     """Emit ``namespace local { void sync(); }`` for the coordinator (NCRISC).
 
@@ -386,7 +393,8 @@ def _emit_local_sync_coordinator(
     lines.append(f'            DeviceZoneScopedN("sem-wait-{s}");')
     if has_compute:
         lines.append("            noc_semaphore_wait_min(compute_done, done);")
-    lines.append("            noc_semaphore_wait_min(writer_done, done);")
+    if has_writer:
+        lines.append("            noc_semaphore_wait_min(writer_done, done);")
     lines.append("        }")
     if op_semaphore_info:
         lines.append("        // Reset op semaphores")
@@ -515,6 +523,7 @@ def _emit_init_coordinator(
     has_compute: bool,
     num_segments: int,
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
+    has_writer: bool = True,
 ) -> List[str]:
     """Emit ``init()`` for the coordinator (NCRISC)."""
     lines = []
@@ -525,10 +534,12 @@ def _emit_init_coordinator(
         lines.append("    compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset}));")
         offset += 1
-    lines.append("    writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
-    lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset}));")
+    if has_writer:
+        lines.append("    writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset}));")
+        offset += 1
     lines.append("    reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
-    lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset + 1}));")
+    lines.append(f"        get_arg_val<uint32_t>(rt_offset + {offset}));")
     lines.append("    *reset_done = 0;")
     lines.append("    // NOTE: Do NOT reset *compute_done or *writer_done here.")
     lines.append("    // Each follower RISC resets its own semaphore in its own init().")
@@ -587,6 +598,7 @@ def _generate_barrier_namespace(
     per_phase_cb_slots: List[List[int]],
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     has_compute: bool = True,
+    has_writer: bool = True,
 ) -> List[str]:
     """Generate ``namespace barrier { }`` for any RISC type.
 
@@ -597,6 +609,8 @@ def _generate_barrier_namespace(
     The coordinator is ``riscv_1`` (NCRISC / reader).  When
     ``has_compute`` is False, the coordinator barrier skips the
     ``compute_done`` semaphore wait (no compute kernel to signal it).
+    When ``has_writer`` is False, the coordinator skips the
+    ``writer_done`` semaphore wait (no writer kernel to signal it).
     """
     is_coordinator = risc_type == "riscv_1"
     num_segments = len(multi_barrier.segments)
@@ -636,11 +650,13 @@ def _generate_barrier_namespace(
         lines.extend(_emit_rebind_slot_arrays(dispatch))
 
     # State variables at barrier namespace level
-    lines.extend(_emit_state_vars(risc_type, is_coordinator, has_compute))
+    lines.extend(_emit_state_vars(risc_type, is_coordinator, has_compute, has_writer))
 
     # namespace local { void sync(); }
     if is_coordinator:
-        lines.extend(_emit_local_sync_coordinator(has_compute, dispatch, op_semaphore_info or []))
+        lines.extend(
+            _emit_local_sync_coordinator(has_compute, dispatch, op_semaphore_info or [], has_writer=has_writer)
+        )
     else:
         lines.extend(_emit_local_sync_follower(risc_type))
     lines.append("")
@@ -648,8 +664,8 @@ def _generate_barrier_namespace(
     # namespace group { seg namespaces + void sync(); }
     lines.append("namespace group {")
     lines.append("")
-    # Barrier RT args = [compute_done? writer_done, reset_done, seg0_arrive, seg0_release, ...]
-    num_phase_sems = int(has_compute) + 2  # [compute_done?] + writer_done + reset_done
+    # Barrier RT args = [compute_done? writer_done? reset_done, seg0_arrive, seg0_release, ...]
+    num_phase_sems = int(has_compute) + int(has_writer) + 1  # [compute_done?] + [writer_done?] + reset_done
     seg_base_offset = num_phase_sems
     if is_coordinator:
         for seg_idx in range(num_segments):
@@ -691,7 +707,7 @@ def _generate_barrier_namespace(
 
     # init()
     if is_coordinator:
-        lines.extend(_emit_init_coordinator(has_compute, num_segments, op_semaphore_info))
+        lines.extend(_emit_init_coordinator(has_compute, num_segments, op_semaphore_info, has_writer=has_writer))
     else:
         lines.extend(_emit_init_follower(risc_type, num_segments))
     lines.append("")

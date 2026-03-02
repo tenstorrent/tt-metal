@@ -35,6 +35,7 @@ from models.experimental.ops.descriptors.fusion.codegen.source_gen import (  # n
     _offset_tensor_accessor_in_source,
     _generate_phase_block,
     _generate_fused_source,
+    _generate_coordinator_only_source,
 )
 from models.experimental.ops.descriptors.fusion.codegen.barrier import (  # noqa: F401
     _generate_barrier_namespace,
@@ -53,6 +54,7 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (  # noqa: F
 )
 from models.experimental.ops.descriptors.fusion.codegen.builder import (  # noqa: F401
     _build_fused_descriptor,
+    _build_coordinator_only_kernel,
     _create_phase_info,
     _create_barrier_segment_config,
     _validate_and_get_compute_config_for_role,
