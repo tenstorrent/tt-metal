@@ -14,10 +14,9 @@ import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -50,7 +49,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
-    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
+    reference_output = reference_model(input_tensor.float(), image_sizes=[(H, W)])
 
     reference_output = reference_output.last_hidden_state
     tt_ccl = TT_CCL(mesh_device)
@@ -64,7 +63,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
         configuration=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_output.shape[-1]
     ]
