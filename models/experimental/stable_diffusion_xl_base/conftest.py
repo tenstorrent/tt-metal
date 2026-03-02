@@ -138,15 +138,20 @@ def sdxl_base_tokenizer_2_location(model_location_generator, is_ci_v2_env):
 
 
 @pytest.fixture(scope="session")
-def sdxl_inpainting_unet_location():
+def sdxl_inpainting_unet_location(model_location_generator, is_ci_v2_env):
     """
     Returns the location for SDXL inpainting UNet model weights.
-    Note: Inpainting model is not available in CIv2 LFC, so only CI v1/local is supported.
-    The 9-channel tests are skipped in CIv2 via assert in the test code.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID.
     """
-    # CI v2 doesn't have inpainting model in LFC, but the assert in test code
-    # ensures 9-channel tests are skipped. Return HF repo ID for CI v1/local.
-    return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-1.0-inpainting-0.1/unet",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 
 
 # --- Refiner Model Locations ---
