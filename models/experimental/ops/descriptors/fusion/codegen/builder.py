@@ -28,6 +28,7 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
 )
 from models.experimental.ops.descriptors.fusion.codegen.source_gen import (
     _generate_fused_source,
+    _generate_coordinator_only_source,
 )
 from models.experimental.ops.descriptors.fusion.codegen.args import (
     _get_core_coords_from_ranges,
@@ -221,9 +222,11 @@ def _build_fused_descriptor(
                 seen_sem_ids_for_reset.add(sem.id)
     op_semaphore_info.sort(key=lambda x: x[0])
 
-    # Determine whether any phase has a compute kernel.
-    # When no compute exists, BRISC barrier skips compute_done semaphore.
+    # Determine whether any phase has a compute / writer kernel.
+    # When no compute exists, coordinator barrier skips compute_done semaphore.
+    # When no writer exists, coordinator barrier skips writer_done semaphore.
     has_compute = any(rk[0] == "compute" for rk in role_keys)
+    has_writer = any(rk[0] == "riscv_0" for rk in role_keys)
 
     fused_kernels = []
     kernel_labels = []
@@ -283,6 +286,7 @@ def _build_fused_descriptor(
             common_rt_arg_offsets=common_rt_offsets,
             all_phase_indices=all_phase_indices,
             has_compute=has_compute,
+            has_writer=has_writer,
         )
 
         # Determine barrier RT addresses per RISC type.
@@ -291,10 +295,11 @@ def _build_fused_descriptor(
         barrier_addrs: List[int] = []
         if multi_barrier is not None:
             if is_coordinator:
+                barrier_addrs = []
                 if has_compute:
-                    barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
-                else:
-                    barrier_addrs = [multi_barrier.writer_done_addr]
+                    barrier_addrs.append(multi_barrier.compute_done_addr)
+                if has_writer:
+                    barrier_addrs.append(multi_barrier.writer_done_addr)
                 barrier_addrs.append(multi_barrier.reset_done_addr)
                 for seg in multi_barrier.segments:
                     barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
@@ -376,6 +381,43 @@ def _build_fused_descriptor(
                     all_named = False
         kernel_labels.append("_".join(role_phase_names) if all_named and role_phase_names else "")
 
+    # Inject a synthetic coordinator kernel when no phase has a reader (riscv_1)
+    # but a barrier is needed.  This ensures riscv_1 still gets a barrier-only
+    # fused kernel (init + sync dispatch, no phase_N::run() calls).
+    coordinator_generated = any(rk[0] == "riscv_1" for rk in role_keys)
+    needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
+    if needs_barrier and not coordinator_generated:
+        # Derive core_ranges from the first available role key
+        coord_core_ranges = target_core_range
+        if coord_core_ranges is None:
+            for pk in phase_kernels:
+                for kernel in pk.values():
+                    if kernel is not None:
+                        coord_core_ranges = kernel.core_ranges
+                        break
+                if coord_core_ranges is not None:
+                    break
+
+        if coord_core_ranges is not None:
+            coord_kernel = _build_coordinator_only_kernel(
+                multi_barrier=multi_barrier,
+                phases=phases,
+                per_phase_cb_slots=per_phase_cb_slots,
+                rebind_info=rebind_info,
+                op_semaphore_info=op_semaphore_info,
+                core_ranges=coord_core_ranges,
+                has_compute=has_compute,
+                has_writer=has_writer,
+            )
+            fused_kernels.append(coord_kernel)
+            kernel_labels.append("")
+            # Add empty phase map entry for the injected coordinator
+            kernel_phase_map_extra = True
+        else:
+            kernel_phase_map_extra = False
+    else:
+        kernel_phase_map_extra = False
+
     # Merge semaphores (dedup by ID).
     # When building for a specific core group, restrict each semaphore's
     # core_ranges to the target.  Without this, the stem phase's semaphores
@@ -432,6 +474,8 @@ def _build_fused_descriptor(
             if role_key in pk:
                 sources.append((phases[phase_idx].op_descriptor, phase_kernel_indices[phase_idx][role_key]))
         kernel_phase_map.append(sources)
+    if kernel_phase_map_extra:
+        kernel_phase_map.append([])  # Injected coordinator has no source phase kernels
 
     return _BuildResult(
         descriptor=merged_descriptor,
@@ -441,6 +485,76 @@ def _build_fused_descriptor(
         kernel_labels=tuple(kernel_labels),
         kernel_phase_map=tuple(kernel_phase_map),
     )
+
+
+def _build_coordinator_only_kernel(
+    multi_barrier: MultiBarrierSpec,
+    phases: List[PhaseInfo],
+    per_phase_cb_slots: List[List[int]],
+    rebind_info: Dict[int, List[Tuple[int, int, int]]],
+    op_semaphore_info: List[Tuple[int, int]],
+    core_ranges: Any,
+    has_compute: bool,
+    has_writer: bool,
+) -> "ttnn.KernelDescriptor":
+    """Build a barrier-only coordinator kernel for riscv_1.
+
+    Called when no phase has a reader kernel but a barrier is needed.
+    The generated kernel has no phase_N::run() calls — only barrier
+    init, sync dispatch, and CB reset/rebind between phases.
+    """
+    all_phase_indices = list(range(len(phases)))
+    phase_names = {i: phases[i].op_descriptor.name for i in range(len(phases))}
+
+    source = _generate_coordinator_only_source(
+        multi_barrier=multi_barrier,
+        rebind_info=rebind_info,
+        all_phase_indices=all_phase_indices,
+        per_phase_cb_slots=per_phase_cb_slots,
+        op_semaphore_info=op_semaphore_info,
+        has_compute=has_compute,
+        has_writer=has_writer,
+        phase_names=phase_names,
+    )
+
+    # Barrier RT args (coordinator layout)
+    barrier_addrs: List[int] = []
+    if has_compute:
+        barrier_addrs.append(multi_barrier.compute_done_addr)
+    if has_writer:
+        barrier_addrs.append(multi_barrier.writer_done_addr)
+    barrier_addrs.append(multi_barrier.reset_done_addr)
+    for seg in multi_barrier.segments:
+        barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
+
+    # Build per-core RT args (barrier addrs only, uniform across all cores)
+    coords = _get_core_coords_from_ranges(core_ranges)
+    rt_args = [(coord, list(barrier_addrs)) for coord in coords]
+
+    # Named CT args
+    named_ct_args: List[Tuple[str, int]] = [("barrier_rt_offset", 0)]
+    for seg_idx, seg in enumerate(multi_barrier.segments):
+        s = f"seg{seg_idx}"
+        named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
+        named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
+        named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
+
+    # Rebind RT args
+    rebind_rt_args, rebind_offset = _append_rebind_runtime_args(rt_args, rebind_info)
+    if rebind_offset is not None:
+        named_ct_args.append(("rebind_rt_offset", rebind_offset))
+
+    desc = ttnn.KernelDescriptor()
+    desc.kernel_source = source
+    desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+    desc.core_ranges = core_ranges
+    desc.compile_time_args = []
+    desc.named_compile_time_args = named_ct_args
+    desc.defines = []
+    desc.runtime_args = rebind_rt_args
+    desc.common_runtime_args = []
+    desc.config = ttnn.ReaderConfigDescriptor()
+    return desc
 
 
 def _create_phase_info(op_descriptor: OpDescriptor, phase_idx: int) -> PhaseInfo:
