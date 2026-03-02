@@ -155,3 +155,8 @@ models/experimental/petr/resources/*.pth
 *.err
 
 .claude
+
+# Lingbot-VA checkpoints
+models/experimental/lingbot_va/reference/checkpoints/
+*.safetensors
+*.ckpt
