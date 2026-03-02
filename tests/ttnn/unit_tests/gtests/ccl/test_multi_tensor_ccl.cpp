@@ -66,7 +66,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     // Quiesce parent mesh before all gather
     mesh_device_->quiesce_devices();
 
-    auto all_gathered_tensor = ttnn::all_gather(
+    auto all_gathered_tensor = ttnn::ccl::all_gather(
         aggregated_tensor,
         /* dim */ 0);
 
@@ -106,7 +106,7 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     // Quiesce parent mesh before all gather
     mesh_device_->quiesce_devices();
 
-    auto all_gathered_tensor = ttnn::all_gather(
+    auto all_gathered_tensor = ttnn::ccl::all_gather(
         aggregated_tensor,
         /* dim */ 0,
         std::nullopt,
@@ -147,7 +147,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
 
     // Quiesce parent mesh before reduce scatter
     mesh_device_->quiesce_devices();
-    auto reduced = ttnn::reduce_scatter(
+    auto reduced = ttnn::ccl::reduce_scatter(
         aggregated_tensor,
         /* dim */ 3,
         std::nullopt,
@@ -182,7 +182,7 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
 
     // Quiesce parent mesh before all reduce
     mesh_device_->quiesce_devices();
-    auto all_reduced_tensor = ttnn::all_reduce(
+    auto all_reduced_tensor = ttnn::ccl::all_reduce(
         aggregated_tensor,
         /* cluster_axis */ 1);
     // Quiesce parent mesh after all reduce

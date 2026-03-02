@@ -158,7 +158,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
-        auto all_gathered_tensor = ttnn::all_gather(
+        auto all_gathered_tensor = ttnn::ccl::all_gather(
             aggregated_tensor,
             /* dim */ 0,
             std::nullopt,
@@ -339,7 +339,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
-        auto all_gathered_tensor = ttnn::all_gather(
+        auto all_gathered_tensor = ttnn::ccl::all_gather(
             aggregated_tensor,
             /* dim */ dim,
             std::nullopt,
@@ -545,7 +545,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
-        auto all_gathered_tensor = ttnn::all_gather(
+        auto all_gathered_tensor = ttnn::ccl::all_gather(
             aggregated_tensor,
             /* dim */ dim,
             std::nullopt,

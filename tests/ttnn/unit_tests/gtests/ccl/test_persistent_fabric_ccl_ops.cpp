@@ -64,7 +64,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
                 .mesh_shape_override = MeshShape{1, num_devices}}),
         *test_fixture.mesh_device_);
 
-    auto output_tensor = ttnn::reduce_scatter(input_mesh_tensor, dim, 1);
+    auto output_tensor = ttnn::ccl::reduce_scatter(input_mesh_tensor, dim, 1);
     // auto output_tensor = ttnn::reduce_scatter(input_mesh_tensor, dim); //Issue 31845, should be able to replace
     // previous line with this
 
