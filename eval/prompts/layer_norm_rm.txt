@@ -1,0 +1,33 @@
+/create-op
+Build me a simple TTNN operation layer_norm_rm which takes a row-major interleaved tensor,
+and does layer normalization.
+
+First computes the variance of each row. It does so by first calculating the
+mean of each row, subtracting it from the relevant elements used to compute
+said mean. After that, the centralized values get squared, and their mean is
+computed as the variance. After that, a small constant epsilon is added to the
+variances for numerical stability. Epsilon should be a parameter of the
+operation. After that, the inverse square root of the epsilon + var sum is
+computed. That sum multiplies all of the relevant centralized values in order
+to do standardization. It takes in a tensor that is at least two dimensional,
+and the output tensor should have the same dimensions as the input tensor.
+
+Then it applies affine transformations gamma and beta, with both of them also being a row major input tensor. Required dimensions for it are (1, 1, 1, W), where W is the width. Basically, it performs
+
+Inputs should be bfloat16, with the final 2 dimensions being tile aligned to 32. Do not heavily rely on the bfloat16 datatype and instead implement "as if" you had to implement for other dtypes as well.
+
+Run in FULLY AUTOMATED mode. Introduce reasonable assumptions and DO NOT ask
+for confirmation or clarifications.
+
+Run with FULL BREADCRUMBS LOGGING ENABLED.
+
+## Reporting
+
+In the end, produce a well-structured markdown report summarizing the whole
+process, including:
+- Summary for each agent (analyzer, planner, builder, designer, writer)
+- References to log/breadcrumb files
+- TDD pipeline results: which stages passed, how many attempts each took,
+  any failure classifications encountered
+- Decisions made, deviations from specs, pain points
+- Suggestions for improving the agent pipeline
