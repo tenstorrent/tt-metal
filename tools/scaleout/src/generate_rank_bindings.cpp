@@ -275,6 +275,22 @@ TopologyMappingResult run_topology_mapping(
     config.strict_mode = true;
     config.disable_rank_bindings = true;  // Do not pass rank bindings at all
 
+    // Set per-mesh validation modes based on mesh graph policy
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
+                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+
+    // Set inter-mesh validation mode based on mesh graph policy
+    // TODO: Enable per-connection inter-mesh validation mode. Currently, all inter-mesh connections
+    // use the same validation mode based on the mesh graph's global inter-mesh policy. In the future,
+    // we should support mixed STRICT and RELAXED policies where some inter-mesh connections are
+    // device-level (strict) and others are mesh-level (relaxed).
+    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
+                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+
     // Run mapping without rank bindings (empty maps)
     log_info(tt::LogFabric, "Running topology mapping...");
     TopologyMappingResult result = map_multi_mesh_to_physical(logical_graph, physical_graph, config);
