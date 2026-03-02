@@ -6,6 +6,8 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "tensor_shape.h"
+
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
 #endif
@@ -132,6 +134,21 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 // clang-format off
 /**
  * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ * Naive implementation of reduce_tile_math; assumes that the num_faces are laid out row-wise first. That is:
+ *
+ * num_faces = 2
+ * --------------------
+ * Face 0    | Face 1
+ * --------------------
+ *
+ * num_faces = 4
+ * --------------------
+ * Face 0    | Face 1
+ * --------------------
+ * Face 2    | Face 3
+ * --------------------
+ *
+ * For finer control in using this kernel, such as specifying different layout of faces, use the TensorShape overloaded function.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -144,7 +161,32 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
+    const ckernel::TensorShape tensor_shape = {
+        MAX_FACE_R_DIM,
+        MAX_FACE_C_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(1) : MAX_NUM_FACES_R_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
-        idst, num_faces)));
+        idst, tensor_shape)));
 }
+
+// clang-format off
+/**
+ * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type                 | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|----------------------|------------------------------------------------|----------|
+ * | Template   | reduce_type               | The type of reduce op - sum, average or maximum                                         | PoolType             | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim            | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool                 | {true, false}                                  | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t             | Must be less than the acquired size of DST REG | True     |
+ * | Function   | tensor_shape              | The shape of the tensor to reduce (optional, default: 32x32)                            | ckernel::TensorShape | N/A                                            | False    |
+ */
+// clang-format on
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+ALWI void reduce_tile_math(uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
+        idst, tensor_shape)));
+}
+
 }  // namespace ckernel
