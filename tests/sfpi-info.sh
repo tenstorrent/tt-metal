@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/usr/bin/env bash
 
 # Compute SFPI release version information.
 # Emit as evaluable shell assignments or CMAKE script
