@@ -17,9 +17,3 @@ concept Reflectable = (std::is_aggregate_v<std::decay_t<T>> and requires {
 });
 
 }  // namespace ttsl::concepts
-
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt
