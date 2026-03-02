@@ -15,9 +15,10 @@
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
     pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text -k "repeat" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text -k "pcc-80L" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text -k "batch-1-prefix-caching-pcc" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py::test_demo_text -k "batch-32-non-uniform-sampling" --timeout 500
   model: llama3
   skus:
     wh_galaxy:
