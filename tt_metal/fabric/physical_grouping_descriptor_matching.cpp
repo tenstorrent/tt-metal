@@ -802,6 +802,9 @@ static bool add_forbidden_for_used_asics(
     return true;
 }
 
+// Maximum placements to find before stopping (safeguard against infinite loops).
+constexpr size_t kMaxPlacementsPerRun = 10000;
+
 // Helper: add forbidden constraints to all groupings (ASICs shared globally).
 static bool add_forbidden_for_used_asics_to_all_groupings(
     const std::set<AsicID>& used_asic_ids,
@@ -834,28 +837,30 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     }
 
     // Iteratively solve for copies until no more can be found
-    // solve_for_one_grouping_to_psd will handle trait constraints internally
     std::vector<MappingResult<uint32_t, AsicID>> results;
-
-    // Start with empty constraints - solve_for_one_grouping_to_psd will add trait constraints
     MappingConstraints<uint32_t, AsicID> current_constraints;
+    std::set<std::set<AsicID>> seen_asic_sets;  // Guard against infinite loop
 
-    while (true) {
-        // Solve for one copy using solve_for_one_grouping_to_psd with current constraints
+    while (results.size() < kMaxPlacementsPerRun) {
         MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
             grouping_info, physical_graph, physical_system_descriptor, current_constraints);
 
-        // If mapping failed, we're done
         if (!result.success) {
             break;
         }
-
-        results.push_back(result);
 
         std::set<AsicID> used_asic_ids;
         for (const auto& [_, asic_id] : result.target_to_global) {
             used_asic_ids.insert(asic_id);
         }
+
+        if (seen_asic_sets.contains(used_asic_ids)) {
+            log_warning(tt::LogFabric, "Homogeneous solver: repeated result - stopping to prevent infinite loop");
+            break;
+        }
+        seen_asic_sets.insert(used_asic_ids);
+
+        results.push_back(result);
 
         std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
         if (!add_forbidden_for_used_asics(used_asic_ids, all_target_nodes, current_constraints)) {
@@ -876,12 +881,21 @@ solve_for_many_groupings_to_psd_heterogeneous(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
-    // Per-grouping constraints, same pattern as homogeneous current_constraints
     std::vector<MappingConstraints<uint32_t, AsicID>> current_constraints(groupings.size());
-    // Track seen (grouping_idx, used_asic_ids) to detect infinite loop when add_forbidden_constraint isn't working
     std::vector<std::set<std::set<AsicID>>> seen_asic_sets_per_grouping(groupings.size());
 
     while (true) {
+        size_t total_results = 0;
+        for (const auto& r : results) {
+            total_results += r.size();
+        }
+        if (total_results >= kMaxPlacementsPerRun) {
+            log_warning(
+                tt::LogFabric,
+                "Heterogeneous solver: hit max placements limit ({}) - stopping to prevent infinite loop",
+                kMaxPlacementsPerRun);
+            break;
+        }
         bool found_any = false;
         bool overconstrained = false;
         for (size_t i = 0; const auto& grouping : groupings) {
@@ -903,6 +917,33 @@ solve_for_many_groupings_to_psd_heterogeneous(
             std::set<AsicID> used_asic_ids;
             for (const auto& [_, asic_id] : result.target_to_global) {
                 used_asic_ids.insert(asic_id);
+            }
+
+            // Skip if this placement overlaps with results from a different grouping family (different name).
+            // Forbidden constraints may fail (validate) when adding to groupings with required traits that
+            // only allow the used ASICs; this check ensures we use only one disjoint family.
+            bool overlaps_other_family = false;
+            for (size_t j = 0; j < groupings.size(); ++j) {
+                if (groupings[j].name != grouping.name) {
+                    for (const auto& prev_result : results[j]) {
+                        for (const auto& [_, prev_asic] : prev_result.target_to_global) {
+                            if (used_asic_ids.count(prev_asic)) {
+                                overlaps_other_family = true;
+                                break;
+                            }
+                        }
+                        if (overlaps_other_family) {
+                            break;
+                        }
+                    }
+                }
+                if (overlaps_other_family) {
+                    break;
+                }
+            }
+            if (overlaps_other_family) {
+                ++i;
+                continue;
             }
 
             // Guard against infinite loop when forbidden constraints don't take effect
@@ -1046,9 +1087,12 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
         auto heterogeneous_results =
             solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
 
-        for (const auto& [grouping_ptr, mapping_results] : heterogeneous_results) {
-            (void)grouping_ptr;
-            for (const auto& result : mapping_results) {
+        for (const auto& grouping : flat_meshes) {
+            auto it = heterogeneous_results.find(&grouping);
+            if (it == heterogeneous_results.end()) {
+                continue;
+            }
+            for (const auto& result : it->second) {
                 if (result.success) {
                     std::unordered_set<tt::tt_metal::AsicID> asic_set;
                     for (const auto& [target_node, asic_id] : result.target_to_global) {
