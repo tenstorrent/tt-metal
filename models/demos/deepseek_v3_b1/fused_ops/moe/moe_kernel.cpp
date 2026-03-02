@@ -63,6 +63,9 @@
 #ifdef ENABLE_BCAST
 #include "../../unified_kernels/broadcast.hpp"
 #endif
+#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE)
+#include "../../unified_kernels/d2d0_aggregator.hpp"
+#endif
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
@@ -90,6 +93,9 @@ struct Core {
     // Reduce-to-one core roles
     static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
     static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
+
+    // D2D0 aggregator core (receives from worker sockets, sends downstream)
+    static constexpr bool is_d2d0_core = get_named_compile_time_arg_val("is_d2d0_core") == 1;
 };
 
 void kernel_main() {
@@ -916,6 +922,31 @@ void kernel_main() {
 
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
 
+#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE) && defined(COMPILE_FOR_NCRISC)
+    using D2D0CTArgs = deepseek_b1_ops::D2D0Aggregator::CTArgs<
+        get_named_compile_time_arg_val("d2d0_sender_socket_config_addr"),
+        get_named_compile_time_arg_val("d2d0_termination_semaphore_addr"),
+        get_named_compile_time_arg_val("d2d0_sender_page_size"),
+        get_named_compile_time_arg_val("d2d0_upstream_page_size"),
+        get_named_compile_time_arg_val("d2d0_fab_pkts_link_0"),
+        get_named_compile_time_arg_val("d2d0_fab_pkts_link_1"),
+        get_named_compile_time_arg_val("d2d0_whole_packet_size"),
+        get_named_compile_time_arg_val("d2d0_partial_packet_size"),
+        get_named_compile_time_arg_val("d2d0_fabric_header_cb_id"),
+        get_named_compile_time_arg_val("d2d0_use_fabric_on_sender"),
+        get_named_compile_time_arg_val("d2d0_num_upstream_sockets"),
+        get_named_compile_time_arg_val("d2d0_socket_0_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_1_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_2_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_3_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_4_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_5_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_6_addr"),
+        get_named_compile_time_arg_val("d2d0_socket_7_addr")>;
+    deepseek_b1_ops::D2D0Aggregator::Op<D2D0CTArgs, Core::is_d2d0_core> d2d0_op;
+    d2d0_op.setup();
+#endif
+
     auto moe_body = [&]() {
 #if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
         {
@@ -1334,6 +1365,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_iterations; i++) {
         moe_body();
     }
+
+#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE) && defined(COMPILE_FOR_NCRISC)
+    d2d0_op.run();
+#endif
 
     // Teardown (one teardown since all mcasts reuse the same semaphores)
     residual_mcast.teardown();
