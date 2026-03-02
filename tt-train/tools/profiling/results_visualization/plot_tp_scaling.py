@@ -3,13 +3,13 @@
 
 The script filters rows where dp==1 and tp in {1, 2, 4, 8} (pure TP scaling),
 groups them by n_blocks, and creates:
-  - tp_scaling.csv          – the filtered subset
-  - ts_vs_tp.png            – tokens/s vs TP
-  - tsd_vs_tp.png           – tokens/s/device vs TP
-  - fwd_ms_vs_tp.png        – forward time vs TP
-  - bwd_ms_vs_tp.png        – backward time vs TP
-  - opt_ms_vs_tp.png        – optimizer time vs TP
-  - step_time_ms_vs_tp.png  – total step time vs TP
+  - tp_scaling.csv          - the filtered subset
+  - ts_vs_tp.png            - tokens/s vs TP
+  - tsd_vs_tp.png           - tokens/s/device vs TP
+  - fwd_ms_vs_tp.png        - forward time vs TP
+  - bwd_ms_vs_tp.png        - backward time vs TP
+  - opt_ms_vs_tp.png        - optimizer time vs TP
+  - step_time_ms_vs_tp.png  - total step time vs TP
 
 Each plot includes a red dashed "ideal scaling" line derived from the tp=1
 baseline for each block count.
