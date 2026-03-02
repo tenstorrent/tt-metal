@@ -522,11 +522,11 @@ class BlitzDecodeWeights:
             self.moe_tp = 1
         else:
             mesh_shape = (device.shape[0], device.shape[1])
-            # assert mesh_shape == (
-            #     4,
-            #     2,
-            # ), f"Only single-device or 4x2 mesh supported, got {mesh_shape[0]}x{mesh_shape[1]}"
-            self.mla_tp = 2 if device.shape[1] == 2 else 1
+            assert mesh_shape == (
+                4,
+                2,
+            ), f"Only single-device or 4x2 mesh supported, got {mesh_shape[0]}x{mesh_shape[1]}"
+            self.mla_tp = 2
             self.moe_tp = 8
 
     # ------------------------------------------------------------------
