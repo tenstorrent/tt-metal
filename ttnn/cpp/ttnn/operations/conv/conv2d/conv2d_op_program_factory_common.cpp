@@ -526,15 +526,16 @@ static bool is_split_reader_viable_noc_estimator(
         .transaction_size_bytes = weights_tile_size,
     });
 
-    // Weight multicast: linked multicast L1-to-L1
+    // Weight multicast: single multicast of entire weight block
+    const uint32_t weights_block_bytes = weights_block_ntiles * weights_tile_size;
     const double mcast_cycles = estimate_noc_latency({
         .mechanism = NocMechanism::MULTICAST_LINKED,
         .pattern = NocPattern::ONE_TO_ALL,
         .memory = MemoryType::L1,
         .arch = est_arch,
-        .num_transactions = weights_block_ntiles,
-        .num_transactions_per_barrier = weights_block_ntiles,
-        .transaction_size_bytes = weights_tile_size,
+        .num_transactions = 1,
+        .num_transactions_per_barrier = 1,
+        .transaction_size_bytes = weights_block_bytes,
     });
 
     // Weight transfer = DRAM read + multicast (sequential)
