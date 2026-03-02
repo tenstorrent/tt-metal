@@ -44,8 +44,8 @@ void issue_record_event_commands(
     uint8_t cq_id,
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);

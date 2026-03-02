@@ -236,7 +236,7 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
         std::vector<CQDispatchWritePackedLargeSubCmd> sub_cmds(1);
 
         uint8_t data[4] = {};
-        std::vector<tt::stl::Span<const uint8_t>> data_collection{{data, 4}};
+        std::vector<ttsl::Span<const uint8_t>> data_collection{{data, 4}};
         command.add_dispatch_write_packed_large(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds, data_collection, nullptr);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());

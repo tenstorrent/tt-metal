@@ -32,7 +32,7 @@
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
-    return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
+    return ttsl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
 namespace tt::tt_fabric {
@@ -65,8 +65,8 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
 using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
 
-const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
-    tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
+const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
+    ttsl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
         {tt::tt_fabric::FabricType::MESH,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},

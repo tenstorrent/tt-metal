@@ -191,7 +191,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall() {
     return cmd;
 }
 
-HostMemDeviceCommand build_dispatch_write_offset(tt::stl::Span<const uint32_t> write_offsets) {
+HostMemDeviceCommand build_dispatch_write_offset(ttsl::Span<const uint32_t> write_offsets) {
     DeviceCommandCalculator calc;
     calc.add_dispatch_set_write_offsets(write_offsets.size());
     const uint32_t command_size_bytes = calc.write_offset_bytes();

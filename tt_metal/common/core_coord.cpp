@@ -155,7 +155,7 @@ bool CoreRange::CoreIterator::operator==(const CoreIterator& other) const { retu
 
 bool CoreRange::CoreIterator::operator!=(const CoreIterator& other) const { return !(current_ == other.current_); }
 
-CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
+CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
     this->validate_no_overlap();
 }
@@ -166,7 +166,7 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
-CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
+CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
     std::vector<CoreRange> core_ranges;
     core_ranges.reserve(core_coords.size());
     for (const auto& core_coord : core_coords) {
@@ -734,6 +734,6 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
 }  // namespace ttsl::json
 
 std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set) {
-    tt::stl::reflection::operator<<(os, core_range_set);
+    ttsl::reflection::operator<<(os, core_range_set);
     return os;
 }

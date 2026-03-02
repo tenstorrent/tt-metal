@@ -370,7 +370,7 @@ SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
+ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
     bool is_chunked_prefill = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
     bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
 

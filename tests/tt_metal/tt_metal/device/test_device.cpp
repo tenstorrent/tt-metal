@@ -508,7 +508,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Allocate and pin host memory
     auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
+        ttsl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
     auto pinned_memory = experimental::PinnedMemory::Create(
         *mesh_device,

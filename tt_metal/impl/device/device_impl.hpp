@@ -37,7 +37,7 @@ public:
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0,
@@ -129,7 +129,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
@@ -172,7 +172,7 @@ private:
     uint32_t num_sub_devices() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
@@ -180,13 +180,13 @@ private:
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
 
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -195,7 +195,7 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {});
 
     void configure_command_queue_programs(DispatchTopology* topology);
 

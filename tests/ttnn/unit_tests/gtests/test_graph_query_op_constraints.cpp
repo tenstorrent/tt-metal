@@ -490,7 +490,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -525,7 +525,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::subtract,
@@ -560,7 +560,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::multiply,
@@ -595,7 +595,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::maximum,
@@ -630,7 +630,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::minimum,

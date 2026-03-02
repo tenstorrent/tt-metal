@@ -1295,7 +1295,7 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
     return output_tensors;
 }
 
-tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     const auto& input_tensors = args.input_tensors;
     const auto& input_tensor_a = input_tensors.at(0);
@@ -1308,13 +1308,13 @@ tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
 
     for (const auto& optional_input_tensor : args.optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
-            hash = tt::stl::hash::hash_objects(hash, optional_input_tensor.value());
+            hash = ttsl::hash::hash_objects(hash, optional_input_tensor.value());
         }
     }
 
     for (const auto& optional_output_tensor : args.optional_output_tensors) {
         if (optional_output_tensor.has_value()) {
-            hash = tt::stl::hash::hash_objects(hash, optional_output_tensor.value());
+            hash = ttsl::hash::hash_objects(hash, optional_output_tensor.value());
         }
     }
     return hash;

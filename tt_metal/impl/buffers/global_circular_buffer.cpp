@@ -155,7 +155,7 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 }
 
 std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::reflection::operator<<(os, value);
     return os;
 }
 
@@ -165,7 +165,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::experimental::GlobalCircularBuffer>::operator()(
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
 }
 
 }  // namespace std

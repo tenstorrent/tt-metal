@@ -249,7 +249,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
         auto config = std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
@@ -1718,7 +1718,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
+    ttsl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
         device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
@@ -1733,7 +1733,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance().hal();

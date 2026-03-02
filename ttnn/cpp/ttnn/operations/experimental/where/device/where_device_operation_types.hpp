@@ -17,9 +17,9 @@ struct WhereParams {
 
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-    tt::stl::hash::hash_t to_hash() const {
+    ttsl::hash::hash_t to_hash() const {
         // hash has to exclude the scalar value
-        return tt::stl::hash::hash_objects_with_default_seed(memory_config, dtype, compute_kernel_config);
+        return ttsl::hash::hash_objects_with_default_seed(memory_config, dtype, compute_kernel_config);
     }
 };
 

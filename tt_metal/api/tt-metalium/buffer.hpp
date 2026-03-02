@@ -31,10 +31,10 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <typename T>
 struct from_json_t;
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 

@@ -126,9 +126,9 @@ std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDi
     }
 
     return BufferDistributionSpec(
-        Shape(tt::stl::SmallVector<uint32_t>(
+        Shape(ttsl::SmallVector<uint32_t>(
             fb_dist_spec->tensor_shape_in_pages()->cbegin(), fb_dist_spec->tensor_shape_in_pages()->cend())),
-        Shape(tt::stl::SmallVector<uint32_t>(
+        Shape(ttsl::SmallVector<uint32_t>(
             fb_dist_spec->shard_shape_in_pages()->cbegin(), fb_dist_spec->shard_shape_in_pages()->cend())),
         std::move(cores));
 }

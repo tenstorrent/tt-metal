@@ -455,7 +455,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .input_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 64, 96},
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
@@ -517,7 +517,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 1, 2, 64, 64},
                     .grid = CoreRangeSet(
-                        tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                        ttsl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
             .output_shard_spec =
@@ -577,7 +577,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .input_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 64, 96},
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
@@ -1088,7 +1088,7 @@ INSTANTIATE_TEST_SUITE_P(
                            .input_shard_spec =
                                NdShardSpec{
                                    .shard_shape = tt::tt_metal::Shape{1, 1, 2, 64, 64},
-                                   .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                                   .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                                        {CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                                    .orientation = ShardOrientation::COL_MAJOR,
                                },

@@ -416,7 +416,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     for (auto& [_, program] : programs_) {
         program_impls.push_back(&program.impl());
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+    ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);

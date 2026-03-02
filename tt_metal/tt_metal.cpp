@@ -435,7 +435,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceSharded(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -497,7 +497,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
     return addr;
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     if (GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
@@ -548,7 +548,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
@@ -559,7 +559,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     }
 }
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough

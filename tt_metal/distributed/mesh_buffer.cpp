@@ -82,7 +82,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
             [](const ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
@@ -200,7 +200,7 @@ Buffer* MeshBuffer::get_backing_buffer() const {
 
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const ReplicatedBufferConfig& config) { return config.size; },
             [&](const ShardedBufferConfig& config) { return config.global_size; }},
         config_);

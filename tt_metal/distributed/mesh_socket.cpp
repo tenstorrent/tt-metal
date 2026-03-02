@@ -298,12 +298,12 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::distributed::SocketConnection>::operator()(
     const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
+    return ttsl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
 }
 
 std::size_t hash<tt::tt_metal::distributed::MeshCoreCoord>::operator()(
     const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+    return ttsl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
 }
 
 std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
@@ -314,7 +314,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
         distributed_context_rank = config.distributed_context->rank();
         distributed_context_size = config.distributed_context->size();
     }
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         config.socket_connection_config,
         config.socket_mem_config,
         config.sender_rank,
@@ -325,7 +325,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
 
 std::size_t hash<tt::tt_metal::distributed::MeshSocket>::operator()(
     const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(socket.attribute_values());
 }
 
 }  // namespace std

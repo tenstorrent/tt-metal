@@ -33,7 +33,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     host_buffer_ = std::shared_ptr<uint32_t[]>(
         static_cast<uint32_t*>(aligned_ptr), [page_size](uint32_t* p) { munmap(p, page_size); });
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
 
@@ -71,7 +71,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
         static_cast<uint32_t*>(aligned_ptr), [alloc_size](uint32_t* p) { munmap(p, alloc_size); });
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 

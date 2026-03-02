@@ -26,7 +26,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-std::string shape_to_string(tt::stl::Span<const uint32_t> shape) {
+std::string shape_to_string(ttsl::Span<const uint32_t> shape) {
     std::stringstream ss;
     ss << "Shape([";
     for (std::size_t i = 0; i < shape.size(); ++i) {

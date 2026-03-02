@@ -54,22 +54,22 @@ namespace {
 
 // Helper functions that return MeshCoordinateRange spanning various parts of the T3000 device.
 const MeshCoordinateRange& t3k_bottom_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
     return bottom_row.get();
 }
 
 const MeshCoordinateRange& t3k_top_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
     return top_row.get();
 }
 
 const MeshCoordinateRange& t3k_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
     return full_grid.get();
 }
 
 const MeshCoordinateRange& tg_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
     return full_grid.get();
 }
 

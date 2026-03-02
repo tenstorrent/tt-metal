@@ -26,7 +26,7 @@ protected:
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
@@ -35,12 +35,12 @@ protected:
         std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) = 0;
     // Must be called with lock_api_function_() held.
-    virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual MeshEvent enqueue_record_event_to_host_nolock(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
 
 private:

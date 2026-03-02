@@ -262,7 +262,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 

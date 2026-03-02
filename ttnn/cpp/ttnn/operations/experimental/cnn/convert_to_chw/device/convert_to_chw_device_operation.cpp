@@ -54,7 +54,7 @@ Tensor ConvertToCHWDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
 }
 
-tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();

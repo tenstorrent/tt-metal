@@ -118,7 +118,7 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
     return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();

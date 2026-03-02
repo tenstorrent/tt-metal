@@ -283,7 +283,7 @@ bool single_core_reconfig(
         packed_golden0 = pack_vector<uint32_t, bfloat16>(golden0_bfp16);
     }
     // Pack out1 vector:
-    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(tt::stl::make_const_span(golden1), true, false);
+    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(ttsl::make_const_span(golden1), true, false);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Compile and Execute Application

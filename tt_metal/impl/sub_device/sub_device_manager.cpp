@@ -47,7 +47,7 @@ static_assert(
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
 SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -61,7 +61,7 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -162,7 +162,7 @@ DeviceAddr SubDeviceManager::local_l1_size() const { return local_l1_size_; }
 
 const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_stall_group() const { return sub_device_stall_group_; }
 
-void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void SubDeviceManager::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(

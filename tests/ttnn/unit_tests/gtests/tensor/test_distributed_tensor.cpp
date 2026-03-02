@@ -52,7 +52,7 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(1));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 }
 
 TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
@@ -67,7 +67,7 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -112,7 +112,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DFewerShardsThanDevices) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices() - 1));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
@@ -147,7 +147,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DNegativeDim) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -175,7 +175,7 @@ TEST_F(TensorDistribution2x4Test, Shard1D) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 

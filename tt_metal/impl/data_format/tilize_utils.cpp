@@ -44,7 +44,7 @@ std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val -
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_swizzled(
-    tt::stl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ttsl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
     std::vector<T> tilized_result;
     if (in_row_major.size() == 0) {
@@ -81,7 +81,7 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T>
 std::vector<T> convert_layout_tile_swizzled_to_row_major(
-    tt::stl::Span<const T> in_tile_swizzled, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ttsl::Span<const T> in_tile_swizzled, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
     std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
@@ -118,7 +118,7 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
 
 template <class T>
 std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
-    tt::stl::Span<const T> in_tile_swizzled,
+    ttsl::Span<const T> in_tile_swizzled,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -182,7 +182,7 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
 
 template <class T>
 std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
-    tt::stl::Span<const T> in_tile_nfaces,
+    ttsl::Span<const T> in_tile_nfaces,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
@@ -254,7 +254,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_nfaces(
-    tt::stl::Span<const T> in_row_major,
+    ttsl::Span<const T> in_row_major,
     const PhysicalSize& shape,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
@@ -336,7 +336,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
 
 template <typename T>
 std::vector<T> convert_layout_tile_nfaces_to_row_major(
-    tt::stl::Span<const T> in_nfaces,
+    ttsl::Span<const T> in_nfaces,
     const PhysicalSize& shape,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
@@ -369,7 +369,7 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     auto write_face =
-        [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
+        [&](std::vector<T>& out_data, ttsl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
             if (!transpose_face) {
                 for (size_t row = 0; row < face_H; row++) {
                     size_t src_idx = in_face_start + (row * face_W);
@@ -426,7 +426,7 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
 
 template <typename T>
 std::vector<T> convert_layout(
-    tt::stl::Span<const T> inp,
+    ttsl::Span<const T> inp,
     const PhysicalSize& shape,
     TensorLayoutType inL,
     TensorLayoutType outL,
@@ -477,8 +477,8 @@ std::vector<T> convert_layout(
 
 template <typename T>
 std::vector<T> convert_layout(
-    tt::stl::Span<const T> inp,
-    tt::stl::Span<const uint32_t> shape,
+    ttsl::Span<const T> inp,
+    ttsl::Span<const uint32_t> shape,
     TensorLayoutType inL,
     TensorLayoutType outL,
     std::optional<PhysicalSize> tile_shape,
@@ -533,29 +533,29 @@ std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t
 
 // Explicit instantiations
 // clang-format off
-template std::vector<float> convert_layout_tile_swizzled_to_tile_nfaces<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout_tile_swizzled_to_tile_nfaces<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout_tile_swizzled_to_tile_nfaces<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout_tile_swizzled_to_tile_nfaces<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout_tile_swizzled_to_tile_nfaces<float>(ttsl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout_tile_swizzled_to_tile_nfaces<uint16_t>(ttsl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout_tile_swizzled_to_tile_nfaces<uint32_t>(ttsl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout_tile_swizzled_to_tile_nfaces<bfloat16>(ttsl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_layout_tile_nfaces_to_tile_swizzled<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout_tile_nfaces_to_tile_swizzled<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout_tile_nfaces_to_tile_swizzled<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout_tile_nfaces_to_tile_swizzled<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout_tile_nfaces_to_tile_swizzled<float>(ttsl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout_tile_nfaces_to_tile_swizzled<uint16_t>(ttsl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout_tile_nfaces_to_tile_swizzled<uint32_t>(ttsl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout_tile_nfaces_to_tile_swizzled<bfloat16>(ttsl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout<float>(ttsl::Span<const float>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<int> convert_layout<int>(ttsl::Span<const int>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint8_t> convert_layout<uint8_t>(ttsl::Span<const uint8_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout<uint16_t>(ttsl::Span<const uint16_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout<uint32_t>(ttsl::Span<const uint32_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout<bfloat16>(ttsl::Span<const bfloat16>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_t>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout<float>(ttsl::Span<const float>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<int> convert_layout<int>(ttsl::Span<const int>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint8_t> convert_layout<uint8_t>(ttsl::Span<const uint8_t>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout<uint16_t>(ttsl::Span<const uint16_t>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout<uint32_t>(ttsl::Span<const uint32_t>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout<bfloat16>(ttsl::Span<const bfloat16>, ttsl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<uint16_t> tilize_swizzled<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template std::vector<uint32_t> tilize_swizzled<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);

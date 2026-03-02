@@ -34,7 +34,7 @@ Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_devic
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
     return distributed::create_distributed_tensor(
-        tt::stl::make_span(*buffer),
+        ttsl::make_span(*buffer),
         global_shape,
         tt::tt_metal::MemoryPin{buffer},
         tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
@@ -49,7 +49,7 @@ Tensor make_tensor_with_mapper_config(
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
     return distributed::create_distributed_tensor(
-        tt::stl::make_span(*buffer),
+        ttsl::make_span(*buffer),
         global_shape,
         tt::tt_metal::MemoryPin{buffer},
         tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
@@ -262,7 +262,7 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {
     EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
     EXPECT_EQ(
         sum.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
 TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
@@ -289,17 +289,17 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
     EXPECT_EQ(sum_1.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_1.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}}));
     EXPECT_EQ(sum_2.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_2.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
     EXPECT_EQ(sum_3.tensor_topology().distribution_shape(), MeshShape(1, 4));
     EXPECT_EQ(
         sum_3.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
 }
 
@@ -312,7 +312,7 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
     EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
     EXPECT_EQ(
         sum.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
 }  // namespace
