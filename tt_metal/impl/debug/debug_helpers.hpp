@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <set>
+#include <vector>
+#include <cctype>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 

@@ -69,7 +69,7 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
                 "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
                 processor_index,
                 core_type,
-                num_processors);
+                num_processors - 1);
             return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
         case HalProgrammableCoreType::ACTIVE_ETH: {
@@ -998,10 +998,21 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 
     fprintf(reader_.f, " h_id:%3d ", launch_msg_.kernel_config().host_assigned_id());
     uint32_t num_subordinates = hal.get_num_risc_processors(programmable_core_type_) - 1;
+    uint32_t dm_subordinates =
+        hal.get_processor_types_count(programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM)) - 1;
     if (num_subordinates > 0) {
         fprintf(reader_.f, "smsg:");
         for (uint32_t i = 0; i < num_subordinates; ++i) {
-            DumpRunState(subordinate_sync.map()[i]);
+            uint32_t map_idx = i;
+            if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
+                // On Quasar TENSIX, subordinate_sync.map() layout is:
+                // dm1 .. dm7, padding, neo0_trisc0, neo0_trisc1 .. neo3_trisc3
+                // so we must skip the padding byte between DM and NEO entries.
+                if (i >= dm_subordinates) {
+                    map_idx = i + 1;
+                }
+            }
+            DumpRunState(subordinate_sync.map()[map_idx]);
         }
         fprintf(reader_.f, " ");
     }
