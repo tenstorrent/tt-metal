@@ -60,6 +60,8 @@ def test_log_probs_calculation(shape, mesh_device):
 
     log_probs_calculator.set_log_probs_mode(True)
     tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    if tt_log_probs is None:
+        assert False, "Log-probs should not be None"
     log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
 
@@ -149,6 +151,8 @@ def test_log_probs_with_sub_core_grids_on_galaxy(shape, mesh_device):
 
     log_probs_calculator.set_log_probs_mode(True)
     tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    if tt_log_probs is None:
+        assert False, "Log-probs should not be None"
     log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     # slice from (1,1,32,256) -> (1,1,1,32)
     log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]

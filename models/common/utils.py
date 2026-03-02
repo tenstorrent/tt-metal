@@ -284,10 +284,10 @@ class LogProbsCalculator:
         Calculate log-probs for a given logits tensor and indices tensor.
         """
         if not self.enable_log_probs:
-            return self.output_tensor
+            return None  # self.output_tensor
 
         if self.mesh_device.get_num_devices() not in [8, 32]:
-            return self.output_tensor
+            return None  # self.output_tensor
 
         # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
         if logits_tensor.dtype == ttnn.bfloat8_b:

@@ -548,7 +548,22 @@ class Generator:
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
-        self.model.sampling.seed_manager.get_new_values()
+        # call get_new_values only when seed is not None
+
+        if sampling_params is not None:
+            if isinstance(sampling_params.seed, list):
+                if any(sampling_params.seed):
+                    self.model.sampling.seed_manager.get_new_values()
+                    print("Getting new values for seed")
+                else:
+                    print("No seed to get new values for")
+            elif isinstance(sampling_params.seed, int):
+                if sampling_params.seed is not None and sampling_params.seed != 0:
+                    self.model.sampling.seed_manager.get_new_values()
+                    print("Getting new values for seed")
+                else:
+                    print("No seed to get new values for")
+
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
