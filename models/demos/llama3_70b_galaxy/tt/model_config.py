@@ -33,6 +33,11 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 
+# Performance tuning:
+# Chunk size for flexible chunked SDPA (prefix caching). chunk_start_idx must be
+# a multiple of this; generator aligns num_cached_tokens DOWN to this boundary.
+# (That means some tokens, even full pages, can be recomputed.)
+SDPA_CHUNK_ALIGN = 128
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -729,12 +734,35 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=512 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
+            # works for any block-aligned chunk_start at replay.
+            # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=SDPA_CHUNK_ALIGN,
+                k_chunk_size=SDPA_CHUNK_ALIGN,
             )
 
             def find_largest_divisor(n, max_divisor=8):
