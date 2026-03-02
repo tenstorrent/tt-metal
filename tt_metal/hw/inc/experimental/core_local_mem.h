@@ -143,10 +143,6 @@ public:
         return byte_diff / sizeof(T);
     }
 
-    [[nodiscard]] auto scoped_lock() {
-        return Lock([this]() { release_scoped_lock(); });
-    }
-
     /** @brief Lock a region of num_elements for the duration of the returned guard (same as scoped_lock(); size for
      * future debug/profiler use). */
     [[nodiscard]] auto scoped_lock(size_t num_elements) {
