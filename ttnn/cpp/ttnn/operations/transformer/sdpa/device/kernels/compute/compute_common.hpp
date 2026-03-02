@@ -1215,7 +1215,7 @@ ALWI void matmul_blocks(
         cb_wait_front(in1_cb, K * N);
     }
     {
-        DeviceZoneScopedN("Reserve OUT");
+        DeviceZoneScopedN("Wait OUT");
         cb_reserve_back(out_cb, output_num_tiles);
     }
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
@@ -1225,17 +1225,14 @@ ALWI void matmul_blocks(
         }
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            {
-                DeviceZoneScopedN("Wait PACKER");
-                tile_regs_acquire();
-            }
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
+            tile_regs_acquire();
 
             {
                 DeviceZoneScopedN("@");
+                uint32_t dst_index = 0;
+                uint32_t in0_index = in0_index_offset;
+                uint32_t in1_index = in1_index_offset;
+
                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                     matmul_block(
                         in0_cb,
@@ -1264,10 +1261,9 @@ ALWI void matmul_blocks(
                 }
             }
             tile_regs_commit();
-            {
-                DeviceZoneScopedN("Wait MATH");
-                tile_regs_wait();
-            }
+
+            tile_regs_wait();
+
             {
                 DeviceZoneScopedN("Packer");
                 uint32_t dst_idx = 0;
@@ -1565,7 +1561,7 @@ void sdpa_inner_loop(
             KV_chunks_processed_in_iter++;
 
             {
-                DeviceZoneScopedN("SDPA_Q@K");
+                DeviceZoneScopedN("Q@K");
                 /**
                  * QK = Q_CHUNK @ K_CHUNK
                  *
@@ -1620,7 +1616,7 @@ void sdpa_inner_loop(
             }
 
             if (apply_mask) {
-                DeviceZoneScopedN("SDPA_QK+=MASK");
+                DeviceZoneScopedN("QK+=MASK");
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -1634,7 +1630,7 @@ void sdpa_inner_loop(
              *  cur_max = max(qk, dim=-1)
              */
             {
-                DeviceZoneScopedN("SDPA_REDUCE_MAX");
+                DeviceZoneScopedN("REDUCE_MAX");
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
                     alias_cur_max, alias_prev_max, processed_k_chunks > 0);
@@ -1651,13 +1647,13 @@ void sdpa_inner_loop(
              * outside of the loop over K chunks.
              */
             {
-                DeviceZoneScopedN("SDPA_SUB_EXP");
+                DeviceZoneScopedN("SUB_EXP");
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                     alias_cur_max, alias_cur_sum, Sk_chunk_t);
             }
 
             {
-                DeviceZoneScopedN("SDPA_QK@V");
+                DeviceZoneScopedN("QK@V");
                 /* OUT_IM = QK @ V_CHUNK */
                 matmul_blocks(
                     cb_qk_im,
@@ -1677,7 +1673,7 @@ void sdpa_inner_loop(
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
             {
-                DeviceZoneScopedN("SDPA_out_acc");
+                DeviceZoneScopedN("OUT_ACC");
                 reconfig_data_format(alias_prev_max, alias_cur_max);
 
                 /* OUT_ACC += OUT_IM */
@@ -1831,6 +1827,7 @@ void sdpa_inner_loop(
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
         } else {
+            DeviceZoneScopedN("ATT_SINK");
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 

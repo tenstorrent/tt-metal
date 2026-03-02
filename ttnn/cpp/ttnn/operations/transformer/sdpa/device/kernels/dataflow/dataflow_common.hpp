@@ -118,29 +118,28 @@ uint32_t read_chunk_with_padding(
         DeviceZoneScopedN("Reserve CB");
         cb_reserve_back(cb_id, num_tiles);
     }
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
-    uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
-
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-        for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(start_tile_id, reader, write_ptr);
-            start_tile_id += 1;
-            write_ptr += inner_ptr_stride;
-
-            if (++barrier_count == barrier_threshold) {
-                DeviceZoneScopedN("Noc Barrier Threshold");
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-        start_tile_id += skip_src_cols;
-    }
-
     {
-        DeviceZoneScopedN("Zero Padding");
+        DeviceZoneScopedN("Noc Ops");
+        const uint32_t base_write_ptr = get_write_ptr(cb_id);
+        uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
+        uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+
+        uint32_t barrier_count = 0;
+        for (uint32_t row = 0; row < src_rows; ++row) {
+            uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+            for (uint32_t col = 0; col < src_cols; ++col) {
+                noc_async_read_tile(start_tile_id, reader, write_ptr);
+                start_tile_id += 1;
+                write_ptr += inner_ptr_stride;
+
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
+            }
+            start_tile_id += skip_src_cols;
+        }
+
         // Zero out the padding
         for (uint32_t row = 0; row < dst_rows; ++row) {
             for (uint32_t col = 0; col < dst_cols; ++col) {
@@ -151,9 +150,7 @@ uint32_t read_chunk_with_padding(
                 fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
             }
         }
-    }
-    {
-        DeviceZoneScopedN("Noc Barrier");
+
         noc_async_read_barrier();  // Why **after** the padding?
     }
     if constexpr (push_num_tiles) {
@@ -546,7 +543,11 @@ void generate_causal_sliding_window_mask(
     bool is_causal = true,
     uint32_t sliding_window_size = 0) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    cb_reserve_back(cb_mask_in, mask_size_tiles);
+
+    {
+        DeviceZoneScopedN("Wait CB Mask");
+        cb_reserve_back(cb_mask_in, mask_size_tiles);
+    }
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
     uint64_t noc_write_addr_base = get_noc_addr(write_ptr_base);
@@ -909,22 +910,28 @@ void write_block(
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
 
-    cb_wait_front(cb_out, out_chunk_tiles);
+    {
+        DeviceZoneScopedN("Wait CB Out");
+        cb_wait_front(cb_out, out_chunk_tiles);
+    }
 
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
-    for (uint32_t row = 0; row < rows; ++row) {
-        for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(tile_id, out_writer, l1_read_addr);
-            ++tile_id;
-            l1_read_addr += tile_bytes;
+    {
+        DeviceZoneScopedN("Noc Ops");
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t row = 0; row < rows; ++row) {
+            for (uint32_t col = 0; col < cols; ++col) {
+                noc_async_write_tile(tile_id, out_writer, l1_read_addr);
+                ++tile_id;
+                l1_read_addr += tile_bytes;
 
-            if (++barrier_count == barrier_threshold) {
-                noc_async_writes_flushed();
-                barrier_count = 0;
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_writes_flushed();
+                    barrier_count = 0;
+                }
             }
         }
+        noc_async_write_barrier();
     }
-    noc_async_write_barrier();
     cb_pop_front(cb_out, out_chunk_tiles);
 }
 
@@ -1006,6 +1013,7 @@ void generate_mask(
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
     const uint32_t unpadded_Sk_mask_1) {
+    DeviceZoneScopedN("Mask");
     if constexpr (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {

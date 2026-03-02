@@ -305,7 +305,6 @@ void kernel_main() {
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
-                DeviceZoneScopedN("Read Page Table");
                 // Chunked means that we have paged attention
                 cb_reserve_back(cb_id_page_table, 1);
                 page_table_ptr = read_page_table_for_batch(
