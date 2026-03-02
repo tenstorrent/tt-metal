@@ -39,7 +39,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 Cache Generation - quad"
+run-name: "DeepSeek V3 Cache Generation - quad ${{ inputs.override-num-layers || 'all' }}"
 
 jobs:
   build-artifact:
