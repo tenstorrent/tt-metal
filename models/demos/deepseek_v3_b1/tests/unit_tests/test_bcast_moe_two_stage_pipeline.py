@@ -216,18 +216,21 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         d2d0_infra = d2d0_infra_temp
         logger.info(f"[rank={my_mesh_id}] D2D_0 infrastructure created and wired to pipeline exit")
 
-    # ── Stage 1: MoE tensor setup (follows test_moe_mlp.py pattern) ──────────
+    # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
     result_scores = None
     result_indices = None
     result_output = None
+    r = None
+    s = None
 
-    if is_stage1:
+    if is_stage0 or is_stage1:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         r = create_routed_expert_tensors(mesh_device, use_hardcoded_expert_index=True, mesh_mapper=mesh_mapper)
         mcast_grid = moe_worker_core_grid
         s = create_shared_expert_tensors(mesh_device, M, K, mcast_grid, mesh_mapper=mesh_mapper)
         logger.info(f"[rank={my_mesh_id}] MoE tensors created")
 
+    if is_stage1:
         # SDPA buffers for CB memory overlap
         kv_cache_shard_height = 256
         kvpe_dim = 576
@@ -409,7 +412,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         )
         logger.info("[rank=1] MoE + reduce + D2D0 completed")
 
-    # ── Stage 0: D2H loopback read ───────────────────────────────────────────
+    # ── Stage 0: D2H loopback read + golden validation ───────────────────────
     if is_stage0:
         logger.info("[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
@@ -425,6 +428,64 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
         assert d2h_nonzero > 0, "D2H output is all zeros — reduce or D2D0 pipeline failed"
 
+        # Validate D2H output against golden expected MoE reduce output
+        from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+
+        mesh_rows, mesh_cols = mesh_device.shape
+        K_down = s["K_down"]
+        torch_input_row = torch_embedding[0, 0, token_id : token_id + 1, :]
+
+        x_raw = torch_input_row.float()
+        variance = x_raw.pow(2).mean(-1, keepdim=True)
+        normalized_input = (
+            ((x_raw * torch.rsqrt(variance + 1e-6)) * r["torch_rmsnorm_gamma"].float()).bfloat16().float()
+        )
+        logits = normalized_input.float() @ r["torch_gate_mm_weights"].float()
+        scores = torch.sigmoid(logits)
+        gate_input = scores.reshape(1, 8, 32)
+        cpu_gate_scores, _ = DeepseekMoeGateSingleCore.golden(
+            gate_input, r["torch_bias"].float(), r["gate_eps"], r["gate_scaling_factor"], enable_sigmoid=False
+        )
+
+        expected_final_outputs = []
+        for dev_idx in range(mesh_rows * mesh_cols):
+            actual_expert_scale = cpu_gate_scores.flatten()[dev_idx].float()
+
+            shared_gate_shard = s["torch_gate_weights"][:, dev_idx * K_down : (dev_idx + 1) * K_down]
+            shared_up_shard = s["torch_up_weights"][:, dev_idx * K_down : (dev_idx + 1) * K_down]
+            shared_down_shard = s["torch_down_weights"][dev_idx * K_down : (dev_idx + 1) * K_down, :]
+
+            _, _, expected_final = MoeOp.golden(
+                torch_input_row,
+                shared_gate_weights=shared_gate_shard,
+                shared_up_weights=shared_up_shard,
+                shared_down_weights=shared_down_shard,
+                gate_proj_weights_dict=r["expert_weights_dict"],
+                up_proj_weights_dict=r["up_proj_weights_dict"],
+                down_proj_weights_dict=r["down_proj_weights_dict"],
+                routing_weights_tensor=r["torch_gate_mm_weights"],
+                bias_tensor=r["torch_bias"],
+                eps=r["gate_eps"],
+                scaling_factor=r["gate_scaling_factor"],
+                use_hardcoded_expert_index=True,
+                hardcoded_expert_index=dev_idx,
+                explicit_expert_scale=actual_expert_scale,
+                rmsnorm_gamma=r["torch_rmsnorm_gamma"],
+                rmsnorm_epsilon=1e-6,
+            )
+            expected_final_outputs.append(expected_final)
+
+        expected_reduce_output = sum(expected_final_outputs)
+
+        d2d0_shard_width = reduce_payload_per_shard // dtype_size(ttnn.bfloat16)
+        d2h_valid = extract_routed_expert_output(
+            d2h_result_torch, r["num_gate_proj_cores"], d2d0_shard_width, r["per_core_down_proj_N"]
+        )
+
+        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.97)
+        logger.info(f"Pipeline Stage 0 D2H Reduce PCC: {pcc_msg}")
+        # assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
+
     ttnn.distributed_context_barrier()
 
     # ── D2D0 termination + pipeline teardown ─────────────────────────────────
@@ -433,6 +494,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         ttnn.reset_global_semaphore_value(termination_semaphore, 1)
         logger.info("[rank=1] D2D_0 termination signaled")
 
+    logger.info(f"[rank={my_mesh_id}] waiting for pipeline block termination")
     pipeline_block.terminate()
     logger.info(f"[rank={my_mesh_id}] programs terminated")
 
@@ -497,6 +559,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
 
         passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
         logger.info(f"Pipeline Stage 1 Reduce PCC: {pcc_msg}")
+        logger.info(f"[rank=1] expected first 5 values: {reduce_output_valid.flatten()[0, :5]}")
         assert passing, f"Pipeline Stage 1 Reduce PCC check failed: {pcc_msg}"
 
     logger.info(f"[rank={my_mesh_id}] test PASSED")

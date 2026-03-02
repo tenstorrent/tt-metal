@@ -31,13 +31,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import (
-    MESH_LEAF,
-    MESH_ROOT1,
-    MESH_ROOT2,
-    MESH_ROOT3,
-    ReduceToOneB1,
-)
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
@@ -1949,6 +1943,13 @@ class MoeRoutedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_reduce_fabric_core",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=1,
+                other_value=0,
+            ),
+            # D2D0 aggregator core — set per-device on ROOT1 when d2d0 output enabled
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_d2d0_core",
                 core_range=ttnn.CoreRangeSet([]),  # Set per-device
                 value=1,
                 other_value=0,
@@ -4179,6 +4180,135 @@ class MoeOp:
                     ncrisc_args=bcast_ncrisc_per_core,
                 )
 
+    def _build_d2d0_per_device(self, reduce_root_coord, coord, row, col):
+        """Integrate D2D0 aggregator into unified kernel on ROOT1. No-op when D2D0 not enabled."""
+        ctx = self.ctx
+        if not self.enable_d2d0_output or self.d2d0_infrastructure is None:
+            return
+        if not ctx.enable_reduce_to_one:
+            return
+
+        # Default D2D0 CTAs — present on ALL devices so the kernel compiles;
+        # only d2d0_core on ROOT1 has is_d2d0_core=1 and actually executes this path.
+        d2d0_zero_args = [
+            ("d2d0_sender_socket_config_addr", 0),
+            ("d2d0_termination_semaphore_addr", 0),
+            ("d2d0_sender_page_size", 0),
+            ("d2d0_upstream_page_size", 0),
+            ("d2d0_fab_pkts_link_0", 0),
+            ("d2d0_fab_pkts_link_1", 0),
+            ("d2d0_whole_packet_size", 0),
+            ("d2d0_partial_packet_size", 0),
+            ("d2d0_fabric_header_cb_id", 0),
+            ("d2d0_use_fabric_on_sender", 0),
+            ("d2d0_num_upstream_sockets", 0),
+            ("d2d0_socket_0_addr", 0),
+            ("d2d0_socket_1_addr", 0),
+            ("d2d0_socket_2_addr", 0),
+            ("d2d0_socket_3_addr", 0),
+            ("d2d0_socket_4_addr", 0),
+            ("d2d0_socket_5_addr", 0),
+            ("d2d0_socket_6_addr", 0),
+            ("d2d0_socket_7_addr", 0),
+        ]
+
+        use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
+        device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
+        if device_role != MESH_ROOT1:
+            self.ncrisc_args.extend(d2d0_zero_args)
+            return
+
+        d2d0_infra = self.d2d0_infrastructure
+        d2d0_core = d2d0_infra["d2d0_core"]
+        d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
+        d2d_socket_pairs = d2d0_infra["d2d_socket_pairs"]
+        termination_semaphore = d2d0_infra["d2d0_termination_semaphore"]
+        reduce_params = ctx.reduce_params
+        num_shard_cores = len(reduce_params["worker_cores_list"])
+        page_size_bytes = reduce_params["payload_size_bytes"]
+        total_page_size = num_shard_cores * page_size_bytes
+
+        # Determine fabric usage
+        d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[0].receiver_core.device_coord
+        my_fabric_node_id = ctx.mesh_device.get_fabric_node_id(coord)
+        downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+            ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
+        )
+        use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+        self.d2d0_use_fabric_on_sender = use_fabric_on_sender
+
+        if use_fabric_on_sender:
+            fabric_max = ttnn.get_tt_fabric_max_payload_size_bytes()
+            num_whole = total_page_size // fabric_max
+            partial = total_page_size % fabric_max
+            num_fwd_links = 2
+            if num_whole > 0:
+                pkts_l0 = (num_whole // num_fwd_links) + int(partial > 0)
+                pkts_l0 = min(pkts_l0, num_whole)
+                pkts_l1 = num_whole - pkts_l0
+            else:
+                pkts_l0, pkts_l1 = 0, 0
+            whole_pkt = fabric_max
+        else:
+            pkts_l0, pkts_l1, whole_pkt, partial = 0, 0, 0, 0
+
+        routed_ctx = ctx.routed_ctx
+        d2d0_hdr_cb = routed_ctx.reduce_packet_header_cb
+
+        # Update is_d2d0_core descriptor with d2d0 core range
+        d2d0_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core, d2d0_core)])
+        for i, desc in enumerate(self.device_unified_core_descs):
+            if desc.named_compile_time_arg == "is_d2d0_core":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_d2d0_core",
+                    core_range=d2d0_core_set,
+                    value=1,
+                    other_value=0,
+                )
+                break
+
+        # D2D0 named compile-time args (only meaningful on d2d0_core, but present on all cores)
+        upstream_socket_addrs = []
+        for sp in d2d_socket_pairs:
+            _, receiver_socket = sp
+            upstream_socket_addrs.append(receiver_socket.get_config_buffer_address())
+        while len(upstream_socket_addrs) < 8:
+            upstream_socket_addrs.append(0)
+
+        self.ncrisc_args.extend(
+            [
+                ("d2d0_sender_socket_config_addr", d2d0_downstream_socket.get_config_buffer_address()),
+                ("d2d0_termination_semaphore_addr", ttnn.get_global_semaphore_address(termination_semaphore)),
+                ("d2d0_sender_page_size", total_page_size),
+                ("d2d0_upstream_page_size", page_size_bytes),
+                ("d2d0_fab_pkts_link_0", pkts_l0),
+                ("d2d0_fab_pkts_link_1", pkts_l1),
+                ("d2d0_whole_packet_size", whole_pkt),
+                ("d2d0_partial_packet_size", partial),
+                ("d2d0_fabric_header_cb_id", d2d0_hdr_cb),
+                ("d2d0_use_fabric_on_sender", 1 if use_fabric_on_sender else 0),
+                ("d2d0_num_upstream_sockets", num_shard_cores),
+                ("d2d0_socket_0_addr", upstream_socket_addrs[0]),
+                ("d2d0_socket_1_addr", upstream_socket_addrs[1]),
+                ("d2d0_socket_2_addr", upstream_socket_addrs[2]),
+                ("d2d0_socket_3_addr", upstream_socket_addrs[3]),
+                ("d2d0_socket_4_addr", upstream_socket_addrs[4]),
+                ("d2d0_socket_5_addr", upstream_socket_addrs[5]),
+                ("d2d0_socket_6_addr", upstream_socket_addrs[6]),
+                ("d2d0_socket_7_addr", upstream_socket_addrs[7]),
+            ]
+        )
+
+        # Per-core NCRISC runtime args for d2d0_core (fabric connections added later in _setup_fabric_connections)
+        d2d0_ncrisc_per_core = [(d2d0_core, [])]
+        if self.device_rt_args_desc is not None:
+            self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
+                brisc_args=self.device_rt_args_desc.brisc_args,
+                ncrisc_args=(self.device_rt_args_desc.ncrisc_args or []) + d2d0_ncrisc_per_core,
+            )
+        else:
+            self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(ncrisc_args=d2d0_ncrisc_per_core)
+
     def _setup_fabric_connections(self, coord, row, col, reduce_root_coord, kernel_result, program):
         """Setup fabric connections for reduce, broadcast, and D2D0 fabric cores."""
         ctx = self.ctx
@@ -4223,30 +4353,35 @@ class MoeOp:
                     )
                     fabric_rt_args_ref.extend(fabric_conn_args)
 
-            # D2D0 aggregator fabric connections on ROOT1
+            # D2D0 aggregator fabric connections on ROOT1 (now part of unified kernel)
             if device_role == MESH_ROOT1 and self.d2d0_infrastructure is not None:
                 d2d0_infra = self.d2d0_infrastructure
                 d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
-                d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
-                    0
-                ].receiver_core.device_coord
-                mesh_device = ctx.mesh_device
-                my_fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
-                    ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
-                )
-                use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+                use_fabric_on_sender = getattr(self, "d2d0_use_fabric_on_sender", False)
                 if use_fabric_on_sender:
-                    d2d0_kernel_idx = len(program.kernels) - 1
                     d2d0_core = d2d0_infra["d2d0_core"]
-                    program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y] = []
-                    d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
-                    num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
-                    for link_idx in range(num_d2d0_links):
-                        d2d0_fabric_args = ttnn.setup_fabric_connection(
-                            my_fabric_node_id, downstream_fabric_node_id, link_idx, program, d2d0_core
+                    d2d0_kernel_idx = None
+                    for group in kernel_result.groups:
+                        if group.compile_time_arg_values.get("is_d2d0_core") == 1 and group.core_range_set.contains(
+                            d2d0_core
+                        ):
+                            d2d0_kernel_idx = group.ncrisc_kernel_index
+                            break
+                    if d2d0_kernel_idx is not None:
+                        d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
+                        d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
+                            0
+                        ].receiver_core.device_coord
+                        my_fabric_node_id = ctx.mesh_device.get_fabric_node_id(coord)
+                        downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+                            ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
                         )
-                        d2d0_rt_args_ref.extend(d2d0_fabric_args)
+                        num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
+                        for link_idx in range(num_d2d0_links):
+                            d2d0_fabric_args = ttnn.setup_fabric_connection(
+                                my_fabric_node_id, downstream_fabric_node_id, link_idx, program, d2d0_core
+                            )
+                            d2d0_rt_args_ref.extend(d2d0_fabric_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
@@ -4637,6 +4772,9 @@ class MoeOp:
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
 
+        # Integrate D2D0 aggregator into unified kernel on ROOT1
+        self._build_d2d0_per_device(reduce_root_coord, coord, row, col)
+
     @staticmethod
     def op(
         shared_residual_mcast_src_tensor,
@@ -4769,20 +4907,9 @@ class MoeOp:
                 moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, coord, row, col)
                 print("setup per-device args done")
 
-                # Exclude d2d0_core from unified kernel grid on ROOT1 to avoid
-                # having 3 DM kernels on the same core (unified NCRISC + BRISC + D2D0 Reader)
-                effective_grid = ctx.full_device_grid
-                if ctx.enable_reduce_to_one and enable_d2d0_output and d2d0_infrastructure is not None:
-                    use_torus_check = is_torus and reduce_root_coord[0] in [0, 3]
-                    device_role_check = get_reduce_device_role(coord, reduce_root_coord, use_torus_check)
-                    if device_role_check == MESH_ROOT1:
-                        d2d0_core_coord = d2d0_infrastructure["d2d0_core"]
-                        d2d0_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(d2d0_core_coord, d2d0_core_coord)])
-                        effective_grid = effective_grid.subtract(d2d0_core_set)
-
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
-                    core_ranges=effective_grid,
+                    core_ranges=ctx.full_device_grid,
                     ncrisc_named_compile_time_args=moe.ncrisc_args,
                     brisc_named_compile_time_args=moe.brisc_args,
                     trisc_named_compile_time_args=moe.trisc_args,
@@ -4808,29 +4935,6 @@ class MoeOp:
                 kernels = kernel_result.kernels
                 cb_descs = moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs
                 sem_descs = moe.device_sem_descs
-
-                # Add D2D0 aggregator kernel on ROOT1 when D2D0 output is enabled
-                if ctx.enable_reduce_to_one and enable_d2d0_output and d2d0_infrastructure is not None:
-                    use_torus = is_torus and reduce_root_coord[0] in [0, 3]
-                    device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
-                    if device_role == MESH_ROOT1:
-                        d2d0_downstream_socket = d2d0_infrastructure["d2d0_downstream_socket"]
-                        d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
-                            0
-                        ].receiver_core.device_coord
-                        my_fabric_node_id = ctx.mesh_device.get_fabric_node_id(coord)
-                        downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
-                            ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
-                        )
-                        use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
-                        reduce_params = ctx.reduce_params
-                        d2d0_kernel = ReduceToOneB1.create_d2d0_aggregator_kernel(
-                            d2d0_infrastructure,
-                            reduce_params["payload_size_bytes"],
-                            len(reduce_params["worker_cores_list"]),
-                            use_fabric_on_sender=use_fabric_on_sender,
-                        )
-                        kernels = list(kernels) + [d2d0_kernel]
 
                 print(
                     f"  creating ProgramDescriptor (kernels={len(kernels)}, cbs={len(cb_descs)}, sems={len(sem_descs)})..."
