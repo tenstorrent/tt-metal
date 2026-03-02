@@ -87,18 +87,24 @@ FORCE_INLINE uint32_t get_compressed_tile_size(uint32_t fmt_idx) { return TILE_S
  * Uses DST_ACCUM_MODE (compile-time constant from kernel config).
  */
 FORCE_INLINE void reconfig_unpack_srca(uint32_t fmt_idx) {
-    uint32_t src_format = DATA_FORMATS[fmt_idx];
-    UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE>(
-        src_format, src_format, TILE_SIZES[fmt_idx], FACE_R_DIM, 4)));
+    UNPACK(({
+        uint32_t src_format = DATA_FORMATS[fmt_idx];
+        uint32_t tile_size_shifted = TILE_SIZES[fmt_idx] >> 4;
+        _llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE>(
+            src_format, src_format, tile_size_shifted, FACE_R_DIM, 4);
+    }));
 }
 
 /**
  * @brief Reconfigure unpacker B for a specific compressed format.
  */
 FORCE_INLINE void reconfig_unpack_srcb(uint32_t fmt_idx) {
-    uint32_t src_format = DATA_FORMATS[fmt_idx];
-    UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE>(
-        src_format, src_format, TILE_SIZES[fmt_idx], FACE_R_DIM, 4)));
+    UNPACK(({
+        uint32_t src_format = DATA_FORMATS[fmt_idx];
+        uint32_t tile_size_shifted = TILE_SIZES[fmt_idx] >> 4;
+        _llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE>(
+            src_format, src_format, tile_size_shifted, FACE_R_DIM, 4);
+    }));
 }
 
 // ---------------------------------------------------------------------------
