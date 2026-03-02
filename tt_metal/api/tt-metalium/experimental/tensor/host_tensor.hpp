@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -138,9 +140,13 @@ public:
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
+     *
+     * We assume buffer is layed out in row-major order.
+     * TODO(#38947): tile parameter should be removed.
      */
     template <typename T>
-    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
+    static HostTensor from_borrowed_data(
+        std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
 
     template <typename T>
     static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
