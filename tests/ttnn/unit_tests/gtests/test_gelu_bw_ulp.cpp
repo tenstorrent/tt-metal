@@ -256,8 +256,9 @@ float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float in
     return static_cast<float>(output_vec[0]);
 }
 
+// Correctness guard: verifies the trivial midpoint GELU'(0) = 0.5.
+// Catches broken CDF constant, wrong formula sign, or kernel crash.
 TEST_F(GeluBwUlpTest, DerivativeAtZero) {
-    // GELU'(0) = 0.5 (since cdf(0) = 0.5 and pdf term = 0)
     float actual = run_gelu_bw_single(*device_, 0.0f);
     float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(0.0f);
 
@@ -268,8 +269,9 @@ TEST_F(GeluBwUlpTest, DerivativeAtZero) {
     EXPECT_LE(ulp, 2) << "GELU'(0) should be ~0.5 with low ULP error";
 }
 
+// Correctness guard: GELU'(x) must approach 1 for positive x.
+// Catches broken positive saturation or wrong formula sign.
 TEST_F(GeluBwUlpTest, DerivativeAtPositiveValues) {
-    // For large positive x, GELU'(x) approaches 1
     std::vector<std::pair<float, int32_t>> test_cases = {
         {0.5f, 5},
         {1.0f, 5},
@@ -291,11 +293,10 @@ TEST_F(GeluBwUlpTest, DerivativeAtPositiveValues) {
     }
 }
 
+// Correctness guard: GELU'(x) must approach 0 for negative x.
+// Thresholds are loose (up to 60 ULP) — catches gross errors but not subtle precision loss.
+// The erfc fix reduced ULP from 30,000+ to ~59 at x=-4.
 TEST_F(GeluBwUlpTest, DerivativeAtNegativeValues) {
-    // For large negative x, GELU'(x) approaches 0
-    // Note: Using erfc(-x/sqrt(2)) instead of 1+erf(x/sqrt(2)) fixes the wrong sign bug
-    // and reduces ULP dramatically, but some precision loss remains near x=-4 due to
-    // the exp(-x^2/2) term becoming very small.
     std::vector<std::pair<float, int32_t>> test_cases = {
         {-0.5f, 5},
         {-1.0f, 5},
@@ -319,8 +320,9 @@ TEST_F(GeluBwUlpTest, DerivativeAtNegativeValues) {
     }
 }
 
+// Correctness guard: near-zero region where GELU'(x) ≈ 0.5 + x/sqrt(2π).
+// Catches broken small-value handling, DAZ flush bugs, or denormal issues.
 TEST_F(GeluBwUlpTest, DerivativeNearZero) {
-    // Near zero, GELU'(x) ≈ 0.5 + x/sqrt(2*pi)
     std::vector<float> test_values = {1e-6f, 1e-4f, 0.01f, 0.1f, -0.1f, -0.01f, -1e-4f};
 
     for (float input_val : test_values) {
@@ -335,8 +337,9 @@ TEST_F(GeluBwUlpTest, DerivativeNearZero) {
     }
 }
 
+// Correctness guard: only test using grad != 1.0 in this fixture.
+// Catches swapped grad/input tensors or missing gradient multiplication.
 TEST_F(GeluBwUlpTest, WithGradientScaling) {
-    // Test with different gradient values
     std::vector<std::tuple<float, float, int32_t>> test_cases = {
         // {input, grad, max_ulp}
         {1.0f, 2.0f, 5},
@@ -357,10 +360,10 @@ TEST_F(GeluBwUlpTest, WithGradientScaling) {
     }
 }
 
+// Precision guard: sweeps ALL ~65K BF16 values, enforces per-region ULP caps.
+// 7 regions from deep-negative to large-positive, each with a tuned threshold.
+// Catches precision degradation in any region that point-sample tests would miss.
 TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
-    // Comprehensive test: batch all BF16 values and compute GELU backward once
-    // Use grad = 1.0 to test GELU'(x) directly
-
     std::vector<float> input_values;
     input_values.reserve(70000);
 
@@ -510,14 +513,32 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
               << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x << "\n";
     std::cout << "============================================================\n";
 
-    // The test passes if we can characterize the current behavior
-    // Actual thresholds should be adjusted based on observed results
-    std::cout << "\nNote: This is a characterization test. Adjust thresholds based on implementation.\n";
+    // Per-region regression guards
+    // Thresholds based on the polynomial+exp implementation (overall max ULP = 5)
+    std::vector<int> region_max_ulp_thresholds = {
+        10,  // Deep negative (x < -5): exp-based + saturation
+        10,  // Moderate negative [-5, -2]: polynomial transition
+        5,   // Near negative [-2, -0.5]: core polynomial
+        2,   // Near zero [-0.5, 0.5]: most accurate region
+        3,   // Near positive [0.5, 2]: core polynomial
+        3,   // Moderate positive [2, 5]: approaching saturation
+        2,   // Large positive (x > 5): saturation to 1
+    };
+
+    for (size_t r = 0; r < regions.size(); ++r) {
+        EXPECT_LE(regions[r].max_ulp, region_max_ulp_thresholds[r])
+            << "Region '" << regions[r].name << "' max ULP " << regions[r].max_ulp << " exceeds threshold "
+            << region_max_ulp_thresholds[r] << " (worst at x=" << regions[r].worst_x << ")";
+    }
+
+    EXPECT_LE(overall_max_ulp, 10) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 10"
+                                   << " (worst at x=" << overall_worst_x << ")";
 }
 
+// Precision guard: builds ULP histogram across all ~65K BF16 values.
+// Asserts max ULP <= 10 and >= 99% of values within 2 ULP.
+// Catches broad precision degradation that region-based tests might miss.
 TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
-    // Test cumulative ULP distribution (similar to forward GELU test)
-
     std::vector<float> input_values;
     input_values.reserve(70000);
 
@@ -609,11 +630,24 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     std::cout << std::string(46, '-') << "\n";
     std::cout << "\nMax ULP: " << max_ulp << " at x = " << worst_x << "\n";
     std::cout << "============================================================\n";
+
+    // Regression guards
+    EXPECT_LE(max_ulp, 10) << "Max ULP " << max_ulp << " at x=" << worst_x << " exceeds threshold 10";
+
+    // At least 99% of values should be within 2 ULP
+    int count_le_2 = 0;
+    for (auto& [ulp, count] : ulp_histogram) {
+        if (ulp <= 2) {
+            count_le_2 += count;
+        }
+    }
+    double pct_le_2 = 100.0 * count_le_2 / valid_count;
+    EXPECT_GE(pct_le_2, 99.0) << "Only " << pct_le_2 << "% of values within 2 ULP (expected >= 99%)";
 }
 
+// Test infrastructure guard: validates the fp64 golden reference function.
+// If this fails, all other tests' expected values are wrong, causing false passes.
 TEST_F(GeluBwUlpTest, ReferenceImplementationVerification) {
-    // Verify reference implementation against known values
-
     // GELU'(0) = 0.5 (cdf=0.5, pdf term = 0)
     double deriv_0 = bf16_ulp_bw::gelu_derivative_exact(0.0);
     EXPECT_NEAR(deriv_0, 0.5, 1e-10) << "GELU'(0) should be 0.5";
@@ -638,9 +672,10 @@ TEST_F(GeluBwUlpTest, ReferenceImplementationVerification) {
     std::cout << "GELU'(-0.751) = " << deriv_min << " (expected: ~0.0 at local min)\n";
 }
 
+// Precision guard: the [-5, -2] region where the original erfc bug had max ULP = 29,756.
+// Asserts max ULP <= 10 across 11 points in this critical region.
+// Directly guards against erfc -> erf regressions.
 TEST_F(GeluBwUlpTest, ModerateNegativeRegionBugAnalysis) {
-    // Test the moderate negative region [-5, -2] where the worst bugs occur
-    // Max ULP = 29,756 at x = -3.719 - this is the MOST CRITICAL BUG region
     std::vector<float> moderate_negative_values = {
         -2.0f, -2.5f, -3.0f, -3.5f, -3.7f, -3.719f, -3.75f, -3.8f, -4.0f, -4.5f, -5.0f};
 
@@ -675,12 +710,15 @@ TEST_F(GeluBwUlpTest, ModerateNegativeRegionBugAnalysis) {
     std::cout << "Worst ULP: " << max_ulp_found << " at x = " << worst_x << "\n";
     std::cout << "========================================\n";
 
-    // Document observed bug: high ULP errors in moderate negative region
-    // These are REAL BUGS that affect training accuracy
+    // Regression guard: moderate negative region must stay within 10 ULP
+    // Original bug had max ULP = 29,756 here
+    EXPECT_LE(max_ulp_found, 10) << "Moderate negative region [-5, -2] max ULP " << max_ulp_found << " at x=" << worst_x
+                                 << " exceeds threshold 10";
 }
 
+// Correctness guard: deep negative region (-6 to -13) where values should saturate toward 0.
+// Asserts max ULP <= 10. Catches broken saturation path or erf() overflow.
 TEST_F(GeluBwUlpTest, DeepNegativeRegionStability) {
-    // Test the deep negative region where erf() saturation could cause issues
     std::vector<float> deep_negative_values = {-6.0f, -7.0f, -8.0f, -9.0f, -10.0f, -12.0f, -13.0f};
 
     std::cout << "\n========================================\n";
@@ -690,6 +728,9 @@ TEST_F(GeluBwUlpTest, DeepNegativeRegionStability) {
               << "ULP\n";
     std::cout << std::string(50, '-') << "\n";
 
+    int max_ulp = 0;
+    float worst_x = 0;
+
     for (float x : deep_negative_values) {
         float actual = run_gelu_bw_single(*device_, x);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
@@ -697,34 +738,53 @@ TEST_F(GeluBwUlpTest, DeepNegativeRegionStability) {
 
         std::cout << std::setw(10) << x << std::setw(15) << std::scientific << std::setprecision(3) << expected
                   << std::setw(15) << actual << std::setw(10) << ulp << "\n";
+
+        if (ulp > max_ulp) {
+            max_ulp = ulp;
+            worst_x = x;
+        }
     }
     std::cout << "========================================\n";
+
+    // Regression guard: deep negative values should saturate cleanly
+    EXPECT_LE(max_ulp, 10) << "Deep negative region max ULP " << max_ulp << " at x=" << worst_x
+                           << " exceeds threshold 10";
 }
 
+// Correctness guard: 6 key points spanning all kernel code paths.
+// Per-point ULP thresholds (2-5). Catches any single broken code path quickly.
 TEST_F(GeluBwUlpTest, SummaryStatistics) {
-    // Summary test that prints overall statistics
-
     std::cout << "\n========================================\n";
     std::cout << "GELU BACKWARD ULP SUMMARY (DAZ+FTZ MODEL)\n";
     std::cout << "========================================\n";
 
-    // Test key regions
-    std::vector<std::tuple<std::string, float, float>> key_points = {
-        {"Zero", 0.0f, 0.5f},
-        {"Positive unity", 1.0f, 0.9279f},
-        {"Negative unity", -1.0f, 0.0832f},
-        {"Local minimum", -0.751f, 0.0f},
-        {"Large positive", 5.0f, 1.0f},
-        {"Large negative", -5.0f, 0.0f},
+    // Test key regions with per-point ULP thresholds
+    // Each point tests a different kernel code path
+    struct KeyPoint {
+        std::string name;
+        float x;
+        int max_ulp_threshold;  // 5 for local minimum (derivative ≈ 0), 3 otherwise
     };
 
-    for (const auto& [name, x, approx_expected] : key_points) {
-        float actual = run_gelu_bw_single(*device_, x);
-        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
+    std::vector<KeyPoint> key_points = {
+        {"Zero", 0.0f, 2},
+        {"Positive unity", 1.0f, 3},
+        {"Negative unity", -1.0f, 3},
+        {"Local minimum", -0.751f, 5},  // Derivative ≈ 0, larger relative error expected
+        {"Large positive", 5.0f, 2},
+        {"Large negative", -5.0f, 2},
+    };
+
+    for (const auto& kp : key_points) {
+        float actual = run_gelu_bw_single(*device_, kp.x);
+        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(kp.x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << name << " (x=" << x << "): ";
+        std::cout << kp.name << " (x=" << kp.x << "): ";
         std::cout << "expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << "\n";
+
+        EXPECT_LE(ulp, kp.max_ulp_threshold)
+            << kp.name << " (x=" << kp.x << "): ULP " << ulp << " exceeds threshold " << kp.max_ulp_threshold;
     }
 
     std::cout << "\nExpected behavior:\n";
@@ -741,6 +801,8 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
 
 class GeluBwPolyTest : public TTNNFixtureWithDevice {};
 
+// Correctness guard: same midpoint check as GeluBwUlpTest but against the poly kernel.
+// Verifies GELU'(0) = 0.5 via the polynomial path. Catches broken constant term.
 TEST_F(GeluBwPolyTest, DerivativeAtZero) {
     // GELU'(0) = 0.5
     float actual = run_gelu_bw_single(*device_, 0.0f);
@@ -753,6 +815,9 @@ TEST_F(GeluBwPolyTest, DerivativeAtZero) {
     EXPECT_LE(ulp, 2) << "POLY GELU'(0) should be ~0.5 with low ULP error";
 }
 
+// Correctness guard: tests 24 negative-side points across all 4 implementation regions
+// (core poly, left poly, exp-based, saturation). Each has a per-point ULP threshold.
+// Catches region-boundary bugs or broken polynomial/exp coefficients.
 TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
     // Implementation covers (after Session 34 optimization):
     // - Core region [-3, 3.1719]: degree 16 polynomial
@@ -823,6 +888,9 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
     }
 }
 
+// Precision guard: batches ALL ~65K BF16 values through the poly kernel, tabulates
+// per-ULP-bucket counts and identifies worst-case values. Asserts max ULP <= 10 overall.
+// The definitive poly-kernel precision test — catches any regression anywhere in the range.
 TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     // Comprehensive test: batch all BF16 values and compute GELU backward with polynomial
 
@@ -1005,6 +1073,9 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     std::cout << "      This is acceptable because GELU'(x) is very small (< 0.012) for x < -3.\n";
 }
 
+// Precision guard: per-segment ULP analysis matching the kernel's exact code regions.
+// 5 segments (saturation-low, exp, left-poly, core-poly, saturation-high) each with a
+// tuned ULP threshold. Catches precision regression in any single code path.
 TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     // Detailed per-segment ULP analysis matching exact implementation regions:
     // - x <= -13.375: Saturation to 0
@@ -1161,10 +1232,33 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
               << std::setw(12) << "-" << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x
               << "\n";
     std::cout << "================================================================================\n";
+
+    // Per-segment regression guards matching kernel code paths
+    // Saturation regions must be exact (0 ULP), polynomial/exp regions allow small error
+    std::vector<int> segment_max_ulp_thresholds = {
+        0,  // x <= -13.375: BF16 natural saturation to 0 — must be exact
+        2,  // (-13.375, -5]: exp-based fused x*exp(t)
+        5,  // [-5, -3): LEFT polynomial
+        5,  // [-3, 3.1719): CORE polynomial
+        0,  // x >= 3.1719: saturation to 1 — must be exact
+    };
+
+    for (size_t s = 0; s < segments.size(); ++s) {
+        if (segments[s].count > 0) {
+            EXPECT_LE(segments[s].max_ulp, segment_max_ulp_thresholds[s])
+                << "Segment '" << segments[s].name << "' max ULP " << segments[s].max_ulp << " exceeds threshold "
+                << segment_max_ulp_thresholds[s] << " (worst at x=" << segments[s].worst_x << ")";
+        }
+    }
+
+    EXPECT_LE(overall_max_ulp, 10) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 10"
+                                   << " (worst at x=" << overall_worst_x << ")";
 }
 
 // =============================================================================
-// Exp-Based Region Full Dump: All 70 BF16 values in (-13.375, -9)
+// Precision guard: dumps all ~70 BF16 values in the exp-based region (-13.375, -9).
+// Asserts max ULP <= 2. This region uses fused x*exp(t) with Mills ratio correction —
+// a code path that handles very small magnitudes (1e-10 to 1e-18).
 // =============================================================================
 
 TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
@@ -1265,17 +1359,17 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     std::cout << "  Values with ULP <= 1: " << count_le_1 << " (" << std::setprecision(1)
               << (100.0 * count_le_1 / count) << "%)\n";
     std::cout << "================================================================================\n";
+
+    // Regression guard: exp-based region should be very precise
+    EXPECT_LE(max_ulp, 2) << "Exp-based region (-13.375, -9) max ULP " << max_ulp << " at x=" << worst_x
+                          << " exceeds threshold 2";
 }
 
 // =============================================================================
-// Deep Negative Region Analysis: Why polynomial coverage stops at x = -9
+// Correctness guard: verifies all BF16 values at x <= -13.375 saturate to exactly 0.0.
+// Also documents why polynomial coverage stops at x = -9 (values span 8 orders of
+// magnitude making polynomial fit impractical; saturation to 0 is correct for ML).
 // =============================================================================
-// This test documents why extending polynomial coverage below x = -9 is impractical:
-// 1. Function values span 8 orders of magnitude (1e-18 to 1e-26)
-// 2. Polynomial coefficients would be < 1e-18, causing numerical instability
-// 3. Tested FL3 polynomial: produced Max ULP = 15448 (WORSE than saturation's 8898)
-//
-// Saturation to 0 for x < -9 is acceptable because values are < 9e-18 (irrelevant for ML)
 
 TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
     std::cout << "\n============================================================\n";
@@ -1300,14 +1394,72 @@ TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
     std::cout << "  - Max ULP at saturation boundary: 8898 (at x = -9.062)\n";
     std::cout << "  - This is acceptable: values < 9e-18 are irrelevant for ML training\n";
     std::cout << "============================================================\n";
+
+    // Saturation guard: verify all BF16 values below -13.375 produce exactly 0.0
+    // These values are in the BF16-natural-zero region where GELU'(x) rounds to 0 in BF16
+    std::vector<float> saturation_values;
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK) {
+            continue;  // Skip NaN/Inf
+        }
+        if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+        float x = bf16_ulp_bw::bf16_bits_to_float(bf16_bits);
+        if (x <= -13.375f) {
+            saturation_values.push_back(x);
+        }
+    }
+
+    const size_t sat_count = saturation_values.size();
+    std::cout << "\nSaturation guard: testing " << sat_count << " BF16 values with x <= -13.375\n";
+
+    const size_t tile_size = tt::constants::TILE_HW;
+    size_t padded_size = ((sat_count + tile_size - 1) / tile_size) * tile_size;
+    saturation_values.resize(padded_size, 0.0f);
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    std::vector<::bfloat16> bf16_inputs, bf16_grads;
+    for (float x : saturation_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+        bf16_grads.push_back(::bfloat16(1.0f));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    int nonzero_count = 0;
+    for (size_t i = 0; i < sat_count; ++i) {
+        float actual = static_cast<float>(output_vec[i]);
+        if (actual != 0.0f) {
+            nonzero_count++;
+            if (nonzero_count <= 10) {  // Print first 10 violations
+                std::cout << "  VIOLATION: x=" << saturation_values[i] << " produced " << actual << " (expected 0.0)\n";
+            }
+        }
+    }
+
+    EXPECT_EQ(nonzero_count, 0) << nonzero_count << " of " << sat_count
+                                << " values in x <= -13.375 did not saturate to 0.0";
 }
 
 // =============================================================================
-// GELU Derivative Saturation Threshold Research
+// Correctness guard: verifies BOTH saturation regions — positive (x >= 3.1719 → 1.0)
+// and negative (x <= -13.375 → 0.0). Batches all saturation-region BF16 values through
+// the device and asserts zero violations. Also reports the exact transition thresholds.
 // =============================================================================
-// This test scans all BF16 values to find exact saturation thresholds:
-// - Where GELU'(x) becomes 0 for negative x
-// - Where GELU'(x) becomes 1 for positive x
 
 TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
     std::cout << "\n============================================================\n";
@@ -1493,18 +1645,87 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
     std::cout << "\nNote: GELU'(x) exceeds 1.0 for x in [" << first_gt1_x << ", " << last_gt1_x << "]\n";
     std::cout << "      Polynomial must reproduce this 'hump' accurately.\n";
     std::cout << "============================================================\n";
+
+    // =========================================================================
+    // Saturation guards: verify device produces exact saturation values
+    // =========================================================================
+
+    // Collect all BF16 values in both saturation regions
+    std::vector<float> pos_sat_values;  // x >= 3.1719 → should produce 1.0
+    std::vector<float> neg_sat_values;  // x <= -13.375 → should produce 0.0
+
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & bf16_ulp_bw::BF16_EXP_MASK) == bf16_ulp_bw::BF16_EXP_MASK) {
+            continue;  // Skip NaN/Inf
+        }
+        if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+        float x = bf16_ulp_bw::bf16_bits_to_float(bf16_bits);
+        if (x >= 3.1719f) {
+            pos_sat_values.push_back(x);
+        } else if (x <= -13.375f) {
+            neg_sat_values.push_back(x);
+        }
+    }
+
+    std::cout << "\nSaturation guard: " << pos_sat_values.size() << " positive + " << neg_sat_values.size()
+              << " negative values\n";
+
+    // Helper lambda to test saturation region
+    auto test_saturation = [&](std::vector<float>& values, float expected_val, const std::string& label) {
+        const size_t count = values.size();
+        const size_t tile_size = tt::constants::TILE_HW;
+        size_t padded = ((count + tile_size - 1) / tile_size) * tile_size;
+        values.resize(padded, 0.0f);
+
+        uint32_t nt = static_cast<uint32_t>(padded / tile_size);
+        std::array<uint32_t, 4> d = {1, 1, nt * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+        std::vector<::bfloat16> inputs, grads;
+        for (float x : values) {
+            inputs.push_back(::bfloat16(x));
+            grads.push_back(::bfloat16(1.0f));
+        }
+
+        tt::tt_metal::TensorSpec spec(
+            tt::tt_metal::Shape(d),
+            tt::tt_metal::TensorLayout(
+                DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                tt::tt_metal::MemoryConfig{}));
+
+        auto in_t = tt::tt_metal::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
+        auto gr_t = tt::tt_metal::Tensor::from_vector(std::move(grads), spec).to_device(device_);
+
+        auto res = ttnn::experimental::gelu_bw(gr_t, in_t, "none");
+        auto out = ttnn::from_device(res).to_vector<::bfloat16>();
+
+        int violations = 0;
+        for (size_t i = 0; i < count; ++i) {
+            float actual = static_cast<float>(out[i]);
+            if (actual != expected_val) {
+                violations++;
+                if (violations <= 10) {
+                    std::cout << "  " << label << " VIOLATION: x=" << values[i] << " produced " << actual
+                              << " (expected " << expected_val << ")\n";
+                }
+            }
+        }
+        return violations;
+    };
+
+    int pos_violations = test_saturation(pos_sat_values, 1.0f, "positive");
+    EXPECT_EQ(pos_violations, 0) << pos_violations << " positive-saturation values (x >= 3.1719) did not produce 1.0";
+
+    int neg_violations = test_saturation(neg_sat_values, 0.0f, "negative");
+    EXPECT_EQ(neg_violations, 0) << neg_violations << " negative-saturation values (x <= -13.375) did not produce 0.0";
 }
 
-// Test special IEEE values: +inf, -inf, NaN
-// Ref: nmauriceTT review on PR #36366, tt-llk#675
-// Ref: tech_reports/Handling_Special_Value/special_values.md
-//
-// Per TT hardware docs: "operations not listed [multiply/add/subtract with Inf]
-// will treat NaN/Inf numbers just as any other ordinary number". This means
-// v_if comparisons treat NaN/Inf as ordinary floats by bit pattern:
-//   +inf (0x7F80): large positive → x >= 3.1719 is true → saturates to 1.0
-//   -inf (0xFF80): large negative → all >= comparisons fail → default 0.0
-//   NaN  (0x7FFF): large positive → x >= 3.1719 is true → saturates to 1.0
+// Correctness guard: verifies IEEE special values (+inf, -inf, NaN) per nmauriceTT review.
+// +inf → 1.0, -inf → 0.0, NaN → 1.0 (via v_if comparison treating NaN bit pattern as
+// large positive). Ref: tt-llk#675, tech_reports/Handling_Special_Value/special_values.md.
 TEST_F(GeluBwPolyTest, SpecialValues) {
     float pos_inf = std::numeric_limits<float>::infinity();
     float neg_inf = -std::numeric_limits<float>::infinity();
