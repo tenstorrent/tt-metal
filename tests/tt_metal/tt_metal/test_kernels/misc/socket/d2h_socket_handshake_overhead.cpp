@@ -4,7 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "socket_benchmark_defs.h"
+#include "pcie_noc_utils.h"
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
