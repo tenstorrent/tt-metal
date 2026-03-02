@@ -490,7 +490,14 @@ def import_graph(
         "ttnn::convert_python_tensor_to_tt_tensor",
         "tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor",
         "Tensor::deallocate",
+        "Tensor::to_device",
+        "Tensor::reshape",
+        "tt::tt_metal::to_dtype",
     )
+
+    # from_torch is only filtered in the leading block (model weight loading).
+    # Once any real compute op is seen, subsequent from_torch ops are kept.
+    seen_compute_op = False
 
     # -------------------------------------------------------------------
     # Pre-pass: build lookup tables for tensor nodes.
@@ -532,7 +539,11 @@ def import_graph(
 
         if node_type == "function_start":
             name = params.get("name", "unknown")
-            is_filtered = name.startswith(_FILTERED_OP_PREFIXES)
+            is_prefix_filtered = name.startswith(_FILTERED_OP_PREFIXES)
+            is_leading_from_torch = name == "ttnn.from_torch" and not seen_compute_op
+            is_filtered = is_prefix_filtered or is_leading_from_torch
+            if not is_filtered and real_function_depth == 0 and name != "ttnn.from_torch":
+                seen_compute_op = True
             is_nested = real_function_depth > 0 or is_filtered
 
             # Consume matching Python I/O record (keep queues in sync for
