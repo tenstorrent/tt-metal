@@ -473,6 +473,7 @@ class Glm4MoeAttention(LightweightModule):
         rot_mats=None,
         page_table=None,
         kv_cache=None,
+        active_batch: int | None = None,
     ) -> ttnn.Tensor:
         """Decode forward: single token per sequence.
 
@@ -482,6 +483,8 @@ class Glm4MoeAttention(LightweightModule):
             rot_mats: (cos, sin) rotation matrices for RoPE
             page_table: page table tensor for paged KV cache
             kv_cache: [keys, values] external KV cache tensors
+            active_batch: Actual logical batch size (from model_tt, not x.shape which
+                may be tile-padded by ttnn.add / sharded_to_interleaved)
 
         Returns:
             Output tensor [1, 1, batch, hidden_size=5120]
@@ -504,8 +507,10 @@ class Glm4MoeAttention(LightweightModule):
         # Column-parallel QKV: each device has its own output slice, no all-reduce needed.
         xqkv = ttnn.to_memory_config(xqkv, ttnn.DRAM_MEMORY_CONFIG)
 
-        # True logical batch from input
-        active_batch = int(x.shape[-2])
+        # Use caller-provided active_batch (reliable) instead of x.shape[-2] which
+        # can be inflated to 32 by tile-padding in ttnn.add / sharded_to_interleaved.
+        if active_batch is None:
+            active_batch = int(x.shape[-2])
         dp_size = self.num_device_groups  # 4 for TG
         tg_batch_sliced = self.TG and active_batch > 1 and active_batch % dp_size == 0
 
@@ -819,6 +824,7 @@ class Glm4MoeAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        active_batch: int | None = None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -837,6 +843,7 @@ class Glm4MoeAttention(LightweightModule):
                 rot_mats,
                 page_table=page_table,
                 kv_cache=kv_cache,
+                active_batch=active_batch,
             )
 
     def _prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):

@@ -610,6 +610,7 @@ class Glm4MoeTT:
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(
                 x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
+                active_batch=active,
             )
             ttnn.deallocate(x, force=False)
             x = x_next
@@ -902,7 +903,8 @@ class Glm4MoeTT:
         # Run forward once (compile) before trace capture.
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
-            x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode")
+            x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
+                                active_batch=active)
             ttnn.deallocate(x, force=False)
             x = x_next
 
@@ -963,7 +965,8 @@ class Glm4MoeTT:
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
-            x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode")
+            x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
+                                active_batch=active)
             ttnn.deallocate(x, force=False)
             x = x_next
 

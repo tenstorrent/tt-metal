@@ -173,6 +173,7 @@ class Glm4MoeDecoderLayer:
         page_table: ttnn.Tensor,
         kv_cache: list[ttnn.Tensor],
         mode: str = "decode",
+        active_batch: int | None = None,
     ) -> ttnn.Tensor:
         """Forward pass for one decoder layer.
 
@@ -183,12 +184,14 @@ class Glm4MoeDecoderLayer:
             page_table: Paged KV cache page table.
             kv_cache: [cache_k, cache_v] for this layer.
             mode: "decode" or "prefill".
+            active_batch: True logical batch size (avoids relying on x.shape which
+                may be tile-padded by ttnn ops).
 
         Returns:
             Updated hidden states, same shape as input.
         """
         if mode == "decode":
-            return self._forward_decode(x, current_pos, rot_mats, page_table, kv_cache)
+            return self._forward_decode(x, current_pos, rot_mats, page_table, kv_cache, active_batch=active_batch)
         else:
             return self._forward_prefill(x, current_pos, rot_mats, page_table, kv_cache)
 
@@ -199,6 +202,7 @@ class Glm4MoeDecoderLayer:
         rot_mats: Any,
         page_table: ttnn.Tensor,
         kv_cache: list[ttnn.Tensor],
+        active_batch: int | None = None,
     ) -> ttnn.Tensor:
         """Decode forward: batch in dim=2, seq_len=1 per token."""
         w = self.layer_weights
@@ -228,6 +232,7 @@ class Glm4MoeDecoderLayer:
         # ---- GQA Attention ----
         attn_out = self.attention.forward(
             h, current_pos, rot_mats, mode="decode", page_table=page_table, kv_cache=kv_cache,
+            active_batch=active_batch,
         )
 
         # ---- Residual ----
