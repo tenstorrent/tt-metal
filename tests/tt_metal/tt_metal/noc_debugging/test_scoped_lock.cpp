@@ -506,4 +506,159 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
     }
 }
 
+TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToLockedIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+
+        const CoreCoord core = {0, 0};
+        Program program = CreateProgram();
+        distributed::MeshWorkload workload;
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+
+        uint32_t lock_addr = unreserved_addr;
+        uint32_t num_elements = 8;
+        uint32_t src_buffer_addr = unreserved_addr + (alignment * 32);
+        uint32_t write_target_addr = lock_addr;
+        uint32_t write_size = num_elements * sizeof(uint32_t);
+
+        auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+        KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_self_write_kernel.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {lock_addr, num_elements, src_buffer_addr, write_target_addr, write_size, virtual_core.x, virtual_core.y});
+
+        workload.add_program(device_range, std::move(program));
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        std::vector<NOCDebugIssueType> locked_issues;
+        for (IDevice* device : mesh_device->get_devices()) {
+            auto issues = this->get_write_to_locked_issues(device->id(), virtual_core, 0);
+            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
+        }
+        ASSERT_FALSE(locked_issues.empty())
+            << "Expected write-to-locked issue when kernel writes to its own locked region";
+
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
+            EXPECT_EQ(issue.issue_address, write_target_addr);
+            EXPECT_EQ(issue.issue_size, write_size);
+            EXPECT_EQ(issue.src_x, virtual_core.x);
+            EXPECT_EQ(issue.src_y, virtual_core.y);
+            EXPECT_EQ(issue.dst_x, virtual_core.x);
+            EXPECT_EQ(issue.dst_y, virtual_core.y);
+        }
+    }
+}
+
+TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+
+        const CoreCoord core = {0, 0};
+        Program program = CreateProgram();
+        distributed::MeshWorkload workload;
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+
+        uint32_t lock_addr = unreserved_addr;
+        uint32_t num_elements = 8;
+        uint32_t src_buffer_addr = unreserved_addr + (alignment * 32);
+        uint32_t write_target_addr = unreserved_addr + (alignment * 16);
+        uint32_t write_size = num_elements * sizeof(uint32_t);
+
+        auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+        KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_self_write_kernel.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {lock_addr, num_elements, src_buffer_addr, write_target_addr, write_size, virtual_core.x, virtual_core.y});
+
+        workload.add_program(device_range, std::move(program));
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        for (IDevice* device : mesh_device->get_devices()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
+                << "Unexpected write-to-locked issue; NOC write targeted an unlocked region.";
+        }
+    }
+}
+
+TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+
+        const CoreCoord core = {0, 0};
+        Program program = CreateProgram();
+        distributed::MeshWorkload workload;
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+        uint32_t lock_addr = unreserved_addr;
+        uint32_t num_elements = 8;
+
+        auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+        KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_only_kernel.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(program, kernel, core, {lock_addr, num_elements});
+
+        workload.add_program(device_range, std::move(program));
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        for (IDevice* device : mesh_device->get_devices()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
+                << "Unexpected write-to-locked issue; kernel only locked and unlocked with no NOC writes.";
+        }
+    }
+}
+
 }  // namespace tt::tt_metal
