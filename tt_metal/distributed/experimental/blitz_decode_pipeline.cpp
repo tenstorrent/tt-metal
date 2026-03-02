@@ -18,7 +18,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
-namespace tt::tt_metal::experimental::distributed {
+namespace tt::tt_metal::experimental::blitz {
 
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
@@ -509,4 +509,4 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(const distr
     return build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 }
 
-}  // namespace tt::tt_metal::experimental::distributed
+}  // namespace tt::tt_metal::experimental::blitz
