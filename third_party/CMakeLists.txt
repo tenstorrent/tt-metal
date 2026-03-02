@@ -146,6 +146,9 @@ if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+    # Disable reflect's built-in static_assert self-tests.  They use unqualified
+    # `detail::` which is ambiguous when fmt::detail is also in scope.
+    target_compile_definitions(reflect INTERFACE NTEST)
 
     target_sources(
         reflect
