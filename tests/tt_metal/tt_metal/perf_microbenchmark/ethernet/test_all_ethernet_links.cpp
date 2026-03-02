@@ -19,7 +19,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
@@ -29,6 +28,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 #include <thread>
 #include "impl/context/metal_context.hpp"

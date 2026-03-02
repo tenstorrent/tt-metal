@@ -74,7 +74,8 @@ private:
     bool enable_2_erisc_mode_;
 
 public:
-    HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
+    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
+        HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
     std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
 
@@ -419,23 +420,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
-
-    this->verify_eth_fw_version_func_ = [=](tt::umd::semver_t fw_version) {
-        if (enable_2_erisc_mode) {
-            tt::umd::semver_t min_version(1, 7, 0);
-            if (!(fw_version >= min_version)) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
-                    "{}. Automatically falling back to single erisc mode for compatibility.",
-                    min_version.to_string(),
-                    fw_version.to_string());
-                return false;
-            }
-        }
-        return true;
-    };
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode);
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();

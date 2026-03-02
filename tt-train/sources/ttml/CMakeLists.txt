@@ -61,6 +61,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
@@ -120,6 +121,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.cpp
+    # Softmax Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/softmax_backward.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax_backward/device/softmax_backward_program_factory.cpp
     # ProfilerNoOp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
@@ -286,6 +291,15 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
+# Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
+# Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
+target_compile_options(
+    ttml
+    PRIVATE
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+)
+
 target_link_libraries(
     ttml
     PUBLIC
@@ -349,15 +363,50 @@ message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
+##################################################
+# Precompiled headers for ttml
+# The ttml library includes massive TTNN/Metalium headers across 100+ source files.
+# Precompiling them once dramatically reduces compile time.
+##################################################
+
+target_precompile_headers(
+    ttml
+    PRIVATE
+        # Standard library headers (widely used across tt-train)
+        <algorithm>
+        <cmath>
+        <cstdint>
+        <cstring>
+        <functional>
+        <memory>
+        <optional>
+        <span>
+        <stdexcept>
+        <string>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        # Third-party headers
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <enchantum/enchantum.hpp>
+        # Heavy TTNN/Metalium umbrella headers used across tt-train sources
+        "core/ttnn_all_includes.hpp"
+        "metal/ttnn_all_includes.hpp"
+)
+
 if(ENABLE_LIBCXX)
     target_link_libraries(
+        ttml
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
 endif()
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+target_compile_definitions(ttml PUBLIC TOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
 set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")

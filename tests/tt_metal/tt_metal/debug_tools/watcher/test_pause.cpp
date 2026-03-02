@@ -23,6 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -136,7 +137,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
-            for (const auto& risc_str : {" brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
+            for (const auto& risc_str : {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"}) {
                 std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }

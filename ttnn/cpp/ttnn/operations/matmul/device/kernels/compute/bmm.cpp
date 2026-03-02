@@ -22,7 +22,11 @@ void kernel_main() {
     uint32_t Kt = get_compile_time_arg_val(2);
     uint32_t Nt = get_compile_time_arg_val(3);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+
+    mm_init(cb_in0, cb_in1, cb_out);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -32,18 +36,18 @@ void kernel_main() {
             {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
-                    cb_wait_front(tt::CBIndex::c_0, onetile);
-                    cb_wait_front(tt::CBIndex::c_1, onetile);
+                    cb_wait_front(cb_in0, onetile);
+                    cb_wait_front(cb_in1, onetile);
 
-                    matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                    matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
-                    cb_pop_front(tt::CBIndex::c_0, onetile);
-                    cb_pop_front(tt::CBIndex::c_1, onetile);
+                    cb_pop_front(cb_in0, onetile);
+                    cb_pop_front(cb_in1, onetile);
                 }
 
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
-                pack_tile(0, tt::CBIndex::c_16);
-                cb_push_back(tt::CBIndex::c_16, onetile);
+                cb_reserve_back(cb_out, onetile);
+                pack_tile(0, cb_out);
+                cb_push_back(cb_out, onetile);
 
                 release_dst();
             }

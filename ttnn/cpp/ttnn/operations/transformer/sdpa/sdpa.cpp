@@ -170,7 +170,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const CoreCoord ccl_core_grid_offset,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -192,7 +193,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         ccl_core_grid_offset,
         subdevice_id,
         scale,
-        compute_kernel_config);
+        compute_kernel_config,
+        core_allocation_strategy);
     return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
 }
 
@@ -200,6 +202,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
@@ -215,7 +218,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
-        std::nullopt,  // V is implied by K in MLA mode
+        input_tensor_v,
         attn_mask,
         std::nullopt,  // page_table
         std::nullopt,  // attention_sink

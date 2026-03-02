@@ -269,7 +269,8 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 #endif
 }
 
-void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
+bool socket_wait_for_pages(
+    const SocketReceiverInterface& socket, uint32_t num_pages, uint32_t early_exit_iter_count = 0) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
@@ -279,11 +280,18 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
+    uint32_t iter_count = 0;
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
+        iter_count++;
+        if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
+            return false;
+        }
     } while (bytes_recv < num_bytes);
+    return true;
 #endif
+    return true;
 }
 
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
@@ -346,7 +354,7 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
-void socket_notify_sender(const SocketReceiverInterface& socket) {
+void socket_notify_sender(const SocketReceiverInterface& socket, uint8_t noc = noc_index) {
     if (socket.is_h2d) {
         volatile tt_l1_ptr receiver_socket_md* socket_config =
             reinterpret_cast<volatile tt_l1_ptr receiver_socket_md*>(socket.config_addr);
@@ -354,13 +362,13 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
         uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
         uint64_t pcie_addr = (static_cast<uint64_t>(socket.h2d.bytes_acked_addr_hi) << 32) |
                              static_cast<uint64_t>(socket.h2d.bytes_acked_addr_lo);
-        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
+            noc, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
     } else {
         auto upstream_bytes_acked_noc_addr =
             get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
-        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked, 0xF, noc);
     }
 }
 

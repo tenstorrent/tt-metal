@@ -92,7 +92,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -137,7 +137,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1024, W = 1024U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -182,7 +182,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -231,7 +231,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 64, W = 128000U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -273,12 +273,10 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
-    // Skip with watcher enabled due to failure github issue #37193
-    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);

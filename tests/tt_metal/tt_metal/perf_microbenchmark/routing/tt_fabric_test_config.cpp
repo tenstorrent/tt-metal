@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_config.hpp"
 #include <optional>
 #include <variant>
@@ -427,7 +428,34 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
             config);
     }
 
+    if (fabric_setup_yaml["enable_channel_trimming"]) {
+        fabric_setup.enable_channel_trimming = parse_scalar<bool>(fabric_setup_yaml["enable_channel_trimming"]);
+    }
+
     return fabric_setup;
+}
+
+std::vector<ParsedTestConfig> expand_channel_trimming(std::vector<ParsedTestConfig> configs) {
+    std::vector<ParsedTestConfig> expanded;
+    expanded.reserve(configs.size() * 2);
+
+    for (auto& config : configs) {
+        if (config.fabric_setup.enable_channel_trimming) {
+            auto capture_config = config;
+            capture_config.channel_trimming_mode = ChannelTrimmingMode::CAPTURE;
+            capture_config.parametrized_name = config.name + "_capture";
+
+            auto replay_config = config;
+            replay_config.channel_trimming_mode = ChannelTrimmingMode::REPLAY;
+            replay_config.parametrized_name = config.name + "_replay";
+
+            expanded.push_back(std::move(capture_config));
+            expanded.push_back(std::move(replay_config));
+        } else {
+            expanded.push_back(std::move(config));
+        }
+    }
+    return expanded;
 }
 
 PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {
@@ -993,6 +1021,7 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
     resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
+    resolved_test.channel_trimming_mode = parsed_test.channel_trimming_mode;
 
     if (parsed_test.defaults.has_value()) {
         resolved_test.defaults = resolve_traffic_pattern(parsed_test.defaults.value());
@@ -1221,6 +1250,10 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
 
         // After expansion and resolution, apply universal transformations like mcast splitting.
         split_all_unicast_or_multicast_patterns(iteration_test);
+
+        // In benchmark mode, ensure each sender feeds exactly one fabric connection
+        // by splitting senders with patterns going to different routing directions.
+        split_senders_by_direction_for_benchmark(iteration_test);
 
         // Convert to resolved TestConfig
         TestConfig resolved_test = resolve_test_config(iteration_test, i);
@@ -2072,6 +2105,63 @@ void TestConfigBuilder::split_all_unicast_or_multicast_patterns(ParsedTestConfig
     }
 }
 
+void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfig& test) {
+    if (test.performance_test_mode != PerformanceTestMode::BANDWIDTH) {
+        return;
+    }
+
+    std::vector<ParsedSenderConfig> new_senders;
+    new_senders.reserve(test.senders.size());
+
+    for (const auto& sender : test.senders) {
+        if (sender.patterns.size() <= 1) {
+            new_senders.push_back(sender);
+            continue;
+        }
+
+        // Resolve the sender device to FabricNodeId for direction lookups
+        FabricNodeId src_node = resolve_device_identifier(sender.device, device_info_provider_);
+
+        // Group patterns by their outgoing routing direction
+        std::map<RoutingDirection, std::vector<ParsedTrafficPatternConfig>> direction_groups;
+        for (const auto& pattern : sender.patterns) {
+            RoutingDirection dir;
+            if (pattern.destination.has_value() && pattern.destination->hops.has_value()) {
+                dir = route_manager_.get_forwarding_direction(pattern.destination->hops.value());
+            } else if (pattern.destination.has_value() && pattern.destination->device.has_value()) {
+                FabricNodeId dst_node =
+                    resolve_device_identifier(pattern.destination->device.value(), device_info_provider_);
+                dir = route_manager_.get_forwarding_direction(src_node, dst_node);
+            } else {
+                TT_THROW("Cannot determine routing direction for pattern without destination hops or device");
+            }
+            direction_groups[dir].push_back(pattern);
+        }
+
+        if (direction_groups.size() <= 1) {
+            // All patterns go the same direction — no split needed
+            new_senders.push_back(sender);
+        } else {
+            log_debug(
+                LogTest,
+                "Benchmark mode: splitting sender on device {} into {} senders (one per direction)",
+                src_node,
+                direction_groups.size());
+            for (auto& [dir, patterns] : direction_groups) {
+                ParsedSenderConfig split_sender;
+                split_sender.device = sender.device;
+                split_sender.core = sender.core;
+                split_sender.noc_id = sender.noc_id;
+                split_sender.link_id = sender.link_id;
+                split_sender.patterns = std::move(patterns);
+                new_senders.push_back(std::move(split_sender));
+            }
+        }
+    }
+
+    test.senders = std::move(new_senders);
+}
+
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {
     // If num_links is 1, no duplication needed
     if (test.fabric_setup.num_links <= 1) {
@@ -2455,6 +2545,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     }
     out << YAML::Key << "num_links";
     out << YAML::Value << config.num_links;
+    if (config.enable_channel_trimming) {
+        out << YAML::Key << "enable_channel_trimming" << YAML::Value << true;
+    }
     out << YAML::EndMap;
 }
 

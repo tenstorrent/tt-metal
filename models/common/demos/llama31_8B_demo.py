@@ -41,6 +41,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -48,7 +49,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams
+from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 # =============================================================================
@@ -652,7 +653,7 @@ def test_mlp1d_llama_demo(
             out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
         # Decode forward
-        logits, _ = generator.decode_forward_text(
+        logits, _ = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=not measure_accuracy,  # Disable trace for accuracy (teacher forcing)

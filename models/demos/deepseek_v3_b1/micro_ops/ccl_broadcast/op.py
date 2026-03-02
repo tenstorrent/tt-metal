@@ -45,7 +45,8 @@ class DeepseekMinimalBroadcast:
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
-        using_persistent_buffers=True,
+        num_iterations=1,
+        is_torus=False,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -57,7 +58,6 @@ class DeepseekMinimalBroadcast:
             cluster_axis: Primary axis for broadcast (default 0)
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
             num_links: Number of links to use (default 1)
-            using_persistent_buffers: Whether to use persistent buffers (default True)
         Returns:
             Output tensor with broadcast data on all devices
         """
@@ -139,36 +139,37 @@ class DeepseekMinimalBroadcast:
                 ring_size = mesh_rows
                 ring_index = row
 
-                # For Linear topology, calculate forward and backward targets
-                num_targets_forward = ring_size - ring_index - 1
-                num_targets_backward = ring_index
+                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1 and is_torus
+
+                if enable_torus:
+                    num_targets_forward = (ring_size - 1) // 2
+                    num_targets_backward = ring_size - 1 - num_targets_forward
+                else:
+                    # Linear topology
+                    num_targets_forward = ring_size - ring_index - 1
+                    num_targets_backward = ring_index
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-                has_reverse_secondary_connection = is_secondary_sender
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
                 range_hops_forward = num_targets_forward
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
+                num_pages_to_read = input_num_pages
 
                 # Reader named compile-time args
                 reader_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
-                    ("packet_size_in_pages", num_pages_per_packet),
-                    ("tensor0_page_size", page_size_bytes),
+                    ("num_pages_to_read", num_pages_to_read),
                     ("is_sender", 1 if is_sender else 0),
-                    ("core_noc_x", core_noc_x),
-                    ("core_noc_y", core_noc_y),
-                    ("is_secondary_sender", 1 if is_secondary_sender else 0),
-                    ("is_active_broadcaster", 1 if (is_sender or is_secondary_sender) else 0),
                 ]
 
                 # Writer named compile-time args
                 writer_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
-                    ("packet_size_in_pages", num_pages_per_packet),
+                    ("num_pages_to_read", num_pages_to_read),
                     ("tensor0_page_size", page_size_bytes),
                     ("num_targets_forward_direction", num_targets_forward),
                     ("num_targets_backward_direction", num_targets_backward),
@@ -177,12 +178,10 @@ class DeepseekMinimalBroadcast:
                     ("core_noc_y", core_noc_y),
                     ("is_secondary_sender", 1 if is_secondary_sender else 0),
                     ("has_secondary_target", 1 if has_secondary_target else 0),
-                    ("has_reverse_secondary_connection", 1 if has_reverse_secondary_connection else 0),
                     ("start_distance_in_hops_forward", start_distance_forward),
                     ("range_hops_forward", range_hops_forward),
                     ("start_distance_in_hops_backward", start_distance_backward),
                     ("range_hops_backward", range_hops_backward),
-                    ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
                 ]
 
                 union_named_compile_time_args = []
@@ -191,6 +190,7 @@ class DeepseekMinimalBroadcast:
                     if name not in _seen_ct:
                         _seen_ct.add(name)
                         union_named_compile_time_args.append((name, val))
+                union_named_compile_time_args.append(("num_iterations", num_iterations))
 
                 # Determine fabric connections
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -198,31 +198,30 @@ class DeepseekMinimalBroadcast:
 
                 # Primary axis connections (forward and backward in column)
                 if num_targets_forward > 0:
-                    forward_coord = ttnn.MeshCoordinate(row + 1, col)
+                    if enable_torus and sender_row == mesh_rows - 1 and row == sender_row:
+                        # Sender at row 3: forward wraps to row 0
+                        forward_coord = ttnn.MeshCoordinate(0, col)
+                    else:
+                        forward_coord = ttnn.MeshCoordinate((row + 1) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
 
                 if num_targets_backward > 0:
-                    backward_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if enable_torus and sender_row == 0 and row == sender_row:
+                        # Sender at row 0: backward wraps to row 3
+                        backward_coord = ttnn.MeshCoordinate(mesh_rows - 1, col)
+                    else:
+                        backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
 
                 # Secondary axis connection (for sender to secondary sender)
                 if has_secondary_target:
-                    secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
+                    secondary_col = (
+                        1 if sender_col == 0 else 0
+                    )  # If sender is in col 0, secondary target is col 1, and vice versa
+                    secondary_coord = ttnn.MeshCoordinate(row, secondary_col)  # Other column
                     dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
-                # Reverse secondary connection (for secondary sender back to sender)
-                if has_reverse_secondary_connection:
-                    sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                    dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
-
                 num_connections = len(dst_nodes)
-
-                # Common runtime args for reader
-                reader_common_rt_args = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    0,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
 
                 # Writer runtime args - moved to common args since CCL only uses one core
                 wait_output_semaphore = is_secondary_sender or is_receiver
@@ -232,8 +231,6 @@ class DeepseekMinimalBroadcast:
                 writer_common_rt_args = [
                     int(output_tensor_device.buffer_address()),  # tensor_address0
                     int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                    0,  # tile_id_start
-                    input_num_pages,  # tile_id_end
                     int(wait_output_semaphore),  # wait_output_semaphore
                     int(reset_global_semaphore),  # reset_global_semaphore
                     core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
@@ -248,28 +245,17 @@ class DeepseekMinimalBroadcast:
                 ]
 
                 # Create CB config
-                cb_config = ttnn.CBFormatDescriptor(
-                    buffer_index=src0_cb_index,
-                    data_format=dtype,
-                    page_size=page_size_bytes,
-                )
-                cb_desc = ttnn.CBDescriptor(
-                    total_size=num_pages_per_packet * page_size_bytes,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[cb_config],
-                )
-
+                cb_desc = ttnn.cb_descriptor_from_sharded_tensor(src0_cb_index, input_tensor_device)
                 # Create unified kernel descriptor for CCL broadcast
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=ccl_kernel_path,
                     core_ranges=worker_core_set,
                     ncrisc_named_compile_time_args=union_named_compile_time_args,
                     brisc_named_compile_time_args=union_named_compile_time_args,
-                    ncrisc_common_runtime_args=reader_common_rt_args,
-                    brisc_common_runtime_args=writer_common_rt_args,
-                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    ncrisc_common_runtime_args=writer_common_rt_args,
+                    # Per-core runtime args: empty for NCRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
@@ -280,16 +266,16 @@ class DeepseekMinimalBroadcast:
                     cbs=[cb_desc],
                 )
 
-                # Append fabric connection args to BRISC kernel if needed
+                # Append fabric connection args to NCRISC kernel if needed
                 # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if num_connections > 0:
-                    writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
+                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
                         fabric_node_id,
                         dst_nodes,
                         [0],
                         program,
-                        1,  # kernel_idx (writer kernel)
+                        0,  # kernel_idx (writer kernel)
                         worker_core,
                     )
                     writer_rt_args_ref.extend(fabric_args)

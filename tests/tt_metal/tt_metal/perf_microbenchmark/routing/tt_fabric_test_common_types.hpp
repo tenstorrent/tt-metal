@@ -128,6 +128,9 @@ enum class HighLevelTrafficPattern {
     SequentialAllToAll,
 };
 
+// Channel trimming mode for test config expansion
+enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
@@ -135,6 +138,7 @@ struct TestFabricSetup {
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
     std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
+    bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
 };
 
 struct HighLevelPatternConfig {
@@ -167,6 +171,7 @@ struct ParsedTestConfig {
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
     bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
+    ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE;
 };
 
 struct TestConfig {
@@ -192,6 +197,7 @@ struct TestConfig {
     bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
+    ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE;
 };
 
 // Latency test results structure (parallel to bandwidth results)
