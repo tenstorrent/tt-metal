@@ -547,8 +547,9 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
     static constexpr std::string_view inline_source_string = "Inline source";
     detail::KernelMeta result{
         .name = this->kernel_full_name_,
-        .source = this->kernel_src_.source_type_ == KernelSource::SourceType::SOURCE_CODE ? inline_source_string
-                                                                                          : this->kernel_src_.source_,
+        .source = this->kernel_src_.source_type_ == KernelSource::SourceType::SOURCE_CODE
+                      ? inline_source_string
+                      : std::string_view{this->kernel_src_.source_},
         .processor_class = get_kernel_processor_class(),
         .programmable_core_type = get_kernel_programmable_core_type(),
     };
