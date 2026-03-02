@@ -24,18 +24,27 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vUInt mantissa = reinterpret<sfpi::vUInt>(sfpi::exman8(in));
-        sfpi::vInt exponent = sfpi::exexp(in);
-        mantissa = sfpi::shft(mantissa, -(23 - exponent));
-        v_if(in < sfpi::vConst0) {
-            mantissa = ~mantissa + 1;
-            mantissa += 256;
-        };
-        v_endif;
-        mantissa &= 0xFF;
-        sfpi::dst_reg[0] = mantissa;
-        sfpi::dst_reg++;
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        // exponent = exexp(in)
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+        // mantissa = exman8(in)
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        // exponent -= 23  →  shift amount = exponent - 23
+        TTI_SFPIADD(-23 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // mantissa = mantissa >> (23 - exponent)
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        // LaneEnabled = in < 0
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // mantissa = ~mantissa + 1  (two's complement)
+        TTI_SFPIADD(
+            0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        // mantissa += 256
+        TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
+        // mantissa &= 0xFF
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
     }
 }
 
@@ -160,7 +169,9 @@ inline void init_typecast_fp32_to_uint16() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_fp32_to_uint8() {}
+inline void init_typecast_fp32_to_uint8() {
+    sfpi::vConstIntPrgm0 = 0xFF;
+}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
