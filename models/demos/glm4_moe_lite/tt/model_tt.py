@@ -2214,10 +2214,8 @@ class Glm4MoeLiteDenseOnlyTT:
         sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)
         cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, state.mtp_rope_sharded_mem_config)
         sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, state.mtp_rope_sharded_mem_config)
-        ttnn.copy(cos_decode_sharded, state.mtp_cos_batch_tt)
-        ttnn.copy(sin_decode_sharded, state.mtp_sin_batch_tt)
-        cos_batch = state.mtp_cos_batch_tt
-        sin_batch = state.mtp_sin_batch_tt
+        cos_batch = cos_decode_sharded
+        sin_batch = sin_decode_sharded
         trans_matrix = state.mtp_trans_matrix_tt
 
         # 5. Run MTP decoder layer 47
@@ -2279,10 +2277,8 @@ class Glm4MoeLiteDenseOnlyTT:
         sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)  # [1,B,1,D]
         cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, state.rope_sharded_mem_config)
         sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, state.rope_sharded_mem_config)
-        ttnn.copy(cos_decode_sharded, state.cos_batch_tt)
-        ttnn.copy(sin_decode_sharded, state.sin_batch_tt)
-        cos_batch = state.cos_batch_tt
-        sin_batch = state.sin_batch_tt
+        cos_batch = cos_decode_sharded
+        sin_batch = sin_decode_sharded
         trans_matrix = state.trans_matrix_tt
         hidden = int(self.hparams.hidden_size)
         # Match DeepSeek trace pattern: embed tokens *inside* the trace graph.

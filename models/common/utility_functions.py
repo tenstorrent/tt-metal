@@ -9,7 +9,10 @@ import time
 from typing import Union
 
 import numpy as np
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
 import torch
 from loguru import logger
 from ttnn.device import Arch
