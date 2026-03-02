@@ -14,7 +14,7 @@ import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
 def get_image_features(vision_tower, projector, input_tensor, image_sizes):
@@ -26,7 +26,6 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     return image_features
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -69,7 +68,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
-    reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
+    reference_output = get_image_features(reference_model, reference_mmp, input_tensor.float(), image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
     tt_ccl = TT_CCL(mesh_device=mesh_device)
@@ -82,7 +81,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]
