@@ -190,8 +190,7 @@ class AttentionBlock:
         sdpa_input_l_mesh,
         sdpa_input_ms_mesh,
         sdpa_output_l_mesh,
-        sdpa_r1_recv_mesh,
-        sdpa_r2_recv_mesh,
+        sdpa_intermediate_recv_mesh,
         sdpa_forwarder_scratch_mesh,
         sdpa_per_device_chunk_size,
         attention_block_output_tensor,
@@ -834,15 +833,12 @@ class AttentionBlock:
         # SDPA CB indices (14-24, after existing CBs 0-13)
         sdpa_cb_local_l = 14
         sdpa_cb_local_ms = 15
-        sdpa_cb_r1_neighbor_l = 16
-        sdpa_cb_r1_neighbor_ms = 17
+        sdpa_cb_neighbor_l = 16
+        sdpa_cb_neighbor_ms = 17
         sdpa_cb_r1_result_l = 18
         sdpa_cb_r1_result_ms = 19
-        sdpa_cb_r2_neighbor_l = 20
-        sdpa_cb_r2_neighbor_ms = 21
-        sdpa_cb_l_out = 22
-        sdpa_cb_ms_out = 23
-        sdpa_cb_packet_slot = 24
+        sdpa_cb_l_out = 20
+        sdpa_cb_packet_slot = 21
 
         matmul4_in0_cb = 44  # Matmul4 input (kv_b2 grid)
         matmul4_in1_cb = 45  # Matmul4 weights (kv_b2 grid)
@@ -1641,10 +1637,8 @@ class AttentionBlock:
                 # SDPA CB indices
                 ("sdpa_cb_local_l", sdpa_cb_local_l),
                 ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
-                ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
+                ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                 # SDPA tile/chunk sizes
                 ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
                 ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
@@ -1780,14 +1774,11 @@ class AttentionBlock:
                 # SDPA CB indices
                 ("sdpa_cb_local_l", sdpa_cb_local_l),
                 ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
+                ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                 ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                 ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
                 ("sdpa_cb_l_out", sdpa_cb_l_out),
-                ("sdpa_cb_ms_out", sdpa_cb_ms_out),
                 # SDPA compute params
                 ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                 ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
@@ -2716,8 +2707,7 @@ class AttentionBlock:
                 sdpa_input_l_device = ttnn.get_device_tensors(sdpa_input_l_mesh)[device_idx]
                 sdpa_input_ms_device = ttnn.get_device_tensors(sdpa_input_ms_mesh)[device_idx]
                 sdpa_output_l_device = ttnn.get_device_tensors(sdpa_output_l_mesh)[device_idx]
-                sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
 
                 # CB 14: SDPA local L (aliased to input tensor)
                 sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2731,29 +2721,22 @@ class AttentionBlock:
                 )
                 post_sdpa_cb_list.append(sdpa_local_ms_cb_descriptor)
 
-                # CB 16: SDPA R1 neighbor L (aliased to R1 recv buffer)
+                # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
                 # The recv buffer holds both L and MS data, but this CB should only
                 # cover the L portion. Override total_size like the original op does.
-                sdpa_r1_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    sdpa_cb_r1_neighbor_l, sdpa_r1_recv_device
+                sdpa_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    sdpa_cb_neighbor_l, sdpa_intermediate_recv_device
                 )
-                sdpa_r1_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                post_sdpa_cb_list.append(sdpa_r1_neighbor_l_cb_descriptor)
+                sdpa_neighbor_l_cb_descriptor.total_size = 2 * sdpa_l_tiles_per_worker * sdpa_l_tile_size
+                post_sdpa_cb_list.append(sdpa_neighbor_l_cb_descriptor)
 
                 # CB 17: SDPA R1 neighbor MS (scratch, not backed by tensor)
                 # Must use sdpa_tile (e.g., 8x32) to match MS input tensor tile format
-                sdpa_r1_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=sdpa_cb_r1_neighbor_ms,
-                    data_format=data_format,
-                    page_size=sdpa_ms_tile_size,
-                    tile=ttnn.TileDescriptor(sdpa_tile),
+                sdpa_neighbor_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    sdpa_cb_neighbor_ms, sdpa_intermediate_recv_device
                 )
-                sdpa_r1_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=sdpa_ms_tile_size,
-                    core_ranges=sdpa_worker_grid,
-                    format_descriptors=[sdpa_r1_neighbor_ms_cb_format],
-                )
-                post_sdpa_cb_list.append(sdpa_r1_neighbor_ms_cb_descriptor)
+                sdpa_neighbor_ms_cb_descriptor.total_size = 2 * sdpa_ms_tile_size
+                post_sdpa_cb_list.append(sdpa_neighbor_ms_cb_descriptor)
 
                 # CB 18: SDPA R1 result L (scratch, reused for scatter)
                 # Use actual tile from SDPA input tensor (e.g., 8x32), not hardcoded 32x32
@@ -2785,49 +2768,11 @@ class AttentionBlock:
                 )
                 post_sdpa_cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
-                # CB 20: SDPA R2 neighbor L (aliased to R2 recv buffer)
-                # Same total_size override as R1 neighbor L - only cover L portion.
-                sdpa_r2_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    sdpa_cb_r2_neighbor_l, sdpa_r2_recv_device
-                )
-                sdpa_r2_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                post_sdpa_cb_list.append(sdpa_r2_neighbor_l_cb_descriptor)
-
-                # CB 21: SDPA R2 neighbor MS (scratch)
-                # Must use sdpa_tile to match MS input tensor tile format
-                sdpa_r2_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=sdpa_cb_r2_neighbor_ms,
-                    data_format=data_format,
-                    page_size=sdpa_ms_tile_size,
-                    tile=ttnn.TileDescriptor(sdpa_tile),
-                )
-                sdpa_r2_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=sdpa_ms_tile_size,
-                    core_ranges=sdpa_worker_grid,
-                    format_descriptors=[sdpa_r2_neighbor_ms_cb_format],
-                )
-                post_sdpa_cb_list.append(sdpa_r2_neighbor_ms_cb_descriptor)
-
-                # CB 22: SDPA L output (aliased to output tensor)
+                # CB 20: SDPA L output (aliased to output tensor)
                 sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sdpa_cb_l_out, sdpa_output_l_device)
                 post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
-                # CB 23: SDPA MS output (scratch, only used for R1 intermediate)
-                # Must use sdpa_tile to match MS input tensor tile format
-                sdpa_ms_out_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=sdpa_cb_ms_out,
-                    data_format=data_format,
-                    page_size=sdpa_ms_tile_size,
-                    tile=ttnn.TileDescriptor(sdpa_tile),
-                )
-                sdpa_ms_out_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=sdpa_ms_tile_size,
-                    core_ranges=sdpa_worker_grid,
-                    format_descriptors=[sdpa_ms_out_cb_format],
-                )
-                post_sdpa_cb_list.append(sdpa_ms_out_cb_descriptor)
-
-                # CB 24: SDPA packet slot (for fabric packet headers)
+                # CB 21: SDPA packet slot (for fabric packet headers)
                 sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
                 sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=sdpa_cb_packet_slot,
@@ -3410,12 +3355,11 @@ class AttentionBlock:
                 # Pre-compute SDPA runtime args (fabric setup deferred to op())
                 # ========================================================================
                 # Get per-device SDPA tensors
-                sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
                 sdpa_forwarder_scratch_device = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[device_idx]
 
                 # Get device for logical to NOC coordinate conversion
-                device = sdpa_r1_recv_device.device()
+                device = sdpa_intermediate_recv_device.device()
 
                 # Get fabric node IDs for SDPA CCL
                 sdpa_fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -3480,8 +3424,8 @@ class AttentionBlock:
                     # NCRISC runtime args: semaphore addresses, recv buffer addresses
                     r1_neighbor_sem_addr = sdpa_semaphore1_addr
                     r2_neighbor_sem_addr = sdpa_semaphore2_addr
-                    r1_recv_buffer_addr = sdpa_r1_recv_device.buffer_address()
-                    r2_recv_buffer_addr = sdpa_r2_recv_device.buffer_address()
+                    r1_recv_buffer_addr = sdpa_intermediate_recv_device.buffer_address()
+                    r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
 
                     ncrisc_base_args = [
                         r1_neighbor_sem_addr,
@@ -3550,11 +3494,11 @@ class AttentionBlock:
                     brisc_rt_args = [
                         int(r1_dst_fabric_node_id.mesh_id),  # r1_dst_mesh_id (varies by type!)
                         r1_dst_fabric_node_id.chip_id,  # r1_dst_chip_id
-                        sdpa_r1_recv_device.buffer_address(),  # r1_neighbor_dst_addr
+                        r1_recv_buffer_addr,  # r1_neighbor_dst_addr
                         sdpa_semaphore1_addr,  # r1_neighbor_sem_addr
                         int(r2_dst_fabric_node_id.mesh_id),  # r2_dst_mesh_id (varies by type!)
                         r2_dst_fabric_node_id.chip_id,  # r2_dst_chip_id
-                        sdpa_r2_recv_device.buffer_address(),  # r2_neighbor_dst_addr
+                        r2_recv_buffer_addr,  # r2_neighbor_dst_addr
                         sdpa_semaphore2_addr,  # r2_neighbor_sem_addr
                         worker_core_noc.x,  # current_core_x (NOC coordinates)
                         worker_core_noc.y,  # current_core_y (NOC coordinates)
@@ -3717,8 +3661,7 @@ class AttentionBlock:
         sdpa_input_l_mesh,
         sdpa_input_ms_mesh,
         sdpa_output_l_mesh,
-        sdpa_r1_recv_mesh,
-        sdpa_r2_recv_mesh,
+        sdpa_intermediate_recv_mesh,
         sdpa_forwarder_scratch_mesh,
         sdpa_per_device_chunk_size,
         attention_block_output_tensor,
@@ -3784,8 +3727,7 @@ class AttentionBlock:
             sdpa_input_l_mesh,
             sdpa_input_ms_mesh,
             sdpa_output_l_mesh,
-            sdpa_r1_recv_mesh,
-            sdpa_r2_recv_mesh,
+            sdpa_intermediate_recv_mesh,
             sdpa_forwarder_scratch_mesh,
             sdpa_per_device_chunk_size,
             attention_block_output_tensor,
