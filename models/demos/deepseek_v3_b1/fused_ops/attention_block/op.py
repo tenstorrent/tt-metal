@@ -6,6 +6,7 @@
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
@@ -230,7 +231,7 @@ class AttentionBlock:
             position_id,
             position_ids_tensor,
             scale,
-            output_tensor,
+            output_tensor,  # remove
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
             sender_coord,
@@ -245,6 +246,7 @@ class AttentionBlock:
         )
 
         post_sdpa_semaphores = attention_block_semaphores
+        post_sdpa_ccl_semaphores = attention_block_semaphores
         full_device_grid, post_sdpa_per_device_contexts = PostSDPA.get_program_context(
             input_tensor_mesh,  # TODO: FIX
             post_sdpa_weights1_tensor,
@@ -252,7 +254,7 @@ class AttentionBlock:
             post_sdpa_gather2_output_tensor,
             post_sdpa_gather3_output_tensor,
             post_sdpa_intermediate_tensor,
-            post_sdpa_output_tensor,  # TODO: FIX
+            attention_block_output_tensor,
             post_sdpa_ccl_semaphores,
             1,  # cluster_axis
             post_sdpa_residual_tensor_mesh,
@@ -272,7 +274,7 @@ class AttentionBlock:
             sdpa_per_device_chunk_size,
         )
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        for ctx in per_device_contexts:
+        for ctx in pre_sdpa_per_device_contexts:
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/attention_block/kernels/attention_block_kernel.cpp",
                 core_ranges=full_device_grid,

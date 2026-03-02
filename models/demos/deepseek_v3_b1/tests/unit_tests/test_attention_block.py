@@ -415,7 +415,6 @@ def test_attention_block(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
     torch_sdpa_output = torch.zeros(sdpa_input_output_shape, dtype=torch.bfloat16)
-    # TODO: use legit final output
     # torch_sdpa_output = torch.zeros(shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_sdpa_output,
@@ -590,8 +589,7 @@ def test_attention_block(
         memory_config=kv_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-    # TODO: temp disabled for quicker testing
-    # kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Post-SDPA setup
     # Set up sub-device (not supported in slow dispatch mode)
@@ -959,20 +957,22 @@ def test_attention_block(
             ttnn_gather1_output,
             ttnn_gather2_output,
             ttnn_ccl_intermediate,
+            ttnn_residual,
             ttnn_sdpa_input_l,
             ttnn_sdpa_input_ms,
             ttnn_sdpa_output_l,
             ttnn_sdpa_r1_recv,
             ttnn_sdpa_r2_recv,
             ttnn_sdpa_forwarder_scratch,
-            ttnn_attention_block_output,
             0,  # sdpa_per_device_chunk_size
+            ttnn_attention_block_output,
             # Shared semaphores, and some default values
             attention_block_semaphores,
             cluster_axis,
             secondary_cluster_axis,
             0,  # sdpa_cluster_axis
             1.0,  # sdpa_scale_fp32
+            1,  # num_links
             epsilon,
             use_fp32,
             skip_ccl,
@@ -1032,13 +1032,12 @@ def test_attention_block(
 
         # ---- KV Cache (fully replicated, no TP) ----
         compare_kv_cache = kv_cache_output_torch[device_idx, ..., position_id, :]
-        # TODO: temp disabled for quicker testing
         # check that kv cache for 0 to pos_id -  1 is identical to kv cache before op
-        # for i in range(position_id):
-        #    assert torch.allclose(
-        #        kv_cache_bfp8_before_op[device_idx, ..., i, :], kv_cache_output_torch[device_idx, ..., i, :], atol=1e-6
-        #   ), "KV Cache before and after op mismatch"
-        # logger.info(f"Device {device_idx} old cache validation passed")
+        for i in range(position_id):
+            assert torch.allclose(
+                kv_cache_bfp8_before_op[device_idx, ..., i, :], kv_cache_output_torch[device_idx, ..., i, :], atol=1e-6
+            ), "KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} old cache validation passed")
 
         # Check that the new kv cache for pos_id is correct compared to golden
         compare_nope = compare_kv_cache[..., :KNOPE_DIM]
