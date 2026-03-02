@@ -1268,19 +1268,18 @@ class Generator(WarmupForwardMixin):
 
         logits = []
         log_probs = []
-        has_log_probs = False
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
-                if tt_out[i][1] is not None:
-                    log_probs_i = self.model[i].process_output_decode(
+                log_probs_i = (
+                    self.model[i].process_output_decode(
                         tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
                     )
-                    has_log_probs = True
-                else:
-                    log_probs_i = None
+                    if tt_out[i][1] is not None
+                    else torch.ones(logits_i.shape)
+                )
                 logits.append(logits_i)
                 log_probs.append(log_probs_i)
             elif isinstance(tt_out[i], ttnn.Tensor):
@@ -1288,11 +1287,11 @@ class Generator(WarmupForwardMixin):
                     tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
                 logits.append(logits_i)
-                log_probs.append(None)
+                # add dummy tensor for log_probs
+                log_probs.append(torch.ones(logits_i.shape))
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
-        combined_log_probs = torch.cat([lp for lp in log_probs if lp is not None], 0) if has_log_probs else None
-        return (torch.cat(logits, 0), combined_log_probs)
+        return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
     def _decode_forward_no_trace(
         self,
