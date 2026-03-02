@@ -255,7 +255,16 @@ class Glm4MoeDecoderLayer:
         res_shape = [int(d) for d in residual.shape]
         mlp_shape = [int(d) for d in mlp_out.shape]
         if mlp_shape != res_shape:
-            mlp_out = ttnn.reshape(mlp_out, res_shape, mlp_shape)
+            res_vol = 1
+            mlp_vol = 1
+            for d in res_shape:
+                res_vol *= d
+            for d in mlp_shape:
+                mlp_vol *= d
+            if mlp_vol == res_vol:
+                mlp_out = ttnn.reshape(mlp_out, res_shape, mlp_shape)
+            else:
+                mlp_out = ttnn.slice(mlp_out, starts=[0] * len(res_shape), ends=res_shape)
 
         x = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mlp_out, force=False)

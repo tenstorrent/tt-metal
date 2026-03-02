@@ -191,11 +191,23 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     # For bs=1, CCL ops don't change the shape — skip reshape entirely.
     out_shape = [int(d) for d in result.shape]
     if out_shape != input_logical_shape:
-        result = ttnn.reshape(
-            result,
-            input_logical_shape,
-            out_shape,
-        )
+        out_vol = 1
+        in_vol = 1
+        for d in out_shape:
+            out_vol *= d
+        for d in input_logical_shape:
+            in_vol *= d
+        if out_vol == in_vol:
+            # Same volume — safe to reshape (just metadata change).
+            result = ttnn.reshape(result, input_logical_shape, out_shape)
+        else:
+            # CCL padded a dimension (e.g., batch 1→32 in TILE_LAYOUT).
+            # Slice back to the original logical shape.
+            result = ttnn.slice(
+                result,
+                starts=[0] * len(input_logical_shape),
+                ends=input_logical_shape,
+            )
 
     return result
 
