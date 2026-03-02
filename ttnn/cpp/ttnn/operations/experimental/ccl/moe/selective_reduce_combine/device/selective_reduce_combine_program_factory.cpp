@@ -287,6 +287,14 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
+    // semaphore will be used for syncing with selective tilize
+    const auto sync_semaphore_id = CreateSemaphore(program, needed_worker_core_range_set, 1);
+
+    const auto start_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
+    const auto end_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
+
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
@@ -296,7 +304,13 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
-        {"select_experts_k", select_experts_k}};
+        {"select_experts_k", select_experts_k},
+        {"sync_semaphore_id", sync_semaphore_id},
+        {"noc_x_start", start_coord.x},
+        {"noc_y_start", start_coord.y},
+        {"noc_x_end", end_coord.x},
+        {"noc_y_end", end_coord.y},
+    };
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
@@ -316,12 +330,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-
-    const auto start_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
-    const auto end_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
-
     const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
                                     !operation_attributes.optional_cross_device_semaphore.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
