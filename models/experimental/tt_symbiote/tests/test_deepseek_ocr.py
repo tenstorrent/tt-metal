@@ -244,6 +244,27 @@ def test_deepseek_ocr(device):
         v.move_weights_to_device()
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
+
+    # Wrap initial inputs with TorchTTNNTensor to enable full dispatch tracking.
+    # Without this, ops that execute before the first TTNN module are invisible
+    # to the profiler (e.g. embedding, RoPE init, MoE routing, vision encoder ops).
+    _orig_forward = model.forward
+
+    def _tracked_forward(input_ids=None, images=None, **kwargs):
+        if input_ids is not None and not isinstance(input_ids, TorchTTNNTensor):
+            input_ids = TorchTTNNTensor(input_ids)
+        if images is not None:
+            images = [
+                tuple(
+                    TorchTTNNTensor(t) if isinstance(t, torch.Tensor) and not isinstance(t, TorchTTNNTensor) else t
+                    for t in img
+                )
+                for img in images
+            ]
+        return _orig_forward(input_ids=input_ids, images=images, **kwargs)
+
+    model.forward = _tracked_forward
+
     DispatchManager.clear_timings()
     res = model.infer(
         tokenizer,
