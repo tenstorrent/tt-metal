@@ -83,6 +83,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t page_block_size_t = 0;
     uint32_t q_heads_parallel_factor = 1;
     uint32_t original_block_size = 0;
+    bool has_block_padding = false;
 
     // Handle paged attention sequence length
     if (is_paged_attention) {
@@ -90,7 +91,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         original_block_size = input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
         S = page_table_tensor.value().padded_shape()[-1] * S;
+        has_block_padding = original_block_size < TILE_HEIGHT;
     }
+
     // ========== Q Sharding & MLA Parallelization ==========
     if (is_q_sharded && use_mla) {
         const uint32_t q_shard_height = input_tensor_q.memory_config().shard_spec()->shape[0];
@@ -234,7 +237,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             (i < num_active_cores ? core_group : core_group_idle).push_back(core);
         }
     } else if ((is_q_sharded || is_output_sharded) && !use_col_major_group_indexing) {
-        // Q/output sharded without spatial indexing: reorder cores so reducers are at batch boundaries
+        // Q/output sharded without row major group assignment: reorder cores so reducers are at batch boundaries
         // This ensures i % num_cores_per_batch == 0 identifies output/reducer cores
         uint32_t reducer_idx = 0, worker_idx = num_output_cores;
         for (uint32_t i = 0; i < num_cores_available; ++i) {
@@ -250,7 +253,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         }
     } else {
         // Q in DRAM, no sharding: simple linear assignment
-        // or Q sharded out sharded but uses spatial indexing
         for (uint32_t i = 0; i < num_cores_available; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
             (i < num_active_cores ? core_group : core_group_idle).push_back(core);
@@ -502,6 +504,10 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     create_cb(CBIndex::c_12, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);
     if (sliding_window_size > 0) {
         create_cb(CBIndex::c_13, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
+    }
+    // Block padding mask (when block_size < TILE_HEIGHT, masks zero-padded rows in each K tile)
+    if (has_block_padding) {
+        create_cb(CBIndex::c_14, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
     }
 
     // Intermediate CBs
