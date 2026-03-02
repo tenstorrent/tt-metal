@@ -453,14 +453,6 @@ int main(int argc, char** argv) {
     // Check if context supports fault tolerance (MPI contexts do, SingleHost doesn't)
     // OR check if we have multiple processes (size > 1)
     auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    if (*context->size() == 1) {
-        // Single host context with size 1 - likely not running under MPI
-        log_error(
-            tt::LogFabric,
-            "This tool must be run with an MPI launcher (e.g., mpirun, srun). "
-            "Example: mpirun -np 4 --tag-output ./build/tools/scaleout/generate_rank_bindings");
-        return 1;
-    }
 
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
