@@ -743,7 +743,7 @@ def run_model_forward_test(
     mesh_device,
     config,
     state_dict_meta,
-    state_dict_hf,
+    reference_model,
     mesh_config,
     batch_size,
     seq_len,
@@ -757,15 +757,13 @@ def run_model_forward_test(
         mesh_device: TTNN mesh device
         config: HuggingFace config (with num_hidden_layers already modified)
         state_dict_meta: Model weights in meta format for TT model
-        state_dict_hf: Model weights in HF format for reference model
+        reference_model: Already-instantiated HuggingFace reference model (eval mode)
         mesh_config: Mesh configuration
         batch_size: Batch size
         seq_len: Sequence length
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
-
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
 
@@ -798,11 +796,6 @@ def run_model_forward_test(
         users_row_sharded=is_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
-
-    # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
 
     # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
@@ -971,7 +964,10 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
 
     # Use randomly-initialized weights (config already has num_hidden_layers overridden to num_layers,
     # so this creates a small model — no need to deserialize the full checkpoint shards).
+    # Build the reference model once here and pass it into run_model_forward_test to avoid
+    # a second instantiation of the large embedding/lm_head tensors inside that function.
     reference_model_hf = GptOssForCausalLM(config)
+    reference_model_hf.eval()
     state_dict_hf = reference_model_hf.state_dict()
 
     # Convert to meta format for TT model
@@ -984,7 +980,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         mesh_device=mesh_device,
         config=config,
         state_dict_meta=state_dict_meta,
-        state_dict_hf=state_dict_hf,
+        reference_model=reference_model_hf,
         mesh_config=mesh_config,
         batch_size=batch_size,
         seq_len=seq_len,
