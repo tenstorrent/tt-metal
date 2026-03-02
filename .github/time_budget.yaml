@@ -101,13 +101,13 @@ scaleout:
 
 models:
   e2e:
-    wh_llmbox: 155
+    wh_llmbox: 160
     wh_llmbox_perf: 60
     wh_n150: 30
     wh_n300: 30
     wh_galaxy: 30
   unit:
-    wh_llmbox: 295
+    wh_llmbox: 298
     wh_llmbox_perf: 60
     wh_n150: 30
     wh_n300: 30

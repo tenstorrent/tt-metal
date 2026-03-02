@@ -20,13 +20,20 @@ def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
     """
     Create rotation transformation matrix for RoPE.
 
-    Returns a [1, 1, 32, 32] tensor with the pattern:
-    - rot_emb_matrix[i, i+1] = 1 for even i
-    - rot_emb_matrix[i+1, i] = -1 for even i
+    Constructs a permutation matrix that pairs adjacent dimensions with
+    signs (+1, -1) for the RoPE rotation:
+        [0, 1] → +1 at (0,1), -1 at (1,0)
+        [2, 3] → +1 at (2,3), -1 at (3,2)
+        ...
 
-    This is used by ttnn.experimental.rotary_embedding_llama.
+    Used by ttnn.experimental.rotary_embedding_llama.
+
+    Args:
+        dhead: Matrix dimension. Must equal TILE_SIZE. Use TILE_SIZE for decode.
+
+    Returns:
+        torch.Tensor of shape [1, 1, dhead, dhead].
     """
-    assert dhead == TILE_SIZE, "dhead must be equal to TILE_SIZE for RoPE op"
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1

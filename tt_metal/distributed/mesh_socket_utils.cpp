@@ -69,7 +69,6 @@ void validate_fabric_config_for_sockets(
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
         tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
         tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
