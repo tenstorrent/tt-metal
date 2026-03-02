@@ -488,8 +488,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
     }
 
-    log_critical(tt::LogFabric, "all_mesh_grouping_infos: {}", all_mesh_grouping_infos);
-
     // Find all possible mappings of mesh groupings to the PSD
     std::vector<std::string> errors;
     auto all_mesh_groupings =

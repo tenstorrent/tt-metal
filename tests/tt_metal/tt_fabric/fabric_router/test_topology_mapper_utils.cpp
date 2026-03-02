@@ -4046,4 +4046,56 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_32x4Qu
     EXPECT_LE(elapsed_seconds, timeout_seconds)
         << "Test took " << elapsed_seconds << " seconds, expected to complete within " << timeout_seconds << " seconds";
 }
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleGalaxyBH2x4Pipeline) {
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_pipeline.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Should have 48 mesh
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 48u);
+
+    // Check that the graph has exit nodes
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    // Check the shape of the mesh adjacency graph
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        // Check that there should be 8 nodes in the graph (2x4)
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
+
+        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 4 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+}
 }  // namespace tt::tt_metal::experimental::tt_fabric
