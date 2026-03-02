@@ -305,9 +305,6 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
-    auto all_devices = cluster_->all_chip_ids();
-
-
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
