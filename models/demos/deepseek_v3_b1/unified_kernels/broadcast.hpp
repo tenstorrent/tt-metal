@@ -133,15 +133,21 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
+                        static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+
+                        noc_async_read(
+                            get_noc_addr(recv.read_ptr),
+                            get_write_ptr(CTArgs::cb0_id),
+                            args.socket_page_size,
+                            1 - noc_index);
+                        noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
-                        socket_notify_sender(recv);
+                        socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
                     } else {
 #endif
@@ -158,6 +164,7 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 

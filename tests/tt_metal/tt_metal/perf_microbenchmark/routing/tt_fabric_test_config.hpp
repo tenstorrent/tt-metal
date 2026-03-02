@@ -519,6 +519,11 @@ private:
 
     void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test);
 
+    // In benchmark mode, split senders that would require multiple fabric connections
+    // into separate senders (one per routing direction) so each worker feeds exactly
+    // one fabric connection. This prevents the worker from becoming the bottleneck.
+    void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
+
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);

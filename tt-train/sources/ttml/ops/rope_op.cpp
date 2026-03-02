@@ -135,9 +135,9 @@ autograd::TensorPtr rope(
 
     if (token_position > 0U) {
         auto pos = token_position;
-        ttnn::SmallVector<uint32_t> start = {0, 0, pos, 0};
-        ttnn::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> start = {0, 0, pos, 0};
+        ttsl::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
 
         cos_cache_to_use = ttnn::slice(params.cos_cache, start, end, step);
         sin_cache_to_use = ttnn::slice(params.sin_cache, start, end, step);
