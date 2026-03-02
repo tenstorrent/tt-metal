@@ -10,8 +10,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from torch.nn import functional as F
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_mul_inplace(device, h, w):
@@ -28,6 +30,7 @@ def test_mul_inplace(device, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_inplace(device, h, w):
@@ -44,6 +47,7 @@ def test_add_inplace(device, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_sub_inplace(device, h, w):

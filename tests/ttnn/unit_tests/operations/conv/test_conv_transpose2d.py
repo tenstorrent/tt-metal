@@ -12,6 +12,7 @@ from models.common.utility_functions import (
     is_llk_assert_enabled,
 )
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import (
     run_conv_transpose2d,
@@ -21,6 +22,7 @@ from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import 
 )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -119,6 +121,7 @@ def test_simple_conv_t2d(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
@@ -211,6 +214,7 @@ def test_convt2d_dram(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -418,6 +422,7 @@ def test_simple_conv_t2d_weights_bias_match(
     logger.info("Weights and bias from conv_transpose2d match prepare functions exactly!")
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(
@@ -494,6 +499,7 @@ def test_conv_transpose2d_model_fruit(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w",
     (
@@ -542,6 +548,7 @@ def test_conv_transpose2d_config_tensors_in_dram(
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, groups",

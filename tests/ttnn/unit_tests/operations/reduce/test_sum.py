@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_llk_assert_enabled
+from models.common.utility_functions import torch_random, is_llk_assert_enabled, skip_with_llk_assert
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
