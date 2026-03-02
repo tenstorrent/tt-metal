@@ -408,6 +408,9 @@ class VisionBackbone(LightweightModule):
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
         image_features_2d = ttnn.reshape(image_features, [-1, image_features.shape[-1]])
 
+        # Convert to ROW_MAJOR for embedding lookup (embedding table must be ROW_MAJOR)
+        image_features_2d = ttnn.to_layout(image_features_2d, ttnn.ROW_MAJOR_LAYOUT)
+
         # 2. Gather features using ttnn.embedding
         # pooled_patches_idx_ttnn: [1, B*N_out*K_pool] contains indices into B*T*N
         gathered = ttnn.embedding(
