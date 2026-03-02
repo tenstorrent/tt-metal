@@ -143,18 +143,13 @@ public:
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
         return Lock([this, addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
-            release_scoped_lock();
         });
 #else
-        return Lock([this]() { release_scoped_lock(); });
+        return Lock([this]() {});
 #endif
     }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
-
     uint32_t cb_id_;
 };
 

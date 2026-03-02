@@ -155,7 +155,6 @@ public:
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
         return Lock([this, addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
-            release_scoped_lock();
         });
     }
 
@@ -168,10 +167,6 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
-
     AddressType address_;
 };
 
