@@ -401,7 +401,7 @@ def _emit_local_sync_coordinator(
         completed_phase_idx = done_val - 1
         lines.append(f"        if (done == {done_val}) {{")
         lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("cb-reset-{s}");')
+        lines.append(f'                DeviceZoneScopedN("cb-reset-transition-{done_val}-{s}");')
         lines.append(f"                reset_cbs(phase_{completed_phase_idx}_cbs);")
         lines.append("            }")
         if rebinds and next_phase_idx is not None:
@@ -488,11 +488,11 @@ def _emit_group_sync_follower(
         completed_phase_idx = done_val - 1
         lines.append(f"        if (done == {done_val}) {{")
         lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("seg-sync-{s}");')
+        lines.append(f'                DeviceZoneScopedN("segment-transition-{done_val}-{s}");')
         lines.append(f"                seg_{seg_idx}::sync();")
         lines.append("            }")
         lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("cb-resync-{s}");')
+        lines.append(f'                DeviceZoneScopedN("cb-resync-transition-{done_val}-{s}");')
         lines.append(f"                resync_cbs(phase_{completed_phase_idx}_cbs);")
         lines.append("            }")
         if rebinds and next_phase_idx is not None:

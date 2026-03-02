@@ -261,6 +261,7 @@ class TestSourceTransformations:
         joined = "\n".join(result)
         assert "arg_idx + 12" in joined
         assert "phase_1_get_arg_val" in joined
+        assert "phase_1_get_arg_addr" in joined
         # Wrapper should NOT contain a #define (that's separate)
         assert "#define" not in joined
         assert "get_named_compile_time_arg_val" not in joined
@@ -269,9 +270,15 @@ class TestSourceTransformations:
         """Test that define/undef emit the correct preprocessor directives."""
         _emit_rt_arg_define = _mock_codegen._emit_rt_arg_define
         _emit_rt_arg_undef = _mock_codegen._emit_rt_arg_undef
-        assert _emit_rt_arg_define(1) == "#define get_arg_val phase_1_get_arg_val"
-        assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
-        assert _emit_rt_arg_undef() == "#undef get_arg_val"
+        assert _emit_rt_arg_define(1) == [
+            "#define get_arg_val phase_1_get_arg_val",
+            "#define get_arg_addr phase_1_get_arg_addr",
+        ]
+        assert _emit_rt_arg_define(2) == [
+            "#define get_arg_val phase_2_get_arg_val",
+            "#define get_arg_addr phase_2_get_arg_addr",
+        ]
+        assert _emit_rt_arg_undef() == ["#undef get_arg_val", "#undef get_arg_addr"]
 
     def test_offset_compile_time_args_phase0_unchanged(self):
         """Test that phase 0 positional args are unchanged."""
@@ -909,14 +916,18 @@ class TestRuntimeArgRedirect:
         joined = "\n".join(result)
         assert "arg_idx + 18" in joined
         assert "phase_2_get_arg_val" in joined
+        assert "phase_2_get_arg_addr" in joined
         assert "get_named_compile_time_arg_val" not in joined
 
     def test_define_and_undef(self):
         """Define/undef should emit correct preprocessor directives."""
         _emit_rt_arg_define = _mock_codegen._emit_rt_arg_define
         _emit_rt_arg_undef = _mock_codegen._emit_rt_arg_undef
-        assert _emit_rt_arg_define(2) == "#define get_arg_val phase_2_get_arg_val"
-        assert _emit_rt_arg_undef() == "#undef get_arg_val"
+        assert _emit_rt_arg_define(2) == [
+            "#define get_arg_val phase_2_get_arg_val",
+            "#define get_arg_addr phase_2_get_arg_addr",
+        ]
+        assert _emit_rt_arg_undef() == ["#undef get_arg_val", "#undef get_arg_addr"]
 
 
 class TestInlineLocalIncludesRelative:
@@ -2168,10 +2179,6 @@ class TestSemaphoreInitialValue:
                 num_cores=1,
                 core0_phys_x=1,
                 core0_phys_y=1,
-                mcast_start_x=1,
-                mcast_start_y=1,
-                mcast_end_x=1,
-                mcast_end_y=1,
             ),
             arrive_addr=3000,
             release_addr=4000,
@@ -2189,7 +2196,7 @@ class TestSemaphoreInitialValue:
             phases,
             {0: 0, 1: 0},  # ct_offsets
             [[0]],  # per_phase_cb_slots
-            risc_type="riscv_0",
+            risc_type="riscv_1",
             role_label="reader",
             rebind_info={},
             op_semaphore_info=[(3, 5)],  # sem_id=3, initial_value=5
@@ -2231,10 +2238,6 @@ class TestSemaphoreInitialValue:
                 num_cores=1,
                 core0_phys_x=1,
                 core0_phys_y=1,
-                mcast_start_x=1,
-                mcast_start_y=1,
-                mcast_end_x=1,
-                mcast_end_y=1,
             ),
             arrive_addr=3000,
             release_addr=4000,
@@ -2252,7 +2255,7 @@ class TestSemaphoreInitialValue:
             [phase0, phase1],
             {0: 0, 1: 0},
             [[0]],  # per_phase_cb_slots
-            risc_type="riscv_0",
+            risc_type="riscv_1",
             role_label="reader",
             rebind_info={},
             op_semaphore_info=[(2, 0), (7, 3)],  # sem 2 -> 0, sem 7 -> 3
