@@ -726,8 +726,7 @@ def _generate_fused_source(
 
         is_last = count == len(dispatch_phases) - 1
         if needs_barrier and (not is_last or has_trailing):
-            lines.append("    barrier::phase::wait();")
-            lines.append("    barrier::phase::reset();")
+            lines.append("    barrier::sync();")
             if not is_last:
                 lines.append("")
 
