@@ -19,7 +19,7 @@ namespace ckernel {
 
 #ifdef ARCH_BLACKHOLE
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
-#define MM_THROTTLE_MAX 5
+#define MM_THROTTLE_MAX 0
 // 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
 volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
