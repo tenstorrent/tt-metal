@@ -38,7 +38,7 @@ void bind_manual_seed_operation(nb::module_& mod) {
             This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.
 
             Args:
-                seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
+                seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator. Pass UINT32_MAX (4294967295) to skip random number generator initialization (rand_tile_init is not called).
 
             Keyword Args:
                 device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t or None.

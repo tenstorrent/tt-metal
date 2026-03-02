@@ -70,13 +70,12 @@ enum class EnvVarID {
     // ========================================
     // DEBUG & TESTING
     // ========================================
-    TT_METAL_WATCHER_TEST_MODE,          // Enable watcher test mode
-    TT_METAL_KERNEL_MAP,                 // Enable kernel build mapping
-    TT_METAL_DISPATCH_DATA_COLLECTION,   // Enable dispatch debug data collection
-    TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
-    TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
-    TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
-    TT_METAL_DISABLE_XIP_DUMP,           // Disable XIP dump
+    TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
+    TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
+    TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
+    TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
     // ========================================
     // HARDWARE CONFIGURATION
@@ -149,6 +148,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
     TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
     TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
+    TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
 
     // ========================================
@@ -504,12 +504,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (load firmware)
         // Usage: export TT_METAL_SKIP_LOADING_FW=1
         case EnvVarID::TT_METAL_SKIP_LOADING_FW: this->skip_loading_fw = true; break;
-
-        // TT_METAL_SKIP_DELETING_BUILT_CACHE
-        // Skip deleting built cache files on cleanup.
-        // Default: false (delete cache)
-        // Usage: export TT_METAL_SKIP_DELETING_BUILT_CACHE=1
-        case EnvVarID::TT_METAL_SKIP_DELETING_BUILT_CACHE: this->skip_deleting_built_cache = true; break;
 
         // ========================================
         // HARDWARE CONFIGURATION
@@ -1060,6 +1054,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_disabled_features.insert(this->watcher_eth_str);
             break;
 
+        // TT_METAL_WATCHER_DISABLE_CB_SANITIZE
+        // Disables watcher circular buffer out-of-bounds sanitization when set to any value.
+        // Default: enabled
+        // Usage: export TT_METAL_WATCHER_DISABLE_CB_SANITIZE=1
+        case EnvVarID::TT_METAL_WATCHER_DISABLE_CB_SANITIZE:
+            this->watcher_disabled_features.insert(this->watcher_cb_sanitize_str);
+            break;
+
         // TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION
         // Enables NoC sanitization for linked transactions to catch more subtle errors.
         // Default: false (linked transaction sanitization disabled)
@@ -1353,7 +1355,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_stack_usage_str,
         watcher_dispatch_str,
         watcher_eth_str,
-        watcher_eth_link_status_str};
+        watcher_eth_link_status_str,
+        watcher_cb_sanitize_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
@@ -1715,6 +1718,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_eth_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_cb_sanitize_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());

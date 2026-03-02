@@ -6,6 +6,8 @@
 
 #include <nanobind/ndarray.h>
 
+#include <source_location>
+
 #include "nb_fwd.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"

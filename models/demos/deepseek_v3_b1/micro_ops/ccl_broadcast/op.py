@@ -46,6 +46,7 @@ class DeepseekMinimalBroadcast:
         secondary_cluster_axis=None,
         num_links=1,
         num_iterations=1,
+        is_torus=False,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -138,9 +139,15 @@ class DeepseekMinimalBroadcast:
                 ring_size = mesh_rows
                 ring_index = row
 
-                # For Linear topology, calculate forward and backward targets
-                num_targets_forward = ring_size - ring_index - 1
-                num_targets_backward = ring_index
+                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1 and is_torus
+
+                if enable_torus:
+                    num_targets_forward = (ring_size - 1) // 2
+                    num_targets_backward = ring_size - 1 - num_targets_forward
+                else:
+                    # Linear topology
+                    num_targets_forward = ring_size - ring_index - 1
+                    num_targets_backward = ring_index
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
@@ -191,16 +198,27 @@ class DeepseekMinimalBroadcast:
 
                 # Primary axis connections (forward and backward in column)
                 if num_targets_forward > 0:
-                    forward_coord = ttnn.MeshCoordinate(row + 1, col)
+                    if enable_torus and sender_row == mesh_rows - 1 and row == sender_row:
+                        # Sender at row 3: forward wraps to row 0
+                        forward_coord = ttnn.MeshCoordinate(0, col)
+                    else:
+                        forward_coord = ttnn.MeshCoordinate((row + 1) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
 
                 if num_targets_backward > 0:
-                    backward_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if enable_torus and sender_row == 0 and row == sender_row:
+                        # Sender at row 0: backward wraps to row 3
+                        backward_coord = ttnn.MeshCoordinate(mesh_rows - 1, col)
+                    else:
+                        backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
 
                 # Secondary axis connection (for sender to secondary sender)
                 if has_secondary_target:
-                    secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
+                    secondary_col = (
+                        1 if sender_col == 0 else 0
+                    )  # If sender is in col 0, secondary target is col 1, and vice versa
+                    secondary_coord = ttnn.MeshCoordinate(row, secondary_col)  # Other column
                     dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
                 num_connections = len(dst_nodes)

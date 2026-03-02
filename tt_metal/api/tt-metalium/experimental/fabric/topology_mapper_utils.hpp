@@ -449,6 +449,6 @@ struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::PhysicalExitNode> {
     auto format(const tt::tt_metal::experimental::tt_fabric::PhysicalExitNode& exit_node, format_context& ctx) const
         -> format_context::iterator {
         return fmt::format_to(
-            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id);
+            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id.get());
     }
 };
