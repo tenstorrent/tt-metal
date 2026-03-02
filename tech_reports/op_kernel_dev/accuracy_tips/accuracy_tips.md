@@ -149,7 +149,7 @@ is used to accumulate the quantity $M_2$:
 
 $$M_{2,n} = \sum_i^n (x_i - \bar{x}_n)^2 = M_{2,n-1} + (x_n - \bar{x}_{n-1})(x_n - \bar{x}_n)$$
 
-where $M_{2,n}$ is used to compute the sample variance of the first $n$ samples $\sigma^2_n$:
+where $M_{2,n}$ is used to compute the variance of the first $n$ samples $\sigma^2_n$:
 
 $$\sigma^2_n = \frac{M_{2,n}}{n}$$
 
@@ -174,20 +174,20 @@ LayerNorm (specified in program configs):
 
 ```python
 # Interleaved
-program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+program_config = ttnn.LayerNormDefaultProgramConfig(<other configs>, use_welford=True)
 # Sharded
-program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(use_welford=True)
+program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(<other configs>, use_welford=True)
 ```
 
 GroupNorm (specified as boolean input to `ttnn.group_norm`):
 
 ```python
-output_tensor = ttnn.group_norm(use_welford=use_welford)
+output_tensor = ttnn.group_norm(<other inputs>, use_welford=use_welford)
 ```
 
 While the Welford method invoked as defined above works, it is advisable to create and pass in a tensor of reciprocals to substantially accelerate the calculation. This can be done by the following:
 
-LayerNorm (only interleaved is supported):
+LayerNorm:
 
 ```python
 # Create the reciprocals
@@ -197,16 +197,21 @@ core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Co
 reciprocals = ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 # Pass into ttnn.layer_norm()
-output_tensor = ttnn.layer_norm(input_tensor, recip_tensor=reciprocals)
+output_tensor = ttnn.layer_norm(<other inputs>, recip_tensor=reciprocals)
 ```
 
-GroupNorm (interleaved and sharded supported):
+GroupNorm:
 
 ```python
 # Create the reciprocals
+grid_size = device.compute_with_storage_grid_size()
 torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size)
-reciprocals = ttnn.from_torch(torch_reciprocals)
+reciprocals = ttnn.from_torch(
+   torch_reciprocals,
+   device=device,
+   memory_config=ttnn.L1_MEMORY_CONFIG,
+   dtype=ttnn.float32)
 
 # Pass into ttnn.group_norm()
-output_tensor = ttnn.group_norm(input_tensor, reciprocals=reciprocals)
+output_tensor = ttnn.group_norm(<other inputs>, reciprocals=reciprocals, use_welford=True)
 ```
