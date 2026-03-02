@@ -151,33 +151,22 @@ Tensor to_layout_impl(
                 sub_core_grids);
         }
         if (layout == ttnn::TILE_LAYOUT) {
-            if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                // ttnn::tilize_with_val_padding doesn't support height sharded tensors
-                // workaround by applying padding and then tilizing
-                SmallVector<std::array<uint32_t, 2>> padding = {
-                    {0, 0},
-                    {0, 0},
-                    {0, padded_output_shape[2] - output_shape[2]},
-                    {0, padded_output_shape[3] - output_shape[3]}};
-                TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
-                tensor = ttnn::pad(tensor, padding, 0, true, std::nullopt);
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+            // ttnn::tilize_with_val_padding now supports both height and width sharded tensors
+            // Removed the workaround that was forcing height sharded tensors through pad+tilize
+            PadValue pad_value_variant;
+            if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
+                pad_value_variant = 0.0f;
             } else {
-                PadValue pad_value_variant;
-                if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
-                    pad_value_variant = 0.0f;
-                } else {
-                    pad_value_variant = (uint32_t)0;
-                }
-                tensor = ttnn::tilize_with_val_padding(
-                    tensor,
-                    Shape(padded_output_shape),
-                    pad_value_variant,
-                    output_memory_config,
-                    dtype,
-                    use_multicore_tilize,
-                    sub_core_grids);
+                pad_value_variant = (uint32_t)0;
             }
+            tensor = ttnn::tilize_with_val_padding(
+                tensor,
+                Shape(padded_output_shape),
+                pad_value_variant,
+                output_memory_config,
+                dtype,
+                use_multicore_tilize,
+                sub_core_grids);
             if (original_rank == 1) {
                 return ttnn::reshape(
                     tensor,
