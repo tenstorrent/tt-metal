@@ -49,17 +49,17 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
-struct MeshWorkloadRuntimeIdEntry {
+struct MeshWorkloadRuntimeEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;
+    std::string operation_name;
+    std::string operation_parameters;
 };
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
     uint64_t mesh_workload_id{};
     std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-    std::string name;
-    std::string parameters;
 };
 
 struct CoreInfo {

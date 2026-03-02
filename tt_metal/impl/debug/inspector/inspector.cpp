@@ -345,8 +345,9 @@ void Inspector::mesh_workload_set_program_binary_status(
     }
 }
 
-void Inspector::mesh_workload_set_operation_name_and_parameters(
+void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
+    uint64_t runtime_id,
     std::string_view operation_name,
     std::string_view operation_parameters) noexcept {
     if (!is_enabled()) {
@@ -354,35 +355,16 @@ void Inspector::mesh_workload_set_operation_name_and_parameters(
     }
     try {
         auto* data = get_inspector_data();
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.name = std::string(operation_name);
-        mesh_workload_data.parameters = std::string(operation_parameters);
-        // Keep log/event name stable for tooling compatibility.
-        data->logger.log_mesh_workload_operation_name_and_parameters(
-            mesh_workload_data, operation_name, operation_parameters);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
-    }
-}
+        const auto workload_id = mesh_workload->get_id();
 
-void Inspector::mesh_workload_set_runtime_id(
-    const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    try {
-        auto* data = get_inspector_data();
-
-        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
-        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
-
-        // Keep only the last MAX_RUNTIME_ID_ENTRIES
-        if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
-            data->runtime_ids.pop_front();
+        std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
+        data->runtime_entries.push_back(
+            {workload_id, runtime_id, std::string(operation_name), std::string(operation_parameters)});
+        if (data->runtime_entries.size() > inspector::Data::MAX_RUNTIME_ENTRIES) {
+            data->runtime_entries.pop_front();
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log workload runtime ID: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
     }
 }
 
@@ -514,16 +496,12 @@ bool IsEnabled() {
     return Inspector::is_enabled();
 }
 
-void EmitMeshWorkloadAnnotation(
+void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
+    uint64_t runtime_id,
     std::string_view operation_name,
     std::string_view operation_parameters) {
-    tt::tt_metal::Inspector::mesh_workload_set_operation_name_and_parameters(
-        &workload.impl(), operation_name, operation_parameters);
-}
-
-void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id) {
-    tt::tt_metal::Inspector::mesh_workload_set_runtime_id(&workload.impl(), runtime_id);
+    tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, operation_parameters);
 }
 
 }  // namespace experimental::inspector

@@ -14,13 +14,11 @@ namespace tt::tt_metal::experimental::inspector {
 // Inspector feature flag
 bool IsEnabled();
 
-// Inspector-only annotation for correlating higher-level execution with MeshWorkload runs.
-void EmitMeshWorkloadAnnotation(
+// Unified debug entry: emits operation name, parameters, and runtime ID in a single call.
+void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
+    uint64_t runtime_id,
     std::string_view operation_name,
     std::string_view operation_parameters);
-
-// Inspector-only runtime id for correlating workload enqueues/runs across tools.
-void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id);
 
 }  // namespace tt::tt_metal::experimental::inspector
