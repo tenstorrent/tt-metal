@@ -23,7 +23,7 @@ struct ExecuteNeighborPadAsync {
         std::vector<uint32_t> cluster_axis,
         std::vector<GlobalSemaphore> neighbor_semaphore,
         std::vector<GlobalSemaphore> barrier_semaphore,
-        std::optional<std::vector<size_t>> num_preferred_links = std::nullopt,
+        const std::optional<std::vector<size_t>>& num_preferred_links = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::ccl::Topology> topology = std::nullopt,
         std::optional<uint32_t> secondary_cluster_axis = std::nullopt,

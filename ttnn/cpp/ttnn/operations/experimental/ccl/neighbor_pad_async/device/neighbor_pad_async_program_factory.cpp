@@ -356,13 +356,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             mesh_coordinate,
             1,
             ttnn::ccl::Topology::Linear,
-            operation_attributes.pad2_cluster_axis.value());
+            operation_attributes.pad2_cluster_axis);
         w_backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
             mesh_coordinate,
             -1,
             ttnn::ccl::Topology::Linear,
-            operation_attributes.pad2_cluster_axis.value());
+            operation_attributes.pad2_cluster_axis);
 
         is_first_w_device = !w_backward_coord.has_value();
         is_last_w_device = !w_forward_coord.has_value();
@@ -422,7 +422,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     // Compute H fabric unicast route configuration (for compile-time args)
     auto [h_unicast_forward_args, h_unicast_backward_args] =
         ::ttnn::ccl::get_forward_backward_line_unicast_configuration(
-            ttnn::ccl::Topology::Linear, mesh_coordinate, forward_coord, backward_coord, mesh_device);
+            mesh_coordinate, forward_coord, backward_coord, mesh_device);
 
     // KERNEL CREATION
     std::vector<KernelHandle> reader_kernel_ids;
@@ -720,7 +720,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
         for (uint32_t w_link = 0; w_link < operation_attributes.pad2_num_links; w_link++) {
             // Per-link work distribution: split w_outer_dim_size rows across pad2_num_links
-            uint32_t w_link_start = w_link * w_rows_per_link + std::min(w_link, w_extra_rows);
+            uint32_t w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
             uint32_t w_link_count = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
             log_trace(
                 tt::LogOp,

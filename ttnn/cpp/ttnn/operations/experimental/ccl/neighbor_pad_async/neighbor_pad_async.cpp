@@ -16,13 +16,13 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     std::vector<uint32_t> cluster_axis,
     std::vector<GlobalSemaphore> neighbor_semaphore,
     std::vector<GlobalSemaphore> barrier_semaphore,
-    std::optional<std::vector<size_t>> num_preferred_links,
+    const std::optional<std::vector<size_t>>& num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     const std::optional<ttnn::Tensor>& persistent_output_buffer) {
-    TT_FATAL(dim.size() >= 1 && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
+    TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
 
     std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(dim.size(), 1));
 
