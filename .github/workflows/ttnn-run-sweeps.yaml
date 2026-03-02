@@ -1152,7 +1152,6 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
