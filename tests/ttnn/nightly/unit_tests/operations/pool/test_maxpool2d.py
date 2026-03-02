@@ -10,6 +10,11 @@ import pytest
 import math
 
 from ttnn.operations.pool import golden_maxpool2d
+from tests.sweep_framework.sweep_utils.pool2d_common import (
+    randomize_tensor,
+    parse_padding,
+    compute_output_shape,
+)
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -22,17 +27,6 @@ def tensor_map(request):
     tensor_map = {}
 
     return tensor_map
-
-
-def randomize_torch_tensor(tensor_map, tensor_shape):
-    tensor_shape = tuple(tensor_shape)
-    if tensor_shape in tensor_map.keys():
-        torch_tensor = tensor_map[tensor_shape]
-    else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        tensor_map[tensor_shape] = torch_tensor
-
-    return torch_tensor
 
 
 def run_max_pool2d(
@@ -60,20 +54,7 @@ def run_max_pool2d(
     stride_h, stride_w = stride
     dilation_h, dilation_w = dilation
 
-    # handle both 2D and 4D padding
-    padding_is_4d = False
-    if len(padding) == 2:
-        pad_h = int(padding[0] * 2)
-        pad_w = int(padding[1] * 2)
-        pad_t = pad_b = padding[0]
-        pad_l = pad_r = padding[1]
-    elif len(padding) == 4:
-        padding_is_4d = True
-        pad_t, pad_b, pad_l, pad_r = padding
-        pad_h = pad_t + pad_b
-        pad_w = pad_l + pad_r
-    else:
-        raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+    pad_t, pad_b, pad_l, pad_r, pad_h, pad_w, padding_is_4d = parse_padding(padding)
 
     if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
@@ -107,23 +88,25 @@ def run_max_pool2d(
 
     out_n = in_n
     out_c = in_c
-    ceil_mode_out_shape_adj = False
-    if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
-        if ((out_h - 1) * stride_h) >= (in_h + pad_t):
-            ceil_mode_out_shape_adj = True
-            out_h -= 1
-        if ((out_w - 1) * stride_w) >= (in_w + pad_l):
-            ceil_mode_out_shape_adj = True
-            out_w -= 1
-    else:
-        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+    out_h, out_w, ceil_mode_out_shape_adj = compute_output_shape(
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        dilation_h,
+        dilation_w,
+        pad_h,
+        pad_w,
+        pad_t,
+        pad_l,
+        ceil_mode,
+    )
 
     torch.manual_seed(0)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input = randomize_torch_tensor(tensor_map, ttnn_input_shape)
+    torch_input = randomize_tensor(tensor_map, ttnn_input_shape)
 
     if in_dtype == ttnn.bfloat8_b:
         assert use_reshaped_tensor == True
@@ -686,7 +669,7 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
     logger.info(f"Running Panoptic MaxPool2D with Channel Slicing (slices={num_slices})")
 
     torch.manual_seed(0)
-    torch_input_nchw = randomize_torch_tensor(tensor_map, input_shape_nchw)
+    torch_input_nchw = randomize_tensor(tensor_map, input_shape_nchw)
 
     torch_output = torch.nn.MaxPool2d(
         kernel_size=kernel_size,

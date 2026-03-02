@@ -6,101 +6,6 @@ import ttnn
 from typing import Tuple
 
 
-def validate_maxpool2d_indices(
-    input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype
-):
-    """
-    Validate indices by checking if differences are due to valid tie-breaking.
-    Note: input tensors should be in [N, H, W, C] format.
-    Supports both uint16 and uint32 index tensors (indices should be converted to int64 before calling).
-    Returns (indices_valid, tie_breaking_differences, actual_errors, value_differences, window_violations)
-    """
-    import torch
-    import math
-
-    batch_size, input_h, input_w, channels = input_tensor.shape
-    kernel_h, kernel_w = kernel_size
-    stride_h, stride_w = stride
-    pad_tb, pad_lr = padding
-    dilation_h, dilation_w = dilation
-
-    # Check if indices are exactly equal first
-    indices_match = torch.equal(torch_indices, ttnn_indices)
-    if indices_match:
-        return True, 0, 0, 0, 0
-
-    # Find positions where indices don't match
-    diff = torch.abs(torch_indices - ttnn_indices)
-    mismatch_positions = torch.nonzero(diff, as_tuple=False)
-
-    tie_breaking_differences = 0
-    actual_errors = 0
-    value_differences = 0
-    window_violations = 0
-    for pos in mismatch_positions:
-        n, h, w, c = pos
-        torch_idx = torch_indices[n, h, w, c]
-        ttnn_idx = ttnn_indices[n, h, w, c]
-
-        # Convert linear indices to spatial coordinates
-        torch_h = torch_idx // input_w
-        torch_w = torch_idx % input_w
-        ttnn_h = ttnn_idx // input_w
-        ttnn_w = ttnn_idx % input_w
-
-        # Get input values at these positions
-        if ttnn_h >= 0 and ttnn_w >= 0 and ttnn_h < input_h and ttnn_w < input_w:
-            torch_input_val = input_tensor[n, torch_h, torch_w, c]
-            ttnn_input_val = input_tensor[n, ttnn_h, ttnn_w, c]
-        else:
-            actual_errors += 1
-            window_violations += 1
-            continue
-
-        # Check if this is a valid tie-breaking difference
-        # Two conditions must be satisfied:
-        # 1. The values must be the same
-        # 2. Both indices must be within the same kernel window
-
-        # Check if values are the same
-        atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-        if dtype == ttnn.bfloat8_b:
-            atol = 0.35
-            values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
-        else:
-            values_same = torch_input_val == ttnn_input_val
-
-        # Check if both indices are within the same kernel window
-        def is_in_dilated_kernel_window(
-            input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-        ):
-            for kh in range(kernel_h):
-                for kw in range(kernel_w):
-                    kernel_pos_h = kernel_top_left_h + kh * dilation_h
-                    kernel_pos_w = kernel_top_left_w + kw * dilation_w
-                    if kernel_pos_h == input_h and kernel_pos_w == input_w:
-                        return True
-            return False
-
-        kernel_top_left_h = h * stride_h - pad_tb
-        kernel_top_left_w = w * stride_w - pad_lr
-        ttnn_in_window = is_in_dilated_kernel_window(
-            ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-        )
-
-        if values_same and ttnn_in_window:
-            tie_breaking_differences += 1
-        elif not ttnn_in_window:
-            actual_errors += 1
-            window_violations += 1
-        else:
-            actual_errors += 1
-            value_differences += 1
-
-    # Indices are valid if there are no actual errors
-    return (actual_errors == 0), tie_breaking_differences, actual_errors, value_differences, window_violations
-
-
 def golden_maxpool2d(
     input_tensor: ttnn.Tensor,
     batch_size: int,
@@ -116,26 +21,11 @@ def golden_maxpool2d(
     **_,
 ):
     import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import prepare_torch_pool_input, pool_output_to_flat_nhwc
 
-    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
-        0, 3, 1, 2
-    )  # 1, 1, NHW, C -> N, C, H, W
-
-    if isinstance(padding, (list, tuple)) and len(padding) == 4:
-        # Apply padding using torch.nn.functional.pad with 4D format
-        # ttnn format: [pad_t, pad_b, pad_l, pad_r]
-        # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
-        pad_t, pad_b, pad_l, pad_r = padding
-        input_nchw = torch.nn.functional.pad(
-            input_nchw, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
-        )
-        torch_padding = 0  # No padding in max_pool2d since we already padded
-    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
-        # Standard 2D padding format (pad_h, pad_w)
-        torch_padding = padding
-    else:
-        # Assume it's already in the correct format
-        torch_padding = padding
+    input_nchw, torch_padding = prepare_torch_pool_input(
+        input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=float("-inf")
+    )
 
     output_tensor, indices = torch.nn.functional.max_pool2d(
         input_nchw,
@@ -147,9 +37,8 @@ def golden_maxpool2d(
         return_indices=True,
     )
 
-    N, C, H, W = output_tensor.shape
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
-    indices = indices.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+    output_tensor = pool_output_to_flat_nhwc(output_tensor)
+    indices = pool_output_to_flat_nhwc(indices)
 
     if return_indices:
         return output_tensor, indices
@@ -262,24 +151,11 @@ def golden_avg_pool2d(
         Output tensor in (1, 1, N*out_H*out_W, C) format
     """
     import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import prepare_torch_pool_input, pool_output_to_flat_nhwc
 
-    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
-    input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
-
-    # Handle 4D padding (asymmetric) vs 2D padding (symmetric)
-    if isinstance(padding, (list, tuple)) and len(padding) == 4:
-        # Apply padding manually using torch.nn.functional.pad with 4D format
-        # ttnn format: [pad_t, pad_b, pad_l, pad_r]
-        # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
-        pad_t, pad_b, pad_l, pad_r = padding
-        input_nchw = torch.nn.functional.pad(input_nchw, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=0)
-        torch_padding = 0  # No padding in avg_pool2d since we already padded
-    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
-        # Standard 2D padding format (pad_h, pad_w)
-        torch_padding = padding
-    else:
-        # Assume it's already in the correct format
-        torch_padding = padding
+    input_nchw, torch_padding = prepare_torch_pool_input(
+        input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=0
+    )
 
     output_tensor = torch.nn.functional.avg_pool2d(
         input_nchw,
@@ -291,11 +167,7 @@ def golden_avg_pool2d(
         divisor_override=divisor_override,
     )
 
-    N, C, H, W = output_tensor.shape
-    # Convert from (N, C, H, W) to (1, 1, N*H*W, C)
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
-
-    return output_tensor
+    return pool_output_to_flat_nhwc(output_tensor)
 
 
 ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
@@ -325,17 +197,11 @@ def golden_adaptive_avg_pool2d(
         Output tensor in (1, 1, N*out_H*out_W, C) format
     """
     import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import pool_output_to_flat_nhwc
 
-    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
     input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
-
     output_tensor = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=output_size)
-
-    N, C, H, W = output_tensor.shape
-    # Convert from (N, C, H, W) to (1, 1, N*H*W, C)
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
-
-    return output_tensor
+    return pool_output_to_flat_nhwc(output_tensor)
 
 
 if hasattr(ttnn, "adaptive_avg_pool2d"):
@@ -366,17 +232,11 @@ def golden_adaptive_max_pool2d(
         Output tensor in (1, 1, N*out_H*out_W, C) format
     """
     import torch
+    from tests.sweep_framework.sweep_utils.pool2d_common import pool_output_to_flat_nhwc
 
-    # Reshape from (1, 1, N*H*W, C) to (N, H, W, C) then to (N, C, H, W)
     input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
-
     output_tensor, _ = torch.nn.functional.adaptive_max_pool2d(input_nchw, output_size=output_size, return_indices=True)
-
-    N, C, H, W = output_tensor.shape
-    # Convert from (N, C, H, W) to (1, 1, N*H*W, C)
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
-
-    return output_tensor
+    return pool_output_to_flat_nhwc(output_tensor)
 
 
 if hasattr(ttnn, "adaptive_max_pool2d"):
