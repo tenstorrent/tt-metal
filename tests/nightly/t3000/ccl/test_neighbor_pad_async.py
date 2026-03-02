@@ -69,6 +69,7 @@ def run_neighbor_pad_1d_impl(
     enable_trace,
     neighbor_pad_topology,
     num_iters,
+    use_persistent_output_buffer=False,
 ):
     torch.manual_seed(0)
 
@@ -113,6 +114,24 @@ def run_neighbor_pad_1d_impl(
         * mesh_device.shape[1 - cluster_axis]
     )
 
+    # Create persistent output buffer if requested
+    persistent_output_buffer = None
+    if use_persistent_output_buffer:
+        num_chunks = mesh_device.shape[cluster_axis]
+        output_shape = list(input_shape)
+        output_shape[halo_shard_dim] += num_chunks * (padding_left + padding_right)
+        dims = [None, None]
+        dims[cluster_axis] = halo_shard_dim
+        dims[1 - cluster_axis] = other_shard_dim
+        persistent_output_buffer = ttnn.from_torch(
+            torch.zeros(output_shape).bfloat16(),
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=mem_config_output,
+            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+        )
+
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
         num_chunks = mesh_device.shape[cluster_axis]
@@ -150,6 +169,7 @@ def run_neighbor_pad_1d_impl(
             num_links=[num_links],
             memory_config=mem_config_output,
             topology=neighbor_pad_topology,
+            persistent_output_buffer=persistent_output_buffer,
         )
 
         return tt_neighbor_pad_out_tensor
@@ -241,6 +261,7 @@ def run_neighbor_pad_2d_impl(
     num_links,
     input_dtype,
     topology,
+    use_persistent_output_buffer=False,
 ):
     """Run fused 2D neighbor pad and compare per-device against golden."""
     mesh_shape = tuple(mesh_device.shape)
@@ -277,6 +298,21 @@ def run_neighbor_pad_2d_impl(
     dims[w_axis] = w_dim
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    # Create persistent output buffer if requested
+    persistent_output_buffer = None
+    if use_persistent_output_buffer:
+        output_shape = list(input_shape)
+        output_shape[h_dim] += h_factor * (pH + pH)
+        output_shape[w_dim] += w_factor * (pW + pW)
+        persistent_output_buffer = ttnn.from_torch(
+            torch.zeros(output_shape).bfloat16(),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=input_dtype,
+            memory_config=mem_config,
+            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        )
+
     input_tensor_mesh = ttnn.from_torch(
         input_tensor,
         device=mesh_device,
@@ -299,6 +335,7 @@ def run_neighbor_pad_2d_impl(
         num_links=[num_links, num_links],
         memory_config=mem_config,
         topology=topology,
+        persistent_output_buffer=persistent_output_buffer,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
@@ -331,18 +368,33 @@ def run_neighbor_pad_2d_impl(
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis, enable_trace, num_iters",
+    "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis, enable_trace, num_iters, use_persistent_output_buffer",
     [
-        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1, True, 10),  # perf
-        ([82, 120, 212, 512], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1, False, 1),  # check
-        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1, True, 10),  # perf
-        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 1, False, 1),  # check
+        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1, True, 10, False),  # perf
+        (
+            [82, 120, 212, 512],
+            0,
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            2,
+            0,
+            "replicate",
+            1,
+            False,
+            1,
+            False,
+        ),  # check
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1, True, 10, False),  # perf
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 1, False, 1, False),  # check
+        ([8, 12, 16, 32], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 1, "zeros", 1, False, 2, True),  # persistent
     ],
     ids=[
         "mochi_vae_1-perf",
         "mochi_vae_2-check",
         "replicate_width_dim-perf",
         "zeros_width_dim-check",
+        "persistent_buffer",
     ],
 )
 @pytest.mark.parametrize(
@@ -379,6 +431,7 @@ def test_neighbor_pad_async_1d(
     enable_trace,
     neighbor_pad_topology,
     num_iters,
+    use_persistent_output_buffer,
 ):
     run_neighbor_pad_1d_impl(
         mesh_device,
@@ -397,6 +450,7 @@ def test_neighbor_pad_async_1d(
         enable_trace=enable_trace,
         neighbor_pad_topology=neighbor_pad_topology,
         num_iters=num_iters,
+        use_persistent_output_buffer=use_persistent_output_buffer,
     )
 
 
@@ -408,21 +462,23 @@ def test_neighbor_pad_async_1d(
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, use_persistent_output_buffer",
     [
         # 5D: [B, T, H, W, C] — H along axis 0, W along axis 1
-        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 1, 1),
-        ([1, 3, 10, 16, 32], 2, 3, 0, 1, 1, 1),
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 1, 1, False),
+        ([1, 3, 10, 16, 32], 2, 3, 0, 1, 1, 1, False),
         # VAE conv_0 shape (full H=90, W=160)
-        ([1, 3, 90, 160, 32], 2, 3, 0, 1, 1, 1),
+        ([1, 3, 90, 160, 32], 2, 3, 0, 1, 1, 1, False),
         # Flipped axes: H along axis 1, W along axis 0
-        ([1, 2, 16, 8, 32], 2, 3, 1, 0, 1, 1),
+        ([1, 2, 16, 8, 32], 2, 3, 1, 0, 1, 1, False),
         # 4D tensor [B, H, W, C]
-        ([2, 8, 16, 32], 1, 2, 0, 1, 1, 1),
+        ([2, 8, 16, 32], 1, 2, 0, 1, 1, 1, False),
         # Larger channel dim
-        ([1, 2, 10, 16, 384], 2, 3, 0, 1, 1, 1),
+        ([1, 2, 10, 16, 384], 2, 3, 0, 1, 1, 1, False),
         # Padding > 1
-        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 2, 2),
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 2, 2, False),
+        # Persistent output buffer
+        ([1, 2, 8, 16, 32], 2, 3, 0, 1, 1, 1, True),
     ],
     ids=[
         "small_5d_h0w1",
@@ -432,6 +488,7 @@ def test_neighbor_pad_async_1d(
         "small_4d_h0w1",
         "medium_5d_largeC",
         "small_5d_pad2",
+        "small_5d_persistent",
     ],
 )
 @pytest.mark.parametrize(
@@ -448,6 +505,7 @@ def test_neighbor_pad_async_2d(
     w_axis,
     pH,
     pW,
+    use_persistent_output_buffer,
     device_params,
 ):
     run_neighbor_pad_2d_impl(
@@ -463,4 +521,5 @@ def test_neighbor_pad_async_2d(
         num_links=1,
         input_dtype=ttnn.bfloat16,
         topology=ttnn.Topology.Linear,
+        use_persistent_output_buffer=use_persistent_output_buffer,
     )
