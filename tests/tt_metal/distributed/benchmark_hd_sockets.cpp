@@ -230,7 +230,7 @@ std::pair<double, double> run_d2h_throughput(
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender_benchmark.cpp",
         sender_core.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -262,7 +262,7 @@ std::pair<double, double> run_d2h_throughput(
     return {per_page_us, per_page_cycles};
 }
 
-std::vector<uint64_t> run_d2h_latency_cycles(
+std::vector<uint64_t> run_d2h_latency(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -310,7 +310,7 @@ std::vector<uint64_t> run_d2h_latency_cycles(
     return cycles;
 }
 
-std::vector<uint64_t> run_d2h_ping_cycles(
+std::vector<uint64_t> measure_d2h_handshake_overhead(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -326,7 +326,7 @@ std::vector<uint64_t> run_d2h_ping_cycles(
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_ping.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/d2h_socket_handshake_overhead.cpp",
         sender_core.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -428,8 +428,8 @@ std::vector<double> run_h2d_latency_us(
 
     const char* kernel_path =
         (h2d_mode == H2DMode::DEVICE_PULL)
-            ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_data_ping_device_pull.cpp"
-            : "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_data_ping_host_push.cpp";
+            ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_latency_device_pull.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_latency_host_push.cpp";
     auto recv_program = CreateProgram();
     CreateKernel(
         recv_program,
@@ -468,7 +468,7 @@ std::vector<double> run_h2d_latency_us(
 }
 
 // H2D pure ping (no data DMA). Returns per-iteration host-side latencies in microseconds.
-std::vector<double> run_h2d_ping_us(
+std::vector<double> measure_h2d_handshake_overhead(
     const std::shared_ptr<MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -574,6 +574,76 @@ bool check_preconditions(
     return true;
 }
 
+struct ThroughputBenchmarkContext {
+    MeshCoreCoord core;
+    uint32_t tray_id;
+    uint32_t asic_location;
+    uint32_t num_iterations;
+    std::string label;
+};
+
+std::optional<ThroughputBenchmarkContext> make_single_chip_throughput_context(
+    benchmark::State& state,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    uint32_t tray_id,
+    uint32_t asic_location,
+    std::size_t page_size,
+    std::size_t fifo_size,
+    std::size_t total_data) {
+    if (!check_preconditions(state, *mesh_device, page_size, fifo_size)) {
+        return std::nullopt;
+    }
+
+    auto target_core = find_benchmark_core(mesh_device, tray_id, asic_location);
+    if (!target_core) {
+        state.SkipWithMessage("Target chip not found");
+        return std::nullopt;
+    }
+
+    std::ostringstream label_ss;
+    label_ss << target_core->device_coord;
+
+    return ThroughputBenchmarkContext{
+        .core = *target_core,
+        .tray_id = tray_id,
+        .asic_location = asic_location,
+        .num_iterations = static_cast<uint32_t>(total_data / page_size),
+        .label = label_ss.str(),
+    };
+}
+
+std::optional<ThroughputBenchmarkContext> make_multichip_throughput_context(
+    benchmark::State& state,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    std::size_t chip_index,
+    std::size_t page_size,
+    std::size_t fifo_size,
+    std::size_t total_data) {
+    if (!check_preconditions(state, *mesh_device, page_size, fifo_size)) {
+        return std::nullopt;
+    }
+
+    static auto mmio_chips = enumerate_mmio_chips(mesh_device);
+    if (chip_index >= mmio_chips.size()) {
+        state.SkipWithMessage("chip_index out of range");
+        return std::nullopt;
+    }
+
+    const auto& chip = mmio_chips[chip_index];
+    MeshCoreCoord core{chip.coord, CoreCoord(0, 0)};
+
+    std::ostringstream label_ss;
+    label_ss << chip.coord;
+
+    return ThroughputBenchmarkContext{
+        .core = core,
+        .tray_id = chip.tray_id,
+        .asic_location = chip.asic_location,
+        .num_iterations = static_cast<uint32_t>(total_data / page_size),
+        .label = label_ss.str(),
+    };
+}
+
 void BM_D2HSocketThroughput(benchmark::State& state) {
     TT_FATAL(state.max_iterations == 1, "Only single-iteration benchmarks are supported");
     init_throughput_counters(state);
@@ -584,32 +654,23 @@ void BM_D2HSocketThroughput(benchmark::State& state) {
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto fifo_size = static_cast<std::size_t>(state.range(3));
     auto total_data = static_cast<std::size_t>(state.range(4));
-
-    if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
+    auto ctx = make_single_chip_throughput_context(
+        state, fx.mesh_device, tray_id, asic_location, page_size, fifo_size, total_data);
+    if (!ctx) {
         return;
     }
-    auto target_core = find_benchmark_core(fx.mesh_device, tray_id, asic_location);
-    if (!target_core) {
-        state.SkipWithMessage("Target chip not found");
-        return;
-    }
-
-    uint32_t num_iterations = static_cast<uint32_t>(total_data / page_size);
 
     for (auto _ : state) {
         auto [per_page_us, per_page_cycles] =
-            run_d2h_throughput(fx.mesh_device, fifo_size, page_size, num_iterations, *target_core);
+            run_d2h_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, ctx->core);
 
         double throughput_gbps = static_cast<double>(page_size) / (per_page_us * 1e3);
         state.counters["data_size"] = static_cast<double>(page_size);
-        state.counters["num_iterations"] = num_iterations;
+        state.counters["num_iterations"] = ctx->num_iterations;
         state.counters["per_page_us"] = per_page_us;
         state.counters["per_page_cycles"] = per_page_cycles;
         state.counters["throughput_gbps"] = throughput_gbps;
-
-        std::ostringstream coord_ss;
-        coord_ss << target_core->device_coord;
-        state.SetLabel(coord_ss.str());
+        state.SetLabel(ctx->label);
     }
 }
 
@@ -633,7 +694,7 @@ void BM_D2HSocketLatency(benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        auto cycles = run_d2h_latency_cycles(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
+        auto cycles = run_d2h_latency(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
         auto stats = summarize_latency_cycles(cycles, get_cycles_per_us(*fx.mesh_device));
 
         set_latency_counters(state, stats, kLatencyIters);
@@ -664,7 +725,7 @@ void BM_D2HSocketPing(benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        auto cycles = run_d2h_ping_cycles(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
+        auto cycles = measure_d2h_handshake_overhead(fx.mesh_device, fifo_size, page_size, kLatencyIters, *target_core);
 
         double cycles_per_us = get_cycles_per_us(*fx.mesh_device);
         auto stats = summarize_latency_cycles(cycles, cycles_per_us);
@@ -673,16 +734,6 @@ void BM_D2HSocketPing(benchmark::State& state) {
         std::ostringstream coord_ss;
         coord_ss << target_core->device_coord;
         state.SetLabel(coord_ss.str());
-
-        std::string csv_path =
-            std::string("d2h_ping_iterations_") + std::to_string(page_size) + "_" + std::to_string(fifo_size) + ".csv";
-        std::ofstream f(csv_path);
-        if (f.is_open()) {
-            f << "iteration,latency_us,cycles\n";
-            for (uint32_t i = 0; i < kLatencyIters; i++) {
-                f << i << "," << (static_cast<double>(cycles[i]) / cycles_per_us) << "," << cycles[i] << "\n";
-            }
-        }
     }
 }
 
@@ -695,38 +746,25 @@ void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
     auto fifo_size = static_cast<std::size_t>(state.range(1));
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto total_data = static_cast<std::size_t>(state.range(3));
-
-    if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
+    auto ctx = make_multichip_throughput_context(state, fx.mesh_device, chip_index, page_size, fifo_size, total_data);
+    if (!ctx) {
         return;
     }
-
-    static auto mmio_chips = enumerate_mmio_chips(fx.mesh_device);
-    if (chip_index >= mmio_chips.size()) {
-        state.SkipWithMessage("chip_index out of range");
-        return;
-    }
-
-    uint32_t num_iterations = static_cast<uint32_t>(total_data / page_size);
-    const auto& chip = mmio_chips[chip_index];
-    MeshCoreCoord sender_core{chip.coord, CoreCoord(0, 0)};
 
     for (auto _ : state) {
         auto [per_page_us, per_page_cycles] =
-            run_d2h_throughput(fx.mesh_device, fifo_size, page_size, num_iterations, sender_core);
+            run_d2h_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, ctx->core);
 
         double throughput_gbps = static_cast<double>(page_size) / (per_page_us * 1e3);
-        state.counters["tray_id"] = chip.tray_id;
-        state.counters["asic_location"] = chip.asic_location;
+        state.counters["tray_id"] = ctx->tray_id;
+        state.counters["asic_location"] = ctx->asic_location;
         state.counters["data_size"] = static_cast<double>(page_size);
-        state.counters["num_iterations"] = num_iterations;
+        state.counters["num_iterations"] = ctx->num_iterations;
         state.counters["total_data"] = static_cast<double>(total_data);
         state.counters["per_page_us"] = per_page_us;
         state.counters["per_page_cycles"] = per_page_cycles;
         state.counters["throughput_gbps"] = throughput_gbps;
-
-        std::ostringstream coord_ss;
-        coord_ss << chip.coord;
-        state.SetLabel(coord_ss.str());
+        state.SetLabel(ctx->label);
     }
 }
 
@@ -743,33 +781,24 @@ void BM_H2DSocketThroughput(benchmark::State& state) {
     auto total_data = static_cast<std::size_t>(state.range(4));
     auto mode_index = static_cast<int>(state.range(5));
     auto h2d_mode = static_cast<H2DMode>(mode_index);
-
-    if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
+    auto ctx = make_single_chip_throughput_context(
+        state, fx.mesh_device, tray_id, asic_location, page_size, fifo_size, total_data);
+    if (!ctx) {
         return;
     }
-    auto target_core = find_benchmark_core(fx.mesh_device, tray_id, asic_location);
-    if (!target_core) {
-        state.SkipWithMessage("Target chip not found");
-        return;
-    }
-
-    uint32_t num_iterations = static_cast<uint32_t>(total_data / page_size);
 
     for (auto _ : state) {
         auto [per_page_us, per_page_cycles] =
-            run_h2d_throughput(fx.mesh_device, fifo_size, page_size, num_iterations, h2d_mode, *target_core);
+            run_h2d_throughput(fx.mesh_device, fifo_size, page_size, ctx->num_iterations, h2d_mode, ctx->core);
 
         double throughput_gbps = static_cast<double>(page_size) / (per_page_us * 1e3);
         state.counters["h2d_mode"] = mode_index;
         state.counters["data_size"] = static_cast<double>(page_size);
-        state.counters["num_iterations"] = num_iterations;
+        state.counters["num_iterations"] = ctx->num_iterations;
         state.counters["per_page_us"] = per_page_us;
         state.counters["per_page_cycles"] = per_page_cycles;
         state.counters["throughput_gbps"] = throughput_gbps;
-
-        std::ostringstream label_ss;
-        label_ss << enchantum::to_string(h2d_mode) << " " << target_core->device_coord;
-        state.SetLabel(label_ss.str());
+        state.SetLabel(std::string(enchantum::to_string(h2d_mode)) + " " + ctx->label);
     }
 }
 
@@ -783,12 +812,13 @@ void BM_H2DSocketLatency(benchmark::State& state) {
     auto asic_location = static_cast<uint32_t>(state.range(1));
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto fifo_size = static_cast<std::size_t>(state.range(3));
-    auto mode_index = static_cast<int>(state.range(4));
-    auto h2d_mode = static_cast<H2DMode>(mode_index);
 
     if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
         return;
     }
+    auto mode_index = static_cast<int>(state.range(4));
+    auto h2d_mode = static_cast<H2DMode>(mode_index);
+
     auto target_core = find_benchmark_core(fx.mesh_device, tray_id, asic_location);
     if (!target_core) {
         state.SkipWithMessage("Target chip not found");
@@ -819,12 +849,13 @@ void BM_H2DSocketPing(benchmark::State& state) {
     auto asic_location = static_cast<uint32_t>(state.range(1));
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto fifo_size = static_cast<std::size_t>(state.range(3));
-    auto mode_index = static_cast<int>(state.range(4));
-    auto h2d_mode = static_cast<H2DMode>(mode_index);
 
     if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
         return;
     }
+    auto mode_index = static_cast<int>(state.range(4));
+    auto h2d_mode = static_cast<H2DMode>(mode_index);
+
     auto target_core = find_benchmark_core(fx.mesh_device, tray_id, asic_location);
     if (!target_core) {
         state.SkipWithMessage("Target chip not found");
@@ -833,7 +864,7 @@ void BM_H2DSocketPing(benchmark::State& state) {
 
     for (auto _ : state) {
         auto latencies_us =
-            run_h2d_ping_us(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
+            measure_h2d_handshake_overhead(fx.mesh_device, fifo_size, page_size, kLatencyIters, h2d_mode, *target_core);
         double cycles_per_us = get_cycles_per_us(*fx.mesh_device);
         auto stats = summarize_latency_us(latencies_us, cycles_per_us);
         state.counters["h2d_mode"] = mode_index;
@@ -842,16 +873,6 @@ void BM_H2DSocketPing(benchmark::State& state) {
         std::ostringstream label_ss;
         label_ss << enchantum::to_string(h2d_mode) << " " << target_core->device_coord;
         state.SetLabel(label_ss.str());
-
-        std::string csv_path =
-            std::string("h2d_ping_iterations_") + std::string(enchantum::to_string(h2d_mode)) + ".csv";
-        std::ofstream f(csv_path);
-        if (f.is_open()) {
-            f << "iteration,latency_us,cycles\n";
-            for (uint32_t i = 0; i < kLatencyIters; i++) {
-                f << i << "," << latencies_us[i] << "," << (latencies_us[i] * cycles_per_us) << "\n";
-            }
-        }
     }
 }
 
@@ -864,38 +885,25 @@ void BM_H2DSocketMultiChipThroughput(benchmark::State& state) {
     auto fifo_size = static_cast<std::size_t>(state.range(1));
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto total_data = static_cast<std::size_t>(state.range(3));
-
-    if (!check_preconditions(state, *fx.mesh_device, page_size, fifo_size)) {
+    auto ctx = make_multichip_throughput_context(state, fx.mesh_device, chip_index, page_size, fifo_size, total_data);
+    if (!ctx) {
         return;
     }
-
-    static auto mmio_chips = enumerate_mmio_chips(fx.mesh_device);
-    if (chip_index >= mmio_chips.size()) {
-        state.SkipWithMessage("chip_index out of range");
-        return;
-    }
-
-    uint32_t num_iterations = static_cast<uint32_t>(total_data / page_size);
-    const auto& chip = mmio_chips[chip_index];
-    MeshCoreCoord recv_core{chip.coord, CoreCoord(0, 0)};
 
     for (auto _ : state) {
-        auto [per_page_us, per_page_cycles] =
-            run_h2d_throughput(fx.mesh_device, fifo_size, page_size, num_iterations, H2DMode::DEVICE_PULL, recv_core);
+        auto [per_page_us, per_page_cycles] = run_h2d_throughput(
+            fx.mesh_device, fifo_size, page_size, ctx->num_iterations, H2DMode::DEVICE_PULL, ctx->core);
 
         double throughput_gbps = static_cast<double>(page_size) / (per_page_us * 1e3);
-        state.counters["tray_id"] = chip.tray_id;
-        state.counters["asic_location"] = chip.asic_location;
+        state.counters["tray_id"] = ctx->tray_id;
+        state.counters["asic_location"] = ctx->asic_location;
         state.counters["data_size"] = static_cast<double>(page_size);
-        state.counters["num_iterations"] = num_iterations;
+        state.counters["num_iterations"] = ctx->num_iterations;
         state.counters["total_data"] = static_cast<double>(total_data);
         state.counters["per_page_us"] = per_page_us;
         state.counters["per_page_cycles"] = per_page_cycles;
         state.counters["throughput_gbps"] = throughput_gbps;
-
-        std::ostringstream coord_ss;
-        coord_ss << chip.coord;
-        state.SetLabel(coord_ss.str());
+        state.SetLabel(ctx->label);
     }
 }
 
