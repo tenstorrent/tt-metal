@@ -48,6 +48,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 
 }  // namespace ttnn::prim
