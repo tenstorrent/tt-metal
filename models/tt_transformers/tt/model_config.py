@@ -109,6 +109,7 @@ class ModelOptimizations:
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
+                or base_model_name.startswith("phi-1")
             ):
                 if model_name.startswith("phi-4"):
                     logger.info(
@@ -447,6 +448,8 @@ class ModelArgs:
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "phi-1": "models/tt_transformers/model_params/phi-1",
+        "microsoft/phi-1": "models/tt_transformers/model_params/phi-1",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2273,6 +2276,7 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "phi-1": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]

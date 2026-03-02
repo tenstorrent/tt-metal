@@ -50,6 +50,11 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
     uint32_t ntiles_per_block = output_shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = output_shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_padded_rows = output.padded_shape()[-2] - a.padded_shape()[-2];
+    uint32_t num_padded_cols = output.padded_shape()[-1] - a.padded_shape()[-1];
+
+    auto memory_layout = a.memory_config().memory_layout();
+    bool is_height_sharded = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    bool is_width_sharded = memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_1,
@@ -87,12 +92,24 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
         (std::uint32_t)src2_cb_index,
     };
 
-    unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
-        "reader_unary_pad_height_width_sharded.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    // Choose the appropriate reader kernel based on sharding type
+    if (is_height_sharded) {
+        // For height sharding, use the kernel that handles height-sharded tensors
+        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+            "reader_unary_pad_height_sharded.cpp",
+            all_cores,
+            tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    } else {
+        // For width sharding, use the existing kernel
+        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+            "reader_unary_pad_height_width_sharded.cpp",
+            all_cores,
+            tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    }
 
     /** writer
      */
@@ -121,15 +138,30 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
 
     uint32_t packed_pad_value = detail::get_packed_value(a, pad_value);
 
-    const std::array reader_rt_args = {
-        num_input_rows,
-        input_shard_width_bytes,
-        (num_input_rows / num_batches) * input_shard_width_bytes,
-        ntiles_per_batch,
-        num_padded_rows,
-        num_batches,
-        packed_pad_value};
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
+    // Set up runtime args based on sharding type
+    if (is_height_sharded) {
+        // For height sharding: only padding in height dimension
+        const std::array reader_rt_args = {
+            num_input_rows,
+            input_shard_width_bytes,
+            (num_input_rows / num_batches) * input_shard_width_bytes,
+            ntiles_per_batch,
+            num_padded_rows,
+            num_batches,
+            packed_pad_value};
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
+    } else {
+        // For width sharding: padding may be in both dimensions (original behavior)
+        const std::array reader_rt_args = {
+            num_input_rows,
+            input_shard_width_bytes,
+            (num_input_rows / num_batches) * input_shard_width_bytes,
+            ntiles_per_batch,
+            num_padded_rows,
+            num_batches,
+            packed_pad_value};
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
+    }
 
     const std::array writer_rt_args = {ntiles_per_core};
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
