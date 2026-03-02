@@ -163,10 +163,8 @@ class TtBarkModel:
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
             # Process only the last token with KV cache (next_token is already on device)
-            logits, layer_past = self.semantic_model(
-                input_ids=tt_next_token, layer_past=layer_past, use_cache=True
-            )
-            
+            logits, layer_past = self.semantic_model(input_ids=tt_next_token, layer_past=layer_past, use_cache=True)
+
             # We can deallocate the previous token now
             ttnn.deallocate(tt_next_token)
 
@@ -212,9 +210,7 @@ class TtBarkModel:
         max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", 512)
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
-            logits, layer_past = self.coarse_model(
-                input_ids=tt_next_token, layer_past=layer_past, use_cache=True
-            )
+            logits, layer_past = self.coarse_model(input_ids=tt_next_token, layer_past=layer_past, use_cache=True)
 
             ttnn.deallocate(tt_next_token)
             tt_next_token = ttnn.argmax(logits, dim=-1)

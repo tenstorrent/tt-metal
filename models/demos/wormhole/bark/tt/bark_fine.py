@@ -164,7 +164,10 @@ class TtBarkFineModel:
         # LM head for the specific codebook
         lm_head_idx = codebook_idx - self.n_codes_given
         logits = ttnn.linear(
-            tt_hidden, self.lm_heads[lm_head_idx], memory_config=memory_config, compute_kernel_config=compute_kernel_config
+            tt_hidden,
+            self.lm_heads[lm_head_idx],
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
         )
         ttnn.deallocate(tt_hidden)
 
