@@ -158,6 +158,23 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
             is_virtual_coord = false;
             return AddressableCoreType::TENSIX;
         }
+
+        // Also read directly from the hardware register to compare
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_id, 0, NOC_CFG(NOC_ID_LOGICAL));
+        uint8_t hw_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint8_t hw_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        if (x == hw_x && y == hw_y) {
+            is_virtual_coord = false;
+            return AddressableCoreType::TENSIX;
+        }
+    }
+
+    // Debug: log the values we're about to reject as UNKNOWN
+    // Pack into debug_insert_delays.feedback: my_x[noc_id] in [31:24], my_y[noc_id] in [23:16], x in [15:8], y in [7:0]
+    {
+        auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
+        watcher_msg->debug_insert_delays.feedback =
+            ((uint32_t)my_x[noc_id] << 24) | ((uint32_t)my_y[noc_id] << 16) | ((uint32_t)x << 8) | ((uint32_t)y);
     }
 
     return AddressableCoreType::UNKNOWN;
