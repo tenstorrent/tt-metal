@@ -45,6 +45,8 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 }
 
 // Get the appropriate CCL topology based on cluster axis ring status
+// The options are Linear, Ring, based on where the fabric was initialized with
+// wrap around connections along the axis.
 ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     if (!cluster_axis.has_value()) {
         auto* mesh_device = &ttml::autograd::ctx().get_device();
