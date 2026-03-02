@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -23,8 +24,14 @@ void kernel_main() {
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
+    experimental::CircularBuffer cb_input_obj(cb_input);
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    experimental::CircularBuffer cb_output_obj(cb_output);
+    experimental::CircularBuffer cb_acc_obj(cb_acc);
+    experimental::CircularBuffer cb_ineg_obj(cb_ineg);
+
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
 
@@ -48,7 +55,7 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                cb_wait_front(cb_input, ntiles);
+                cb_input_obj.wait_front(ntiles);
 
                 reconfig_data_format_srca(cb_input);
                 copy_tile_init(cb_input);
@@ -59,23 +66,23 @@ void kernel_main() {
                 }
 
                 tile_regs_commit();
-                cb_pop_front(cb_input, chunk_end - wt);
-                cb_reserve_back(cb_ineg, ntiles);
+                cb_input_obj.pop_front(chunk_end - wt);
+                cb_ineg_obj.reserve_back(ntiles);
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_ineg);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, cb_ineg);
                 }
                 tile_regs_release();
-                cb_push_back(cb_ineg, ntiles);
+                cb_ineg_obj.push_back(ntiles);
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    cb_wait_front(cb_acc, ntiles);
+                    cb_acc_obj.wait_front(ntiles);
                 }
 
-                cb_wait_front(cb_ineg, ntiles);
+                cb_ineg_obj.wait_front(ntiles);
 
                 if (ht > 0) {
                     reconfig_data_format_srca(cb_acc);
@@ -91,23 +98,23 @@ void kernel_main() {
                 }
                 reduce_uninit(cb_ineg);
                 tile_regs_commit();
-                cb_pop_front(cb_ineg, ntiles);
+                cb_ineg_obj.pop_front(ntiles);
 
                 if (ht > 0) {
-                    cb_pop_front(cb_acc, ntiles);
+                    cb_acc_obj.pop_front(ntiles);
                 }
-                cb_reserve_back(cb_acc, ntiles);
+                cb_acc_obj.reserve_back(ntiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, cb_acc);
                 }
                 tile_regs_release();
-                cb_push_back(cb_acc, ntiles);
+                cb_acc_obj.push_back(ntiles);
             }
 
             tile_regs_acquire();
 
-            cb_wait_front(cb_acc, ntiles);
+            cb_acc_obj.wait_front(ntiles);
 
             reconfig_data_format_srca(cb_acc);
             copy_tile_init(cb_acc);
@@ -120,15 +127,15 @@ void kernel_main() {
             }
 
             tile_regs_commit();
-            cb_pop_front(cb_acc, ntiles);
-            cb_reserve_back(cb_output, ntiles);
+            cb_acc_obj.pop_front(ntiles);
+            cb_output_obj.reserve_back(ntiles);
             tile_regs_wait();
             pack_reconfig_data_format(cb_output);
             for (uint32_t i = 0; i < ntiles; ++i) {
                 pack_tile(i, cb_output);
             }
             tile_regs_release();
-            cb_push_back(cb_output, ntiles);
+            cb_output_obj.push_back(ntiles);
         }
     }
 }
