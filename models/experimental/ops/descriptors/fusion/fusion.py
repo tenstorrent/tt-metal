@@ -358,18 +358,11 @@ class FusedOp:
         os.makedirs(output_dir, exist_ok=True)
 
         # Group kernels by RISC type
+        # riscv_0 = BRISC = writer, riscv_1 = NCRISC = reader
         by_type: dict[str, list] = {}
         for kernel in self.op.descriptor.kernels:
             risc = _get_risc_type(kernel)
-            # Map internal names to friendly filenames
-            if risc == "riscv_0":
-                name = "reader"
-            elif risc == "riscv_1":
-                name = "writer"
-            elif risc == "compute":
-                name = "compute"
-            else:
-                name = "unknown"
+            name = {"riscv_0": "writer", "riscv_1": "reader", "compute": "compute"}.get(risc, "unknown")
             by_type.setdefault(name, []).append(kernel)
 
         for name, kernels in by_type.items():
@@ -407,7 +400,7 @@ class FusedOp:
         by_type: dict[str, list] = {}
         for idx, kernel in enumerate(self.op.descriptor.kernels):
             risc = _get_risc_type(kernel)
-            name = {"riscv_0": "reader", "riscv_1": "writer", "compute": "compute"}.get(risc, "unknown")
+            name = {"riscv_0": "writer", "riscv_1": "reader", "compute": "compute"}.get(risc, "unknown")
             by_type.setdefault(name, []).append((idx, kernel))
 
         for name, entries in by_type.items():
