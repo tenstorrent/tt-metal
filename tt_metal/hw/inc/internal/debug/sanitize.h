@@ -148,33 +148,24 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
     }
 
     if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-        // On architectures with coordinate virtualization, NOC_ID_LOGICAL on each NOC
-        // instance may return NOC-specific translated coordinates that don't map to any
-        // known virtual or physical coordinate space. This is the case on Wormhole where
-        // NOC_1's NOC_ID_LOGICAL returns NOC_1-specific coordinates. These coordinates
-        // are valid for hardware routing via ID translation. Check if the target matches
-        // the local core's coordinates for this NOC (set from NOC_ID_LOGICAL in risc_init).
+        // Check against the logical coordinates for this NOC (virtual coordinates from NOC_ID_LOGICAL).
         if (x == my_x[noc_id] && y == my_y[noc_id]) {
             is_virtual_coord = false;
             return AddressableCoreType::TENSIX;
         }
 
-        // Also read directly from the hardware register to compare
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_id, 0, NOC_CFG(NOC_ID_LOGICAL));
-        uint8_t hw_x = noc_id_reg & NOC_NODE_ID_MASK;
-        uint8_t hw_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        if (x == hw_x && y == hw_y) {
+        // When hardware ID translation is enabled, coordinates written to NOC cmd buf registers
+        // may be translated by the hardware from virtual to physical. Reading back from the cmd buf
+        // (as STATE-based sanitizer macros do) returns the translated physical coordinates, not the
+        // original virtual ones. Check against the physical node ID (NOC_NODE_ID) which reflects
+        // the translated coordinates the hardware uses for this core on this NOC.
+        uint32_t phys_node_id = NOC_CMD_BUF_READ_REG(noc_id, 0, NOC_NODE_ID);
+        uint8_t phys_x = phys_node_id & NOC_NODE_ID_MASK;
+        uint8_t phys_y = (phys_node_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        if (x == phys_x && y == phys_y) {
             is_virtual_coord = false;
             return AddressableCoreType::TENSIX;
         }
-    }
-
-    // Debug: log the values we're about to reject as UNKNOWN
-    // Pack into debug_insert_delays.feedback: my_x[noc_id] in [31:24], my_y[noc_id] in [23:16], x in [15:8], y in [7:0]
-    {
-        auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
-        watcher_msg->debug_insert_delays.feedback =
-            ((uint32_t)my_x[noc_id] << 24) | ((uint32_t)my_y[noc_id] << 16) | ((uint32_t)x << 8) | ((uint32_t)y);
     }
 
     return AddressableCoreType::UNKNOWN;
