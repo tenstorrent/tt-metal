@@ -15,6 +15,10 @@ Description:
     It does that by probing devices by reading L1 address 0 and probes cores by attempting to halt them.
     Devices that time out are marked broken. Cores that fail to halt are marked broken.
 
+    Note: we intentionally do not continue cores as there is a debug hardware bug on both Wormhole and Blackhole with continuing
+    after some reads and writes which can break the core. That means that all other triage scripts will run on already halted cores.
+    More info at tt-exalens:#902
+
 Owner:
     adjordjevic-TT
 """
@@ -42,13 +46,12 @@ def probe_device(device: Device) -> None:
     read_word_from_device(location, 0)
 
 
-def probe_core(location: OnChipCoordinate, risc_name: str) -> None:
+def halt_core(location: OnChipCoordinate, risc_name: str) -> None:
     noc_block = location._device.get_block(location)
     risc_debug = noc_block.get_risc_debug(risc_name)
     if risc_debug.is_in_reset():
         return
-    with risc_debug.ensure_halted():
-        pass
+    risc_debug.halt()
 
 
 def group_broken_cores_by_risc_name(broken_cores: set[BrokenCore]) -> dict[str, set[OnChipCoordinate]]:
@@ -114,14 +117,15 @@ def run(args, context: Context):
     RISC_CORES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1"]
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     run_checks = get_run_checks(args, context)
+
     # These are used to test health of devices and cores and populate broken_devices and broken_cores sets in RunChecks
-    run_checks.run_per_device_check(lambda device: probe_device(device), print_broken_devices=False)
     run_checks.run_per_core_check(
-        lambda location, risc_name: probe_core(location, risc_name),
+        lambda location, risc_name: halt_core(location, risc_name),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
         print_broken_cores=False,
     )
+    run_checks.run_per_device_check(lambda device: probe_device(device), print_broken_devices=False)
     return collect_device_health_summary(run_checks)
 
 
